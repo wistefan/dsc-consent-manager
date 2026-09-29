@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.support.PostgresTestResource;
 import io.micronaut.context.ApplicationContext;
+import io.micronaut.core.type.Argument;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
@@ -15,7 +16,6 @@ import java.util.Map;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
 
 /**
  * Smoke integration test that verifies the application context starts correctly and can connect to
@@ -36,7 +36,6 @@ import org.junit.jupiter.api.TestInstance;
  * </ul>
  */
 @MicronautTest
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @DisplayName("Application Smoke Test")
 class ApplicationSmokeIT extends PostgresTestResource {
 
@@ -69,12 +68,15 @@ class ApplicationSmokeIT extends PostgresTestResource {
         }
     }
 
+    /** Reusable type argument for {@code Map<String, Object>} to avoid raw types. */
+    private static final Argument<Map<String, Object>> MAP_TYPE =
+            Argument.mapOf(String.class, Object.class);
+
     @Test
     @DisplayName("Health endpoint returns 200 with UP status")
-    @SuppressWarnings("unchecked")
     void healthEndpointReturnsUp() {
-        HttpResponse<Map> response =
-                httpClient.toBlocking().exchange(HttpRequest.GET("/health"), Map.class);
+        HttpResponse<Map<String, Object>> response =
+                httpClient.toBlocking().exchange(HttpRequest.GET("/health"), MAP_TYPE);
 
         assertThat((Object) response.status())
                 .as("Health endpoint should return HTTP 200")
@@ -87,10 +89,10 @@ class ApplicationSmokeIT extends PostgresTestResource {
 
     @Test
     @DisplayName("Datasource health indicator reports UP")
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings("unchecked") // Micronaut returns nested maps; inner casts are unavoidable
     void datasourceHealthIndicatorReportsUp() {
         Map<String, Object> body =
-                httpClient.toBlocking().retrieve(HttpRequest.GET("/health"), Map.class);
+                httpClient.toBlocking().retrieve(HttpRequest.GET("/health"), MAP_TYPE);
 
         assertThat(body).as("Health response body should not be null").isNotNull();
 

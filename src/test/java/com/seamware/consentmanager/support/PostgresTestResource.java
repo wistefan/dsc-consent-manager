@@ -2,6 +2,7 @@ package com.seamware.consentmanager.support;
 
 import io.micronaut.test.support.TestPropertyProvider;
 import java.util.Map;
+import org.junit.jupiter.api.TestInstance;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 /**
@@ -25,7 +26,13 @@ import org.testcontainers.containers.PostgreSQLContainer;
  *     // ...
  * }
  * }</pre>
+ *
+ * <p>This class is annotated with {@code @TestInstance(PER_CLASS)} because {@link
+ * TestPropertyProvider} requires per-class lifecycle. Since {@code @TestInstance} is
+ * {@code @Inherited}, subclasses automatically inherit this annotation and do not need to declare
+ * it.
  */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public abstract class PostgresTestResource implements TestPropertyProvider {
 
     /** Docker image name for the PostgreSQL container. */
