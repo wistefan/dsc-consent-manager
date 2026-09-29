@@ -1,0 +1,78 @@
+# =============================================================================
+# Consent Manager — Docker Compose for Local Development
+# =============================================================================
+# Usage:
+#   1. (Optional) Copy .env.sample to .env and adjust values if needed
+#   2. docker compose up -d
+#   3. Health check: curl http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health
+#   4. API base:     http://localhost:8080/v1
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Application
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+      - "${MANAGEMENT_PORT:-9090}:${MANAGEMENT_PORT:-9090}"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Override DB_URL to point to the 'db' service within the Docker network
+      DB_URL: jdbc:postgresql://db:5432/consent_manager
+      # Use dev environment for local development (relaxed security)
+      MICRONAUT_ENVIRONMENTS: dev
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 45s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - consent-manager-net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: consent_manager
+      POSTGRES_USER: ${DB_USER:-consent_manager}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-consent_manager}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-consent_manager} -d consent_manager"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - consent-manager-net
+
+# ---------------------------------------------------------------------------
+# Volumes
+# ---------------------------------------------------------------------------
+volumes:
+  postgres-data:
+    driver: local
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+networks:
+  consent-manager-net:
+    driver: bridge
