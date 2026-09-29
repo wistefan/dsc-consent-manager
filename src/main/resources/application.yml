@@ -1,0 +1,80 @@
+micronaut:
+  application:
+    name: consent-manager
+
+  server:
+    port: ${PORT:8080}
+    context-path: ${API_PREFIX:/v1}
+
+  security:
+    enabled: true
+    # Allow unauthenticated access to management endpoints
+    intercept-url-map:
+      - pattern: /health/**
+        http-method: GET
+        access:
+          - isAnonymous()
+      - pattern: /metrics/**
+        http-method: GET
+        access:
+          - isAuthenticated()
+      - pattern: /prometheus/**
+        http-method: GET
+        access:
+          - isAuthenticated()
+    # JWT/JWKS configuration placeholder (detailed in TICKET-003)
+    token:
+      jwt:
+        enabled: true
+        signatures:
+          jwks:
+            keycloak:
+              url: ${IDP_JWKS_URL:`https://localhost/realms/master/protocol/openid-connect/certs`}
+
+  metrics:
+    enabled: true
+    export:
+      prometheus:
+        enabled: true
+        descriptions: true
+        step: PT1M
+
+datasources:
+  default:
+    url: ${DB_URL:`jdbc:postgresql://localhost:5432/consent_manager`}
+    username: ${DB_USER:consent_manager}
+    password: ${DB_PASSWORD:consent_manager}
+    driver-class-name: org.postgresql.Driver
+    dialect: POSTGRES
+    schema-generate: NONE
+    # HikariCP pool settings
+    minimum-idle: 2
+    maximum-pool-size: 10
+    connection-timeout: 30000
+    idle-timeout: 600000
+    max-lifetime: 1800000
+
+flyway:
+  datasources:
+    default:
+      enabled: true
+
+endpoints:
+  all:
+    # Serve management endpoints outside the API context path
+    path: /
+  health:
+    enabled: true
+    sensitive: false
+    details-visible: AUTHENTICATED
+  metrics:
+    enabled: true
+    sensitive: true
+  prometheus:
+    enabled: true
+    sensitive: true
+
+# Custom application configuration bound to environment variables
+consent-manager:
+  url: ${CONSENT_MANAGER_URL:`http://localhost:8080`}
+  contract-service-url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
