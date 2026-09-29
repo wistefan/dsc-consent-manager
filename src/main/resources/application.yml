@@ -8,7 +8,9 @@ micronaut:
 
   security:
     enabled: true
-    # Allow unauthenticated access to management endpoints
+    # Allow unauthenticated access to management endpoints.
+    # TODO: With management endpoints on a dedicated port (see endpoints.all.port),
+    #   these patterns may need revisiting once the security layer is fully wired.
     intercept-url-map:
       - pattern: /health/**
         http-method: GET
@@ -61,8 +63,9 @@ flyway:
 
 endpoints:
   all:
-    # Serve management endpoints outside the API context path
-    path: /
+    # Serve management endpoints on a dedicated port, outside the API context path.
+    # This ensures health/metrics are reachable without the /v1 prefix.
+    port: ${MANAGEMENT_PORT:9090}
   health:
     enabled: true
     sensitive: false

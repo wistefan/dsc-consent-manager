@@ -20,14 +20,8 @@ import io.micronaut.context.annotation.ConfigurationProperties;
 @ConfigurationProperties("consent-manager")
 public class ConsentManagerConfiguration {
 
-    /** Default public base URL of this service. */
-    private static final String DEFAULT_URL = "http://localhost:8080";
-
-    /** Default base URL of the Contract Service. */
-    private static final String DEFAULT_CONTRACT_SERVICE_URL = "http://localhost:8081";
-
-    private String url = DEFAULT_URL;
-    private String contractServiceUrl = DEFAULT_CONTRACT_SERVICE_URL;
+    private String url;
+    private String contractServiceUrl;
 
     /**
      * Returns the public base URL of this Consent Manager instance.
@@ -35,7 +29,7 @@ public class ConsentManagerConfiguration {
      * <p>Bound to the {@code CONSENT_MANAGER_URL} environment variable
      * via the {@code consent-manager.url} configuration key.
      *
-     * @return the public base URL, never {@code null}
+     * @return the public base URL (default provided via {@code application.yml})
      */
     public String getUrl() {
         return url;
@@ -56,7 +50,7 @@ public class ConsentManagerConfiguration {
      * <p>Bound to the {@code CONTRACT_SERVICE_URL} environment variable
      * via the {@code consent-manager.contract-service-url} configuration key.
      *
-     * @return the Contract Service base URL, never {@code null}
+     * @return the Contract Service base URL (default provided via {@code application.yml})
      */
     public String getContractServiceUrl() {
         return contractServiceUrl;
