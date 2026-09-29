@@ -6,6 +6,17 @@ micronaut:
     port: ${PORT:8080}
     context-path: ${API_PREFIX:/v1}
 
+  router:
+    # Static resources for Swagger UI and the OpenAPI specification.
+    # The openapi.yaml is copied from api/ to target/classes/static/ at build time.
+    static-resources:
+      swagger-ui:
+        paths: classpath:static/swagger-ui
+        mapping: /swagger-ui/**
+      openapi-spec:
+        paths: classpath:static
+        mapping: /static/**
+
   security:
     enabled: true
     # Allow unauthenticated access to management endpoints.
@@ -13,6 +24,14 @@ micronaut:
     #   these patterns may need revisiting once the security layer is fully wired.
     intercept-url-map:
       - pattern: /health/**
+        http-method: GET
+        access:
+          - isAnonymous()
+      - pattern: /swagger-ui/**
+        http-method: GET
+        access:
+          - isAnonymous()
+      - pattern: /static/**
         http-method: GET
         access:
           - isAnonymous()
@@ -70,6 +89,11 @@ endpoints:
     enabled: true
     sensitive: false
     details-visible: AUTHENTICATED
+    # Include disk-space and datasource health indicators in the composite health check.
+    disk-space:
+      enabled: true
+    jdbc:
+      enabled: true
   metrics:
     enabled: true
     sensitive: true

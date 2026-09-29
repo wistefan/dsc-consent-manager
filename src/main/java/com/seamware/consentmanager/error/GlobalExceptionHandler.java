@@ -8,27 +8,26 @@ import io.micronaut.http.MediaType;
 import io.micronaut.http.annotation.Produces;
 import io.micronaut.http.server.exceptions.ExceptionHandler;
 import jakarta.inject.Singleton;
+import java.net.URI;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.URI;
-
 /**
- * Global exception handler that catches all unhandled exceptions and returns
- * an RFC 7807 Problem Details response using the generated {@link ProblemDetail} model.
+ * Global exception handler that catches all unhandled exceptions and returns an RFC 7807 Problem
+ * Details response using the generated {@link ProblemDetail} model.
  *
- * <p>This is a stub implementation that maps all exceptions to a generic
- * HTTP 500 Internal Server Error. Per-exception-type handling (e.g.,
- * {@link BadRequestException} to 400, {@link NotFoundException} to 404,
- * constraint violation mapping, production detail suppression) is deferred
- * to TICKET-015.
+ * <p>This is a stub implementation that maps all exceptions to a generic HTTP 500 Internal Server
+ * Error. Per-exception-type handling (e.g., {@link BadRequestException} to 400, {@link
+ * NotFoundException} to 404, constraint violation mapping, production detail suppression) is
+ * deferred to TICKET-015.
  *
  * @see ProblemDetail
  * @see <a href="https://www.rfc-editor.org/rfc/rfc7807">RFC 7807</a>
  */
 @Singleton
 @Produces("application/problem+json")
-public class GlobalExceptionHandler implements ExceptionHandler<Exception, HttpResponse<ProblemDetail>> {
+public class GlobalExceptionHandler
+        implements ExceptionHandler<Exception, HttpResponse<ProblemDetail>> {
 
     private static final Logger LOG = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
@@ -49,23 +48,28 @@ public class GlobalExceptionHandler implements ExceptionHandler<Exception, HttpR
     private static final int STATUS_INTERNAL_SERVER_ERROR = 500;
 
     /**
-     * Handles an exception by logging it and returning a generic 500 response
-     * with a {@link ProblemDetail} body.
+     * Handles an exception by logging it and returning a generic 500 response with a {@link
+     * ProblemDetail} body.
      *
-     * @param request   the HTTP request that triggered the exception
+     * @param request the HTTP request that triggered the exception
      * @param exception the unhandled exception
      * @return an HTTP 500 response containing a {@link ProblemDetail} body
      */
     @Override
     public HttpResponse<ProblemDetail> handle(HttpRequest request, Exception exception) {
-        LOG.error("Unhandled exception for {} {}: {}",
-                request.getMethod(), request.getUri(), exception.getMessage(), exception);
+        LOG.error(
+                "Unhandled exception for {} {}: {}",
+                request.getMethod(),
+                request.getUri(),
+                exception.getMessage(),
+                exception);
 
-        ProblemDetail error = new ProblemDetail(
-                DEFAULT_PROBLEM_TYPE,
-                INTERNAL_ERROR_TITLE,
-                STATUS_INTERNAL_SERVER_ERROR)
-                .detail(INTERNAL_ERROR_DETAIL);
+        ProblemDetail error =
+                new ProblemDetail(
+                                DEFAULT_PROBLEM_TYPE,
+                                INTERNAL_ERROR_TITLE,
+                                STATUS_INTERNAL_SERVER_ERROR)
+                        .detail(INTERNAL_ERROR_DETAIL);
 
         return HttpResponse.<ProblemDetail>status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(error)
