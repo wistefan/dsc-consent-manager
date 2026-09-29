@@ -1,0 +1,22 @@
+# Development environment overrides
+# Activate with: MICRONAUT_ENVIRONMENTS=dev
+
+micronaut:
+  security:
+    enabled: false
+
+datasources:
+  default:
+    url: jdbc:postgresql://localhost:5432/consent_manager
+    username: consent_manager
+    password: consent_manager
+
+endpoints:
+  all:
+    port: ${MANAGEMENT_PORT:9090}
+  health:
+    details-visible: ANONYMOUS
+  metrics:
+    sensitive: false
+  prometheus:
+    sensitive: false
