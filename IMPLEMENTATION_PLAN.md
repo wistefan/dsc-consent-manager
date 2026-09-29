@@ -1,7 +1,7 @@
 # Implementation Plan: Consent Manager - Project Setup and Scaffolding
 
 ## Overview
-Set up the foundational project structure for the reimplemented Consent Manager on Java 21 + Micronaut 4 + PostgreSQL 16 with Maven. This creates a running, health-checkable, database-connected service with no domain logic. The work is split into 6 sequential steps, each producing a self-contained, mergeable PR to the work branch.
+Set up the foundational project structure for the reimplemented Consent Manager on Java 25 + Micronaut 5 + PostgreSQL 16 with Maven. This creates a running, health-checkable, database-connected service with no domain logic. The work is split into 6 sequential steps, each producing a self-contained, mergeable PR to the work branch.
 
 ## Steps
 
@@ -10,28 +10,29 @@ Set up the foundational project structure for the reimplemented Consent Manager 
 Initialize the Maven project with all required dependencies, the Maven Wrapper, and the application entry point.
 
 **Files to create:**
-- `pom.xml` — Full Maven POM inheriting from `io.micronaut.platform:micronaut-parent` (Micronaut 4.x BOM). Includes:
+- `pom.xml` — Full Maven POM inheriting from `io.micronaut.platform:micronaut-parent` (Micronaut 5.x BOM). Includes:
   - All compile dependencies: `micronaut-http-server-netty`, `micronaut-data-jdbc`, `micronaut-jdbc-hikari`, `postgresql` JDBC driver, `micronaut-flyway`, `micronaut-validation`, `micronaut-security-jwt`, `micronaut-http-client`, `micronaut-cache-caffeine`, `micronaut-management`, `micronaut-micrometer-registry-prometheus`, `micronaut-email-javamail`, `logback-classic`, `logstash-logback-encoder`, `micronaut-serde-jackson`
   - All test dependencies: `micronaut-test-junit5`, `junit-jupiter`, `junit-jupiter-params`, `assertj-core`, `testcontainers`, `testcontainers-postgresql`, `testcontainers-junit-jupiter`, Keycloak testcontainers module, `wiremock`
-  - Maven plugins: `micronaut-maven-plugin`, `maven-compiler-plugin` (Java 21, annotation processor paths for Micronaut inject, validation, data, serde), `maven-surefire-plugin`, `maven-failsafe-plugin`, `jacoco-maven-plugin` (with coverage threshold), `spotless-maven-plugin`
+  - Maven plugins: `micronaut-maven-plugin`, `maven-compiler-plugin` (Java 25, annotation processor paths for Micronaut inject, validation, data, serde), `maven-surefire-plugin`, `maven-failsafe-plugin`
+  - Note: `jacoco-maven-plugin` is fully configured in Step 5 and `spotless-maven-plugin` is fully configured in Step 4. Do NOT add them in this step.
   - Properties section with pinned versions for all non-BOM-managed dependencies
-  - Java 21 source/target/release configuration
+  - Java 25 source/target/release configuration
   - Annotation processors: `micronaut-inject-java`, `micronaut-validation-processor`, `micronaut-data-processor`, `micronaut-serde-processor` — declared in `annotationProcessorPaths`, NOT as compile dependencies
   - **Do NOT** include `micronaut-openapi` annotation processor
 - `.mvn/wrapper/maven-wrapper.properties` — Maven Wrapper properties
 - `mvnw` and `mvnw.cmd` — Maven Wrapper scripts (executable)
 - `.gitignore` — Ignore `target/`, IDE files, `.env`, OS files, generated sources
-- `src/main/java/eu/prometheusx/consentmanager/Application.java` — Micronaut entry point with `Micronaut.run(Application.class, args)`
+- `src/main/java/com/seamware/consentmanager/Application.java` — Micronaut entry point with `Micronaut.run(Application.class, args)`
 
 **Empty directories to create (with `.gitkeep`):**
-- `src/main/java/eu/prometheusx/consentmanager/config/`
-- `src/main/java/eu/prometheusx/consentmanager/domain/`
-- `src/main/java/eu/prometheusx/consentmanager/repository/`
-- `src/main/java/eu/prometheusx/consentmanager/service/`
-- `src/main/java/eu/prometheusx/consentmanager/api/dto/`
-- `src/main/java/eu/prometheusx/consentmanager/error/`
+- `src/main/java/com/seamware/consentmanager/config/`
+- `src/main/java/com/seamware/consentmanager/domain/`
+- `src/main/java/com/seamware/consentmanager/repository/`
+- `src/main/java/com/seamware/consentmanager/service/`
+- `src/main/java/com/seamware/consentmanager/api/dto/`
+- `src/main/java/com/seamware/consentmanager/error/`
 - `src/main/resources/db/migration/`
-- `src/test/java/eu/prometheusx/consentmanager/support/`
+- `src/test/java/com/seamware/consentmanager/support/`
 
 **Acceptance criteria:**
 - `./mvnw compile` succeeds (dependencies resolve, annotation processors run)
@@ -54,14 +55,14 @@ Create the application configuration files, the `@ConfigurationProperties` root 
   - Datasource configuration bound to `DB_URL`, `DB_USER`, `DB_PASSWORD` with HikariCP pool settings
   - `flyway.datasources.default.enabled: true`
   - `micronaut.metrics.enabled: true` with Prometheus registry enabled
-  - `endpoints.health.details-visible: ANONYMOUS` (overridden per environment)
+  - `endpoints.health.details-visible: AUTHENTICATED` (restrictive by default; relaxed to `ANONYMOUS` in dev profile only)
   - Health and metrics endpoints served outside the API context path (using `endpoints.all.path` or similar)
   - Security configuration placeholder for JWT/JWKS (detailed in TICKET-003)
 - `src/main/resources/application-dev.yml` — Dev overrides:
   - Relaxed security settings for local development
   - `endpoints.health.details-visible: ANONYMOUS`
   - Default datasource URL pointing to localhost PostgreSQL
-- `src/main/java/eu/prometheusx/consentmanager/config/ConsentManagerConfiguration.java` — `@ConfigurationProperties("consent-manager")` class with typed fields for:
+- `src/main/java/com/seamware/consentmanager/config/ConsentManagerConfiguration.java` — `@ConfigurationProperties("consent-manager")` class with typed fields for:
   - `url` (bound to `CONSENT_MANAGER_URL`) — public base URL of this service
   - `contractServiceUrl` (bound to `CONTRACT_SERVICE_URL`) — Contract Service base URL
 - `.env.sample` — Documents every environment variable:
@@ -91,22 +92,22 @@ Set up the API-first code generation pipeline and the RFC 7807 error model.
   - `generatorName: java-micronaut-server`
   - `inputSpec: ${project.basedir}/api/openapi.yaml`
   - `output: ${project.build.directory}/generated-sources/openapi`
-  - `apiPackage: eu.prometheusx.consentmanager.api.generated`
-  - `modelPackage: eu.prometheusx.consentmanager.api.generated.model`
+  - `apiPackage: com.seamware.consentmanager.api.generated`
+  - `modelPackage: com.seamware.consentmanager.api.generated.model`
   - `configOptions`: `useBeanValidation=true`, `serializationLibrary=micronaut_serde_jackson`, `generateControllerFromExamples=false`
-  - Pinned generator version via `${openapi-generator.version}` property
+  - Pinned generator version via `${openapi.generator.version}` property
 
-- `src/main/java/eu/prometheusx/consentmanager/error/ApiError.java` — RFC 7807 Problem Details representation:
+- `src/main/java/com/seamware/consentmanager/error/ApiError.java` — RFC 7807 Problem Details representation:
   - Fields: `type` (URI), `title`, `status` (int), `detail`, `instance` (URI)
   - Implements `@Serdeable` for Micronaut serialization
   - Builder or factory methods for constructing from exceptions
 
-- `src/main/java/eu/prometheusx/consentmanager/error/BadRequestException.java` — Extends `RuntimeException`, HTTP 400
-- `src/main/java/eu/prometheusx/consentmanager/error/NotFoundException.java` — Extends `RuntimeException`, HTTP 404
-- `src/main/java/eu/prometheusx/consentmanager/error/ForbiddenException.java` — Extends `RuntimeException`, HTTP 403
-- `src/main/java/eu/prometheusx/consentmanager/error/UpstreamServiceException.java` — Extends `RuntimeException`, HTTP 502
+- `src/main/java/com/seamware/consentmanager/error/BadRequestException.java` — Extends `RuntimeException`, HTTP 400
+- `src/main/java/com/seamware/consentmanager/error/NotFoundException.java` — Extends `RuntimeException`, HTTP 404
+- `src/main/java/com/seamware/consentmanager/error/ForbiddenException.java` — Extends `RuntimeException`, HTTP 403
+- `src/main/java/com/seamware/consentmanager/error/UpstreamServiceException.java` — Extends `RuntimeException`, HTTP 502
 
-- `src/main/java/eu/prometheusx/consentmanager/error/GlobalExceptionHandler.java` — Stub exception handler:
+- `src/main/java/com/seamware/consentmanager/error/GlobalExceptionHandler.java` — Stub exception handler:
   - Annotated with `@Singleton` and implements `ExceptionHandler<Exception, HttpResponse<ApiError>>`
   - Returns a generic 500 response with an `ApiError` body
   - Full implementation (per-exception-type handling, constraint violation mapping, production detail suppression) deferred to TICKET-015
@@ -132,7 +133,7 @@ Configure structured JSON logging, management endpoints, and source formatting.
   - MDC-based correlation ID field (`correlationId` or `traceId`) included in every log line
   - Reasonable log levels: `INFO` for application, `WARN` for framework internals
 
-- `src/main/java/eu/prometheusx/consentmanager/config/CorrelationIdFilter.java` — HTTP server filter:
+- `src/main/java/com/seamware/consentmanager/config/CorrelationIdFilter.java` — HTTP server filter:
   - Reads `X-Correlation-ID` header (or generates a UUID if absent)
   - Sets the value into MDC for the duration of the request
   - Clears MDC after the request completes
@@ -144,7 +145,7 @@ Configure structured JSON logging, management endpoints, and source formatting.
   - Ensure health and readiness endpoints work outside the API context path
 
 - Spotless configuration in `pom.xml`:
-  - Configure `spotless-maven-plugin` with a Java formatter (e.g., Google Java Format or Palantir Java Format)
+  - Add `spotless-maven-plugin` (not added in Step 1 — this step owns the full configuration) with a Java formatter (e.g., Google Java Format or Palantir Java Format)
   - Bind `spotless:check` to the `verify` phase so CI fails on formatting violations
   - Ensure generated sources under `target/` are excluded from formatting checks
 
@@ -169,13 +170,13 @@ Configure structured JSON logging, management endpoints, and source formatting.
 Set up the testing infrastructure with Testcontainers for PostgreSQL and write a smoke test proving the service starts and connects to a real database.
 
 **Files to create:**
-- `src/test/java/eu/prometheusx/consentmanager/support/PostgresTestResource.java` — Testcontainers PostgreSQL fixture:
+- `src/test/java/com/seamware/consentmanager/support/PostgresTestResource.java` — Testcontainers PostgreSQL fixture:
   - Implements `TestResourceProvider` (Micronaut's test resource interface) or uses `@Testcontainers` JUnit 5 extension
   - Starts a `PostgreSQLContainer` with PostgreSQL 16 image
   - Provides datasource properties (`datasources.default.url`, `datasources.default.username`, `datasources.default.password`) to the test application context
   - Shared container instance across test classes for performance
 
-- `src/test/java/eu/prometheusx/consentmanager/ApplicationSmokeTest.java` — Integration test (or `ApplicationSmokeIT.java` if using Failsafe):
+- `src/test/java/com/seamware/consentmanager/ApplicationSmokeTest.java` — Integration test (or `ApplicationSmokeIT.java` if using Failsafe):
   - Uses `@MicronautTest` with the PostgreSQL test resource
   - Verifies the application context starts successfully
   - Verifies `GET /health` returns 200 with `UP` status
@@ -186,7 +187,8 @@ Set up the testing infrastructure with Testcontainers for PostgreSQL and write a
   - Disable security for smoke tests (or configure test credentials)
   - Any test-specific property overrides
 
-- JaCoCo configuration in `pom.xml` (if not already configured in Step 1):
+- JaCoCo configuration in `pom.xml`:
+  - Add `jacoco-maven-plugin` (not added in Step 1 — this step owns the full configuration)
   - Set a minimum coverage threshold (e.g., 50% for scaffolding, to be raised as domain logic is added)
   - Configure report generation bound to the `verify` phase
 
@@ -206,9 +208,9 @@ Create the Docker multi-stage build, Docker Compose configuration for local deve
 
 **Files to create:**
 - `docker/Dockerfile` — Multi-stage build:
-  - **Build stage**: `eclipse-temurin:21-jdk` (or Maven image) — copies source, runs `./mvnw package -DskipTests`
-  - **Runtime stage**: `eclipse-temurin:21-jre-alpine` (or distroless) — copies only the packaged JAR
-  - Proper `ENTRYPOINT` with JVM flags for container environments (`-XX:+UseContainerSupport`, `-XX:MaxRAMPercentage=75.0`)
+  - **Build stage**: `eclipse-temurin:25-jdk` (or Maven image) — copies source, runs `./mvnw package -DskipTests`
+  - **Runtime stage**: `eclipse-temurin:25-jre-alpine` (or distroless) — copies only the packaged JAR
+  - Proper `ENTRYPOINT` with JVM flags for container environments (`-XX:MaxRAMPercentage=75.0`). Note: `-XX:+UseContainerSupport` is enabled by default since JDK 10 and should be omitted.
   - Non-root user for the runtime stage
   - Health check instruction using the `/health` endpoint
 

@@ -1,12 +1,12 @@
 # Consent Manager
 
 ## Overview
-A reimplemented Consent Manager service built on Java 21 + Micronaut 4 + PostgreSQL 16. It provides consent lifecycle management (creation, revocation, querying) as a stateless OAuth2 resource server with an API-first design where code is generated from an OpenAPI specification.
+A reimplemented Consent Manager service built on Java 25 + Micronaut 5 + PostgreSQL 16. It provides consent lifecycle management (creation, revocation, querying) as a stateless OAuth2 resource server with an API-first design where code is generated from an OpenAPI specification.
 
 ## Tech Stack
-- Language: Java 21
+- Language: Java 25
 - Build: Maven (with Maven Wrapper — `./mvnw`)
-- Framework: Micronaut 4 (HTTP server via Netty, Data JDBC, Security JWT, Validation)
+- Framework: Micronaut 5 (HTTP server via Netty, Data JDBC, Security JWT, Validation)
 - Database: PostgreSQL 16
 - Schema Management: Flyway
 - Test: JUnit 5 + AssertJ + Testcontainers (PostgreSQL, Keycloak) + WireMock
@@ -19,7 +19,7 @@ A reimplemented Consent Manager service built on Java 21 + Micronaut 4 + Postgre
 ```
 api/
   openapi.yaml                    # Hand-authored OpenAPI spec (source of truth for API)
-src/main/java/eu/prometheusx/consentmanager/
+src/main/java/com/seamware/consentmanager/
   Application.java                # Micronaut entry point
   config/
     ConsentManagerConfiguration.java  # @ConfigurationProperties root
@@ -40,7 +40,7 @@ src/main/resources/
   application-dev.yml             # Dev environment overrides
   logback.xml                     # Structured JSON logging config
   db/migration/                   # Flyway SQL migration files
-src/test/java/eu/prometheusx/consentmanager/
+src/test/java/com/seamware/consentmanager/
   support/
     PostgresTestResource.java     # Testcontainers PostgreSQL fixture
 docker/
@@ -79,9 +79,9 @@ compose.yaml                      # App + PostgreSQL for local development
 ## Key Conventions
 - **API-first**: The OpenAPI spec at `api/openapi.yaml` is the source of truth. Code is generated from it; never hand-write API interfaces or request/response DTOs.
 - **Generated code**: Lives under `target/generated-sources/openapi/` — never committed to version control.
-- **Package root**: `eu.prometheusx.consentmanager`
-- **Generated API package**: `eu.prometheusx.consentmanager.api.generated`
-- **Generated model package**: `eu.prometheusx.consentmanager.api.generated.model`
+- **Package root**: `com.seamware.consentmanager`
+- **Generated API package**: `com.seamware.consentmanager.api.generated`
+- **Generated model package**: `com.seamware.consentmanager.api.generated.model`
 - **Error handling**: RFC 7807 Problem Details; all exceptions extend a common pattern with HTTP status mapping.
 - **No Kotlin**: Java only — no Kotlin source sets, plugins, or dependencies.
 - **Annotation processors**: Declared in `maven-compiler-plugin`'s `annotationProcessorPaths`, not as runtime dependencies.
