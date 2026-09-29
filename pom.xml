@@ -159,6 +159,20 @@
             <scope>compile</scope>
         </dependency>
 
+        <!-- Micronaut OpenTelemetry Tracing (HTTP server and client instrumentation) -->
+        <dependency>
+            <groupId>io.micronaut.tracing</groupId>
+            <artifactId>micronaut-tracing-opentelemetry-http</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!-- OpenTelemetry OTLP Exporter (sends traces to an OTel Collector) -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- Logback Classic (structured logging runtime) -->
         <dependency>
             <groupId>ch.qos.logback</groupId>

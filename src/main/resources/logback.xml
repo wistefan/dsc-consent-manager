@@ -8,6 +8,10 @@
 
   No file appenders or rotation — the container platform is responsible
   for log retention and rotation.
+
+  OpenTelemetry tracing integration automatically adds 'traceId' and
+  'spanId' to the SLF4J MDC for each request, which the LogstashEncoder
+  includes in every JSON log line.
 -->
 <configuration>
 
@@ -17,10 +21,10 @@
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder class="net.logstash.logback.encoder.LogstashEncoder">
             <!--
-              Include the MDC 'correlationId' field in every log line.
-              The CorrelationIdFilter sets this for each HTTP request.
+              All MDC keys are included by default. OpenTelemetry tracing
+              populates 'traceId' and 'spanId' automatically. Additional
+              MDC keys from future modules will appear without config changes.
             -->
-            <includeMdcKeyName>correlationId</includeMdcKeyName>
 
             <!-- Use shorter field names for readability -->
             <fieldNames>
@@ -28,7 +32,7 @@
                 <version>[ignore]</version>
             </fieldNames>
 
-            <!-- Include caller info only for ERROR level (performance trade-off) -->
+            <!-- Caller data (class, method, line) disabled for all levels to avoid performance overhead -->
             <includeCallerData>false</includeCallerData>
         </encoder>
     </appender>
@@ -45,6 +49,9 @@
     <logger name="io.netty" level="WARN" />
     <logger name="org.flywaydb" level="INFO" />
     <logger name="com.zaxxer.hikari" level="WARN" />
+
+    <!-- OpenTelemetry SDK internals: WARN to reduce noise -->
+    <logger name="io.opentelemetry" level="WARN" />
 
     <!-- Root logger: INFO as a sensible default -->
     <root level="INFO">
