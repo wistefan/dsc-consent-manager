@@ -38,6 +38,10 @@
         <!-- OpenAPI Generator and generated-code dependencies -->
         <openapi.generator.version>7.12.0</openapi.generator.version>
         <swagger-annotations.version>2.2.28</swagger-annotations.version>
+
+        <!-- Code formatting -->
+        <spotless.version>3.10.3</spotless.version>
+        <google-java-format.version>1.36.1</google-java-format.version>
     </properties>
 
     <dependencyManagement>
@@ -153,6 +157,20 @@
             <groupId>io.micronaut.serde</groupId>
             <artifactId>micronaut-serde-jackson</artifactId>
             <scope>compile</scope>
+        </dependency>
+
+        <!-- Micronaut OpenTelemetry Tracing (HTTP server and client instrumentation) -->
+        <dependency>
+            <groupId>io.micronaut.tracing</groupId>
+            <artifactId>micronaut-tracing-opentelemetry-http</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!-- OpenTelemetry OTLP Exporter (sends traces to an OTel Collector) -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- Logback Classic (structured logging runtime) -->
@@ -326,6 +344,59 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+            </plugin>
+
+            <!-- Copy hand-authored OpenAPI spec into static resources for Swagger UI -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-openapi-spec</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/static</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}/api</directory>
+                                    <includes>
+                                        <include>openapi.yaml</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Spotless: source code formatting using Google Java Format -->
+            <plugin>
+                <groupId>com.diffplug.spotless</groupId>
+                <artifactId>spotless-maven-plugin</artifactId>
+                <version>${spotless.version}</version>
+                <configuration>
+                    <java>
+                        <googleJavaFormat>
+                            <version>${google-java-format.version}</version>
+                            <style>AOSP</style>
+                        </googleJavaFormat>
+                        <removeUnusedImports />
+                        <trimTrailingWhitespace />
+                        <endWithNewline />
+                    </java>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>spotless-check</id>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <phase>verify</phase>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

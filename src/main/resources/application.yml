@@ -6,6 +6,17 @@ micronaut:
     port: ${PORT:8080}
     context-path: ${API_PREFIX:/v1}
 
+  router:
+    # Static resources for Swagger UI and the OpenAPI specification.
+    # The openapi.yaml is copied from api/ to target/classes/static/ at build time.
+    static-resources:
+      swagger-ui:
+        paths: classpath:static/swagger-ui
+        mapping: /swagger-ui/**
+      openapi-spec:
+        paths: classpath:static
+        mapping: /static/**
+
   security:
     enabled: true
     # Allow unauthenticated access to management endpoints.
@@ -13,6 +24,14 @@ micronaut:
     #   these patterns may need revisiting once the security layer is fully wired.
     intercept-url-map:
       - pattern: /health/**
+        http-method: GET
+        access:
+          - isAnonymous()
+      - pattern: /swagger-ui/**
+        http-method: GET
+        access:
+          - isAnonymous()
+      - pattern: /static/**
         http-method: GET
         access:
           - isAnonymous()
@@ -70,12 +89,28 @@ endpoints:
     enabled: true
     sensitive: false
     details-visible: AUTHENTICATED
+    # Health indicators (DiskSpaceHealthIndicator, JdbcHealthIndicator) are
+    # auto-discovered from the classpath — no explicit enablement needed.
   metrics:
     enabled: true
     sensitive: true
   prometheus:
     enabled: true
     sensitive: true
+
+# OpenTelemetry tracing configuration.
+# The Micronaut OTel module autoconfigures the SDK from standard OTel environment
+# variables (OTEL_SERVICE_NAME, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_TRACES_EXPORTER).
+# Trace IDs and span IDs are automatically added to the SLF4J MDC for log correlation.
+tracing:
+  opentelemetry:
+    enabled: ${OTEL_TRACING_ENABLED:true}
+  exclusions:
+    - /health/**
+    - /metrics/**
+    - /prometheus/**
+    - /swagger-ui/**
+    - /static/**
 
 # Custom application configuration bound to environment variables
 consent-manager:
