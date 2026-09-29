@@ -1,0 +1,44 @@
+# Test environment overrides
+# Activated automatically when running with @MicronautTest (the "test" environment
+# is active by default).
+
+micronaut:
+  security:
+    # Disable security for integration/smoke tests. Tests that need security
+    # (e.g., OAuth2/JWT tests) can override this in their own configuration.
+    enabled: false
+
+  server:
+    # Remove the API context path in tests so management and API endpoints
+    # share the same root, simplifying test HTTP client usage.
+    context-path: /
+
+# Datasource properties are injected at runtime by PostgresTestResource
+# (Testcontainers), so no static values are needed here.
+
+flyway:
+  datasources:
+    default:
+      enabled: true
+
+endpoints:
+  all:
+    # Reset to null so management endpoints are served on the main server port
+    # (overrides application.yml's endpoints.all.port: 9090).
+    port: ~
+  health:
+    enabled: true
+    sensitive: false
+    details-visible: ANONYMOUS
+
+# Disable OpenTelemetry tracing in tests to avoid noise and external dependencies.
+tracing:
+  opentelemetry:
+    enabled: false
+
+# Suppress noisy Testcontainers and framework logs during test runs.
+logger:
+  levels:
+    org.testcontainers: WARN
+    com.github.dockerjava: WARN
+    io.micronaut: WARN
