@@ -95,6 +95,13 @@
             <scope>compile</scope>
         </dependency>
 
+        <!-- Flyway PostgreSQL Database Support (required since Flyway 10) -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- Micronaut Validation -->
         <dependency>
             <groupId>io.micronaut.validation</groupId>
