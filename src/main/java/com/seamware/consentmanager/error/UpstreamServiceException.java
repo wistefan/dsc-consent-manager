@@ -6,7 +6,8 @@ package com.seamware.consentmanager.error;
  * <p>Thrown when an external service dependency (e.g., Contract Service,
  * Identity Provider) is unreachable or returns an unexpected error. The
  * {@link GlobalExceptionHandler} maps this exception to an HTTP 502
- * Bad Gateway response with an {@link ApiError} body.
+ * Bad Gateway response with a
+ * {@link com.seamware.consentmanager.api.generated.model.ProblemDetail} body.
  */
 public class UpstreamServiceException extends RuntimeException {
 

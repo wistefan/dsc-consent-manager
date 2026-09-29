@@ -5,8 +5,8 @@ package com.seamware.consentmanager.error;
  *
  * <p>Thrown when request validation fails, required parameters are missing,
  * or the request body cannot be parsed. The {@link GlobalExceptionHandler}
- * maps this exception to an HTTP 400 Bad Request response with an
- * {@link ApiError} body.
+ * maps this exception to an HTTP 400 Bad Request response with a
+ * {@link com.seamware.consentmanager.api.generated.model.ProblemDetail} body.
  */
 public class BadRequestException extends RuntimeException {
 

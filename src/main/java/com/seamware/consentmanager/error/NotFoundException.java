@@ -5,7 +5,8 @@ package com.seamware.consentmanager.error;
  *
  * <p>Thrown when a lookup by identifier (e.g., consent ID) yields no result.
  * The {@link GlobalExceptionHandler} maps this exception to an HTTP 404
- * Not Found response with an {@link ApiError} body.
+ * Not Found response with a
+ * {@link com.seamware.consentmanager.api.generated.model.ProblemDetail} body.
  */
 public class NotFoundException extends RuntimeException {
 

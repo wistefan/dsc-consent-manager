@@ -5,8 +5,8 @@ package com.seamware.consentmanager.error;
  *
  * <p>Thrown when the authenticated principal lacks the required permissions
  * or roles to access a resource. The {@link GlobalExceptionHandler} maps
- * this exception to an HTTP 403 Forbidden response with an {@link ApiError}
- * body.
+ * this exception to an HTTP 403 Forbidden response with a
+ * {@link com.seamware.consentmanager.api.generated.model.ProblemDetail} body.
  */
 public class ForbiddenException extends RuntimeException {
 
