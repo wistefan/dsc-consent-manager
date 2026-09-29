@@ -1,0 +1,5 @@
+-- Baseline migration: creates the Flyway schema history table.
+-- This file intentionally contains no schema changes. Future tickets
+-- will add domain-specific DDL in V1, V2, etc.
+-- Flyway requires at least one migration file to initialise the
+-- flyway_schema_history table.

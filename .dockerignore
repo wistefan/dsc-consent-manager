@@ -1,0 +1,47 @@
+# =============================================================================
+# Consent Manager — Docker Build Context Exclusions
+# =============================================================================
+# Exclude files not needed inside the Docker build to speed up context
+# transfer and avoid leaking sensitive data into images.
+# =============================================================================
+
+# Version control
+.git
+.gitignore
+
+# Build output (rebuilt inside Docker)
+target/
+
+# Environment files (may contain secrets)
+.env
+.env.*
+!.env.sample
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+nbproject/
+out/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Docker files (not needed inside the build)
+docker/
+compose.yaml
+.dockerignore
+
+# Documentation
+*.md
+LICENSE
+
+# CI/CD configuration
+.github/
+.gitlab-ci.yml
+Jenkinsfile
