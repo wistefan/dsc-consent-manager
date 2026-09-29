@@ -1,0 +1,42 @@
+# ===== Build Output =====
+target/
+
+# ===== IDE Files =====
+# IntelliJ IDEA
+.idea/
+*.iml
+out/
+
+# Eclipse
+.project
+.classpath
+.settings/
+
+# VS Code
+.vscode/
+
+# NetBeans
+nb-configuration.xml
+nbproject/
+
+# ===== Editor Swap/Backup Files =====
+*.swp
+*.swo
+*~
+\#*\#
+
+# ===== OS Files =====
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ===== Environment Files =====
+.env
+
+# ===== Generated Sources =====
+# Generated API code lives under target/generated-sources/ (covered by target/ above)
+# Explicitly noting this for clarity — never commit generated sources.
+
+# ===== Maven Wrapper JAR =====
+# The wrapper JAR is downloaded on first use; no need to commit it.
+.mvn/wrapper/maven-wrapper.jar
