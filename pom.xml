@@ -34,6 +34,10 @@
         <testcontainers.version>1.20.4</testcontainers.version>
         <testcontainers-keycloak.version>3.6.0</testcontainers-keycloak.version>
         <wiremock.version>3.10.0</wiremock.version>
+
+        <!-- OpenAPI Generator and generated-code dependencies -->
+        <openapi.generator.version>7.12.0</openapi.generator.version>
+        <swagger-annotations.version>2.2.28</swagger-annotations.version>
     </properties>
 
     <dependencyManagement>
@@ -166,6 +170,16 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- ===== OpenAPI Generated Code Dependencies ===== -->
+        <!-- Swagger v3 annotations (@Schema, @Operation, etc.) required by generated code.
+             Scope is 'provided' — needed at compile time but NOT shipped at runtime. -->
+        <dependency>
+            <groupId>io.swagger.core.v3</groupId>
+            <artifactId>swagger-annotations</artifactId>
+            <version>${swagger-annotations.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- ===== Test Dependencies ===== -->
 
         <!-- Micronaut Test JUnit 5 -->
@@ -242,6 +256,42 @@
                 <groupId>io.micronaut.maven</groupId>
                 <artifactId>micronaut-maven-plugin</artifactId>
                 <extensions>true</extensions>
+            </plugin>
+
+            <!-- OpenAPI Generator: generates server interfaces and models from the spec -->
+            <plugin>
+                <groupId>org.openapitools</groupId>
+                <artifactId>openapi-generator-maven-plugin</artifactId>
+                <version>${openapi.generator.version}</version>
+                <executions>
+                    <execution>
+                        <id>generate-api</id>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${project.basedir}/api/openapi.yaml</inputSpec>
+                            <generatorName>java-micronaut-server</generatorName>
+                            <output>${project.build.directory}/generated-sources/openapi</output>
+                            <apiPackage>com.seamware.consentmanager.api.generated</apiPackage>
+                            <modelPackage>com.seamware.consentmanager.api.generated.model</modelPackage>
+                            <configOptions>
+                                <useBeanValidation>true</useBeanValidation>
+                                <useJakartaEe>true</useJakartaEe>
+                                <serializationLibrary>micronaut_serde_jackson</serializationLibrary>
+                                <generateControllerFromExamples>false</generateControllerFromExamples>
+                                <generateControllerAsAbstract>true</generateControllerAsAbstract>
+                                <reactive>false</reactive>
+                            </configOptions>
+                            <!-- Suppress generated Application.java and other scaffolding — we manage them ourselves -->
+                            <generateSupportingFiles>false</generateSupportingFiles>
+                            <generateApiTests>false</generateApiTests>
+                            <generateModelTests>false</generateModelTests>
+                            <generateApiDocumentation>false</generateApiDocumentation>
+                            <generateModelDocumentation>false</generateModelDocumentation>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
 
             <!-- Java Compiler with Micronaut Annotation Processors -->
