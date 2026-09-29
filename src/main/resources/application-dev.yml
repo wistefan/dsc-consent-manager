@@ -4,12 +4,22 @@
 micronaut:
   security:
     enabled: false
+    # Disable JWT token validation in dev — no IdP is required locally.
+    token:
+      jwt:
+        enabled: false
+        # Override JWKS signatures to prevent the JWKS fetcher from starting.
+        # In dev mode no Identity Provider is available, so no keys to fetch.
+        signatures:
+          jwks:
+            keycloak:
+              url: ""
 
 datasources:
   default:
-    url: jdbc:postgresql://localhost:5432/consent_manager
-    username: consent_manager
-    password: consent_manager
+    url: ${DB_URL:`jdbc:postgresql://localhost:5432/consent_manager`}
+    username: ${DB_USER:consent_manager}
+    password: ${DB_PASSWORD:consent_manager}
 
 endpoints:
   all:
@@ -20,3 +30,8 @@ endpoints:
     sensitive: false
   prometheus:
     sensitive: false
+
+# Disable OpenTelemetry tracing in dev — no collector is required locally.
+tracing:
+  opentelemetry:
+    enabled: false

@@ -23,6 +23,9 @@
         <jdk.version>25</jdk.version>
         <release.version>25</release.version>
 
+        <!-- Application main class for executable JAR packaging -->
+        <exec.mainClass>com.seamware.consentmanager.Application</exec.mainClass>
+
         <!-- Micronaut runtime -->
         <micronaut.runtime>netty</micronaut.runtime>
         <micronaut.test.resources.enabled>false</micronaut.test.resources.enabled>
