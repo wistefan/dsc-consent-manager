@@ -2,9 +2,9 @@
 # Consent Manager — Docker Compose for Local Development
 # =============================================================================
 # Usage:
-#   1. Copy .env.sample to .env and adjust values if needed
+#   1. (Optional) Copy .env.sample to .env and adjust values if needed
 #   2. docker compose up -d
-#   3. Health check: curl http://localhost:9090/v1/health
+#   3. Health check: curl http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health
 #   4. API base:     http://localhost:8080/v1
 # =============================================================================
 
@@ -24,14 +24,15 @@ services:
       db:
         condition: service_healthy
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       # Override DB_URL to point to the 'db' service within the Docker network
       DB_URL: jdbc:postgresql://db:5432/consent_manager
       # Use dev environment for local development (relaxed security)
       MICRONAUT_ENVIRONMENTS: dev
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/v1/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health || exit 1"]
       interval: 15s
       timeout: 5s
       start_period: 45s
