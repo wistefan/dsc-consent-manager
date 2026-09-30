@@ -14,9 +14,9 @@ import java.util.UUID;
  * Repository for {@link PrivacyNotice} entities, backed by the {@code privacy_notices} database
  * table.
  *
- * <p>Extends {@link PageableRepository} to provide standard CRUD operations plus pagination
- * support. Includes methods for querying active (non-archived) privacy notices by provider and
- * contract URI.
+ * <p>Extends {@link PageableRepository} to provide standard CRUD operations plus pagination support
+ * (including {@code findAll(Pageable)}). Includes methods for querying active (non-archived)
+ * privacy notices by provider and contract URI.
  */
 @JdbcRepository(dialect = Dialect.POSTGRES)
 public interface PrivacyNoticeRepository extends PageableRepository<PrivacyNotice, UUID> {
@@ -53,14 +53,4 @@ public interface PrivacyNoticeRepository extends PageableRepository<PrivacyNotic
      * @return a page of active privacy notices matching the criteria
      */
     Page<PrivacyNotice> findByProviderIdAndArchivedAtIsNull(UUID providerId, Pageable pageable);
-
-    /**
-     * Returns a paginated list of all privacy notices.
-     *
-     * <p>The returned {@link Page} includes the total count for pagination metadata.
-     *
-     * @param pageable the pagination parameters (page number, size, sort)
-     * @return a page of privacy notices matching the pagination criteria
-     */
-    Page<PrivacyNotice> findAll(Pageable pageable);
 }
