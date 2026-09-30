@@ -21,6 +21,9 @@ The DDL must match the schema in the ticket exactly. Use the exact constraint na
 **Files to create:**
 - `src/main/resources/db/migration/V1__initial_schema.sql`
 
+**Files to delete:**
+- `src/main/resources/db/migration/.gitkeep`
+
 **Acceptance criteria covered:** AC-1 (Flyway applies cleanly), AC-3 (unique constraints), AC-4 (partial unique index), AC-5 (CHECK constraint), AC-6 (partial unique index on privacy_notices), AC-7 (cascade/restrict on users), AC-8 (cascade/restrict on participants).
 
 ### Step 2: Enums and JSONB record types
@@ -51,7 +54,7 @@ Create the Java enums and JSONB-serializable record types that are referenced by
 - `src/main/java/com/seamware/consentmanager/domain/PrivacyNoticePayload.java`
 - `src/main/java/com/seamware/consentmanager/domain/ConsentSnapshot.java`
 
-**Acceptance criteria covered:** AC-9 (ConsentStatus enum used by factory method in Step 3), AC-10 (JSONB round-trip types defined here, tested in Step 5).
+**Acceptance criteria covered:** AC-9 (ConsentStatus enum used by factory method in Step 4), AC-10 (JSONB round-trip types defined here, tested in Step 6).
 
 ### Step 3: Domain entities — User, Participant, UserParticipant
 
@@ -134,7 +137,9 @@ public interface UserRepository extends CrudRepository<User, UUID> {
 - Methods: `findByIdentifier`, `existsByIdentifier`, paginated `findAll` returning `Page<Participant>`.
 
 **`UserParticipantRepository`** (`src/main/java/com/seamware/consentmanager/repository/UserParticipantRepository.java`):
-- Methods: `findByUserId`, `findByParticipantId`, `existsByUserIdAndParticipantId`, `deleteByUserIdAndParticipantId`.
+- Extends `GenericRepository<UserParticipant>` (not `CrudRepository`) because `user_participants` has a composite PK `(user_id, participant_id)` which Micronaut Data's `CrudRepository<Entity, ID>` cannot handle with a single ID type parameter.
+- Provide manual CRUD via `@Query`-annotated methods: `save` (raw INSERT), `deleteByUserIdAndParticipantId`, `findByUserId`, `findByParticipantId`, `existsByUserIdAndParticipantId`.
+- Alternatively, if using an `@EmbeddedId` with a `UserParticipantId` embeddable class works with Micronaut Data JDBC, prefer that approach and extend `CrudRepository<UserParticipant, UserParticipantId>`. The implementing agent should verify which approach Micronaut Data JDBC supports and document the choice.
 
 **`PrivacyNoticeRepository`** (`src/main/java/com/seamware/consentmanager/repository/PrivacyNoticeRepository.java`):
 - Extends `CrudRepository<PrivacyNotice, UUID>` or `PageableRepository`.
@@ -143,7 +148,7 @@ public interface UserRepository extends CrudRepository<User, UUID> {
 **`ConsentRepository`** (`src/main/java/com/seamware/consentmanager/repository/ConsentRepository.java`):
 - Extends `CrudRepository<Consent, UUID>` or `PageableRepository`.
 - Methods: `findByUserId` (paginated), `findByUserIdAndStatus`, `findByProviderId` (paginated), `findByConsumerId` (paginated), `findByPrivacyNoticeId`, `findByParentConsentId`.
-- All paginated queries return `Page<Consent>` with filtered counts (AC-12 / original bug 18.3 fix).
+- All paginated queries return `Page<Consent>` with filtered counts (original bug 18.3 fix — ensures `Page.getTotalSize()` reflects the filtered result set, not the unfiltered table count).
 
 **`ConsentEventRepository`** (`src/main/java/com/seamware/consentmanager/repository/ConsentEventRepository.java`):
 - Extends `CrudRepository<ConsentEvent, UUID>`.
@@ -210,7 +215,8 @@ Create comprehensive integration tests that validate all acceptance criteria aga
 - Test CRUD operations and ordering by `occurred_at`.
 - Test cascade: deleting a consent cascades to its events.
 
-**`ConsentStatusIT`** (`src/test/java/com/seamware/consentmanager/domain/ConsentStatusIT.java`):
+**`ConsentStatusIT`** (`src/test/java/com/seamware/consentmanager/repository/ConsentStatusIT.java`):
+- Placed in the `repository` package because it requires a running PostgreSQL database (raw SQL inserts to test the CHECK constraint), making it a schema integration test rather than a domain unit test.
 - **Parameterized test (AC-12):** Verify every `ConsentStatus` enum value maps to a valid database status string.
 - **Parameterized test (AC-12):** Verify invalid status strings (e.g., `"INVALID"`, `"ACTIVE"`, `""`, `null`) are rejected by the CHECK constraint, using raw SQL inserts.
 
@@ -230,6 +236,6 @@ Create comprehensive integration tests that validate all acceptance criteria aga
 - `src/test/java/com/seamware/consentmanager/repository/PrivacyNoticeRepositoryIT.java`
 - `src/test/java/com/seamware/consentmanager/repository/ConsentRepositoryIT.java`
 - `src/test/java/com/seamware/consentmanager/repository/ConsentEventRepositoryIT.java`
-- `src/test/java/com/seamware/consentmanager/domain/ConsentStatusIT.java`
+- `src/test/java/com/seamware/consentmanager/repository/ConsentStatusIT.java`
 
 **Acceptance criteria covered:** AC-1 through AC-12 (all).
