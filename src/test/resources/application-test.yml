@@ -42,3 +42,27 @@ logger:
     org.testcontainers: WARN
     com.github.dockerjava: WARN
     io.micronaut: WARN
+
+# Dummy identity provider trust list.
+#
+# Required: the trust-list check runs unconditionally during context startup, so
+# without an entry here every @MicronautTest that starts a full context (such as
+# ApplicationSmokeIT) would fail regardless of `micronaut.security.enabled` above.
+#
+# The issuer and discovery URL point at a port nothing listens on. Nothing resolves
+# them, and an unresolvable provider is non-fatal: discovery fails in the background
+# and the provider simply never becomes usable. Tests that need a working provider
+# supply their own property source pointing at WireMock or Testcontainers Keycloak.
+consent-manager:
+  identity-providers:
+    - issuer: http://localhost:1/realms/test
+      discovery-url: http://localhost:1/realms/test/.well-known/openid-configuration
+      audience: consent-manager-test
+      claims:
+        user-identifier: sub
+        participant-identifier: participant_id
+        roles: realm_access.roles
+      role-mapping:
+        USER: consent-user
+        PARTICIPANT: consent-participant
+        CATALOG: consent-catalog

@@ -23,6 +23,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      keycloak:
+        condition: service_started
     env_file:
       - path: .env
         required: false
@@ -31,6 +33,9 @@ services:
       DB_URL: jdbc:postgresql://db:5432/consent_manager
       # Use dev environment for local development (relaxed security)
       MICRONAUT_ENVIRONMENTS: dev
+      # Override the trust-list entry to reach Keycloak inside the Docker network.
+      IDP_ISSUER: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager
+      IDP_DISCOVERY_URL: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager/.well-known/openid-configuration
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health || exit 1"]
       interval: 15s
@@ -59,6 +64,30 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    networks:
+      - consent-manager-net
+
+  # ---------------------------------------------------------------------------
+  # Keycloak — local OpenID Connect provider
+  # ---------------------------------------------------------------------------
+  # Supplies the single trust-list entry configured in application-dev.yml so
+  # `docker compose up` has a real issuer to discover. Development mode only:
+  # in-memory storage, plain HTTP, no production hardening.
+  #
+  # A bare `start-dev` Keycloak has no `consent-manager` realm yet, so discovery
+  # returns 404 until you create one in the admin console at
+  # http://localhost:${KEYCLOAK_PORT:-8180} (admin/admin by default). That is
+  # deliberately non-fatal: an unresolvable provider leaves the app running and
+  # readiness DOWN, and discovery is retried with backoff.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--http-port=${KEYCLOAK_PORT:-8180}"]
+    ports:
+      - "${KEYCLOAK_PORT:-8180}:${KEYCLOAK_PORT:-8180}"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
     restart: unless-stopped
     networks:
       - consent-manager-net

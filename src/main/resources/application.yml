@@ -43,14 +43,14 @@ micronaut:
         http-method: GET
         access:
           - isAuthenticated()
-    # JWT/JWKS configuration placeholder (detailed in TICKET-003)
+    # Token validation is performed by the application's own TokenValidator against
+    # the `consent-manager.identity-providers` trust list below. The declarative
+    # single-issuer `signatures.jwks` block is deliberately absent: the trust list holds
+    # a configurable *number* of providers, so the per-issuer validators are built
+    # programmatically from discovered JWKS URIs.
     token:
       jwt:
         enabled: true
-        signatures:
-          jwks:
-            keycloak:
-              url: ${IDP_JWKS_URL:`https://localhost/realms/master/protocol/openid-connect/certs`}
 
   metrics:
     enabled: true
@@ -116,3 +116,39 @@ tracing:
 consent-manager:
   url: ${CONSENT_MANAGER_URL:`http://localhost:8080`}
   contract-service-url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
+
+  # ---------------------------------------------------------------------------
+  # Identity provider trust list
+  # ---------------------------------------------------------------------------
+  # The set of OpenID Connect providers whose access tokens this resource server
+  # accepts. It is read ONCE at startup and is immutable for the lifetime of the
+  # process: there is no runtime reload, no admin endpoint and no auto-registration.
+  # Adding, removing or re-pointing a provider requires a config change and a restart.
+  #
+  # Startup FAILS when the list is empty or any entry is malformed. The defaults
+  # below are intentionally blank for the three values that have no defensible
+  # default, so a deployment that forgets to configure an IdP aborts at startup with
+  # a message naming the missing property rather than silently accepting nothing.
+  #
+  # Additional providers are configured either by mounting a YAML file that replaces
+  # this list, or via indexed environment variables, for example:
+  #   CONSENT_MANAGER_IDENTITY_PROVIDERS_1_ISSUER=https://other.example.com/realms/x
+  identity-providers:
+    - issuer: ${IDP_ISSUER:}
+      discovery-url: ${IDP_DISCOVERY_URL:}
+      audience: ${IDP_AUDIENCE:}
+      # Lifetime of a cached JWKS document. Key rotation is picked up within this
+      # window without a restart.
+      jwks-cache-ttl: ${IDP_JWKS_CACHE_TTL:1h}
+      # Tolerance applied to the exp, iat and nbf claims.
+      clock-skew: ${IDP_CLOCK_SKEW:30s}
+      # Claim names are per provider. Each may be a dot-separated nested path.
+      claims:
+        user-identifier: ${IDP_CLAIM_USER_IDENTIFIER:sub}
+        participant-identifier: ${IDP_CLAIM_PARTICIPANT_IDENTIFIER:participant_id}
+        roles: ${IDP_CLAIM_ROLES:realm_access.roles}
+      # Maps this service's roles to the raw role strings the provider emits.
+      role-mapping:
+        USER: ${IDP_ROLE_USER:consent-user}
+        PARTICIPANT: ${IDP_ROLE_PARTICIPANT:consent-participant}
+        CATALOG: ${IDP_ROLE_CATALOG:consent-catalog}

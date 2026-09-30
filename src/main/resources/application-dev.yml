@@ -8,12 +8,6 @@ micronaut:
     token:
       jwt:
         enabled: false
-        # Override JWKS signatures to prevent the JWKS fetcher from starting.
-        # In dev mode no Identity Provider is available, so no keys to fetch.
-        signatures:
-          jwks:
-            keycloak:
-              url: ""
 
 datasources:
   default:
@@ -35,3 +29,14 @@ endpoints:
 tracing:
   opentelemetry:
     enabled: false
+
+# Local Keycloak-shaped trust list entry, matching the `keycloak` service in
+# compose.yaml. The entry must be present even though security is disabled above:
+# the trust-list check is unconditional, because a resource server with no trust
+# list is misconfigured whatever the security toggle says. Discovery against an
+# unreachable Keycloak is non-fatal — the provider simply stays unresolved.
+consent-manager:
+  identity-providers:
+    - issuer: ${IDP_ISSUER:`http://localhost:8180/realms/consent-manager`}
+      discovery-url: ${IDP_DISCOVERY_URL:`http://localhost:8180/realms/consent-manager/.well-known/openid-configuration`}
+      audience: ${IDP_AUDIENCE:consent-manager}
