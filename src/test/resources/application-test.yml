@@ -8,6 +8,18 @@ micronaut:
     # (e.g., OAuth2/JWT tests) can override this in their own configuration.
     enabled: false
 
+    # Dummy trusted issuer. This overrides the `primary` entry declared in
+    # application.yml rather than adding a second provider: application.yml leaves
+    # `IDP_ISSUER` and `IDP_AUDIENCE` blank on purpose so a misconfigured deployment
+    # aborts at startup, so every test context must fill those two blanks in place.
+    # Introducing a differently-named entry here would leave `primary` blank and fail
+    # the trust-list validation for every test that starts a full context.
+    oauth2:
+      clients:
+        primary:
+          openid:
+            issuer: http://localhost:1/realms/test
+
   server:
     # Remove the API context path in tests so management and API endpoints
     # share the same root, simplifying test HTTP client usage.
@@ -49,20 +61,13 @@ logger:
 # without an entry here every @MicronautTest that starts a full context (such as
 # ApplicationSmokeIT) would fail regardless of `micronaut.security.enabled` above.
 #
-# The issuer and discovery URL point at a port nothing listens on. Nothing resolves
-# them, and an unresolvable provider is non-fatal: discovery fails in the background
-# and the provider simply never becomes usable. Tests that need a working provider
-# supply their own property source pointing at WireMock or Testcontainers Keycloak.
+# The issuer points at a port nothing listens on. Micronaut's OpenID discovery for
+# it fails in the background and the provider simply never becomes usable; startup
+# is unaffected. Tests that need a working provider supply their own property source
+# pointing at WireMock or Testcontainers Keycloak.
 consent-manager:
   identity-providers:
-    - issuer: http://localhost:1/realms/test
-      discovery-url: http://localhost:1/realms/test/.well-known/openid-configuration
-      audience: consent-manager-test
-      claims:
-        user-identifier: sub
-        participant-identifier: participant_id
-        roles: realm_access.roles
-      role-mapping:
-        USER: consent-user
-        PARTICIPANT: consent-participant
-        CATALOG: consent-catalog
+    primary:
+      # The only value application.yml leaves blank for this half. Claim paths, clock
+      # skew and role mapping are inherited per leaf key from application.yml.
+      audience: consent-manager

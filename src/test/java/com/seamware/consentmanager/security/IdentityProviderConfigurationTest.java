@@ -1,13 +1,10 @@
 package com.seamware.consentmanager.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micronaut.context.ApplicationContext;
 import java.time.Duration;
-import java.util.Comparator;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,55 +24,95 @@ import org.junit.jupiter.params.provider.ValueSource;
  * IdentityProviderConfiguration} and the startup check in {@link
  * IdentityProviderRegistryValidator}.
  *
- * <p>Each test starts a throwaway {@link ApplicationContext} from an explicit property map. Loading
- * of {@code application.yml} and {@code application-test.yml} is disabled so the deployment's own
- * trust list cannot leak in and mask a binding defect — every property under test is supplied by
- * the test itself.
+ * <p>A trusted provider is described by two configuration blocks that share one name — the issuer
+ * half under {@code micronaut.security.oauth2.clients.<name>.openid}, owned by Micronaut Security,
+ * and the claim half under {@code consent-manager.identity-providers.<name>}, owned by this
+ * service. These tests exercise the binding of the claim half and the startup validation of the
+ * pairing.
+ *
+ * <p>Each test starts a throwaway {@link ApplicationContext} from an explicit property map with
+ * default property sources disabled, so neither {@code application.yml} nor {@code
+ * application-test.yml} can leak a trust list in and mask a binding defect.
+ *
+ * <p>Every issuer used here points at {@link #UNREACHABLE_AUTHORITY}, a port nothing listens on, so
+ * Micronaut's OpenID discovery fails immediately with a connection refusal instead of waiting on
+ * DNS or a socket timeout. Discovery failure is deliberately non-fatal, so it does not disturb
+ * these assertions.
  */
 @DisplayName("Identity provider trust list configuration")
 class IdentityProviderConfigurationTest {
 
-    /** Prefix of the first trust-list entry, as it appears in a flattened property map. */
-    private static final String ENTRY_0 = IdentityProviderConfiguration.PREFIX + "[0]";
+    /** Host and port that refuse connections instantly, keeping discovery attempts cheap. */
+    private static final String UNREACHABLE_AUTHORITY = "http://localhost:1";
 
-    /** Prefix of the second trust-list entry. */
-    private static final String ENTRY_1 = IdentityProviderConfiguration.PREFIX + "[1]";
+    /** Name shared by both configuration halves of the provider under test. */
+    private static final String PROVIDER = "primary";
 
-    private static final String ISSUER = "https://keycloak.example.com/realms/dataspace";
-    private static final String DISCOVERY_URL = ISSUER + "/.well-known/openid-configuration";
+    /** Name of a second provider, used by the multi-provider and pairing tests. */
+    private static final String OTHER_PROVIDER = "secondary";
+
+    private static final String ISSUER = UNREACHABLE_AUTHORITY + "/realms/dataspace";
+    private static final String OTHER_ISSUER = UNREACHABLE_AUTHORITY + "/realms/other";
     private static final String AUDIENCE = "consent-manager";
     private static final String USER_ROLE_STRING = "consent-user";
     private static final String PARTICIPANT_ROLE_STRING = "consent-participant";
     private static final String CATALOG_ROLE_STRING = "consent-catalog";
     private static final String NESTED_ROLES_CLAIM = "realm_access.roles";
     private static final String PARTICIPANT_ID_CLAIM = "participant_id";
+    private static final String CONFIGURED_CLOCK_SKEW = "45s";
 
     /**
-     * Builds a fully specified, valid single-entry trust list.
+     * Returns the configuration key of the issuer half of a provider.
+     *
+     * @param name the provider name
+     * @return for example {@code micronaut.security.oauth2.clients.primary.openid.issuer}
+     */
+    private static String issuerKey(String name) {
+        return IdentityProviderConfiguration.OIDC_CLIENTS_PREFIX + "." + name + ".openid.issuer";
+    }
+
+    /**
+     * Returns the configuration key prefix of the claim half of a provider.
+     *
+     * @param name the provider name
+     * @return for example {@code consent-manager.identity-providers.primary}
+     */
+    private static String settingsKey(String name) {
+        return IdentityProviderConfiguration.PREFIX + "." + name;
+    }
+
+    /**
+     * Adds a fully specified, valid claim-settings block for a provider.
+     *
+     * @param properties the map to populate
+     * @param name the provider name
+     */
+    private static void putValidSettings(Map<String, Object> properties, String name) {
+        String prefix = settingsKey(name);
+        properties.put(prefix + ".audience", AUDIENCE);
+        properties.put(prefix + ".clock-skew", CONFIGURED_CLOCK_SKEW);
+        properties.put(prefix + ".claims.user-identifier", "sub");
+        properties.put(prefix + ".claims.participant-identifier", PARTICIPANT_ID_CLAIM);
+        properties.put(prefix + ".claims.roles", NESTED_ROLES_CLAIM);
+        properties.put(prefix + ".role-mapping.user", USER_ROLE_STRING);
+        properties.put(prefix + ".role-mapping.participant", PARTICIPANT_ROLE_STRING);
+        properties.put(prefix + ".role-mapping.catalog", CATALOG_ROLE_STRING);
+    }
+
+    /**
+     * Builds a valid single-provider trust list covering both configuration halves.
      *
      * @return a mutable property map that individual tests mutate to produce variants
      */
-    private static Map<String, Object> validEntry() {
+    private static Map<String, Object> validTrustList() {
         Map<String, Object> properties = new LinkedHashMap<>();
-        properties.put(ENTRY_0 + ".issuer", ISSUER);
-        properties.put(ENTRY_0 + ".discovery-url", DISCOVERY_URL);
-        properties.put(ENTRY_0 + ".audience", AUDIENCE);
-        properties.put(ENTRY_0 + ".jwks-cache-ttl", "2h");
-        properties.put(ENTRY_0 + ".clock-skew", "45s");
-        properties.put(ENTRY_0 + ".claims.user-identifier", "sub");
-        properties.put(ENTRY_0 + ".claims.participant-identifier", PARTICIPANT_ID_CLAIM);
-        properties.put(ENTRY_0 + ".claims.roles", NESTED_ROLES_CLAIM);
-        properties.put(ENTRY_0 + ".role-mapping.USER", USER_ROLE_STRING);
-        properties.put(ENTRY_0 + ".role-mapping.PARTICIPANT", PARTICIPANT_ROLE_STRING);
-        properties.put(ENTRY_0 + ".role-mapping.CATALOG", CATALOG_ROLE_STRING);
+        properties.put(issuerKey(PROVIDER), ISSUER);
+        putValidSettings(properties, PROVIDER);
         return properties;
     }
 
     /**
      * Starts an isolated application context from the supplied properties.
-     *
-     * <p>Default property sources are disabled so neither {@code application.yml} nor {@code
-     * application-test.yml} contributes a trust list.
      *
      * @param properties the complete configuration for the context
      * @return the started context; the caller is responsible for closing it
@@ -89,13 +126,27 @@ class IdentityProviderConfigurationTest {
     }
 
     /**
-     * Returns the configured providers, ordered by their position in configuration.
+     * Returns the assembled trust list, ordered by provider name.
      *
      * @param context a started context
-     * @return the trust list as the validator sees it
+     * @return the trusted providers as the validator assembled them
      */
-    private static List<IdentityProviderConfiguration> providersOf(ApplicationContext context) {
+    private static List<TrustedIdentityProvider> providersOf(ApplicationContext context) {
         return context.getBean(IdentityProviderRegistryValidator.class).getProviders();
+    }
+
+    /**
+     * Asserts that a configuration prevents the context from starting, naming the offending
+     * property.
+     *
+     * @param properties the configuration under test
+     * @param expectedMessageFragment a fragment the failure message must contain
+     */
+    private static void assertStartupFails(
+            Map<String, Object> properties, String expectedMessageFragment) {
+        assertThatThrownBy(() -> startContext(properties).close())
+                .as("startup should fail, naming the offending property")
+                .hasStackTraceContaining(expectedMessageFragment);
     }
 
     @Nested
@@ -103,33 +154,28 @@ class IdentityProviderConfigurationTest {
     class WellFormed {
 
         @Test
-        @DisplayName("binds every property of a single entry")
-        void bindsAllProperties() {
-            try (ApplicationContext context = startContext(validEntry())) {
-                List<IdentityProviderConfiguration> providers = providersOf(context);
+        @DisplayName("joins the issuer half and the claim half under one name")
+        void joinsBothHalves() {
+            try (ApplicationContext context = startContext(validTrustList())) {
+                List<TrustedIdentityProvider> providers = providersOf(context);
 
                 assertThat(providers).as("exactly one provider should be configured").hasSize(1);
 
-                IdentityProviderConfiguration provider = providers.get(0);
-                assertThat(provider.getIssuer()).isEqualTo(ISSUER);
-                assertThat(provider.getDiscoveryUrl()).isEqualTo(DISCOVERY_URL);
-                assertThat(provider.getAudience()).isEqualTo(AUDIENCE);
-                assertThat(provider.getIndex()).isZero();
-                assertThat(provider.getPropertyPath()).isEqualTo(ENTRY_0);
+                TrustedIdentityProvider provider = providers.get(0);
+                assertThat(provider.name()).isEqualTo(PROVIDER);
+                assertThat(provider.issuer()).isEqualTo(ISSUER);
+                assertThat(provider.settings().getName()).isEqualTo(PROVIDER);
+                assertThat(provider.settings().getPropertyPath()).isEqualTo(settingsKey(PROVIDER));
+                assertThat(provider.settings().getAudience()).isEqualTo(AUDIENCE);
             }
         }
 
         @Test
-        @DisplayName("parses Duration properties from their ISO-like shorthand")
+        @DisplayName("parses Duration properties from their shorthand form")
         void parsesDurations() {
-            try (ApplicationContext context = startContext(validEntry())) {
-                IdentityProviderConfiguration provider = providersOf(context).get(0);
-
-                assertThat(provider.getJwksCacheTtl())
-                        .as("jwks-cache-ttl: 2h should parse")
-                        .isEqualTo(Duration.ofHours(2));
-                assertThat(provider.getClockSkew())
-                        .as("clock-skew: 45s should parse")
+            try (ApplicationContext context = startContext(validTrustList())) {
+                assertThat(providersOf(context).get(0).settings().getClockSkew())
+                        .as("clock-skew: %s should parse", CONFIGURED_CLOCK_SKEW)
                         .isEqualTo(Duration.ofSeconds(45));
             }
         }
@@ -137,9 +183,9 @@ class IdentityProviderConfigurationTest {
         @Test
         @DisplayName("binds nested, dot-separated claim paths verbatim")
         void bindsNestedClaimPaths() {
-            try (ApplicationContext context = startContext(validEntry())) {
+            try (ApplicationContext context = startContext(validTrustList())) {
                 IdentityProviderConfiguration.ClaimsConfiguration claims =
-                        providersOf(context).get(0).getClaims();
+                        providersOf(context).get(0).settings().getClaims();
 
                 assertThat(claims.getRoles())
                         .as("a nested roles path must survive binding unchanged")
@@ -150,237 +196,184 @@ class IdentityProviderConfigurationTest {
         }
 
         @Test
-        @DisplayName("resolves the role mapping into typed Role keys")
+        @DisplayName("converts the role mapping to Role constants")
         void resolvesRoleMapping() {
-            try (ApplicationContext context = startContext(validEntry())) {
-                Map<Role, String> mapping = providersOf(context).get(0).getResolvedRoleMapping();
+            try (ApplicationContext context = startContext(validTrustList())) {
+                assertThat(providersOf(context).get(0).settings().getResolvedRoleMapping())
+                        .containsExactlyInAnyOrderEntriesOf(
+                                Map.of(
+                                        Role.USER, USER_ROLE_STRING,
+                                        Role.PARTICIPANT, PARTICIPANT_ROLE_STRING,
+                                        Role.CATALOG, CATALOG_ROLE_STRING));
+            }
+        }
 
-                assertThat(mapping)
-                        .containsEntry(Role.USER, USER_ROLE_STRING)
-                        .containsEntry(Role.PARTICIPANT, PARTICIPANT_ROLE_STRING)
-                        .containsEntry(Role.CATALOG, CATALOG_ROLE_STRING)
-                        .hasSize(Role.values().length);
+        @Test
+        @DisplayName("applies the documented defaults for optional properties")
+        void appliesDefaults() {
+            Map<String, Object> properties = validTrustList();
+            properties.remove(settingsKey(PROVIDER) + ".clock-skew");
+            properties.remove(settingsKey(PROVIDER) + ".claims.user-identifier");
+
+            try (ApplicationContext context = startContext(properties)) {
+                IdentityProviderConfiguration settings = providersOf(context).get(0).settings();
+
+                assertThat(settings.getClockSkew())
+                        .isEqualTo(IdentityProviderConfiguration.DEFAULT_CLOCK_SKEW);
+                assertThat(settings.getClaims().getUserIdentifier())
+                        .isEqualTo(IdentityProviderConfiguration.DEFAULT_USER_IDENTIFIER_CLAIM);
+            }
+        }
+
+        @Test
+        @DisplayName("binds several providers and orders them by name")
+        void bindsSeveralProviders() {
+            Map<String, Object> properties = validTrustList();
+            properties.put(issuerKey(OTHER_PROVIDER), OTHER_ISSUER);
+            putValidSettings(properties, OTHER_PROVIDER);
+
+            try (ApplicationContext context = startContext(properties)) {
+                assertThat(providersOf(context))
+                        .extracting(TrustedIdentityProvider::name, TrustedIdentityProvider::issuer)
+                        .containsExactly(
+                                org.assertj.core.groups.Tuple.tuple(PROVIDER, ISSUER),
+                                org.assertj.core.groups.Tuple.tuple(OTHER_PROVIDER, OTHER_ISSUER));
             }
         }
 
         @Test
         @DisplayName("publishes the trust list as an unmodifiable collection")
-        void trustListIsUnmodifiable() {
-            try (ApplicationContext context = startContext(validEntry())) {
-                IdentityProviderConfiguration provider = providersOf(context).get(0);
+        void publishesUnmodifiableTrustList() {
+            try (ApplicationContext context = startContext(validTrustList())) {
+                List<TrustedIdentityProvider> providers = providersOf(context);
 
-                assertThatThrownBy(() -> providersOf(context).add(provider))
-                        .as("the trust list is fixed at startup and must not be mutable")
+                assertThatThrownBy(() -> providers.add(providers.get(0)))
+                        .as("the trust list must be immutable for the lifetime of the process")
                         .isInstanceOf(UnsupportedOperationException.class);
-                assertThatThrownBy(
-                                () ->
-                                        provider.getResolvedRoleMapping()
-                                                .put(Role.USER, "something-else"))
-                        .isInstanceOf(UnsupportedOperationException.class);
-            }
-        }
-
-        @Test
-        @DisplayName("applies defaults for the optional properties")
-        void appliesDefaults() {
-            Map<String, Object> properties = validEntry();
-            properties.remove(ENTRY_0 + ".jwks-cache-ttl");
-            properties.remove(ENTRY_0 + ".clock-skew");
-            properties.remove(ENTRY_0 + ".claims.user-identifier");
-
-            try (ApplicationContext context = startContext(properties)) {
-                IdentityProviderConfiguration provider = providersOf(context).get(0);
-
-                assertThat(provider.getJwksCacheTtl())
-                        .isEqualTo(IdentityProviderConfiguration.DEFAULT_JWKS_CACHE_TTL);
-                assertThat(provider.getClockSkew())
-                        .isEqualTo(IdentityProviderConfiguration.DEFAULT_CLOCK_SKEW);
-                assertThat(provider.getClaims().getUserIdentifier())
-                        .isEqualTo(IdentityProviderConfiguration.DEFAULT_USER_IDENTIFIER_CLAIM);
-            }
-        }
-
-        @ParameterizedTest(name = "role-mapping key written as \"{0}\"")
-        @ValueSource(strings = {"USER", "user", "User"})
-        @DisplayName("accepts a role-mapping key in any case")
-        void acceptsRoleKeyInAnyCase(String roleKey) {
-            Map<String, Object> properties = validEntry();
-            properties.remove(ENTRY_0 + ".role-mapping.USER");
-            properties.remove(ENTRY_0 + ".role-mapping.PARTICIPANT");
-            properties.remove(ENTRY_0 + ".role-mapping.CATALOG");
-            properties.put(ENTRY_0 + ".role-mapping." + roleKey, USER_ROLE_STRING);
-
-            try (ApplicationContext context = startContext(properties)) {
-                assertThat(providersOf(context).get(0).getResolvedRoleMapping())
-                        .containsExactly(Map.entry(Role.USER, USER_ROLE_STRING));
-            }
-        }
-
-        @Test
-        @DisplayName("binds several providers in configuration order")
-        void bindsMultipleProviders() {
-            Map<String, Object> properties = validEntry();
-            String secondIssuer = "https://other.example.com/realms/partners";
-            properties.put(ENTRY_1 + ".issuer", secondIssuer);
-            properties.put(
-                    ENTRY_1 + ".discovery-url", secondIssuer + "/.well-known/openid-configuration");
-            properties.put(ENTRY_1 + ".audience", "consent-manager");
-            properties.put(ENTRY_1 + ".claims.participant-identifier", "org_id");
-            properties.put(ENTRY_1 + ".claims.roles", "roles");
-            properties.put(ENTRY_1 + ".role-mapping.PARTICIPANT", "partner");
-
-            try (ApplicationContext context = startContext(properties)) {
-                List<IdentityProviderConfiguration> providers = providersOf(context);
-
-                assertThat(providers)
-                        .extracting(IdentityProviderConfiguration::getIssuer)
-                        .containsExactly(ISSUER, secondIssuer);
-                assertThat(providers)
-                        .isSortedAccordingTo(
-                                Comparator.comparingInt(IdentityProviderConfiguration::getIndex));
-                assertThat(providers.get(1).getResolvedRoleMapping())
-                        .as("each provider keeps its own role vocabulary")
-                        .containsExactly(Map.entry(Role.PARTICIPANT, "partner"));
             }
         }
     }
 
     @Nested
-    @DisplayName("A malformed trust list")
-    class Malformed {
+    @DisplayName("A malformed claim-settings entry")
+    class MalformedSettings {
 
         /**
-         * Supplies one malformed variant of the valid entry per case, together with the fragment
-         * the startup failure must mention so an operator can find the offending property.
+         * Supplies one malformed variant of the valid trust list per case.
          *
-         * @return the rejection matrix
+         * @return the case name, the property overrides to apply, the property keys to remove and
+         *     the fragment the failure message must contain
          */
-        static Stream<Arguments> malformedRegistries() {
+        static Stream<Arguments> malformedVariants() {
+            String prefix = settingsKey(PROVIDER);
             return Stream.of(
                     Arguments.of(
-                            "no providers at all",
-                            Map.<String, Object>of(),
-                            IdentityProviderConfiguration.PREFIX),
-                    Arguments.of(
-                            "blank issuer",
-                            mutate(m -> m.put(ENTRY_0 + ".issuer", "  ")),
-                            "issuer"),
-                    Arguments.of(
-                            "issuer is not a URL",
-                            mutate(m -> m.put(ENTRY_0 + ".issuer", "not a url")),
-                            "issuer"),
-                    Arguments.of(
-                            "issuer is a relative URL",
-                            mutate(m -> m.put(ENTRY_0 + ".issuer", "/realms/dataspace")),
-                            "issuer"),
-                    Arguments.of(
-                            "blank discovery URL",
-                            mutate(m -> m.put(ENTRY_0 + ".discovery-url", "")),
-                            "discovery-url"),
-                    Arguments.of(
-                            "discovery URL is not a URL",
-                            mutate(m -> m.put(ENTRY_0 + ".discovery-url", "well-known")),
-                            "discovery-url"),
-                    Arguments.of(
                             "blank audience",
-                            mutate(m -> m.put(ENTRY_0 + ".audience", "")),
-                            "audience"),
+                            Map.of(prefix + ".audience", ""),
+                            List.of(),
+                            "audience must not be blank"),
+                    Arguments.of(
+                            "blank user-identifier claim",
+                            Map.of(prefix + ".claims.user-identifier", "  "),
+                            List.of(),
+                            "claims.user-identifier must not be blank"),
                     Arguments.of(
                             "missing roles claim",
-                            mutate(m -> m.remove(ENTRY_0 + ".claims.roles")),
-                            "claims.roles"),
-                    Arguments.of(
-                            "missing participant identifier claim",
-                            mutate(m -> m.remove(ENTRY_0 + ".claims.participant-identifier")),
-                            "claims.participant-identifier"),
+                            Map.of(),
+                            List.of(prefix + ".claims.roles"),
+                            "claims.roles must not be blank"),
                     Arguments.of(
                             "empty role mapping",
-                            mutate(
-                                    m -> {
-                                        m.remove(ENTRY_0 + ".role-mapping.USER");
-                                        m.remove(ENTRY_0 + ".role-mapping.PARTICIPANT");
-                                        m.remove(ENTRY_0 + ".role-mapping.CATALOG");
-                                    }),
-                            "role-mapping"),
-                    // Micronaut normalises configuration keys to lower-case kebab before binding,
-                    // so a YAML key of `ADMIN` reaches the registry — and the failure message — as
-                    // `admin`. The original casing is not recoverable.
+                            Map.of(),
+                            List.of(
+                                    prefix + ".role-mapping.user",
+                                    prefix + ".role-mapping.participant",
+                                    prefix + ".role-mapping.catalog"),
+                            "role-mapping must map at least one"),
                     Arguments.of(
                             "unknown role name in the role mapping",
-                            mutate(m -> m.put(ENTRY_0 + ".role-mapping.ADMIN", "consent-admin")),
-                            "unknown role 'admin'"),
+                            Map.of(prefix + ".role-mapping.admin", "consent-admin"),
+                            List.of(),
+                            "role-mapping contains unknown role 'admin'"),
                     Arguments.of(
                             "blank raw role string",
-                            mutate(m -> m.put(ENTRY_0 + ".role-mapping.USER", "   ")),
-                            "role-mapping"),
+                            Map.of(prefix + ".role-mapping.user", "   "),
+                            List.of(),
+                            "role-mapping.user must not be blank"),
                     Arguments.of(
-                            "two roles mapped to the same provider role string",
-                            mutate(m -> m.put(ENTRY_0 + ".role-mapping.CATALOG", USER_ROLE_STRING)),
-                            "ambiguous"),
+                            "the same raw role string mapped to two roles",
+                            Map.of(prefix + ".role-mapping.participant", USER_ROLE_STRING),
+                            List.of(),
+                            "the mapping would be ambiguous"),
                     Arguments.of(
                             "negative clock skew",
-                            mutate(m -> m.put(ENTRY_0 + ".clock-skew", "-5s")),
-                            "clock-skew"));
+                            Map.of(prefix + ".clock-skew", "-5s"),
+                            List.of(),
+                            "clock-skew must not be negative"));
         }
 
-        /**
-         * Applies a mutation to a copy of the valid entry.
-         *
-         * @param mutation the change that makes the entry invalid
-         * @return the mutated property map
-         */
-        private static Map<String, Object> mutate(
-                java.util.function.Consumer<Map<String, Object>> mutation) {
-            Map<String, Object> properties = validEntry();
-            mutation.accept(properties);
-            return properties;
-        }
-
-        @ParameterizedTest(name = "{0}")
-        @MethodSource("malformedRegistries")
+        @ParameterizedTest(name = "{0} aborts startup")
+        @MethodSource("malformedVariants")
         @DisplayName("aborts startup with a message naming the offending property")
         void abortsStartup(
-                String caseName, Map<String, Object> properties, String expectedFragment) {
-            assertThatThrownBy(() -> startContext(properties).close())
-                    .as("'%s' must prevent the application context from starting", caseName)
-                    .hasStackTraceContaining(expectedFragment);
+                String description,
+                Map<String, Object> overrides,
+                List<String> removals,
+                String expectedMessageFragment) {
+            Map<String, Object> properties = validTrustList();
+            removals.forEach(properties::remove);
+            properties.putAll(overrides);
+
+            assertStartupFails(properties, expectedMessageFragment);
+        }
+    }
+
+    @Nested
+    @DisplayName("The startup trust-list check")
+    class RegistryValidation {
+
+        @Test
+        @DisplayName("rejects a context with no provider at all")
+        void rejectsEmptyTrustList() {
+            assertStartupFails(new LinkedHashMap<>(), "No identity provider is configured");
         }
 
         @Test
-        @DisplayName("rejects two providers declaring the same issuer")
+        @DisplayName("rejects an OpenID client that has no claim settings")
+        void rejectsClientWithoutSettings() {
+            Map<String, Object> properties = validTrustList();
+            properties.put(issuerKey(OTHER_PROVIDER), OTHER_ISSUER);
+
+            assertStartupFails(properties, "have no claim settings");
+        }
+
+        @Test
+        @DisplayName("rejects claim settings that have no OpenID client")
+        void rejectsSettingsWithoutClient() {
+            Map<String, Object> properties = validTrustList();
+            putValidSettings(properties, OTHER_PROVIDER);
+
+            assertStartupFails(properties, "but no issuer");
+        }
+
+        @Test
+        @DisplayName("rejects two providers that declare the same issuer")
         void rejectsDuplicateIssuers() {
-            Map<String, Object> properties = validEntry();
-            properties.put(ENTRY_1 + ".issuer", ISSUER);
-            properties.put(ENTRY_1 + ".discovery-url", DISCOVERY_URL);
-            properties.put(ENTRY_1 + ".audience", AUDIENCE);
-            properties.put(ENTRY_1 + ".claims.participant-identifier", PARTICIPANT_ID_CLAIM);
-            properties.put(ENTRY_1 + ".claims.roles", NESTED_ROLES_CLAIM);
-            properties.put(ENTRY_1 + ".role-mapping.USER", USER_ROLE_STRING);
+            Map<String, Object> properties = validTrustList();
+            properties.put(issuerKey(OTHER_PROVIDER), ISSUER);
+            putValidSettings(properties, OTHER_PROVIDER);
 
-            assertThatThrownBy(() -> startContext(properties).close())
-                    .as("an issuer appearing twice makes lookup by issuer ambiguous")
-                    .hasStackTraceContaining(ISSUER)
-                    .hasStackTraceContaining("exactly once");
+            assertStartupFails(properties, "each issuer must appear exactly once");
         }
 
-        @Test
-        @DisplayName("fails even when micronaut.security is disabled")
-        void failsRegardlessOfSecurityToggle() {
-            Map<String, Object> properties = new HashMap<>();
-            properties.put("micronaut.security.enabled", false);
+        @ParameterizedTest(name = "issuer \"{0}\" aborts startup")
+        @ValueSource(strings = {"not-a-url", "/realms/dataspace", "ftp:"})
+        @DisplayName("rejects an issuer that is not an absolute URL with a host")
+        void rejectsMalformedIssuer(String issuer) {
+            Map<String, Object> properties = validTrustList();
+            properties.put(issuerKey(PROVIDER), issuer);
 
-            assertThatThrownBy(() -> startContext(properties).close())
-                    .as("a resource server with no trust list is misconfigured either way")
-                    .hasStackTraceContaining(IdentityProviderConfiguration.PREFIX);
-        }
-
-        @Test
-        @DisplayName("accepts a valid trust list when micronaut.security is disabled")
-        void acceptsValidListWhenSecurityDisabled() {
-            Map<String, Object> properties = validEntry();
-            properties.put("micronaut.security.enabled", false);
-
-            assertThatCode(() -> startContext(properties).close()).doesNotThrowAnyException();
+            assertStartupFails(properties, issuerKey(PROVIDER));
         }
     }
 

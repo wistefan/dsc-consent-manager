@@ -8,44 +8,66 @@ import jakarta.annotation.PostConstruct;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
-import java.util.Locale;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Configuration for a single trusted OpenID Connect provider.
+ * The Consent Manager's own settings for one trusted OpenID Connect provider.
  *
- * <p>One bean is created per entry of the {@code consent-manager.identity-providers} configuration
- * list. Together these beans form the service's <em>trust list</em>: the set of issuers whose
- * access tokens the Consent Manager accepts. The list is read <strong>once at startup</strong> and
- * is immutable for the lifetime of the process — there is no runtime reload, no admin endpoint and
- * no auto-registration. Adding, removing or re-pointing a provider requires a configuration change
- * and a restart.
+ * <p>This type deliberately holds <strong>only what Micronaut Security does not already
+ * provide</strong>. A trusted provider is declared to Micronaut as an OpenID Connect client:
  *
- * <p>Example configuration:
+ * <pre>{@code
+ * micronaut:
+ *   security:
+ *     oauth2:
+ *       clients:
+ *         keycloak:                 # <-- the provider name
+ *           openid:
+ *             issuer: https://keycloak.example.com/realms/dataspace
+ * }</pre>
+ *
+ * <p>From that single property Micronaut fetches the provider's OpenID discovery document, reads
+ * its {@code jwks_uri}, and registers a JWKS-backed signature configuration that caches the
+ * provider's signing keys and re-fetches them when the cache expires. Issuer, discovery, key
+ * retrieval and key caching therefore need no code here. No {@code client-id} or {@code
+ * client-secret} is configured: the Consent Manager is a resource server, performs no OAuth2 flow
+ * and stores no credentials.
+ *
+ * <p>What Micronaut does <em>not</em> offer is per-provider claim handling — its audience and roles
+ * settings are single, global values and its roles lookup cannot follow a nested claim path. Those
+ * gaps are what this class fills, under a matching name:
  *
  * <pre>{@code
  * consent-manager:
  *   identity-providers:
- *     - issuer: https://keycloak.example.com/realms/dataspace
- *       discovery-url: https://keycloak.example.com/realms/dataspace/.well-known/openid-configuration
+ *     keycloak:                     # <-- same name as the OIDC client above
  *       audience: consent-manager
- *       jwks-cache-ttl: 1h
  *       clock-skew: 30s
  *       claims:
  *         user-identifier: sub
  *         participant-identifier: participant_id
  *         roles: realm_access.roles
  *       role-mapping:
- *         USER: consent-user
- *         PARTICIPANT: consent-participant
- *         CATALOG: consent-catalog
+ *         user: consent-user
+ *         participant: consent-participant
+ *         catalog: consent-catalog
  * }</pre>
+ *
+ * <p>Entries are keyed by <strong>name</strong> rather than by list index. A named key binds from
+ * an environment variable ({@code CONSENT_MANAGER_IDENTITY_PROVIDERS_KEYCLOAK_AUDIENCE}), whereas
+ * an indexed one does not: Micronaut registers {@code CONSENT_MANAGER_IDENTITY_PROVIDERS_1_ISSUER}
+ * verbatim as {@code CONSENT_MANAGER_IDENTITY_PROVIDERS[1]ISSUER}, which never normalises to a
+ * bindable property, so an operator adding a second issuer that way would be silently ignored.
+ *
+ * <p>The trust list is read <strong>once at startup</strong> and is immutable for the lifetime of
+ * the process — no runtime reload, no admin endpoint, no auto-registration. Adding, removing or
+ * re-pointing a provider requires a configuration change and a restart.
  *
  * <p>Every value is validated at startup. A malformed entry aborts context creation with a message
  * naming the offending property, because a resource server that silently trusts a misconfigured
@@ -53,39 +75,44 @@ import java.util.Map;
  *
  * @see IdentityProviderRegistryValidator
  */
-@EachProperty(value = IdentityProviderConfiguration.PREFIX, list = true)
+@EachProperty(IdentityProviderConfiguration.PREFIX)
 public class IdentityProviderConfiguration {
 
-    /** Configuration prefix holding the trust list. */
+    /** Configuration prefix holding the per-provider claim settings. */
     public static final String PREFIX = "consent-manager.identity-providers";
 
     /**
-     * Wildcard form of a single trust-list entry's property path.
+     * Configuration prefix under which each trusted provider's issuer is declared.
+     *
+     * <p>Owned by Micronaut Security OAuth2, not by this application. Referenced here so that
+     * startup diagnostics can point an operator at the exact property they need to add.
+     */
+    public static final String OIDC_CLIENTS_PREFIX = "micronaut.security.oauth2.clients";
+
+    /**
+     * Wildcard form of a single entry's property path.
      *
      * <p>Used to build Bean Validation messages that name the offending property in the
      * lower-case-kebab form an operator actually writes in configuration, rather than the Java
      * field name the default constraint message would report.
      */
-    private static final String ENTRY_PATH = PREFIX + "[*]";
-
-    /** Default lifetime of a cached JWKS document when {@code jwks-cache-ttl} is not configured. */
-    public static final Duration DEFAULT_JWKS_CACHE_TTL = Duration.ofHours(1);
+    private static final String ENTRY_PATH = PREFIX + ".*";
 
     /**
      * Default tolerance applied to {@code exp}, {@code iat} and {@code nbf} when {@code clock-skew}
      * is not configured.
+     *
+     * <p>Micronaut's own expiration and not-before validators compare against the current instant
+     * with no leeway, so this tolerance has no equivalent in the framework.
      */
     public static final Duration DEFAULT_CLOCK_SKEW = Duration.ofSeconds(30);
 
     /** Default claim carrying the user identifier, per the published token contract. */
     public static final String DEFAULT_USER_IDENTIFIER_CLAIM = "sub";
 
-    private final int index;
+    private final String name;
 
-    private String issuer;
-    private String discoveryUrl;
     private String audience;
-    private Duration jwksCacheTtl = DEFAULT_JWKS_CACHE_TTL;
     private Duration clockSkew = DEFAULT_CLOCK_SKEW;
     private ClaimsConfiguration claims = new ClaimsConfiguration();
     private Map<String, String> roleMapping = Map.of();
@@ -93,77 +120,39 @@ public class IdentityProviderConfiguration {
     private Map<Role, String> resolvedRoleMapping = Map.of();
 
     /**
-     * Creates a configuration bean for one entry of the trust list.
+     * Creates the settings bean for one named trust-list entry.
      *
-     * @param index the zero-based position of this entry within {@code
-     *     consent-manager.identity-providers}, supplied by Micronaut
+     * @param name the configuration key of this entry, which must match the name of a {@code
+     *     micronaut.security.oauth2.clients.<name>} OpenID Connect client
      */
-    public IdentityProviderConfiguration(@Parameter int index) {
-        this.index = index;
+    public IdentityProviderConfiguration(@Parameter String name) {
+        this.name = name;
     }
 
     /**
-     * Returns the zero-based position of this entry within the configured trust list.
+     * Returns the name of this entry, which is also the name of its OpenID Connect client.
      *
-     * @return the configuration list index
+     * @return the configuration key, for example {@code keycloak}
      */
-    public int getIndex() {
-        return index;
+    public String getName() {
+        return name;
     }
 
     /**
      * Returns the fully-qualified configuration path of this entry, for use in diagnostics.
      *
-     * @return for example {@code consent-manager.identity-providers[0]}
+     * @return for example {@code consent-manager.identity-providers.keycloak}
      */
     public String getPropertyPath() {
-        return PREFIX + "[" + index + "]";
-    }
-
-    /**
-     * Returns the expected {@code iss} claim value.
-     *
-     * <p>Compared byte-for-byte against both the token's {@code iss} and the {@code issuer} field
-     * of the provider's discovery document.
-     *
-     * @return the absolute issuer URL
-     */
-    @NotBlank(message = ENTRY_PATH + ".issuer must not be blank")
-    public String getIssuer() {
-        return issuer;
-    }
-
-    /**
-     * Sets the expected {@code iss} claim value.
-     *
-     * @param issuer the absolute issuer URL
-     */
-    public void setIssuer(String issuer) {
-        this.issuer = issuer;
-    }
-
-    /**
-     * Returns the OpenID Connect discovery endpoint used to locate this provider's {@code
-     * jwks_uri}.
-     *
-     * @return the absolute discovery document URL
-     */
-    @NotBlank(message = ENTRY_PATH + ".discovery-url must not be blank")
-    public String getDiscoveryUrl() {
-        return discoveryUrl;
-    }
-
-    /**
-     * Sets the OpenID Connect discovery endpoint.
-     *
-     * @param discoveryUrl the absolute discovery document URL
-     */
-    public void setDiscoveryUrl(String discoveryUrl) {
-        this.discoveryUrl = discoveryUrl;
+        return PREFIX + "." + name;
     }
 
     /**
      * Returns the audience this service expects to find in the token's {@code aud} claim.
+     *
+     * <p>Micronaut's {@code micronaut.security.token.jwt.claims-validators.audience} is a single
+     * global string shared by every issuer, so it cannot express "issuer A must address audience X
+     * and issuer B audience Y". This per-provider value can.
      *
      * @return the expected audience
      */
@@ -179,25 +168,6 @@ public class IdentityProviderConfiguration {
      */
     public void setAudience(String audience) {
         this.audience = audience;
-    }
-
-    /**
-     * Returns how long a fetched JWKS document stays valid before it is refreshed.
-     *
-     * @return the JWKS cache time-to-live, never {@code null}
-     */
-    @NotNull(message = ENTRY_PATH + ".jwks-cache-ttl must not be null")
-    public Duration getJwksCacheTtl() {
-        return jwksCacheTtl;
-    }
-
-    /**
-     * Sets the JWKS cache time-to-live.
-     *
-     * @param jwksCacheTtl the time-to-live; {@code null} restores {@link #DEFAULT_JWKS_CACHE_TTL}
-     */
-    public void setJwksCacheTtl(Duration jwksCacheTtl) {
-        this.jwksCacheTtl = jwksCacheTtl == null ? DEFAULT_JWKS_CACHE_TTL : jwksCacheTtl;
     }
 
     /**
@@ -242,11 +212,11 @@ public class IdentityProviderConfiguration {
     /**
      * Returns the raw, unconverted role mapping exactly as bound from configuration.
      *
-     * <p>Keys are {@link Role} names (case-insensitive, because Micronaut normalises configuration
-     * keys) and values are the raw role strings this provider emits. Prefer {@link
-     * #getResolvedRoleMapping()}, which is type-safe and validated.
+     * <p>Keys are {@link Role} names and values are the raw role strings this provider emits.
+     * Prefer {@link #getResolvedRoleMapping()}, which is type-safe and validated.
      *
-     * @return an unmodifiable view of the configured role mapping
+     * @return an unmodifiable view of the configured role mapping; values may be {@code null} when
+     *     a key was written with no value
      */
     public Map<String, String> getRoleMapping() {
         return roleMapping;
@@ -255,11 +225,20 @@ public class IdentityProviderConfiguration {
     /**
      * Sets the raw role mapping.
      *
+     * <p>The defensive copy is deliberately null-tolerant. A YAML entry such as {@code
+     * role-mapping:\n user:} binds the key with a {@code null} value; {@link Map#copyOf} would
+     * reject that with a bare {@link NullPointerException} from inside the binder, whereas this
+     * copy lets {@link #resolveRoleMapping()} report it as a named, operator-readable property
+     * error.
+     *
      * @param roleMapping mapping from {@link Role} name to the raw role string this provider emits;
      *     {@code null} is treated as an empty mapping and rejected at validation time
      */
     public void setRoleMapping(Map<String, String> roleMapping) {
-        this.roleMapping = roleMapping == null ? Map.of() : Map.copyOf(roleMapping);
+        this.roleMapping =
+                roleMapping == null
+                        ? Map.of()
+                        : Collections.unmodifiableMap(new LinkedHashMap<>(roleMapping));
     }
 
     /**
@@ -279,17 +258,14 @@ public class IdentityProviderConfiguration {
      *
      * <p>Invoked by Micronaut once the bean has been populated and its Bean Validation constraints
      * have passed, so presence and non-blankness are already guaranteed here. This method covers
-     * only what those constraints cannot express: absolute-URL syntax, non-negative durations and
-     * the conversion of the raw role mapping. Throws rather than logging: a resource server with a
-     * malformed trust list must not start.
+     * only what those constraints cannot express: non-negative durations and the conversion of the
+     * raw role mapping. Throws rather than logging: a resource server with a malformed trust list
+     * must not start.
      *
      * @throws ConfigurationException if any value is malformed, naming the offending property
      */
     @PostConstruct
     public void validate() {
-        requireAbsoluteUrl("issuer", issuer);
-        requireAbsoluteUrl("discovery-url", discoveryUrl);
-        requireNonNegative("jwks-cache-ttl", jwksCacheTtl);
         requireNonNegative("clock-skew", clockSkew);
         this.resolvedRoleMapping = resolveRoleMapping();
     }
@@ -306,10 +282,11 @@ public class IdentityProviderConfiguration {
             throw new ConfigurationException(
                     getPropertyPath()
                             + ".role-mapping must map at least one of "
-                            + java.util.Arrays.toString(Role.values())
+                            + Arrays.toString(Role.values())
                             + " to a role string issued by this provider");
         }
         Map<Role, String> resolved = new EnumMap<>(Role.class);
+        Map<Role, String> keyForRole = new EnumMap<>(Role.class);
         Map<String, Role> seenRawRoles = new HashMap<>();
         roleMapping.forEach(
                 (configuredRole, rawRole) -> {
@@ -323,7 +300,7 @@ public class IdentityProviderConfiguration {
                                                                     + " unknown role '"
                                                                     + configuredRole
                                                                     + "'; expected one of "
-                                                                    + java.util.Arrays.toString(
+                                                                    + Arrays.toString(
                                                                             Role.values())));
                     if (rawRole == null || rawRole.isBlank()) {
                         throw new ConfigurationException(
@@ -333,15 +310,28 @@ public class IdentityProviderConfiguration {
                                         + " must not be blank");
                     }
                     String trimmedRawRole = rawRole.strip();
-                    if (resolved.put(role, trimmedRawRole) != null) {
+                    // Defence in depth: Micronaut normalises configuration keys to lower-case
+                    // kebab, so two distinct keys cannot currently resolve to the same Role. The
+                    // check guards a future binding path that does not normalise, and costs
+                    // nothing.
+                    String previousKey = keyForRole.put(role, configuredRole);
+                    if (previousKey != null) {
                         throw new ConfigurationException(
                                 getPropertyPath()
-                                        + ".role-mapping maps role "
+                                        + ".role-mapping names role "
                                         + role
-                                        + " more than once");
+                                        + " twice, as '"
+                                        + previousKey
+                                        + "' and '"
+                                        + configuredRole
+                                        + "'; role-mapping keys are compared ignoring case and a"
+                                        + " single role must be mapped exactly once. Write the keys"
+                                        + " in lower case so that an environment-variable override"
+                                        + " replaces the configured value instead of adding a"
+                                        + " second entry.");
                     }
-                    Role previousOwner =
-                            seenRawRoles.put(trimmedRawRole.toLowerCase(Locale.ROOT), role);
+                    resolved.put(role, trimmedRawRole);
+                    Role previousOwner = seenRawRoles.put(trimmedRawRole, role);
                     if (previousOwner != null) {
                         throw new ConfigurationException(
                                 getPropertyPath()
@@ -355,46 +345,6 @@ public class IdentityProviderConfiguration {
                     }
                 });
         return Collections.unmodifiableMap(resolved);
-    }
-
-    /**
-     * Asserts that a configured value is present and not blank.
-     *
-     * @param property the simple property name, used in the failure message
-     * @param value the configured value
-     * @throws ConfigurationException if the value is {@code null} or blank
-     */
-    private void requireNotBlank(String property, String value) {
-        if (value == null || value.isBlank()) {
-            throw new ConfigurationException(
-                    getPropertyPath() + "." + property + " must not be blank");
-        }
-    }
-
-    /**
-     * Asserts that a configured value parses as an absolute URL.
-     *
-     * @param property the simple property name, used in the failure message
-     * @param value the configured value
-     * @throws ConfigurationException if the value is blank or not an absolute URL
-     */
-    private void requireAbsoluteUrl(String property, String value) {
-        requireNotBlank(property, value);
-        try {
-            URI uri = new URI(value);
-            if (!uri.isAbsolute() || uri.getHost() == null) {
-                throw new ConfigurationException(
-                        getPropertyPath()
-                                + "."
-                                + property
-                                + " must be an absolute URL with a host, but was '"
-                                + value
-                                + "'");
-            }
-        } catch (URISyntaxException e) {
-            throw new ConfigurationException(
-                    getPropertyPath() + "." + property + " is not a valid URL: '" + value + "'", e);
-        }
     }
 
     /**
@@ -412,10 +362,11 @@ public class IdentityProviderConfiguration {
     }
 
     /**
-     * Claim names used to extract identifiers and roles from this provider's tokens.
+     * The claim names this provider uses for identifiers and roles.
      *
-     * <p>Every value may be a dot-separated nested path (for example {@code realm_access.roles});
-     * resolution of nested paths is implemented by the claim mapper.
+     * <p>Each value may be a dot-separated nested path, for example {@code realm_access.roles}.
+     * Micronaut's {@code micronaut.security.token.roles-name} is a single global key looked up with
+     * a plain map access, so it can express neither a nested path nor a per-provider difference.
      */
     @ConfigurationProperties("claims")
     public static class ClaimsConfiguration {
@@ -426,6 +377,9 @@ public class IdentityProviderConfiguration {
 
         /**
          * Returns the claim carrying the opaque user identifier.
+         *
+         * <p>The value is treated as opaque: it may be an email address, a DID, a URI or a hash of
+         * an EUDI Wallet PID.
          *
          * @return the claim path, defaulting to {@value #DEFAULT_USER_IDENTIFIER_CLAIM}
          */
@@ -447,11 +401,7 @@ public class IdentityProviderConfiguration {
         /**
          * Returns the claim carrying the opaque participant identifier.
          *
-         * <p>Required even for deployments that only expect user tokens, because the claim name has
-         * no defensible default: providers disagree on it. Catalog tokens are exempt from carrying
-         * the claim, but the claim <em>name</em> must still be configured for participant tokens.
-         *
-         * @return the claim path
+         * @return the claim path, for example {@code participant_id}
          */
         @NotBlank(message = ENTRY_PATH + ".claims.participant-identifier must not be blank")
         public String getParticipantIdentifier() {

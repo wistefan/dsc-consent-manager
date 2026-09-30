@@ -8,6 +8,12 @@ micronaut:
     token:
       jwt:
         enabled: false
+    # Issuer half of the local trust list; see the note at the bottom of this file.
+    oauth2:
+      clients:
+        primary:
+          openid:
+            issuer: ${IDP_ISSUER:`http://localhost:8180/realms/consent-manager`}
 
 datasources:
   default:
@@ -30,13 +36,17 @@ tracing:
   opentelemetry:
     enabled: false
 
-# Local Keycloak-shaped trust list entry, matching the `keycloak` service in
-# compose.yaml. The entry must be present even though security is disabled above:
-# the trust-list check is unconditional, because a resource server with no trust
-# list is misconfigured whatever the security toggle says. Discovery against an
-# unreachable Keycloak is non-fatal — the provider simply stays unresolved.
+# Local Keycloak trust list entry, matching the `keycloak` service in compose.yaml.
+#
+# Only the two values that differ from application.yml are overridden here; the
+# audience, clock skew, claim paths and role mapping of the `primary` entry are
+# inherited per leaf key from application.yml.
+#
+# The entry must be present even though security is disabled above: the trust-list
+# check is unconditional, because a resource server with no trust list is
+# misconfigured whatever the security toggle says. Discovery against an unreachable
+# Keycloak is non-fatal - the provider simply never becomes usable.
 consent-manager:
   identity-providers:
-    - issuer: ${IDP_ISSUER:`http://localhost:8180/realms/consent-manager`}
-      discovery-url: ${IDP_DISCOVERY_URL:`http://localhost:8180/realms/consent-manager/.well-known/openid-configuration`}
+    primary:
       audience: ${IDP_AUDIENCE:consent-manager}

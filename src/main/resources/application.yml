@@ -43,11 +43,46 @@ micronaut:
         http-method: GET
         access:
           - isAuthenticated()
-    # Token validation is performed by the application's own TokenValidator against
-    # the `consent-manager.identity-providers` trust list below. The declarative
-    # single-issuer `signatures.jwks` block is deliberately absent: the trust list holds
-    # a configurable *number* of providers, so the per-issuer validators are built
-    # programmatically from discovered JWKS URIs.
+    # -------------------------------------------------------------------------
+    # Trusted OpenID Connect providers - issuer half of the trust list
+    # -------------------------------------------------------------------------
+    # Each entry under `oauth2.clients` declares one trusted issuer. From the
+    # `openid.issuer` URL alone Micronaut Security fetches the provider's discovery
+    # document, reads its `jwks_uri` and registers a JWKS-backed signature
+    # configuration that caches the signing keys and re-fetches them when the cache
+    # expires, so key rotation needs no restart. Discovery happens lazily and off the
+    # startup path: an unreachable provider does not prevent the service from starting.
+    #
+    # No `client-id` or `client-secret` is set. This service is a resource server: it
+    # runs no OAuth2 flow, issues no token and stores no credential.
+    #
+    # Every client here MUST have a matching `consent-manager.identity-providers.<name>`
+    # entry below (and vice versa) or startup fails - see IdentityProviderRegistryValidator.
+    #
+    # To trust more than one issuer, mount a YAML file that adds further named entries
+    # to BOTH blocks, or pass system properties
+    # (-Dmicronaut.security.oauth2.clients.<name>.openid.issuer=...). Environment
+    # variables are not a supported way to add a provider: the underscores in a name
+    # such as CONSENT_MANAGER_IDENTITY_PROVIDERS_OTHER_ROLE_MAPPING_USER are ambiguous
+    # and bind spurious extra providers. Use them only for the `${IDP_*}` placeholders
+    # below, which configure the single `primary` provider.
+    oauth2:
+      clients:
+        primary:
+          openid:
+            issuer: ${IDP_ISSUER:}
+
+    # Micronaut's own JWT validation is left ENABLED so that the JWKS signature
+    # configurations registered above are applied to incoming bearer tokens. With no
+    # signature configuration at all Micronaut accepts an unsigned `alg: none` token,
+    # which is why UnsignedTokenRejector is registered as a never-matching fallback:
+    # the set of signature configurations is then never empty, even while discovery is
+    # still pending or has failed.
+    #
+    # Issuer, audience, claim and role checks are NOT performed here - Micronaut's
+    # equivalents are single global values. They are applied per provider by this
+    # service's own TokenValidator (added in a later step) from the
+    # `consent-manager.identity-providers` settings below.
     token:
       jwt:
         enabled: true
@@ -118,28 +153,27 @@ consent-manager:
   contract-service-url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
 
   # ---------------------------------------------------------------------------
-  # Identity provider trust list
+  # Identity provider trust list - claim half
   # ---------------------------------------------------------------------------
-  # The set of OpenID Connect providers whose access tokens this resource server
-  # accepts. It is read ONCE at startup and is immutable for the lifetime of the
-  # process: there is no runtime reload, no admin endpoint and no auto-registration.
-  # Adding, removing or re-pointing a provider requires a config change and a restart.
+  # One entry per trusted provider, keyed by the SAME name as the
+  # `micronaut.security.oauth2.clients.<name>` entry above. The two halves are
+  # joined at startup; a name present in only one of them aborts startup.
   #
-  # Startup FAILS when the list is empty or any entry is malformed. The defaults
-  # below are intentionally blank for the three values that have no defensible
-  # default, so a deployment that forgets to configure an IdP aborts at startup with
-  # a message naming the missing property rather than silently accepting nothing.
+  # This block holds only what Micronaut Security cannot express: a per-provider
+  # audience, clock skew, claim paths (which may be nested) and role mapping.
+  # Issuer, discovery and signing-key caching are Micronaut's job, not ours.
   #
-  # Additional providers are configured either by mounting a YAML file that replaces
-  # this list, or via indexed environment variables, for example:
-  #   CONSENT_MANAGER_IDENTITY_PROVIDERS_1_ISSUER=https://other.example.com/realms/x
+  # The trust list is read ONCE at startup and is immutable for the lifetime of the
+  # process: no runtime reload, no admin endpoint, no auto-registration. Adding,
+  # removing or re-pointing a provider requires a config change and a restart.
+  #
+  # Startup FAILS when the list is empty or any entry is malformed. `IDP_ISSUER` and
+  # `IDP_AUDIENCE` intentionally have no default, so a deployment that forgets to
+  # configure an IdP aborts at startup with a message naming the missing property
+  # rather than silently trusting something.
   identity-providers:
-    - issuer: ${IDP_ISSUER:}
-      discovery-url: ${IDP_DISCOVERY_URL:}
+    primary:
       audience: ${IDP_AUDIENCE:}
-      # Lifetime of a cached JWKS document. Key rotation is picked up within this
-      # window without a restart.
-      jwks-cache-ttl: ${IDP_JWKS_CACHE_TTL:1h}
       # Tolerance applied to the exp, iat and nbf claims.
       clock-skew: ${IDP_CLOCK_SKEW:30s}
       # Claim names are per provider. Each may be a dot-separated nested path.
@@ -148,7 +182,9 @@ consent-manager:
         participant-identifier: ${IDP_CLAIM_PARTICIPANT_IDENTIFIER:participant_id}
         roles: ${IDP_CLAIM_ROLES:realm_access.roles}
       # Maps this service's roles to the raw role strings the provider emits.
+      # Keys are written in lower case so that an override replaces the configured
+      # value instead of adding a second entry for the same role.
       role-mapping:
-        USER: ${IDP_ROLE_USER:consent-user}
-        PARTICIPANT: ${IDP_ROLE_PARTICIPANT:consent-participant}
-        CATALOG: ${IDP_ROLE_CATALOG:consent-catalog}
+        user: ${IDP_ROLE_USER:consent-user}
+        participant: ${IDP_ROLE_PARTICIPANT:consent-participant}
+        catalog: ${IDP_ROLE_CATALOG:consent-catalog}

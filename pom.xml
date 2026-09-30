@@ -138,6 +138,21 @@
             <scope>compile</scope>
         </dependency>
 
+        <!--
+            Micronaut Security OAuth2.
+
+            Used purely for its OpenID Connect *provider* support: each
+            `micronaut.security.oauth2.clients.<name>.openid.issuer` entry makes Micronaut
+            fetch that provider's discovery document and register a JWKS-backed signature
+            configuration for it. No OAuth2 login flow, callback route or client secret is
+            involved; this service is a resource server.
+        -->
+        <dependency>
+            <groupId>io.micronaut.security</groupId>
+            <artifactId>micronaut-security-oauth2</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
         <!-- Micronaut Cache (Caffeine) -->
         <dependency>
             <groupId>io.micronaut.cache</groupId>
