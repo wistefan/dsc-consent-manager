@@ -18,7 +18,10 @@ import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Requires;
+import io.micronaut.context.env.Environment;
+import io.micronaut.http.HttpHeaders;
 import io.micronaut.http.HttpRequest;
+import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
 import io.micronaut.http.annotation.Controller;
 import io.micronaut.http.annotation.Get;
@@ -97,6 +100,33 @@ class TokenSignatureEnforcementIT {
 
     /** Issuer URL that refuses connections instantly, so discovery can never succeed. */
     private static final String UNREACHABLE_ISSUER = "http://localhost:1" + REALM_PATH;
+
+    /**
+     * Path micronaut-security-oauth2 serves its protected-resource metadata on by default.
+     *
+     * <p>{@code ProtectedResourceMetadataController} is annotated
+     * {@code @Secured(SecurityRule.IS_ANONYMOUS)} and {@code
+     * DefaultProtectedResourceMetadataProvider} renders the injected {@code
+     * List<OpenIdClientConfiguration>}, so while the endpoint is enabled any unauthenticated caller
+     * can read the configured issuer URLs.
+     */
+    private static final String PROTECTED_RESOURCE_METADATA_PATH =
+            "/.well-known/oauth-protected-resource";
+
+    /** Property {@code application.yml} sets to remove the metadata controller. */
+    private static final String PROTECTED_RESOURCE_METADATA_ENABLED =
+            "micronaut.security.oauth2.protected-resource-metadata.enabled";
+
+    /**
+     * Property {@code application.yml} sets to stop the metadata hint being appended to {@code
+     * WWW-Authenticate}. It is separate from {@link #PROTECTED_RESOURCE_METADATA_ENABLED}: the
+     * challenge provider has its own {@code @Requires} on this name and ignores the other flag.
+     */
+    private static final String PROTECTED_RESOURCE_METADATA_WWW_AUTHENTICATE =
+            "micronaut.security.oauth2.protected-resource-metadata.www-authenticate";
+
+    /** Parameter the challenge provider appends to {@code WWW-Authenticate} while it is active. */
+    private static final String RESOURCE_METADATA_CHALLENGE_PARAMETER = "resource_metadata";
 
     private static WireMockServer provider;
     private static String reachableIssuer;
@@ -376,10 +406,20 @@ class TokenSignatureEnforcementIT {
      *     makes an AssertJ assertion on it ambiguous, so the numeric code is returned instead
      */
     private static int statusFor(HttpClient client, String token) {
+        return statusFor(client, PROBE_PATH, token);
+    }
+
+    /**
+     * Issues a GET against an arbitrary path and reports the status code.
+     *
+     * @param client the client bound to the server under test
+     * @param path the path to request
+     * @param token the bearer token to present, or {@code null} to call anonymously
+     * @return the HTTP status code, including error statuses
+     */
+    private static int statusFor(HttpClient client, String path, String token) {
         HttpRequest<?> request =
-                token == null
-                        ? HttpRequest.GET(PROBE_PATH)
-                        : HttpRequest.GET(PROBE_PATH).bearerAuth(token);
+                token == null ? HttpRequest.GET(path) : HttpRequest.GET(path).bearerAuth(token);
         try {
             return client.toBlocking().exchange(request).getStatus().getCode();
         } catch (HttpClientResponseException e) {
@@ -448,6 +488,92 @@ class TokenSignatureEnforcementIT {
         assertThat(statusFor(unreachableClient, rsaToken(publishedKey)))
                 .as("with no usable signing key the service must fail closed")
                 .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+    }
+
+    /**
+     * Asserts that adding micronaut-security-oauth2 has not silently exposed the trust list.
+     *
+     * <p>The module enables {@code ProtectedResourceMetadataController} by default, and that
+     * controller answers anonymous callers with the configured issuer URLs. Its sibling {@code
+     * ResourceMetadataWwwAuthenticateChallengeProvider} points at the same document from every 401.
+     * This service deliberately discloses nothing about which issuers it trusts - a rejected token
+     * gets a generic 401 that never echoes the issuer back - so {@code application.yml} switches
+     * both off.
+     *
+     * <p>Unlike every other case here, these contexts are built from the <strong>real</strong>
+     * property sources rather than an inline map. Restating the disabling flags in a map would only
+     * prove that the flags work, which is Micronaut's concern; the claim worth pinning is that
+     * {@code application.yml} actually sets them. Security has to be forced on because {@code
+     * application-test.yml} disables it, and with it disabled the endpoint would be absent for the
+     * wrong reason and the assertion would hold vacuously.
+     *
+     * <p>The removed route answers 401, not 404, because the security filter rejects an anonymous
+     * request to any path carrying no explicit anonymous grant before routing decides whether a
+     * route exists - which is exactly what stops the absence from being observable. A 401 on its
+     * own would therefore be no evidence at all, so {@link #publishesProtectedResourceMetadata()}
+     * is the control: with the flags overridden the same request is served.
+     */
+    @Test
+    @DisplayName("does not publish the trust list at the OAuth2 protected-resource metadata path")
+    void doesNotPublishProtectedResourceMetadata() {
+        HttpResponse<?> response = probeProtectedResourceMetadata(Map.of());
+
+        assertThat(response.getStatus().getCode())
+                .as("an unauthenticated caller must not be able to read the trust list")
+                .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+        assertThat(response.getHeaders().getAll(HttpHeaders.WWW_AUTHENTICATE))
+                .as("the rejection must not point the caller at the metadata document either")
+                .noneMatch(challenge -> challenge.contains(RESOURCE_METADATA_CHALLENGE_PARAMETER));
+    }
+
+    /**
+     * Control for {@link #doesNotPublishProtectedResourceMetadata()}: with both flags overridden
+     * back to their Micronaut defaults the endpoint is served to an anonymous caller, so the
+     * rejection asserted there is the doing of {@code application.yml} rather than a status this
+     * probe would have produced for any path at all.
+     */
+    @Test
+    @DisplayName("control: the metadata endpoint is anonymous once the flags are put back")
+    void publishesProtectedResourceMetadata() {
+        HttpResponse<?> response =
+                probeProtectedResourceMetadata(
+                        Map.of(
+                                PROTECTED_RESOURCE_METADATA_ENABLED, true,
+                                PROTECTED_RESOURCE_METADATA_WWW_AUTHENTICATE, true));
+
+        assertThat(response.getStatus().getCode())
+                .as("with the flags removed the module serves the document without a token")
+                .isEqualTo(HttpStatus.OK.getCode());
+    }
+
+    /**
+     * Starts a context from the real property sources and requests the protected-resource metadata
+     * path without a token.
+     *
+     * @param overrides properties layered on top of {@code application.yml} for this probe
+     * @return the response, whether the server accepted or rejected the request
+     */
+    private static HttpResponse<?> probeProtectedResourceMetadata(Map<String, Object> overrides) {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("micronaut.security.enabled", true);
+        properties.put("micronaut.server.port", -1);
+        properties.put("datasources.default.enabled", false);
+        properties.put("flyway.enabled", false);
+        properties.putAll(overrides);
+
+        try (ApplicationContext context =
+                ApplicationContext.builder(Environment.TEST).properties(properties).build()) {
+            context.start();
+            EmbeddedServer server = context.getBean(EmbeddedServer.class).start();
+            try (HttpClient client = HttpClient.create(server.getURL())) {
+                try {
+                    return client.toBlocking()
+                            .exchange(HttpRequest.GET(PROTECTED_RESOURCE_METADATA_PATH));
+                } catch (HttpClientResponseException e) {
+                    return e.getResponse();
+                }
+            }
+        }
     }
 
     /**

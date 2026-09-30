@@ -152,8 +152,18 @@
             the configured one, the JWKS cache expiration is global rather than per
             provider, and an unknown `kid` does not trigger a refetch - so issuer
             verification, resilient discovery, per-provider key caching and rate-limited
-            refetch remain this service's own work. See the notes in
+            refetch remain this service's own work. Signature verification is also not
+            bound to the issuer: every configured key set is tried and the first that
+            matches wins, which is why only one trusted provider is accepted until the
+            per-provider validator lands. See the notes in
             src/main/resources/application.yml for the verified details.
+
+            The module also switches on, by default, an anonymous
+            /.well-known/oauth-protected-resource endpoint that publishes the configured
+            issuer URLs, and a WWW-Authenticate challenge provider that appends
+            `resource_metadata="..."` to 401 responses. Both are disabled in
+            application.yml (`micronaut.security.oauth2.protected-resource-metadata`);
+            see the comment there for why.
         -->
         <dependency>
             <groupId>io.micronaut.security</groupId>

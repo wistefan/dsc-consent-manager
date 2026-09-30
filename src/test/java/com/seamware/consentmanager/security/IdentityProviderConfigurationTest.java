@@ -258,22 +258,6 @@ class IdentityProviderConfigurationTest {
         }
 
         @Test
-        @DisplayName("binds several providers and orders them by name")
-        void bindsSeveralProviders() {
-            Map<String, Object> properties = validTrustList();
-            properties.put(issuerKey(OTHER_PROVIDER), OTHER_ISSUER);
-            putValidSettings(properties, OTHER_PROVIDER);
-
-            try (ApplicationContext context = startContext(properties)) {
-                assertThat(providersOf(context))
-                        .extracting(TrustedIdentityProvider::name, TrustedIdentityProvider::issuer)
-                        .containsExactly(
-                                org.assertj.core.groups.Tuple.tuple(PROVIDER, ISSUER),
-                                org.assertj.core.groups.Tuple.tuple(OTHER_PROVIDER, OTHER_ISSUER));
-            }
-        }
-
-        @Test
         @DisplayName("publishes the trust list as an unmodifiable collection")
         void publishesUnmodifiableTrustList() {
             try (ApplicationContext context = startContext(validTrustList())) {
@@ -396,6 +380,45 @@ class IdentityProviderConfigurationTest {
             putValidSettings(properties, OTHER_PROVIDER);
 
             assertStartupFails(properties, "each issuer must appear exactly once");
+        }
+
+        @Test
+        @DisplayName("rejects a second provider, which could otherwise forge the first's tokens")
+        void rejectsMoreThanOneProvider() {
+            Map<String, Object> properties = validTrustList();
+            properties.put(issuerKey(OTHER_PROVIDER), OTHER_ISSUER);
+            putValidSettings(properties, OTHER_PROVIDER);
+
+            // Signature verification is delegated to Micronaut, which tries every configured key
+            // set and stops at the first that matches without checking whose key it is. A second
+            // provider could therefore sign a token carrying the first provider's `iss` and it
+            // would authenticate, so more than one entry must not start.
+            assertStartupFails(
+                    properties, "only one is supported until per-provider token validation");
+        }
+
+        @Test
+        @DisplayName("rejects a sole provider configured under a name the interim guard misses")
+        void rejectsProviderUnderAnotherName() {
+            Map<String, Object> properties = new LinkedHashMap<>();
+            properties.put(issuerKey(OTHER_PROVIDER), OTHER_ISSUER);
+            putValidSettings(properties, OTHER_PROVIDER);
+
+            assertStartupFails(properties, "must be named '" + PROVIDER + "'");
+        }
+
+        @ParameterizedTest(name = "unrecognised key \"{0}\" aborts startup")
+        @ValueSource(
+                strings = {"discovery-url", "jwks-cache-ttl", "claims.email", "role-mappings.user"})
+        @DisplayName("rejects a settings key this service does not read")
+        void rejectsUnrecognisedSettingKeys(String key) {
+            Map<String, Object> properties = validTrustList();
+            properties.put(settingsKey(PROVIDER) + "." + key, "whatever");
+
+            // @EachProperty ignores an unknown key silently, so without this check `discovery-url`
+            // and `jwks-cache-ttl` - both of which look like security-boundary settings - would
+            // bind to nothing and do nothing, with a clean startup.
+            assertStartupFails(properties, "unrecognised key(s)");
         }
 
         @ParameterizedTest(name = "issuer \"{0}\" aborts startup")

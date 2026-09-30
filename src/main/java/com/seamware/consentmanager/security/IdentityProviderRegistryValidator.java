@@ -50,6 +50,13 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Per the immutability rule for the trust list, this bean exposes an unmodifiable view of the
  * configured providers and offers no way to add, remove, replace or reload an entry.
+ *
+ * <p><strong>Exactly one provider is accepted for now.</strong> Token validation is still delegated
+ * to Micronaut Security, whose signature verification tries every configured key set and is not
+ * bound to the token's issuer, so a second provider could sign tokens bearing the first provider's
+ * {@code iss} and they would authenticate. Until step 5 binds each issuer to its own key set, a
+ * multi-provider trust list is a startup failure rather than a warning — see {@link
+ * #rejectMoreThanOneProvider()}.
  */
 @Context
 public class IdentityProviderRegistryValidator {
@@ -63,6 +70,34 @@ public class IdentityProviderRegistryValidator {
     /** Property holding the single issuer Micronaut's own claim validator enforces. */
     private static final String GLOBAL_ISSUER_VALIDATOR_PROPERTY =
             "micronaut.security.token.jwt.claims-validators.issuer";
+
+    /** Property holding the single audience Micronaut's own claim validator enforces. */
+    private static final String GLOBAL_AUDIENCE_VALIDATOR_PROPERTY =
+            "micronaut.security.token.jwt.claims-validators.audience";
+
+    /**
+     * Name the sole trusted provider must be configured under until step 5.
+     *
+     * <p>The interim claim validators in {@code application.yml} cannot say "whichever provider is
+     * configured": a YAML placeholder has to name one, and it names this one. A deployment that
+     * configures its provider under any other name leaves {@code claims-validators.issuer} pointing
+     * at an unresolvable placeholder, which aborts startup with a message about placeholder
+     * resolution rather than about the trust list. Requiring the name here turns that into a
+     * diagnosis. Step 5 replaces the global validators with per-provider ones and deletes both this
+     * constant and the check that uses it.
+     */
+    private static final String INTERIM_GUARDED_PROVIDER_NAME = "primary";
+
+    /** Keys a {@code consent-manager.identity-providers.<name>} entry may declare. */
+    private static final Set<String> SUPPORTED_SETTING_KEYS =
+            Set.of("audience", "clock-skew", "claims", "role-mapping");
+
+    /** Key of the nested block holding the per-provider claim paths. */
+    private static final String CLAIMS_KEY = "claims";
+
+    /** Keys a {@code consent-manager.identity-providers.<name>.claims} block may declare. */
+    private static final Set<String> SUPPORTED_CLAIM_KEYS =
+            Set.of("user-identifier", "participant-identifier", "roles");
 
     /**
      * URL schemes an issuer may use.
@@ -108,8 +143,9 @@ public class IdentityProviderRegistryValidator {
     /**
      * Verifies the assembled trust list during context startup.
      *
-     * @throws ConfigurationException if no provider is configured or two providers declare the same
-     *     issuer
+     * @throws ConfigurationException if no provider is configured, two providers declare the same
+     *     issuer, more than one provider is configured, the sole provider is not the one the
+     *     interim claim validators guard, or an entry declares an unrecognised key
      */
     @PostConstruct
     public void validate() {
@@ -124,38 +160,144 @@ public class IdentityProviderRegistryValidator {
                             + ".<name>'.");
         }
         rejectDuplicateIssuers();
+        rejectMoreThanOneProvider();
+        requireTheInterimGuardToNameTheProvider();
+        rejectUnrecognisedSettingKeys();
         LOG.info(
                 "Identity provider trust list loaded with {} provider(s): {}",
                 providers.size(),
                 providers.stream().map(p -> p.name() + " -> " + p.issuer()).toList());
-        warnAboutTheInterimSingleProviderGuard();
     }
 
     /**
-     * Warns that only one provider's tokens can currently pass validation.
+     * Refuses to start with more than one trusted provider, until per-provider token validation
+     * lands in step 5.
      *
-     * <p>Until the per-provider token validator lands, issuer and audience are enforced by
-     * Micronaut's own claim validators, which hold a single global value each (see the {@code
-     * micronaut.security.token.jwt.claims-validators} block in {@code application.yml}). Tokens
-     * from every provider other than the first therefore fail validation. That is fail-closed and
-     * deliberate, but it must not be silent: an operator who configures a second issuer would
-     * otherwise see a clean startup and unexplained rejections.
+     * <p>This is a security check, not a limitation of the configuration binding: a second provider
+     * would be able to forge tokens for the first. Signature verification is delegated to Micronaut
+     * Security, and it is not bound to the issuer. Verified against micronaut-security 5.4.0,
+     * {@code NimbusJsonWebTokenSignatureValidator.validate} is:
+     *
+     * <pre>{@code
+     * for (SignatureConfiguration config : signatureConfigurations) {
+     *     if (validate(jwt, config)) { return true; }
+     * }
+     * return false;
+     * }</pre>
+     *
+     * <p>and the reactive path — the one the JWKS beans actually take — is the same iteration
+     * expressed as a {@code Flux}. Neither reads the token's {@code iss}: every configured key set
+     * is tried, and the first that verifies wins. Each OpenID client contributes its own key set,
+     * so with providers A and B both configured, a token signed with <strong>B's</strong> key but
+     * carrying {@code iss} of A passes signature validation on B's keys and then satisfies the
+     * global issuer and audience validators, which only ever pin A. B can therefore mint tokens
+     * that authenticate as A.
+     *
+     * <p>Rejecting the configuration outright is the only fail-closed option available before the
+     * per-provider validator exists. Step 5 binds each issuer to its own key set and removes this
+     * check.
+     *
+     * @throws ConfigurationException if more than one provider is configured
      */
-    private void warnAboutTheInterimSingleProviderGuard() {
+    private void rejectMoreThanOneProvider() {
         if (providers.size() <= SINGLE_PROVIDER) {
             return;
         }
-        LOG.warn(
-                "{} identity providers are configured, but issuer and audience are still enforced"
-                        + " by Micronaut's global claim validators, which hold one value each:"
-                        + " {}='{}'. Only tokens matching that issuer can pass validation; tokens"
-                        + " from the other provider(s) will be rejected until the per-provider"
-                        + " token validator is in place.",
-                providers.size(),
-                GLOBAL_ISSUER_VALIDATOR_PROPERTY,
-                environment
-                        .getProperty(GLOBAL_ISSUER_VALIDATOR_PROPERTY, String.class)
-                        .orElse("<unset>"));
+        throw new ConfigurationException(
+                providers.size()
+                        + " identity providers are configured ("
+                        + providers.stream().map(TrustedIdentityProvider::name).toList()
+                        + "), but only one is supported until per-provider token validation is in"
+                        + " place. Micronaut Security verifies a token against every configured"
+                        + " key set and stops at the first that matches, without checking which"
+                        + " issuer the key belongs to, so a second provider could sign tokens"
+                        + " bearing the first provider's issuer and they would authenticate."
+                        + " Configure exactly one provider under '"
+                        + IdentityProviderConfiguration.OIDC_CLIENTS_PREFIX
+                        + "' and '"
+                        + IdentityProviderConfiguration.PREFIX
+                        + "'.");
+    }
+
+    /**
+     * Refuses to start when the sole provider is not the one the interim claim validators guard.
+     *
+     * <p>Issuer and audience are currently enforced by Micronaut's global claim validators, which
+     * hold one value each and are configured in {@code application.yml} as placeholders naming the
+     * {@value #INTERIM_GUARDED_PROVIDER_NAME} provider. A provider configured under a different
+     * name is therefore not guarded by them — and the placeholders become unresolvable, which
+     * aborts startup with a message about placeholder resolution that says nothing about the trust
+     * list. Failing here instead names the actual problem.
+     *
+     * @throws ConfigurationException if the sole provider is configured under another name
+     */
+    private void requireTheInterimGuardToNameTheProvider() {
+        TrustedIdentityProvider provider = providers.get(0);
+        if (INTERIM_GUARDED_PROVIDER_NAME.equals(provider.name())) {
+            return;
+        }
+        throw new ConfigurationException(
+                "Identity provider '"
+                        + provider.name()
+                        + "' must be named '"
+                        + INTERIM_GUARDED_PROVIDER_NAME
+                        + "' until per-provider token validation is in place. Issuer and audience"
+                        + " are enforced by Micronaut's global claim validators, '"
+                        + GLOBAL_ISSUER_VALIDATOR_PROPERTY
+                        + "' and '"
+                        + GLOBAL_AUDIENCE_VALIDATOR_PROPERTY
+                        + "', which are configured as placeholders naming the '"
+                        + INTERIM_GUARDED_PROVIDER_NAME
+                        + "' entry; under any other name they would guard nothing.");
+    }
+
+    /**
+     * Refuses to start when a claim-settings entry declares a key this service does not read.
+     *
+     * <p>{@code @EachProperty} ignores unknown keys silently, so a typo, or a key taken from an
+     * older revision of the configuration schema, binds to nothing and does nothing. Two keys make
+     * that especially dangerous: {@code discovery-url} and {@code jwks-cache-ttl} both look as
+     * though they configure the security boundary, and neither is read — discovery is derived from
+     * the issuer by Micronaut Security, and the JWKS cache TTL is global rather than per provider
+     * (see {@code application.yml}). An operator who sets either gets a clean startup and no
+     * effect, which contradicts this class's promise that a malformed trust list aborts startup.
+     *
+     * <p>The role mapping is deliberately not checked here: its keys are role names, which {@link
+     * IdentityProviderConfiguration} already validates.
+     *
+     * @throws ConfigurationException if an entry declares a key outside {@link
+     *     #SUPPORTED_SETTING_KEYS}, or its {@code claims} block declares one outside {@link
+     *     #SUPPORTED_CLAIM_KEYS}
+     */
+    private void rejectUnrecognisedSettingKeys() {
+        for (TrustedIdentityProvider provider : providers) {
+            String prefix = IdentityProviderConfiguration.PREFIX + "." + provider.name();
+            rejectUnrecognisedKeys(prefix, SUPPORTED_SETTING_KEYS);
+            rejectUnrecognisedKeys(prefix + "." + CLAIMS_KEY, SUPPORTED_CLAIM_KEYS);
+        }
+    }
+
+    /**
+     * Asserts that every configured key directly below a prefix is one this service reads.
+     *
+     * @param prefix the fully-qualified configuration prefix to inspect
+     * @param supportedKeys the keys that prefix may declare
+     * @throws ConfigurationException if any other key is present
+     */
+    private void rejectUnrecognisedKeys(String prefix, Set<String> supportedKeys) {
+        var unrecognised = new TreeSet<>(environment.getPropertyEntries(prefix));
+        unrecognised.removeAll(supportedKeys);
+        if (unrecognised.isEmpty()) {
+            return;
+        }
+        throw new ConfigurationException(
+                "Identity provider settings '"
+                        + prefix
+                        + "' declare unrecognised key(s) "
+                        + unrecognised
+                        + "; this service reads only "
+                        + new TreeSet<>(supportedKeys)
+                        + ". An unrecognised key is bound to nothing and silently has no effect.");
     }
 
     /**

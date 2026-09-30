@@ -88,15 +88,47 @@ micronaut:
     #     guaranteed to be picked up without a restart, and there is no rate-limited
     #     refetch to observe.
     #
+    # EXACTLY ONE PROVIDER IS ACCEPTED FOR NOW, and a second one is a startup failure
+    # (IdentityProviderRegistryValidator), because it would be able to forge tokens for
+    # the first: Micronaut verifies a token against every configured key set and stops
+    # at the first that matches, without checking which issuer the key belongs to, so a
+    # token signed with provider B's key but carrying provider A's `iss` authenticates
+    # as an A token. Multi-provider support arrives with the per-provider validator in
+    # step 5; see the check's javadoc for the verified source of that behaviour.
+    #
     # Environment variables can only OVERRIDE values of a provider that is already
     # declared here; they cannot ADD one. A name (or index) that appears only in an
     # environment variable never becomes a configuration entry, so no provider bean is
     # created and the setting is silently ignored - it stays readable as a raw
-    # property, which is why the omission is easy to miss. To trust more than one
-    # issuer, mount a YAML file adding further named entries to BOTH blocks, or pass
-    # system properties (-Dmicronaut.security.oauth2.clients.<name>.openid.issuer=...).
-    # The `${IDP_*}` placeholders below configure the single `primary` provider.
+    # property, which is why the omission is easy to miss. The `${IDP_*}` placeholders
+    # below configure the single `primary` provider, which must keep that name: the
+    # interim claim validators further down are placeholders naming it, and under any
+    # other name they would guard nothing. That too is a startup failure rather than a
+    # surprise.
     oauth2:
+      # micronaut-security-oauth2 brings more than OIDC discovery, and two of its
+      # defaults are wrong for this service (verified against micronaut-security 5.4.0):
+      #   * `ProtectedResourceMetadataController` is `@Secured(IS_ANONYMOUS)` on
+      #     GET /.well-known/oauth-protected-resource, and
+      #     `DefaultProtectedResourceMetadataProvider` builds its response from the
+      #     injected `List<OpenIdClientConfiguration>` - it publishes the configured
+      #     issuer URLs to any unauthenticated caller. This service deliberately does
+      #     not disclose which issuers it trusts (a rejected token gets a generic 401
+      #     that never echoes the issuer back), and the route appears nowhere in
+      #     api/openapi.yaml, whose default is `security: [{bearerAuth: []}]`.
+      #   * `ResourceMetadataWwwAuthenticateChallengeProvider`, in the same package,
+      #     appends `resource_metadata="..."` to the WWW-Authenticate header on a 401 -
+      #     the header step 6 takes ownership of.
+      # The two flags below are INDEPENDENT - `enabled: false` alone is not enough.
+      # It gates only the controller; the challenge provider carries its own
+      # `@Requires(property = "...www-authenticate", notEquals = "false",
+      # defaultValue = "true")`, so it stays active and keeps appending the hint to
+      # every 401 unless it is switched off by name. Both are therefore set.
+      protected-resource-metadata:
+        # Removes GET /.well-known/oauth-protected-resource.
+        enabled: false
+        # Removes `resource_metadata="..."` from the WWW-Authenticate header.
+        www-authenticate: false
       clients:
         primary:
           openid:
@@ -142,17 +174,25 @@ micronaut:
           # That looseness is not exploitable by itself - the token must still carry a
           # valid signature from the trusted provider's JWKS - but step 5 must replace it
           # with a byte-for-byte per-provider comparison rather than assume one is already
-          # in force. TokenSignatureEnforcementIT pins the gap so it cannot be forgotten. Micronaut's validators are single global values,
-          # so they are pointed at the `primary` entry; a deployment that adds a
-          # second provider through a mounted YAML file will have that provider's
-          # tokens rejected here until step 5 replaces this with the per-provider
-          # checks. That is deliberate: fail closed rather than fail open.
+          # in force. TokenSignatureEnforcementIT pins the gap so it cannot be forgotten.
+          #
+          # Both validators hold a single global value, so they can only ever guard one
+          # provider. That is NOT a fail-closed limitation: a second provider would be
+          # able to forge tokens for the guarded one, because signature verification
+          # tries every configured key set and ignores the token's issuer. A trust list
+          # with more than one entry is therefore rejected at startup rather than
+          # merely warned about - see IdentityProviderRegistryValidator.
           #
           # These reference the two properties rather than `${IDP_*}` directly so that
           # they follow the configured value however it was set. A blank value would
           # activate a validator that rejects every token, but cannot occur in a
           # running process: IdentityProviderRegistryValidator aborts startup when
           # either property is blank.
+          #
+          # The placeholders name the `primary` provider literally, because a
+          # placeholder cannot say "whichever provider is configured". A deployment
+          # that renames the provider would leave them unresolvable; the validator
+          # rejects any other name first, with a message that says so.
           issuer: ${micronaut.security.oauth2.clients.primary.openid.issuer}
           audience: ${consent-manager.identity-providers.primary.audience}
 
