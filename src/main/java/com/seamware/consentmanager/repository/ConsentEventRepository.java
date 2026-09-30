@@ -1,7 +1,6 @@
 package com.seamware.consentmanager.repository;
 
 import com.seamware.consentmanager.domain.ConsentEvent;
-import io.micronaut.data.annotation.Query;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
 import io.micronaut.data.model.Page;
 import io.micronaut.data.model.Pageable;
@@ -24,17 +23,13 @@ public interface ConsentEventRepository extends CrudRepository<ConsentEvent, UUI
      * Finds all events for the given consent, ordered by occurrence time ascending.
      *
      * <p>Returns the full audit trail for a consent in chronological order, which is useful for
-     * reconstructing the consent's lifecycle history. Ordering is enforced by the explicit
-     * {@code @Query} annotation containing an {@code ORDER BY occurred_at ASC} clause.
+     * reconstructing the consent's lifecycle history. Ordering is enforced by Micronaut Data's
+     * derived query mechanism: the {@code OrderByOccurredAtAsc} suffix in the method name causes
+     * the framework to generate an {@code ORDER BY occurred_at ASC} clause at compile time.
      *
      * @param consentId the UUID of the consent record
      * @return a list of events in ascending chronological order, or an empty list if none exist
      */
-    @Query(
-            value =
-                    "SELECT * FROM consent_events WHERE consent_id = :consentId"
-                            + " ORDER BY occurred_at ASC",
-            nativeQuery = true)
     List<ConsentEvent> findByConsentIdOrderByOccurredAtAsc(UUID consentId);
 
     /**
