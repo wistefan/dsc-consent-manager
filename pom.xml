@@ -381,10 +381,16 @@
                         <configuration>
                             <outputDirectory>${project.build.outputDirectory}/static</outputDirectory>
                             <resources>
+                                <!--
+                                    Copy the whole api/ tree (root spec plus the
+                                    components/ subdirectory) so the relative $refs in
+                                    openapi.yaml still resolve when Swagger UI loads the
+                                    spec from /static/openapi.yaml.
+                                -->
                                 <resource>
                                     <directory>${project.basedir}/api</directory>
                                     <includes>
-                                        <include>openapi.yaml</include>
+                                        <include>**/*.yaml</include>
                                     </includes>
                                 </resource>
                             </resources>

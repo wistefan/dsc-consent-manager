@@ -1,0 +1,17 @@
+# Response: 403 Forbidden — referenced from api/openapi.yaml as
+# components.responses.Forbidden and from every secured operation.
+description: >
+  The bearer token authenticated successfully but does not grant a role that is
+  permitted to perform this operation. A token whose roles claim is absent, or
+  whose roles are all unmappable, authenticates with zero roles and therefore
+  also receives this response.
+content:
+  application/problem+json:
+    schema:
+      $ref: "../schemas/ProblemDetail.yaml"
+    example:
+      type: "https://consent-manager.example/problems/forbidden"
+      title: "Forbidden"
+      status: 403
+      detail: "The authenticated principal lacks a role permitted to perform this operation."
+      instance: "/v1/consents"

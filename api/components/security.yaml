@@ -1,0 +1,128 @@
+# Security schemes for the Consent Manager API.
+#
+# This file is the authoritative, human-readable token contract for the service.
+# It is referenced from `api/openapi.yaml` via
+# `components.securitySchemes.bearerAuth.$ref`.
+securitySchemes:
+  bearerAuth:
+    type: http
+    scheme: bearer
+    bearerFormat: JWT
+    description: >
+      **Bearer token contract**
+
+
+      The Consent Manager is a stateless OAuth2 **resource server**. It issues no
+      tokens, stores no credentials and keeps no sessions. Every secured request
+      must carry `Authorization: Bearer <JWT>`, where the JWT was issued by one of
+      the identity providers on the service's trust list. The trust list is read
+      once from configuration at process startup and is fixed for the lifetime of
+      the process; tokens from any other issuer are rejected.
+
+
+      **Signature requirements.** Tokens must be signed with an asymmetric
+      algorithm (`RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`,
+      `ES384`, `ES512`) using a key published at the issuer's JWKS endpoint, which
+      is located through OpenID Connect discovery. `alg: none` is rejected.
+      Symmetric algorithms (`HS256`, `HS384`, `HS512`) are rejected, because a
+      shared secret would make the resource server capable of minting tokens.
+
+
+      **Claim names are configurable per identity provider.** The tables below name
+      the *default* claims. The claim carrying the user identifier, the claim
+      carrying the participant identifier and the claim carrying roles are each
+      configured per provider, so a deployment can consume tokens from providers
+      that use different claim vocabularies without changing code.
+
+
+      **Identifiers are opaque.** The user and participant identifiers are treated
+      as opaque strings and are never parsed, split or interpreted. An identifier
+      may be an email address, a DID, an arbitrary URI or a hash of an EUDI Wallet
+      PID. The service compares them for equality and stores them verbatim.
+
+
+      ---
+
+
+      ### User Access Token
+
+
+      Issued to a natural person who acts on their own consent records.
+
+
+      | Claim | Required | Description |
+      | --- | --- | --- |
+      | `iss` | yes | Token issuer. Must exactly match a configured trusted issuer. |
+      | `aud` | yes | Audience. Must contain the audience configured for that issuer. |
+      | `exp` | yes | Expiry time. Expired tokens are rejected, subject to the configured clock skew. |
+      | `iat` | yes | Issued-at time. A token issued in the future beyond the clock skew is rejected. |
+      | `sub` | yes | Subject identifier as issued by the provider. |
+      | *user identifier* | yes | Opaque identifier of the acting user. Claim name is configured per provider; defaults to `sub`. |
+      | *roles* | yes | Roles granted to the token. Claim name is configured per provider and may be a dot-separated nested path (for example `realm_access.roles`). Raw role strings are translated to the service's roles through a per-provider role mapping. |
+      | `nbf` | no | Not-before time. Honoured when present, subject to the configured clock skew. |
+      | `jti` | no | Unique token identifier. |
+      | `email` | no | Email address of the user. |
+      | `email_verified` | no | Whether the provider verified the email address. |
+      | `name` | no | Full display name of the user. |
+      | `given_name` | no | Given name of the user. |
+      | `family_name` | no | Family name of the user. |
+
+
+      ### Participant Access Token
+
+
+      Issued to a dataspace participant (a machine client acting for an
+      organisation), typically through the OAuth2 client-credentials grant.
+
+
+      | Claim | Required | Description |
+      | --- | --- | --- |
+      | `iss` | yes | Token issuer. Must exactly match a configured trusted issuer. |
+      | `aud` | yes | Audience. Must contain the audience configured for that issuer. |
+      | `exp` | yes | Expiry time. Expired tokens are rejected, subject to the configured clock skew. |
+      | `iat` | yes | Issued-at time. A token issued in the future beyond the clock skew is rejected. |
+      | `sub` | yes | Subject identifier as issued by the provider. |
+      | *participant identifier* | yes | Opaque identifier of the participant. Claim name is configured per provider. |
+      | *roles* | yes | Roles granted to the token, resolved exactly as for a user access token. |
+      | `nbf` | no | Not-before time. Honoured when present, subject to the configured clock skew. |
+      | `jti` | no | Unique token identifier. |
+      | `azp` | no | Authorized party — the client the token was issued to. |
+      | `client_id` | no | Client identifier, where the provider emits it instead of `azp`. |
+
+
+      ### Catalog Token
+
+
+      A Catalog Token is not a third token shape. It is a **participant access
+      token that carries the `CATALOG` role**, issued to the dataspace catalog
+      service so it can read consent state on behalf of the dataspace. It is
+      validated exactly like any other participant access token.
+
+
+      ---
+
+
+      ### Roles
+
+
+      | Role | Granted to | Scope |
+      | --- | --- | --- |
+      | `USER` | A natural person | May manage and read their own consent records. |
+      | `PARTICIPANT` | A dataspace participant | May manage and read consent records relating to itself as a participant. |
+      | `CATALOG` | The dataspace catalog service | May read consent state across the dataspace. |
+
+
+      ### Authentication versus authorization failures
+
+
+      A request that fails **authentication** receives `401 Unauthorized`: the
+      `Authorization` header is missing or malformed, the token is expired, not yet
+      valid, has an invalid signature, uses a rejected algorithm, or was issued by
+      an issuer that is not on the trust list. The `401` body deliberately does not
+      distinguish between these cases, so it leaks nothing about the trust list.
+
+
+      A request that authenticates successfully but lacks the role required by the
+      operation receives `403 Forbidden`. A token whose roles claim is absent, or
+      whose roles are all unmappable, authenticates with zero roles and therefore
+      also receives `403` on any secured operation.
