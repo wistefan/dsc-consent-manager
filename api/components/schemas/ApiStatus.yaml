@@ -1,0 +1,10 @@
+# Schema: ApiStatus — referenced from api/openapi.yaml as components.schemas.ApiStatus.
+type: object
+description: Simple API status response.
+properties:
+  status:
+    type: string
+    description: Current status of the API.
+    example: "ok"
+required:
+  - status

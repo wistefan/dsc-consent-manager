@@ -173,7 +173,10 @@
             <scope>compile</scope>
         </dependency>
 
-        <!-- SnakeYAML: required for Micronaut to load application.yml config files -->
+        <!-- SnakeYAML: required for Micronaut to load application.yml config files, and
+             used by the specification tests to parse the served OpenAPI documents. A single
+             runtime-scoped declaration covers both: runtime scope is on the test classpath,
+             and it is the scope that packages the parser into the runnable jar. -->
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
@@ -381,10 +384,16 @@
                         <configuration>
                             <outputDirectory>${project.build.outputDirectory}/static</outputDirectory>
                             <resources>
+                                <!--
+                                    Copy the whole api/ tree (root spec plus the
+                                    components/ subdirectory) so the relative $refs in
+                                    openapi.yaml still resolve when Swagger UI loads the
+                                    spec from /static/openapi.yaml.
+                                -->
                                 <resource>
                                     <directory>${project.basedir}/api</directory>
                                     <includes>
-                                        <include>openapi.yaml</include>
+                                        <include>**/*.yaml</include>
                                     </includes>
                                 </resource>
                             </resources>
