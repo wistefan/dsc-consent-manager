@@ -1,5 +1,11 @@
 # Response: 403 Forbidden — referenced from api/openapi.yaml as
-# components.responses.Forbidden and from every secured operation.
+# components.responses.Forbidden.
+#
+# No operation references it yet: /api-status is declared `security: []` and must
+# therefore not advertise 401 or 403. Every secured operation added by a later
+# endpoint ticket must reference this response. That obligation is convention
+# until Step 6's AC 19 spec-vs-@Secured consistency test enforces it, which is
+# the place to add the check rather than leaving it to review.
 description: >
   The bearer token authenticated successfully but does not grant a role that is
   permitted to perform this operation. A token whose roles claim is absent, or

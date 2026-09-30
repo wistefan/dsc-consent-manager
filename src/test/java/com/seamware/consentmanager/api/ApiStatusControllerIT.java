@@ -123,6 +123,7 @@ class ApiStatusControllerIT extends PostgresTestResource {
                 "| `aud` | yes |",
                 "| *user identifier* | yes |",
                 "| *participant identifier* | yes |",
+                "| *participant identifier* | no |",
                 "| Role | Granted to | Scope |",
                 "| `CATALOG` |",
                 "### User Access Token",
@@ -165,17 +166,33 @@ class ApiStatusControllerIT extends PostgresTestResource {
         String reference =
                 stringAt(root, "components", "securitySchemes", "bearerAuth", REFERENCE_KEY);
 
+        assertThat(reference)
+                .as("bearerAuth must be an external $ref of the form <file>#<fragment>")
+                .contains(REFERENCE_FRAGMENT_SEPARATOR);
+
         String referencedFile =
                 reference.substring(0, reference.indexOf(REFERENCE_FRAGMENT_SEPARATOR));
         assertThat(referencedFile)
                 .as("bearerAuth must be defined in a referenced component file")
                 .isNotBlank();
 
-        Map<String, Object> component =
-                parseSpecFile(referencedFile.replace(RELATIVE_PATH_PREFIX, ""));
+        Map<String, Object> component = parseSpecFile(stripRelativePrefix(referencedFile));
         String description = stringAt(component, "securitySchemes", "bearerAuth", "description");
 
         return description.lines().toList();
+    }
+
+    /**
+     * Strips a single leading {@code ./} from a relative reference, leaving any later occurrence
+     * untouched, so the result can be resolved against the published specification root.
+     *
+     * @param referencedFile the file part of a JSON Reference
+     * @return the reference path without its leading relative prefix
+     */
+    private static String stripRelativePrefix(String referencedFile) {
+        return referencedFile.startsWith(RELATIVE_PATH_PREFIX)
+                ? referencedFile.substring(RELATIVE_PATH_PREFIX.length())
+                : referencedFile;
     }
 
     /**

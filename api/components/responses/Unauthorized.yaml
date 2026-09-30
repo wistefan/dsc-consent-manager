@@ -1,5 +1,11 @@
 # Response: 401 Unauthorized — referenced from api/openapi.yaml as
-# components.responses.Unauthorized and from every secured operation.
+# components.responses.Unauthorized.
+#
+# No operation references it yet: /api-status is declared `security: []` and must
+# therefore not advertise 401 or 403. Every secured operation added by a later
+# endpoint ticket must reference this response. That obligation is convention
+# until Step 6's AC 19 spec-vs-@Secured consistency test enforces it, which is
+# the place to add the check rather than leaving it to review.
 description: >
   Authentication failed. The `Authorization` header was missing or malformed, or
   the bearer token was expired, not yet valid, incorrectly signed, signed with a

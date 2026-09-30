@@ -80,10 +80,30 @@ securitySchemes:
 
       ### Catalog Token
 
-      A Catalog Token is not a third token shape. It is a **participant access
-      token that carries the `CATALOG` role**, issued to the dataspace catalog
-      service so it can read consent state on behalf of the dataspace. It is
-      validated exactly like any other participant access token.
+      A Catalog Token is issued to the dataspace catalog service so it can read
+      consent state on behalf of the dataspace. It is a machine token obtained
+      the same way as a participant access token, and it carries the `CATALOG`
+      role. It differs from a participant access token in one respect: the
+      catalog acts for the dataspace rather than for a single organisation, so
+      it is **not** required to carry a participant identifier, and none is
+      demanded of it.
+
+      | Claim | Required | Description |
+      | --- | --- | --- |
+      | `iss` | yes | Token issuer. Must exactly match a configured trusted issuer. |
+      | `aud` | yes | Audience. Must contain the audience configured for that issuer. |
+      | `exp` | yes | Expiry time. Expired tokens are rejected, subject to the configured clock skew. |
+      | `iat` | yes | Issued-at time. A token issued in the future beyond the clock skew is rejected. |
+      | `sub` | yes | Subject identifier as issued by the provider. The catalog is identified by its issuer and subject alone. |
+      | *roles* | yes | Must resolve to the `CATALOG` role through the provider's role mapping. |
+      | *participant identifier* | no | Not required and not used. A catalog token that carries one is accepted; the claim is ignored. |
+      | `nbf` | no | Not-before time. Honoured when present, subject to the configured clock skew. |
+      | `jti` | no | Unique token identifier. |
+      | `azp` | no | Authorized party — the client the token was issued to. |
+      | `client_id` | no | Client identifier, where the provider emits it instead of `azp`. |
+
+      An identity provider operator configuring the catalog service therefore
+      does not need a participant-identifier claim mapper for it.
 
       ---
 

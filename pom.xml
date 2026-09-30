@@ -173,7 +173,10 @@
             <scope>compile</scope>
         </dependency>
 
-        <!-- SnakeYAML: required for Micronaut to load application.yml config files -->
+        <!-- SnakeYAML: required for Micronaut to load application.yml config files, and
+             used by the specification tests to parse the served OpenAPI documents. A single
+             runtime-scoped declaration covers both: runtime scope is on the test classpath,
+             and it is the scope that packages the parser into the runnable jar. -->
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
@@ -239,15 +242,6 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-params</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <!-- SnakeYAML: parses the served OpenAPI specification in specification tests.
-             Present transitively at runtime; declared explicitly so test code may compile
-             against it. -->
-        <dependency>
-            <groupId>org.yaml</groupId>
-            <artifactId>snakeyaml</artifactId>
             <scope>test</scope>
         </dependency>
 
