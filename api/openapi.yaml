@@ -1,13 +1,11 @@
 openapi: "3.0.3"
 info:
   title: Consent Manager API
-  description: >
+  description: |
     Consent lifecycle management API. Provides endpoints for creating,
     revoking, and querying consent records.
 
-
     ## Authentication and authorization
-
 
     The Consent Manager is a stateless OAuth2 **resource server**. Every operation
     except the public `/api-status` reachability probe requires a bearer JWT issued
@@ -17,9 +15,7 @@ info:
     claim names and the accepted signature algorithms — is documented on the
     `bearerAuth` security scheme.
 
-
     Three roles are recognised:
-
 
     - `USER` — a natural person, who may manage and read their own consent records.
     - `PARTICIPANT` — a dataspace participant, which may manage and read consent
@@ -27,7 +23,6 @@ info:
     - `CATALOG` — the dataspace catalog service, which may read consent state
       across the dataspace. A "catalog token" is simply a participant access token
       carrying this role.
-
 
     Failures are reported as RFC 7807 problem details and distinguish the two
     cases: a request that fails **authentication** receives `401 Unauthorized`

@@ -8,9 +8,8 @@ securitySchemes:
     type: http
     scheme: bearer
     bearerFormat: JWT
-    description: >
+    description: |
       **Bearer token contract**
-
 
       The Consent Manager is a stateless OAuth2 **resource server**. It issues no
       tokens, stores no credentials and keeps no sessions. Every secured request
@@ -19,7 +18,6 @@ securitySchemes:
       once from configuration at process startup and is fixed for the lifetime of
       the process; tokens from any other issuer are rejected.
 
-
       **Signature requirements.** Tokens must be signed with an asymmetric
       algorithm (`RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`,
       `ES384`, `ES512`) using a key published at the issuer's JWKS endpoint, which
@@ -27,28 +25,22 @@ securitySchemes:
       Symmetric algorithms (`HS256`, `HS384`, `HS512`) are rejected, because a
       shared secret would make the resource server capable of minting tokens.
 
-
       **Claim names are configurable per identity provider.** The tables below name
       the *default* claims. The claim carrying the user identifier, the claim
       carrying the participant identifier and the claim carrying roles are each
       configured per provider, so a deployment can consume tokens from providers
       that use different claim vocabularies without changing code.
 
-
       **Identifiers are opaque.** The user and participant identifiers are treated
       as opaque strings and are never parsed, split or interpreted. An identifier
       may be an email address, a DID, an arbitrary URI or a hash of an EUDI Wallet
       PID. The service compares them for equality and stores them verbatim.
 
-
       ---
-
 
       ### User Access Token
 
-
       Issued to a natural person who acts on their own consent records.
-
 
       | Claim | Required | Description |
       | --- | --- | --- |
@@ -67,13 +59,10 @@ securitySchemes:
       | `given_name` | no | Given name of the user. |
       | `family_name` | no | Family name of the user. |
 
-
       ### Participant Access Token
-
 
       Issued to a dataspace participant (a machine client acting for an
       organisation), typically through the OAuth2 client-credentials grant.
-
 
       | Claim | Required | Description |
       | --- | --- | --- |
@@ -89,21 +78,16 @@ securitySchemes:
       | `azp` | no | Authorized party — the client the token was issued to. |
       | `client_id` | no | Client identifier, where the provider emits it instead of `azp`. |
 
-
       ### Catalog Token
-
 
       A Catalog Token is not a third token shape. It is a **participant access
       token that carries the `CATALOG` role**, issued to the dataspace catalog
       service so it can read consent state on behalf of the dataspace. It is
       validated exactly like any other participant access token.
 
-
       ---
 
-
       ### Roles
-
 
       | Role | Granted to | Scope |
       | --- | --- | --- |
@@ -111,16 +95,13 @@ securitySchemes:
       | `PARTICIPANT` | A dataspace participant | May manage and read consent records relating to itself as a participant. |
       | `CATALOG` | The dataspace catalog service | May read consent state across the dataspace. |
 
-
       ### Authentication versus authorization failures
-
 
       A request that fails **authentication** receives `401 Unauthorized`: the
       `Authorization` header is missing or malformed, the token is expired, not yet
       valid, has an invalid signature, uses a rejected algorithm, or was issued by
       an issuer that is not on the trust list. The `401` body deliberately does not
       distinguish between these cases, so it leaks nothing about the trust list.
-
 
       A request that authenticates successfully but lacks the role required by the
       operation receives `403 Forbidden`. A token whose roles claim is absent, or

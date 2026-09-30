@@ -242,6 +242,15 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- SnakeYAML: parses the served OpenAPI specification in specification tests.
+             Present transitively at runtime; declared explicitly so test code may compile
+             against it. -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- AssertJ Fluent Assertions -->
         <dependency>
             <groupId>org.assertj</groupId>
