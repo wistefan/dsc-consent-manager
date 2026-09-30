@@ -4,12 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micronaut.context.ApplicationContext;
+import io.micronaut.context.env.PropertySource;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
+import org.assertj.core.api.AbstractThrowableAssert;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -126,6 +129,28 @@ class IdentityProviderConfigurationTest {
     }
 
     /**
+     * Starts an isolated application context in which the given values are delivered the way the
+     * operating system delivers environment variables.
+     *
+     * @param properties the configuration the context would otherwise have
+     * @param environmentVariables raw environment-variable names and their values
+     * @return the started context; the caller is responsible for closing it
+     */
+    private static ApplicationContext startContextWithEnvironmentVariables(
+            Map<String, Object> properties, Map<String, Object> environmentVariables) {
+        return ApplicationContext.builder()
+                .enableDefaultPropertySources(false)
+                .properties(properties)
+                .propertySources(
+                        PropertySource.of(
+                                "test-environment",
+                                environmentVariables,
+                                PropertySource.PropertyConvention.ENVIRONMENT_VARIABLE))
+                .build()
+                .start();
+    }
+
+    /**
      * Returns the assembled trust list, ordered by provider name.
      *
      * @param context a started context
@@ -139,14 +164,21 @@ class IdentityProviderConfigurationTest {
      * Asserts that a configuration prevents the context from starting, naming the offending
      * property.
      *
+     * <p>Every expected fragment must appear somewhere in the stack trace. Pass both the property
+     * name and a distinctive phrase from the validator's own message wherever the property name
+     * alone would also be produced by an unrelated binding or conversion failure on that property.
+     *
      * @param properties the configuration under test
-     * @param expectedMessageFragment a fragment the failure message must contain
+     * @param expectedMessageFragments fragments the failure message must all contain
      */
     private static void assertStartupFails(
-            Map<String, Object> properties, String expectedMessageFragment) {
-        assertThatThrownBy(() -> startContext(properties).close())
-                .as("startup should fail, naming the offending property")
-                .hasStackTraceContaining(expectedMessageFragment);
+            Map<String, Object> properties, String... expectedMessageFragments) {
+        AbstractThrowableAssert<?, ? extends Throwable> thrown =
+                assertThatThrownBy(() -> startContext(properties).close())
+                        .as("startup should fail, naming the offending property");
+        for (String fragment : expectedMessageFragments) {
+            thrown.hasStackTraceContaining(fragment);
+        }
     }
 
     @Nested
@@ -367,13 +399,22 @@ class IdentityProviderConfigurationTest {
         }
 
         @ParameterizedTest(name = "issuer \"{0}\" aborts startup")
-        @ValueSource(strings = {"not-a-url", "/realms/dataspace", "ftp:"})
-        @DisplayName("rejects an issuer that is not an absolute URL with a host")
-        void rejectsMalformedIssuer(String issuer) {
+        @CsvSource({
+            "not-a-url, 'URL with a host, but was'",
+            "/realms/dataspace, 'URL with a host, but was'",
+            "ftp://an.example, 'URL with a host, but was'",
+            "'ftp:', is not a valid URL"
+        })
+        @DisplayName("rejects an issuer that is not an absolute http(s) URL with a host")
+        void rejectsMalformedIssuer(String issuer, String expectedMessage) {
             Map<String, Object> properties = validTrustList();
             properties.put(issuerKey(PROVIDER), issuer);
 
-            assertStartupFails(properties, issuerKey(PROVIDER));
+            // Assert the validator's own wording, not just the property name: Micronaut silently
+            // repairs some malformed values and fails to convert others, and either outcome would
+            // also name the property. Only these phrases prove that the trust-list check is what
+            // rejected the value.
+            assertStartupFails(properties, issuerKey(PROVIDER), expectedMessage);
         }
     }
 
@@ -408,6 +449,65 @@ class IdentityProviderConfigurationTest {
         @DisplayName("returns empty for null")
         void rejectsNull() {
             assertThat(Role.fromConfiguredName(null)).isEqualTo(Optional.empty());
+        }
+    }
+
+    /**
+     * Pins what environment variables can and cannot do to the trust list.
+     *
+     * <p>The behaviour is documented in {@code .env.sample} and {@code application.yml} and is
+     * load-bearing: an operator who believes a second issuer can be trusted through environment
+     * variables would get a service that starts cleanly while trusting only the first. These tests
+     * keep the documentation honest.
+     */
+    @Nested
+    @DisplayName("environment-variable binding")
+    class EnvironmentVariableBinding {
+
+        /** Prefix of the environment variables that configure the claim half of a provider. */
+        private static final String ENV_PREFIX = "CONSENT_MANAGER_IDENTITY_PROVIDERS_";
+
+        @ParameterizedTest(name = "{0} does not add a provider")
+        @CsvSource({
+            "an indexed entry, " + ENV_PREFIX + "1",
+            "an entry under a new name, " + ENV_PREFIX + "OTHER"
+        })
+        @DisplayName("cannot add a provider that is not already declared")
+        void cannotAddProvider(String description, String variablePrefix) {
+            Map<String, Object> environment =
+                    Map.of(
+                            variablePrefix + "_AUDIENCE", AUDIENCE,
+                            variablePrefix + "_CLAIMS_ROLES", NESTED_ROLES_CLAIM);
+
+            try (ApplicationContext context =
+                    startContextWithEnvironmentVariables(validTrustList(), environment)) {
+                assertThat(providersOf(context))
+                        .as(
+                                "%s must be ignored: the trust list still holds only the declared"
+                                        + " provider",
+                                description)
+                        .extracting(TrustedIdentityProvider::name)
+                        .containsExactly(PROVIDER);
+            }
+        }
+
+        @Test
+        @DisplayName("overrides a value of a provider that is already declared")
+        void overridesDeclaredProvider() {
+            String overridden = "audience-from-the-environment";
+            Map<String, Object> environment =
+                    Map.of(
+                            ENV_PREFIX + PROVIDER.toUpperCase(Locale.ROOT) + "_AUDIENCE",
+                            overridden);
+
+            try (ApplicationContext context =
+                    startContextWithEnvironmentVariables(validTrustList(), environment)) {
+                assertThat(providersOf(context))
+                        .singleElement()
+                        .extracting(provider -> provider.settings().getAudience())
+                        .as("an environment variable must override the declared value")
+                        .isEqualTo(overridden);
+            }
         }
     }
 }

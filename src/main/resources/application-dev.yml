@@ -3,11 +3,13 @@
 
 micronaut:
   security:
-    enabled: false
-    # Disable JWT token validation in dev — no IdP is required locally.
-    token:
-      jwt:
-        enabled: false
+    # Security is ENABLED in dev so the local stack exercises the same wiring as
+    # production: the Keycloak service in compose.yaml is discovered, its JWKS is
+    # fetched and bearer tokens are actually verified. Running without that Keycloak
+    # (plain `./mvnw mn:run`) still starts the service — discovery simply fails, no
+    # signing key is registered and every bearer token is rejected, while the
+    # anonymous routes (/health, /swagger-ui, /static) stay reachable.
+    enabled: true
     # Issuer half of the local trust list; see the note at the bottom of this file.
     oauth2:
       clients:
@@ -21,6 +23,10 @@ datasources:
     username: ${DB_USER:consent_manager}
     password: ${DB_PASSWORD:consent_manager}
 
+# Management endpoints. Note that with security enabled above, the
+# `intercept-url-map` in application.yml still governs access: /metrics and
+# /prometheus require a bearer token in dev too, so obtain one from the local
+# Keycloak. `sensitive: false` only waives Micronaut's own endpoint-level check.
 endpoints:
   all:
     port: ${MANAGEMENT_PORT:9090}
@@ -42,10 +48,11 @@ tracing:
 # audience, clock skew, claim paths and role mapping of the `primary` entry are
 # inherited per leaf key from application.yml.
 #
-# The entry must be present even though security is disabled above: the trust-list
+# The entry must be present whatever `micronaut.security.enabled` says: the trust-list
 # check is unconditional, because a resource server with no trust list is
-# misconfigured whatever the security toggle says. Discovery against an unreachable
-# Keycloak is non-fatal - the provider simply never becomes usable.
+# misconfigured either way. Discovery against an unreachable Keycloak does not abort
+# startup - the provider simply never becomes usable, and stays that way until the
+# process is restarted (see the note in application.yml).
 consent-manager:
   identity-providers:
     primary:

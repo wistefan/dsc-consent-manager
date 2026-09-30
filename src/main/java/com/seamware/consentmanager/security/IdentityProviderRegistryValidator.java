@@ -57,6 +57,13 @@ public class IdentityProviderRegistryValidator {
     private static final Logger LOG =
             LoggerFactory.getLogger(IdentityProviderRegistryValidator.class);
 
+    /** Number of providers the interim global claim validators can cover. */
+    private static final int SINGLE_PROVIDER = 1;
+
+    /** Property holding the single issuer Micronaut's own claim validator enforces. */
+    private static final String GLOBAL_ISSUER_VALIDATOR_PROPERTY =
+            "micronaut.security.token.jwt.claims-validators.issuer";
+
     /**
      * URL schemes an issuer may use.
      *
@@ -121,6 +128,34 @@ public class IdentityProviderRegistryValidator {
                 "Identity provider trust list loaded with {} provider(s): {}",
                 providers.size(),
                 providers.stream().map(p -> p.name() + " -> " + p.issuer()).toList());
+        warnAboutTheInterimSingleProviderGuard();
+    }
+
+    /**
+     * Warns that only one provider's tokens can currently pass validation.
+     *
+     * <p>Until the per-provider token validator lands, issuer and audience are enforced by
+     * Micronaut's own claim validators, which hold a single global value each (see the {@code
+     * micronaut.security.token.jwt.claims-validators} block in {@code application.yml}). Tokens
+     * from every provider other than the first therefore fail validation. That is fail-closed and
+     * deliberate, but it must not be silent: an operator who configures a second issuer would
+     * otherwise see a clean startup and unexplained rejections.
+     */
+    private void warnAboutTheInterimSingleProviderGuard() {
+        if (providers.size() <= SINGLE_PROVIDER) {
+            return;
+        }
+        LOG.warn(
+                "{} identity providers are configured, but issuer and audience are still enforced"
+                        + " by Micronaut's global claim validators, which hold one value each:"
+                        + " {}='{}'. Only tokens matching that issuer can pass validation; tokens"
+                        + " from the other provider(s) will be rejected until the per-provider"
+                        + " token validator is in place.",
+                providers.size(),
+                GLOBAL_ISSUER_VALIDATOR_PROPERTY,
+                environment
+                        .getProperty(GLOBAL_ISSUER_VALIDATOR_PROPERTY, String.class)
+                        .orElse("<unset>"));
     }
 
     /**

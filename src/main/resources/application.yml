@@ -49,9 +49,7 @@ micronaut:
     # Each entry under `oauth2.clients` declares one trusted issuer. From the
     # `openid.issuer` URL alone Micronaut Security fetches the provider's discovery
     # document, reads its `jwks_uri` and registers a JWKS-backed signature
-    # configuration that caches the signing keys and re-fetches them when the cache
-    # expires, so key rotation needs no restart. Discovery happens lazily and off the
-    # startup path: an unreachable provider does not prevent the service from starting.
+    # configuration, so no discovery or JWKS URL has to be configured separately.
     #
     # No `client-id` or `client-secret` is set. This service is a resource server: it
     # runs no OAuth2 flow, issues no token and stores no credential.
@@ -59,33 +57,76 @@ micronaut:
     # Every client here MUST have a matching `consent-manager.identity-providers.<name>`
     # entry below (and vice versa) or startup fails - see IdentityProviderRegistryValidator.
     #
-    # To trust more than one issuer, mount a YAML file that adds further named entries
-    # to BOTH blocks, or pass system properties
-    # (-Dmicronaut.security.oauth2.clients.<name>.openid.issuer=...). Environment
-    # variables are not a supported way to add a provider: the underscores in a name
-    # such as CONSENT_MANAGER_IDENTITY_PROVIDERS_OTHER_ROLE_MAPPING_USER are ambiguous
-    # and bind spurious extra providers. Use them only for the `${IDP_*}` placeholders
-    # below, which configure the single `primary` provider.
+    # WHAT THE FRAMEWORK DOES *NOT* DO (verified against micronaut-security 5.4.0 -
+    # these gaps are the remaining scope of this ticket's steps 3 and 4, and must not
+    # be assumed away):
+    #   * Discovery is attempted once, when the signature configuration bean is first
+    #     created. `DefaultOpenIdProviderMetadataFetcher` turns a failed fetch into a
+    #     `DisabledBeanException`; there is NO retry and NO backoff.
+    #     `JwksUriSignatureFactory` is `@EachBean(DefaultOpenIdProviderMetadata)` and
+    #     reads `jwks_uri` eagerly, so if the provider is unreachable at that moment
+    #     no JWKS signature configuration is ever created and EVERY token is rejected
+    #     for the lifetime of the process. Startup itself still succeeds - which is
+    #     why a readiness indicator and a retry-with-backoff path are still required.
+    #   * `JwksUriSignatureFactory` sets only the JWKS URL. The cache expiration keeps
+    #     its framework default (60s) and is NOT configurable per provider, so the
+    #     ticket's per-provider `jwks-cache-ttl` is not expressible through it.
+    #   * An unknown `kid` does not trigger a re-fetch: the JWKS verification path
+    #     fails against the cached key set. Key rotation therefore is not yet
+    #     guaranteed to be picked up without a restart, and there is no rate-limited
+    #     refetch to observe.
+    #
+    # Environment variables can only OVERRIDE values of a provider that is already
+    # declared here; they cannot ADD one. A name (or index) that appears only in an
+    # environment variable never becomes a configuration entry, so no provider bean is
+    # created and the setting is silently ignored - it stays readable as a raw
+    # property, which is why the omission is easy to miss. To trust more than one
+    # issuer, mount a YAML file adding further named entries to BOTH blocks, or pass
+    # system properties (-Dmicronaut.security.oauth2.clients.<name>.openid.issuer=...).
+    # The `${IDP_*}` placeholders below configure the single `primary` provider.
     oauth2:
       clients:
         primary:
           openid:
             issuer: ${IDP_ISSUER:}
 
-    # Micronaut's own JWT validation is left ENABLED so that the JWKS signature
-    # configurations registered above are applied to incoming bearer tokens. With no
-    # signature configuration at all Micronaut accepts an unsigned `alg: none` token,
-    # which is why UnsignedTokenRejector is registered as a never-matching fallback:
-    # the set of signature configurations is then never empty, even while discovery is
-    # still pending or has failed.
+    # Micronaut's own JWT support is left ENABLED. The flag gates the whole
+    # `io.micronaut.security.token.jwt` package, which includes the JWKS-backed
+    # signature beans the OpenID clients above feed, so turning it off would remove
+    # signature verification altogether rather than merely disabling the built-in
+    # token validator.
     #
-    # Issuer, audience, claim and role checks are NOT performed here - Micronaut's
-    # equivalents are single global values. They are applied per provider by this
-    # service's own TokenValidator (added in a later step) from the
-    # `consent-manager.identity-providers` settings below.
+    # With no signature configuration at all Micronaut accepts an unsigned
+    # `alg: none` token, which is why UnsignedTokenRejector is registered as a
+    # never-matching fallback: the set of signature configurations is then never
+    # empty, even while discovery is still pending or has failed.
+    #
+    # The built-in validator applies only the expiration and subject-not-null claim
+    # validators by default. Issuer and audience are checked solely because they are
+    # configured below; roles, per-provider claim paths and per-provider clock skew
+    # are not checked at all yet.
     token:
       jwt:
         enabled: true
+        claims-validators:
+          # INTERIM GUARD - remove when ConsentManagerTokenValidator lands (step 5).
+          #
+          # Without these two keys the built-in validator authenticates ANY token
+          # signed by a trusted issuer's key, whatever its `aud` - and the
+          # intercept-url-map above already grants `isAuthenticated()` access to
+          # /metrics and /prometheus. Micronaut's validators are single global values,
+          # so they are pointed at the `primary` entry; a deployment that adds a
+          # second provider through a mounted YAML file will have that provider's
+          # tokens rejected here until step 5 replaces this with the per-provider
+          # checks. That is deliberate: fail closed rather than fail open.
+          #
+          # These reference the two properties rather than `${IDP_*}` directly so that
+          # they follow the configured value however it was set. A blank value would
+          # activate a validator that rejects every token, but cannot occur in a
+          # running process: IdentityProviderRegistryValidator aborts startup when
+          # either property is blank.
+          issuer: ${micronaut.security.oauth2.clients.primary.openid.issuer}
+          audience: ${consent-manager.identity-providers.primary.audience}
 
   metrics:
     enabled: true

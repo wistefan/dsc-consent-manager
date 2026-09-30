@@ -35,6 +35,11 @@ services:
       MICRONAUT_ENVIRONMENTS: dev
       # Override the trust-list entry to reach Keycloak inside the Docker network.
       # Only the issuer is configured: Micronaut derives the discovery URL from it.
+      #
+      # This must match the `iss` claim Keycloak stamps into its tokens byte for byte.
+      # KC_HOSTNAME on the keycloak service below pins that claim to this exact URL,
+      # so a token obtained from the host (http://localhost:8180/...) still carries
+      # `iss: http://keycloak:8180/...` and is accepted here.
       IDP_ISSUER: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health || exit 1"]
@@ -72,16 +77,27 @@ services:
   # Keycloak — local OpenID Connect provider
   # ---------------------------------------------------------------------------
   # Supplies the single trust-list entry configured in application-dev.yml so
-  # `docker compose up` has a real issuer to discover. Development mode only:
-  # in-memory storage, plain HTTP, no production hardening.
+  # `docker compose up` has a real issuer to discover. `application-dev.yml` enables
+  # security, so this container is genuinely exercised: the app fetches the realm's
+  # discovery document, reads its jwks_uri and verifies bearer tokens against it.
+  # Development mode only: in-memory storage, plain HTTP, no production hardening.
   #
   # The `consent-manager` realm is imported at startup from
-  # docker/keycloak/consent-manager-realm.json, so `docker compose up` yields a
-  # provider that actually resolves: the realm defines the consent-user,
+  # docker/keycloak/consent-manager-realm.json: it defines the consent-user,
   # consent-participant and consent-catalog roles, a `participant_id` claim mapper
   # and an audience mapper for `consent-manager`, matching the trust-list entry in
   # application-dev.yml. Test users (test-user / test-participant / test-catalog,
   # password `test-password`) are included for manual probing.
+  #
+  # KC_HOSTNAME pins the issuer to the in-network URL so the `iss` claim is the same
+  # whichever side asks. Without it Keycloak derives the issuer from the request host
+  # and a token fetched from the host would carry `iss: http://localhost:8180/...`,
+  # which will not match the configured issuer once tokens are validated per provider.
+  # A developer fetching tokens from the host therefore uses
+  # http://localhost:${KEYCLOAK_PORT:-8180}/realms/consent-manager/protocol/openid-connect/token
+  # and receives a token whose `iss` is the keycloak:${KEYCLOAK_PORT:-8180} URL. To make
+  # the URLs inside the discovery document resolve from the host as well, add
+  # `127.0.0.1 keycloak` to /etc/hosts.
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
     command:
@@ -95,6 +111,9 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Fixed issuer/frontend URL - see the note above.
+      KC_HOSTNAME: http://keycloak:${KEYCLOAK_PORT:-8180}
+      KC_HOSTNAME_STRICT: "false"
     restart: unless-stopped
     networks:
       - consent-manager-net

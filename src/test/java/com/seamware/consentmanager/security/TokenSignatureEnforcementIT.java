@@ -48,8 +48,13 @@ import org.junit.jupiter.params.provider.MethodSource;
  * <p>Signature verification is delegated to Micronaut Security rather than reimplemented: each
  * {@code micronaut.security.oauth2.clients.<name>.openid.issuer} entry makes Micronaut fetch that
  * provider's OpenID discovery document, read its {@code jwks_uri} and register a JWKS-backed {@code
- * SignatureConfiguration} whose keys it caches and re-fetches. This test stands a WireMock OpenID
- * provider in front of that machinery and drives real HTTP requests through a secured route.
+ * SignatureConfiguration} over the keys it publishes. This test stands a WireMock OpenID provider
+ * in front of that machinery and drives real HTTP requests through a secured route.
+ *
+ * <p>What it does <em>not</em> cover is recovery: discovery is attempted once and is not retried,
+ * so {@link #refusesGenuineTokenDuringOutage()} pins the fail-closed behaviour of a provider that
+ * was unreachable, not an eventual return to service. Retry with backoff, readiness reporting and
+ * rate-limited key refetch are still to be built.
  *
  * <p>The decisive case is {@code alg: none}. Micronaut's {@code
  * AbstractJsonWebTokenValidator.validateSignature} treats an <em>empty</em> set of signature
@@ -213,6 +218,11 @@ class TokenSignatureEnforcementIT {
                         + ".openid.issuer",
                 issuer);
         properties.put(settings + ".audience", AUDIENCE);
+        // Mirrors the interim claims validators configured in application.yml. Default property
+        // sources are disabled for this context, so they have to be restated here; without them
+        // Micronaut's built-in validator checks neither `iss` nor `aud`.
+        properties.put("micronaut.security.token.jwt.claims-validators.issuer", issuer);
+        properties.put("micronaut.security.token.jwt.claims-validators.audience", AUDIENCE);
         properties.put(settings + ".claims.participant-identifier", "participant_id");
         properties.put(settings + ".claims.roles", "realm_access.roles");
         properties.put(settings + ".role-mapping.user", "consent-user");
@@ -230,9 +240,20 @@ class TokenSignatureEnforcementIT {
      * @return claims with a valid issuer, audience, subject and expiry
      */
     private static JWTClaimsSet claims() {
+        return claims(reachableIssuer, AUDIENCE);
+    }
+
+    /**
+     * Builds a claim set with the given issuer and audience, leaving the rest valid.
+     *
+     * @param issuer the value of the {@code iss} claim
+     * @param audience the value of the {@code aud} claim
+     * @return the claim set
+     */
+    private static JWTClaimsSet claims(String issuer, String audience) {
         return new JWTClaimsSet.Builder()
-                .issuer(reachableIssuer)
-                .audience(AUDIENCE)
+                .issuer(issuer)
+                .audience(audience)
                 .subject("a-subject")
                 .issueTime(Date.from(Instant.now()))
                 .expirationTime(Date.from(Instant.now().plus(TOKEN_LIFETIME)))
@@ -255,11 +276,22 @@ class TokenSignatureEnforcementIT {
      * @return the serialized token
      */
     private static String rsaToken(RSAKey key) {
+        return rsaToken(key, claims());
+    }
+
+    /**
+     * Mints an RS256 token signed with the given key and carrying the given claims.
+     *
+     * @param key the signing key
+     * @param claims the claim set to sign
+     * @return the serialized token
+     */
+    private static String rsaToken(RSAKey key, JWTClaimsSet claims) {
         try {
             SignedJWT jwt =
                     new SignedJWT(
                             new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(key.getKeyID()).build(),
-                            claims());
+                            claims);
             jwt.sign(new RSASSASigner(key));
             return jwt.serialize();
         } catch (JOSEException e) {
@@ -274,6 +306,31 @@ class TokenSignatureEnforcementIT {
      */
     private static String foreignlySignedToken() {
         return rsaToken(foreignKey);
+    }
+
+    /**
+     * Mints a correctly signed token whose {@code aud} names a different service.
+     *
+     * <p>The signature is valid, so only the audience check can refuse it. Until the per-provider
+     * validator lands, that check is the interim global {@code claims-validators.audience} setting
+     * this service configures; this case is what keeps it from being dropped unnoticed.
+     *
+     * @return the serialized token
+     */
+    private static String foreignAudienceToken() {
+        return rsaToken(publishedKey, claims(reachableIssuer, "some-other-service"));
+    }
+
+    /**
+     * Mints a correctly signed token whose {@code iss} names a different provider.
+     *
+     * <p>As above, the signature is valid: the token is refused only because the issuer does not
+     * match the one this service trusts.
+     *
+     * @return the serialized token
+     */
+    private static String foreignIssuerToken() {
+        return rsaToken(publishedKey, claims("https://not-the-trusted-issuer.example", AUDIENCE));
     }
 
     /**
@@ -331,8 +388,13 @@ class TokenSignatureEnforcementIT {
                 Arguments.of(
                         "an HS256 token claiming the published key id",
                         (Supplier<String>) TokenSignatureEnforcementIT::symmetricToken),
+                Arguments.of("a syntactically invalid token", (Supplier<String>) () -> "not-a-jwt"),
                 Arguments.of(
-                        "a syntactically invalid token", (Supplier<String>) () -> "not-a-jwt"));
+                        "a genuinely signed token minted for another audience",
+                        (Supplier<String>) TokenSignatureEnforcementIT::foreignAudienceToken),
+                Arguments.of(
+                        "a genuinely signed token claiming another issuer",
+                        (Supplier<String>) TokenSignatureEnforcementIT::foreignIssuerToken));
     }
 
     @ParameterizedTest(name = "{0} is refused")
