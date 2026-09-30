@@ -148,10 +148,12 @@
             involved; this service is a resource server.
 
             This covers discovery and signature verification only. Discovery is attempted
-            once with no retry or backoff, the JWKS cache expiration is not configurable
-            per provider, and an unknown `kid` does not trigger a refetch - so resilient
-            discovery, per-provider key caching and rate-limited refetch remain this
-            service's own work. See the notes in src/main/resources/application.yml.
+            once with no retry or backoff, the discovered issuer is never compared against
+            the configured one, the JWKS cache expiration is global rather than per
+            provider, and an unknown `kid` does not trigger a refetch - so issuer
+            verification, resilient discovery, per-provider key caching and rate-limited
+            refetch remain this service's own work. See the notes in
+            src/main/resources/application.yml for the verified details.
         -->
         <dependency>
             <groupId>io.micronaut.security</groupId>

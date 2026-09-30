@@ -242,8 +242,11 @@ public class IdentityProviderRegistryValidator {
      * property to a {@link java.net.URL} and, in doing so, silently repairs a malformed value by
      * prefixing {@code http://} — {@code not-a-url} becomes {@code http://not-a-url}. Trusting the
      * converted value would therefore turn a typo into a plausible-looking trusted issuer that can
-     * never match any token. The raw string is also what a token's {@code iss} claim is later
-     * compared against byte for byte, so it is the value that has to be well formed.
+     * never match any token. The raw string is also the value a token's {@code iss} claim is
+     * matched against, so it is the one that has to be well formed. (That match is currently a
+     * protocol-stripped suffix comparison rather than an equality test — see {@link
+     * TrustedIdentityProvider} — which makes a well-formed configured issuer matter more, not less:
+     * everything the match keeps comes from this string.)
      *
      * @param name the provider name, used in the failure message
      * @return the issuer exactly as configured

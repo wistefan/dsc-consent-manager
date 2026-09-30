@@ -17,8 +17,21 @@ package com.seamware.consentmanager.security;
  *
  * <p>Instances are created once, during startup validation, and are immutable thereafter.
  *
+ * <p><strong>The issuer is not yet matched exactly.</strong> Until the per-provider validator lands
+ * (step 5), a token's {@code iss} is checked by Micronaut's global {@code
+ * IssuerJwtClaimsValidator}, which does not compare for equality: verified against
+ * micronaut-security 5.4.0, it strips {@code http://}/{@code https://} and one trailing slash from
+ * both sides and then tests {@code expected.endsWith(actual)}. The token's value therefore only has
+ * to be a <em>suffix</em> of the configured one, with the scheme discarded — with an issuer of
+ * {@code http://keycloak:8180/realms/consent-manager}, the values {@code consent-manager} and
+ * {@code https://keycloak:8180/realms/consent-manager} are both accepted. That is not exploitable
+ * on its own, because the token must still carry a valid signature from the trusted provider's
+ * JWKS, but step 5 must replace it with a byte-for-byte comparison rather than assume one is
+ * already in force.
+ *
  * @param name the shared configuration key of the two blocks, for example {@code keycloak}
- * @param issuer the absolute issuer URL, compared byte-for-byte against a token's {@code iss}
+ * @param issuer the absolute issuer URL; matched against a token's {@code iss} only as loosely as
+ *     described above until step 5 tightens it to a byte-for-byte comparison
  * @param settings this service's claim and role settings for the issuer
  */
 public record TrustedIdentityProvider(

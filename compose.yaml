@@ -24,7 +24,14 @@ services:
       db:
         condition: service_healthy
       keycloak:
-        condition: service_started
+        # service_healthy, NOT service_started: the app resolves the provider's discovery
+        # document ONCE at startup and never retries (see application.yml). Keycloak needs
+        # ~30-60s with --import-realm before /realms/consent-manager/.well-known/... answers,
+        # while the app container is up in a fraction of that. Losing that race is permanent,
+        # not transient: no JWKS signature configuration is ever created and every bearer
+        # token is rejected for the lifetime of the process, with the app reporting a
+        # successful start. `restart: unless-stopped` does not rescue it either.
+        condition: service_healthy
     env_file:
       - path: .env
         required: false
@@ -36,7 +43,10 @@ services:
       # Override the trust-list entry to reach Keycloak inside the Docker network.
       # Only the issuer is configured: Micronaut derives the discovery URL from it.
       #
-      # This must match the `iss` claim Keycloak stamps into its tokens byte for byte.
+      # This is the value a token's `iss` claim is matched against. Keep it identical to the
+      # `iss` Keycloak stamps: the interim global validator only suffix-matches (see
+      # TrustedIdentityProvider), but step 5 tightens that to a byte-for-byte comparison, and a
+      # mismatch here will start failing the moment it does.
       # KC_HOSTNAME on the keycloak service below pins that claim to this exact URL,
       # so a token obtained from the host (http://localhost:8180/...) still carries
       # `iss: http://keycloak:8180/...` and is accepted here.
@@ -114,6 +124,25 @@ services:
       # Fixed issuer/frontend URL - see the note above.
       KC_HOSTNAME: http://keycloak:${KEYCLOAK_PORT:-8180}
       KC_HOSTNAME_STRICT: "false"
+      # Exposes /health/ready on the management port for the healthcheck below.
+      KC_HEALTH_ENABLED: "true"
+      # Pins the management port rather than relying on its default, so the port the
+      # healthcheck dials cannot drift from the one Keycloak listens on.
+      KC_HTTP_MANAGEMENT_PORT: ${KEYCLOAK_MANAGEMENT_PORT:-9000}
+    # The app depends on this being *healthy*, so the check has to mean "serving", not
+    # "process started". The image ships neither curl nor wget, so the readiness endpoint
+    # is polled over bash's /dev/tcp; `start-dev --import-realm` reaches ready well inside
+    # start_period + interval * retries.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/${KEYCLOAK_MANAGEMENT_PORT:-9000}; echo -e "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; grep -q ''"status": "UP"'' <&3'
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 20
     restart: unless-stopped
     networks:
       - consent-manager-net

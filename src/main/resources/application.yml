@@ -68,9 +68,21 @@ micronaut:
     #     no JWKS signature configuration is ever created and EVERY token is rejected
     #     for the lifetime of the process. Startup itself still succeeds - which is
     #     why a readiness indicator and a retry-with-backoff path are still required.
-    #   * `JwksUriSignatureFactory` sets only the JWKS URL. The cache expiration keeps
-    #     its framework default (60s) and is NOT configurable per provider, so the
-    #     ticket's per-provider `jwks-cache-ttl` is not expressible through it.
+    #   * The discovered issuer is NEVER compared against the configured one. Nothing
+    #     in the oauth2 module performs that check: `DefaultOpenIdProviderMetadataFetcher`
+    #     returns the document unchecked, and `OpenIdClientFactory.overrideFromConfig`
+    #     only back-fills the configured value when the document omits `issuer` - a
+    #     present-but-mismatched discovered issuer silently wins. That is precisely
+    #     AC 2, and it does NOT come for free with discovery; step 3 must implement it.
+    #   * The JWKS cache TTL is GLOBAL, not per provider. The per-provider
+    #     `cacheExpiration` knob is `@Deprecated(forRemoval = true, since = "4.11.0")`
+    #     - "Not used. JWKS is cached via Micronaut Cache" - and `JwksUriSignatureFactory`
+    #     sets only the JWKS URL in any case. Caching goes through `CacheableJwkSetFetcher`,
+    #     which is `@CacheConfig("jwks")`, so a single global TTL IS expressible as
+    #     `micronaut.caches.jwks.expire-after-write` (micronaut-cache-caffeine is already
+    #     on the classpath). What is NOT expressible is the ticket's PER-PROVIDER
+    #     `jwks-cache-ttl`: one cache serves every provider. With no such cache
+    #     configured today the effective expiration is the 60s default.
     #   * An unknown `kid` does not trigger a re-fetch: the JWKS verification path
     #     fails against the cached key set. Key rotation therefore is not yet
     #     guaranteed to be picked up without a restart, and there is no rate-limited
@@ -114,7 +126,23 @@ micronaut:
           # Without these two keys the built-in validator authenticates ANY token
           # signed by a trusted issuer's key, whatever its `aud` - and the
           # intercept-url-map above already grants `isAuthenticated()` access to
-          # /metrics and /prometheus. Micronaut's validators are single global values,
+          # /metrics and /prometheus.
+          #
+          # Know what these two actually enforce, because they are NOT equally strict
+          # (verified against micronaut-security 5.4.0):
+          #   * `audience` is an exact match - `AudienceJwtClaimsValidator` does a plain
+          #     `List<String>.contains` over the token's `aud`.
+          #   * `issuer` is NOT an equality test. `IssuerJwtClaimsValidator` delegates to
+          #     `ClaimsUtils.endsWithIgnoringProtocolAndTrailingSlash`, which strips the
+          #     scheme and one trailing slash from both sides and then evaluates
+          #     `expected.endsWith(actual)`. The token's `iss` therefore only has to be a
+          #     SUFFIX of the configured issuer, with the scheme discarded: for an issuer
+          #     of http://host:8180/realms/consent-manager, the values `consent-manager`
+          #     and https://host:8180/realms/consent-manager are both accepted.
+          # That looseness is not exploitable by itself - the token must still carry a
+          # valid signature from the trusted provider's JWKS - but step 5 must replace it
+          # with a byte-for-byte per-provider comparison rather than assume one is already
+          # in force. TokenSignatureEnforcementIT pins the gap so it cannot be forgotten. Micronaut's validators are single global values,
           # so they are pointed at the `primary` entry; a deployment that adds a
           # second provider through a mounted YAML file will have that provider's
           # tokens rejected here until step 5 replaces this with the per-provider

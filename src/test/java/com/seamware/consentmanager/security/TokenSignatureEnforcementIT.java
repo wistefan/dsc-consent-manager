@@ -137,11 +137,14 @@ class TokenSignatureEnforcementIT {
                                                 + publishedKey.toPublicJWK().toJSONString()
                                                 + "]}")));
 
-        reachableContext = startContext(reachableIssuer);
+        reachableContext = startContext(reachableIssuer, reachableIssuer);
         reachableServer = reachableContext.getBean(EmbeddedServer.class).start();
         reachableClient = HttpClient.create(reachableServer.getURL());
 
-        unreachableContext = startContext(UNREACHABLE_ISSUER);
+        // Trusts an issuer that can never be discovered, but still expects the `iss` and `aud` the
+        // minted tokens carry, so the missing signature configuration is the only possible ground
+        // for rejection. See startContext.
+        unreachableContext = startContext(UNREACHABLE_ISSUER, reachableIssuer);
         unreachableServer = unreachableContext.getBean(EmbeddedServer.class).start();
         unreachableClient = HttpClient.create(unreachableServer.getURL());
     }
@@ -197,12 +200,24 @@ class TokenSignatureEnforcementIT {
     }
 
     /**
-     * Starts an isolated context whose only trusted provider is the given issuer.
+     * Starts an isolated context that trusts exactly one issuer and expects exactly one {@code iss}
+     * claim value.
      *
-     * @param issuer the issuer to trust
+     * <p>The two are deliberately separate parameters. For the reachable context they are the same
+     * URL, but the outage context has to trust an issuer that can never be discovered while still
+     * accepting the {@code iss} the minted tokens carry. Were the interim issuer claims validator
+     * also pointed at the unreachable URL, every outage assertion would be satisfied by an issuer
+     * mismatch and the absence of a signature configuration — the thing those cases exist to pin —
+     * would never be reached. {@link UnsignedTokenRejector} could then be deleted without a single
+     * test going red.
+     *
+     * @param trustedIssuer the issuer registered as an OpenID client, whose discovery document
+     *     supplies the signing keys
+     * @param expectedTokenIssuer the {@code iss} value the interim claims validator accepts
      * @return the started context
      */
-    private static ApplicationContext startContext(String issuer) {
+    private static ApplicationContext startContext(
+            String trustedIssuer, String expectedTokenIssuer) {
         String settings = IdentityProviderConfiguration.PREFIX + "." + PROVIDER;
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put(PROBE_ROUTE_ENABLED, true);
@@ -216,12 +231,13 @@ class TokenSignatureEnforcementIT {
                         + "."
                         + PROVIDER
                         + ".openid.issuer",
-                issuer);
+                trustedIssuer);
         properties.put(settings + ".audience", AUDIENCE);
         // Mirrors the interim claims validators configured in application.yml. Default property
         // sources are disabled for this context, so they have to be restated here; without them
         // Micronaut's built-in validator checks neither `iss` nor `aud`.
-        properties.put("micronaut.security.token.jwt.claims-validators.issuer", issuer);
+        properties.put(
+                "micronaut.security.token.jwt.claims-validators.issuer", expectedTokenIssuer);
         properties.put("micronaut.security.token.jwt.claims-validators.audience", AUDIENCE);
         properties.put(settings + ".claims.participant-identifier", "participant_id");
         properties.put(settings + ".claims.roles", "realm_access.roles");
@@ -432,6 +448,64 @@ class TokenSignatureEnforcementIT {
         assertThat(statusFor(unreachableClient, rsaToken(publishedKey)))
                 .as("with no usable signing key the service must fail closed")
                 .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+    }
+
+    /**
+     * Supplies {@code iss} values that are <em>not</em> the trusted issuer but that the interim
+     * global validator nevertheless accepts.
+     *
+     * @return case name and the {@code iss} value to mint a token with
+     */
+    static Stream<Arguments> looselyMatchedIssuers() {
+        return Stream.of(
+                Arguments.of("a bare trailing path segment", (Supplier<String>) () -> "dataspace"),
+                Arguments.of(
+                        "the same URL with the scheme swapped",
+                        (Supplier<String>)
+                                () -> "https" + reachableIssuer.substring("http".length())),
+                Arguments.of(
+                        "the path without the authority",
+                        (Supplier<String>) () -> REALM_PATH.substring(1)));
+    }
+
+    /**
+     * Pins the known looseness of the interim issuer check, so step 5 cannot inherit the assumption
+     * that the issuer is already matched exactly.
+     *
+     * <p>This test asserts that these tokens are <strong>accepted</strong>, which is the opposite
+     * of what the finished service must do. That is deliberate. Micronaut's {@code
+     * IssuerJwtClaimsValidator} does not compare issuers for equality: it strips the scheme and one
+     * trailing slash from both sides and evaluates {@code expected.endsWith(actual)}, so a token's
+     * {@code iss} only has to be a suffix of the configured issuer. {@link #foreignIssuerToken()}
+     * uses a wholly unrelated issuer and so cannot detect this — a suffix match rejects that one
+     * too.
+     *
+     * <p>Nothing here is exploitable today: every one of these tokens still carries a genuine
+     * signature from the trusted provider's JWKS, so an attacker able to mint one already holds the
+     * provider's signing key. What the looseness would permit is a scheme downgrade and confusion
+     * between issuers sharing a URL suffix.
+     *
+     * <p><strong>When the per-provider byte-for-byte validator lands in step 5, this test must go
+     * red.</strong> The fix at that point is not to relax it but to delete it and move these cases
+     * into {@link #forgedTokens()}, where they belong.
+     *
+     * @param description the case name, for the test report
+     * @param issuer supplies the {@code iss} value to mint the token with, deferred because the
+     *     reachable issuer's port is only known once the WireMock provider has started
+     */
+    @ParameterizedTest(name = "{0} is (for now) wrongly accepted as the trusted issuer")
+    @MethodSource("looselyMatchedIssuers")
+    @DisplayName("documents that the interim issuer check is a suffix match, not an equality test")
+    void documentsInterimIssuerSuffixMatch(String description, Supplier<String> issuer) {
+        assertThat(
+                        statusFor(
+                                reachableClient,
+                                rsaToken(publishedKey, claims(issuer.get(), AUDIENCE))))
+                .as(
+                        "the interim global issuer validator suffix-matches; step 5 must tighten "
+                                + "this to a byte-for-byte comparison and move the case into "
+                                + "forgedTokens()")
+                .isEqualTo(HttpStatus.OK.getCode());
     }
 
     /**
