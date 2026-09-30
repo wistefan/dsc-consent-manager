@@ -6,7 +6,7 @@
 -- users
 -- ============================================================
 CREATE TABLE users (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              UUID        PRIMARY KEY,
     identifier      TEXT        NOT NULL,
     email           TEXT,
     first_name      TEXT,
@@ -26,12 +26,12 @@ CREATE INDEX idx_users_email_lower
 -- participants
 -- ============================================================
 CREATE TABLE participants (
-    id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    id                   UUID        PRIMARY KEY,
     identifier           TEXT        NOT NULL,
     legal_name           TEXT        NOT NULL,
     self_description_uri TEXT,
     email                TEXT,
-    endpoints            JSONB       NOT NULL DEFAULT '[]'::jsonb,
+    endpoints            JSONB       NOT NULL DEFAULT '{}'::jsonb,
     legal_person         JSONB,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -68,7 +68,7 @@ CREATE INDEX idx_user_participants_participant_id
 -- privacy_notices
 -- ============================================================
 CREATE TABLE privacy_notices (
-    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    id           UUID        PRIMARY KEY,
     contract_uri TEXT        NOT NULL,
     title        TEXT,
     provider_id  UUID        NOT NULL,
@@ -96,7 +96,7 @@ CREATE UNIQUE INDEX uq_privacy_notices_active_contract
 -- consents
 -- ============================================================
 CREATE TABLE consents (
-    id                 UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    id                 UUID        PRIMARY KEY,
     user_id            UUID        NOT NULL,
     privacy_notice_id  UUID        NOT NULL,
     provider_id        UUID        NOT NULL,
@@ -166,7 +166,7 @@ CREATE UNIQUE INDEX uq_consents_granted_per_user_notice
 -- consent_events (audit log)
 -- ============================================================
 CREATE TABLE consent_events (
-    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    id           UUID        PRIMARY KEY,
     consent_id   UUID        NOT NULL,
     event_state  TEXT        NOT NULL,
     event_type   TEXT        NOT NULL DEFAULT 'explicit',
