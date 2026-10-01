@@ -26,13 +26,12 @@ services:
       db:
         condition: service_healthy
       keycloak:
-        # service_healthy, NOT service_started: the app resolves the provider's discovery
-        # document ONCE at startup and never retries (see application.yml). Keycloak needs
-        # ~30-60s with --import-realm before /realms/consent-manager/.well-known/... answers,
-        # while the app container is up in a fraction of that. Losing that race is permanent,
-        # not transient: no JWKS signature configuration is ever created and every bearer
-        # token is rejected for the lifetime of the process, with the app reporting a
-        # successful start. `restart: unless-stopped` does not rescue it either.
+        # service_healthy, NOT service_started. Keycloak needs ~30-60s with --import-realm
+        # before /realms/consent-manager/.well-known/... answers, while the app container
+        # is up in a fraction of that. From step 3 on, losing that race is recoverable -
+        # discovery is retried with bounded backoff and readiness stays DOWN meanwhile -
+        # but waiting here means `docker compose up` reaches a usable stack directly
+        # instead of spending the first backoff windows rejecting every token.
         condition: service_healthy
     env_file:
       - path: .env
@@ -45,16 +44,14 @@ services:
       # verify. Only the `test` environment disables security.
       MICRONAUT_ENVIRONMENTS: dev
       # Override the trust-list entry to reach Keycloak inside the Docker network.
-      # Only the issuer is configured: Micronaut derives the discovery URL from it.
       #
-      # This is the value a token's `iss` claim is matched against. Keep it identical to the
-      # `iss` Keycloak stamps: the interim global validator only suffix-matches (see
-      # TrustedIdentityProvider), but step 5 tightens that to a byte-for-byte comparison, and a
-      # mismatch here will start failing the moment it does.
+      # IDP_ISSUER is the value a token's `iss` claim is matched against, byte for byte,
+      # and is also compared against the `issuer` field of the discovery document.
       # KC_HOSTNAME on the keycloak service below pins that claim to this exact URL,
       # so a token obtained from the host (http://localhost:8180/...) still carries
       # `iss: http://keycloak:8180/...` and is accepted here.
       IDP_ISSUER: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager
+      IDP_DISCOVERY_URL: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager/.well-known/openid-configuration
     healthcheck:
       # `endpoints.all.port` moves management endpoints onto their own port but
       # does NOT take them out of `micronaut.server.context-path`, so the probe

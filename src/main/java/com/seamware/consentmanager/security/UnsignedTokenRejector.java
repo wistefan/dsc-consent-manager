@@ -25,12 +25,12 @@ import jakarta.inject.Singleton;
  * both paths.
  *
  * <p>An unsigned {@code alg: none} token therefore <strong>authenticates</strong> whenever both
- * collections are empty. That is not a hypothetical: the OpenID Connect clients configured under
- * {@code micronaut.security.oauth2.clients} only contribute their JWKS-backed key material once
- * discovery has succeeded, so both collections are empty during startup, throughout an identity
- * provider outage, and permanently if an issuer is misconfigured. Without this bean an IdP outage
- * would silently degrade into "every forged token is accepted" — the exact inverse of the
- * requirement that unsigned and symmetrically signed tokens be rejected.
+ * collections are empty. That is not a hypothetical: nothing contributes a signing key until the
+ * per-issuer validator lands in step 5, so both collections are empty for the whole of this step,
+ * and they will be empty again during startup and throughout an identity provider outage once key
+ * resolution exists. Without this bean the absence of a usable key would silently mean "every
+ * forged token is accepted" — the exact inverse of the requirement that unsigned and symmetrically
+ * signed tokens be rejected.
  *
  * <p>Registering one configuration that matches no algorithm and verifies no token makes the
  * imperative collection permanently non-empty, so the short-circuit above can never be reached.
@@ -38,12 +38,10 @@ import jakarta.inject.Singleton;
  * never participates in the validation of a genuine token: a correctly signed token is still
  * verified by the key set its issuer contributes.
  *
- * <p>Note that the two collections hold different beans, which is why this one is not made
- * redundant by a provider resolving successfully. The JWKS bean an OpenID client contributes is
- * {@code ReactiveJwksSignature}, declared {@code @EachBean(JwksSignatureConfiguration.class)} and
- * implementing {@code ReactiveSignatureConfiguration<SignedJWT>} — <em>not</em> {@link
- * SignatureConfiguration}. The imperative collection this bean joins is otherwise empty even when
- * discovery has succeeded.
+ * <p>Note that the latch spans two collections holding different bean types, which is why this one
+ * is not made redundant later by a reactive, JWKS-backed configuration: a {@code
+ * ReactiveSignatureConfiguration<SignedJWT>} joins the reactive collection, while this bean keeps
+ * the imperative one non-empty. Either suffices, and this bean holds whatever step 5 registers.
  *
  * <p>The guarantee is "fail closed": with no usable signing key, every token is rejected.
  *
@@ -62,9 +60,9 @@ import jakarta.inject.Singleton;
  * it builds its own context with the {@code test} environment active, while a deployment that sets
  * the property fails fast rather than failing open.
  *
- * <p>See {@code docs/adr/0001-delegate-oidc-discovery-and-jwks-to-micronaut-security.md} for why
- * signature verification is delegated to Micronaut at all, and what else that delegation leaves to
- * this service.
+ * <p>See {@code docs/adr/0002-own-identity-provider-registry-on-nimbus.md} for why signature
+ * verification is built on Nimbus here rather than delegated to micronaut-security-oauth2's
+ * declarative OpenID client support, and what that leaves to steps 3-5.
  *
  * @see IdentityProviderRegistryValidator
  */

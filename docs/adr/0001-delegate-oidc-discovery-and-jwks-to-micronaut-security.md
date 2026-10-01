@@ -1,11 +1,13 @@
 # ADR 0001 — Delegate OIDC discovery and JWKS handling to `micronaut-security-oauth2`
 
-- **Status:** Proposed — awaiting sign-off. This ADR records a deliberate departure from
-  the agreed implementation plan; it must be accepted or rejected before step 3 builds on it.
-- **Date:** 2025-10-01
+- **Status:** **Rejected.** Superseded by
+  [ADR 0002](0002-own-identity-provider-registry-on-nimbus.md), which keeps implementation
+  plan convention 6. Retained because the framework behaviour recorded below was verified by
+  source reading and is the evidence for rejecting this option; do not re-litigate it without
+  re-reading the sources.
+- **Date:** 2025-10-01 (proposed), 2025-10-01 (rejected)
 - **Ticket:** TICKET-003 (Taiga #67), step 2
-- **Supersedes:** implementation plan convention 6 ("custom validation, not declarative JWKS")
-  and parts of plan steps 2, 3 and 4.
+- **Superseded by:** [ADR 0002](0002-own-identity-provider-registry-on-nimbus.md)
 
 This is the single place where the behaviour of the framework we delegate to is written
 down. Configuration files point here instead of repeating it: there is one artefact to

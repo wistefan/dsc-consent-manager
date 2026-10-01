@@ -59,81 +59,23 @@ micronaut:
         http-method: GET
         access:
           - isAuthenticated()
-    # -------------------------------------------------------------------------
-    # Trusted OpenID Connect providers - issuer half of the trust list
-    # -------------------------------------------------------------------------
-    # Each entry under `oauth2.clients` declares one trusted issuer. From the
-    # `openid.issuer` URL alone Micronaut Security fetches the provider's discovery
-    # document, reads its `jwks_uri` and registers a JWKS-backed signature
-    # configuration, so no discovery or JWKS URL has to be configured separately.
+    # Micronaut's own JWT support stays ENABLED: the flag gates the whole
+    # `io.micronaut.security.token.jwt` package - the security filter, the bearer-token
+    # reader and the `TokenValidator` SPI that ConsentManagerTokenValidator plugs into
+    # in step 5. No signature configuration is registered yet, so until that validator
+    # lands EVERY bearer token is rejected and no request authenticates. That is the
+    # fail-closed direction, and it is what UnsignedTokenRejector keeps true for
+    # `alg: none` tokens, which the framework would otherwise accept precisely because
+    # no signature configuration exists.
     #
-    # No `client-id` or `client-secret` is set. This service is a resource server: it
-    # runs no OAuth2 flow, issues no token and stores no credential.
-    #
-    # Every client here MUST have a matching `consent-manager.identity-providers.<name>`
-    # entry below (and vice versa) or startup fails - see IdentityProviderRegistryValidator.
-    #
-    # EXACTLY ONE PROVIDER IS ACCEPTED FOR NOW, and it must be named `primary`. A
-    # second entry is a startup failure, not a warning: it would be able to forge
-    # tokens for the first. Multi-provider support arrives in step 5.
-    #
-    # Environment variables can only OVERRIDE values of a provider already declared
-    # here; they cannot ADD one. A name that appears only in an environment variable
-    # never becomes a configuration entry and is silently ignored.
-    #
-    # Why discovery and JWKS are delegated to the framework, what it does NOT do, and
-    # which interim guards that forced into this file:
-    #   docs/adr/0001-delegate-oidc-discovery-and-jwks-to-micronaut-security.md
-    # Keep framework-behaviour details in that ADR, not here - there is one artefact
-    # to re-verify on a Micronaut upgrade rather than several copies to drift apart.
-    oauth2:
-      # micronaut-security-oauth2 enables an anonymous metadata surface by default
-      # that publishes the configured issuer URLs, and a 401 challenge provider that
-      # points at it. This service discloses nothing about which issuers it trusts,
-      # so both are switched off. The two flags are INDEPENDENT: `enabled: false`
-      # gates only the controller. Rationale and the verified framework behaviour:
-      # docs/adr/0001-delegate-oidc-discovery-and-jwks-to-micronaut-security.md
-      # TokenSignatureEnforcementIT pins both flags against the real property sources.
-      protected-resource-metadata:
-        # Removes GET /.well-known/oauth-protected-resource.
-        enabled: false
-        # Removes `resource_metadata="..."` from the WWW-Authenticate header.
-        www-authenticate: false
-      clients:
-        primary:
-          openid:
-            issuer: ${IDP_ISSUER:}
-
-    # Micronaut's own JWT support is left ENABLED: the flag gates the whole
-    # `io.micronaut.security.token.jwt` package, including the JWKS-backed signature
-    # beans the OpenID clients above feed, so turning it off would remove signature
-    # verification altogether rather than merely disabling the built-in validator.
-    # UnsignedTokenRejector then keeps the set of signature configurations non-empty;
-    # see the ADR referenced above for why that is required.
+    # There are deliberately no `claims-validators.issuer` / `.audience` entries: both
+    # hold a single global value, and the trust list holds a configurable number of
+    # providers each with its own issuer and audience. Those checks are per provider and
+    # belong to ConsentManagerTokenValidator (step 5). See
+    # docs/adr/0002-own-identity-provider-registry-on-nimbus.md.
     token:
       jwt:
         enabled: true
-        claims-validators:
-          # INTERIM GUARD - remove when ConsentManagerTokenValidator lands (step 5).
-          #
-          # Without these two keys the built-in validator applies only the expiration
-          # and subject-not-null checks, so ANY token signed by a trusted issuer's key
-          # authenticates whatever its `aud` - and the intercept-url-map above already
-          # grants `isAuthenticated()` access to /metrics and /prometheus.
-          #
-          # They are not equally strict: `audience` is an exact match, `issuer` is a
-          # protocol-stripped SUFFIX match, NOT an equality test. Step 5 must replace
-          # it with a byte-for-byte per-provider comparison rather than assume one is
-          # already in force. TokenSignatureEnforcementIT pins the gap. Details:
-          # docs/adr/0001-delegate-oidc-discovery-and-jwks-to-micronaut-security.md
-          #
-          # Both hold a single global value, which is one of the two reasons the trust
-          # list is capped at one entry. These reference the two properties rather than
-          # `${IDP_*}` so they follow the configured value however it was set;
-          # IdentityProviderRegistryValidator asserts at startup that both actually
-          # resolve to the sole provider's issuer and audience.
-          issuer: ${micronaut.security.oauth2.clients.primary.openid.issuer}
-          audience: ${consent-manager.identity-providers.primary.audience}
 
   metrics:
     enabled: true
@@ -204,29 +146,50 @@ consent-manager:
   contract-service-url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
 
   # ---------------------------------------------------------------------------
-  # Identity provider trust list - claim half
+  # Identity provider trust list
   # ---------------------------------------------------------------------------
-  # One entry per trusted provider, keyed by the SAME name as the
-  # `micronaut.security.oauth2.clients.<name>` entry above. The two halves are
-  # joined at startup; a name present in only one of them aborts startup.
-  #
-  # This block holds only what Micronaut Security cannot express: a per-provider
-  # audience, clock skew, claim paths (which may be nested) and role mapping.
-  # Issuer, discovery and signing-key caching are Micronaut's job, not ours.
+  # One entry per trusted OpenID Connect provider, keyed by name. Each entry is
+  # self-contained: the issuer, the discovery document URL, the audience this service
+  # expects, the clock skew, the JWKS cache lifetime, the claim paths and the role
+  # mapping. No `client-id` and no `client-secret` appear anywhere - this service is a
+  # resource server, runs no OAuth2 flow and stores no credential.
   #
   # The trust list is read ONCE at startup and is immutable for the lifetime of the
   # process: no runtime reload, no admin endpoint, no auto-registration. Adding,
-  # removing or re-pointing a provider requires a config change and a restart.
+  # removing or re-pointing a provider requires a config change and a restart. Only the
+  # per-provider metadata discovered for that fixed set (the jwks_uri and the cached
+  # signing keys) changes afterwards, which is what lets a key rotation be picked up
+  # without a restart.
   #
-  # Startup FAILS when the list is empty or any entry is malformed. `IDP_ISSUER` and
-  # `IDP_AUDIENCE` intentionally have no default, so a deployment that forgets to
-  # configure an IdP aborts at startup with a message naming the missing property
-  # rather than silently trusting something.
+  # Startup FAILS when the list is empty, an entry is malformed, two entries declare the
+  # same issuer, or an entry declares a key this service does not read. `IDP_ISSUER`,
+  # `IDP_DISCOVERY_URL` and `IDP_AUDIENCE` intentionally have no default, so a deployment
+  # that forgets to configure an IdP aborts at startup with a message naming the missing
+  # property rather than silently trusting something.
+  #
+  # Environment variables can only OVERRIDE values of a provider already declared here;
+  # they cannot ADD one. A name that appears only in an environment variable never
+  # becomes a configuration entry and is silently ignored - add the second provider to
+  # this file (or to a deployment overlay) and parameterise its values.
+  #
+  # Why the issuer, discovery and key caching are configured here rather than delegated
+  # to `micronaut.security.oauth2.clients.<name>.openid.issuer`:
+  #   docs/adr/0002-own-identity-provider-registry-on-nimbus.md
   identity-providers:
     primary:
+      issuer: ${IDP_ISSUER:}
+      # Fetched at startup to discover the provider's jwks_uri. Kept separate from the
+      # issuer because a provider may publish its metadata at a path that is not the
+      # issuer plus the well-known suffix; step 3 verifies that the document's `issuer`
+      # equals the value above and refuses the provider when they disagree.
+      discovery-url: ${IDP_DISCOVERY_URL:}
       audience: ${IDP_AUDIENCE:}
       # Tolerance applied to the exp, iat and nbf claims.
       clock-skew: ${IDP_CLOCK_SKEW:30s}
+      # How long this provider's fetched JWK set stays usable before it is refreshed.
+      # Per provider: one that rotates keys hourly and one that rotates them yearly
+      # should not share a refresh cadence.
+      jwks-cache-ttl: ${IDP_JWKS_CACHE_TTL:1h}
       # Claim names are per provider. Each may be a dot-separated nested path.
       claims:
         user-identifier: ${IDP_CLAIM_USER_IDENTIFIER:sub}

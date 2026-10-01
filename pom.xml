@@ -131,43 +131,21 @@
             <scope>compile</scope>
         </dependency>
 
-        <!-- Micronaut Security JWT -->
-        <dependency>
-            <groupId>io.micronaut.security</groupId>
-            <artifactId>micronaut-security-jwt</artifactId>
-            <scope>compile</scope>
-        </dependency>
-
         <!--
-            Micronaut Security OAuth2.
+            Micronaut Security JWT.
 
-            Used purely for its OpenID Connect *provider* support: each
-            `micronaut.security.oauth2.clients.<name>.openid.issuer` entry makes Micronaut
-            fetch that provider's discovery document and register a JWKS-backed signature
-            configuration for it. No OAuth2 login flow, callback route or client secret is
-            involved; this service is a resource server.
-
-            This covers discovery and signature verification only. Discovery is attempted
-            once with no retry or backoff, the discovered issuer is never compared against
-            the configured one, the JWKS cache expiration is global rather than per
-            provider, and an unknown `kid` does not trigger a refetch - so issuer
-            verification, resilient discovery, per-provider key caching and rate-limited
-            refetch remain this service's own work. Signature verification is also not
-            bound to the issuer: every configured key set is tried and the first that
-            matches wins, which is why only one trusted provider is accepted until the
-            per-provider validator lands. See the notes in
-            src/main/resources/application.yml for the verified details.
-
-            The module also switches on, by default, an anonymous
-            /.well-known/oauth-protected-resource endpoint that publishes the configured
-            issuer URLs, and a WWW-Authenticate challenge provider that appends
-            `resource_metadata="..."` to 401 responses. Both are disabled in
-            application.yml (`micronaut.security.oauth2.protected-resource-metadata`);
-            see the comment there for why.
+            Brings the security filter, the `@Secured` rules and the token-validation
+            SPI this service plugs into, and transitively `com.nimbusds:nimbus-jose-jwt`
+            - the library that supplies JWS verification, `JWKSource` with caching,
+            rate-limited refetch and outage tolerance. Discovery, issuer verification
+            and per-provider key selection are built on top of Nimbus rather than on
+            `micronaut-security-oauth2`'s declarative OpenID client support, which cannot
+            express them; the reasoning is recorded in
+            docs/adr/0002-own-identity-provider-registry-on-nimbus.md.
         -->
         <dependency>
             <groupId>io.micronaut.security</groupId>
-            <artifactId>micronaut-security-oauth2</artifactId>
+            <artifactId>micronaut-security-jwt</artifactId>
             <scope>compile</scope>
         </dependency>
 

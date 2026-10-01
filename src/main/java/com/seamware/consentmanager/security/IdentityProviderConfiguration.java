@@ -7,7 +7,6 @@ import io.micronaut.context.exceptions.ConfigurationException;
 import jakarta.annotation.PostConstruct;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -17,38 +16,20 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * The Consent Manager's own settings for one trusted OpenID Connect provider.
+ * The Consent Manager's settings for one trusted OpenID Connect provider.
  *
- * <p>This type deliberately holds <strong>only what Micronaut Security does not already
- * provide</strong>. A trusted provider is declared to Micronaut as an OpenID Connect client:
- *
- * <pre>{@code
- * micronaut:
- *   security:
- *     oauth2:
- *       clients:
- *         keycloak:                 # <-- the provider name
- *           openid:
- *             issuer: https://keycloak.example.com/realms/dataspace
- * }</pre>
- *
- * <p>From that single property Micronaut fetches the provider's OpenID discovery document, reads
- * its {@code jwks_uri}, and registers a JWKS-backed signature configuration that caches the
- * provider's signing keys and re-fetches them when the cache expires. Issuer, discovery, key
- * retrieval and key caching therefore need no code here. No {@code client-id} or {@code
- * client-secret} is configured: the Consent Manager is a resource server, performs no OAuth2 flow
- * and stores no credentials.
- *
- * <p>What Micronaut does <em>not</em> offer is per-provider claim handling — its audience and roles
- * settings are single, global values and its roles lookup cannot follow a nested claim path. Those
- * gaps are what this class fills, under a matching name:
+ * <p>The trust list lives entirely in this service's own configuration namespace, one block per
+ * provider:
  *
  * <pre>{@code
  * consent-manager:
  *   identity-providers:
- *     keycloak:                     # <-- same name as the OIDC client above
+ *     keycloak:                     # <-- the provider name
+ *       issuer: https://keycloak.example.com/realms/dataspace
+ *       discovery-url: https://keycloak.example.com/realms/dataspace/.well-known/openid-configuration
  *       audience: consent-manager
  *       clock-skew: 30s
+ *       jwks-cache-ttl: 1h
  *       claims:
  *         user-identifier: sub
  *         participant-identifier: participant_id
@@ -59,43 +40,49 @@ import java.util.Map;
  *         catalog: consent-catalog
  * }</pre>
  *
+ * <p>No {@code client-id} and no {@code client-secret} appear anywhere: the Consent Manager is a
+ * resource server. It runs no OAuth2 flow, issues no token and stores no credential.
+ *
+ * <p><strong>Why these settings are not declared as a Micronaut Security OpenID client.</strong>
+ * Declaring {@code micronaut.security.oauth2.clients.<name>.openid.issuer} would make the framework
+ * fetch the discovery document and register a JWKS-backed signature configuration, which looks like
+ * the whole job. It is not: verified against micronaut-security 5.4.0, that path never compares the
+ * discovered issuer with the configured one (AC 2), never retries a failed discovery (AC 3), has no
+ * per-provider JWKS TTL, never re-fetches on an unknown {@code kid} (AC 13/14), and - decisively -
+ * does not bind a key set to an issuer, so with two providers configured either can mint tokens
+ * that authenticate as the other. The signature primitives underneath it, {@code
+ * com.nimbusds:nimbus-jose-jwt}, are reused directly instead; they supply key-set caching,
+ * rate-limited refetch and outage tolerance per issuer. The full comparison is recorded in {@code
+ * docs/adr/0002-own-identity-provider-registry-on-nimbus.md}.
+ *
  * <p>Entries are keyed by <strong>name</strong> rather than by list index. A named key binds from
  * an environment variable ({@code CONSENT_MANAGER_IDENTITY_PROVIDERS_KEYCLOAK_AUDIENCE}), whereas
  * an indexed one does not: Micronaut registers {@code CONSENT_MANAGER_IDENTITY_PROVIDERS_1_ISSUER}
  * verbatim as {@code CONSENT_MANAGER_IDENTITY_PROVIDERS[1]ISSUER}, which never normalises to a
- * bindable property, so an operator adding a second issuer that way would be silently ignored.
+ * bindable property, so an operator adding a second issuer that way would be silently ignored. This
+ * is the one documented deviation from the implementation plan's {@code @EachProperty(list =
+ * true)}: the plan's goal is a trust list of variable size, which a named map delivers while
+ * staying configurable the way every other setting in this service is.
  *
  * <p>The trust list is read <strong>once at startup</strong> and is immutable for the lifetime of
- * the process — no runtime reload, no admin endpoint, no auto-registration. Adding, removing or
- * re-pointing a provider requires a configuration change and a restart.
+ * the process - no runtime reload, no admin endpoint, no auto-registration. Adding, removing or
+ * re-pointing a provider requires a configuration change and a restart. Only per-provider metadata
+ * discovered for that fixed set (the {@code jwks_uri} and the cached signing keys) changes
+ * afterwards, which is what lets a key rotation be picked up without a restart.
  *
  * <p>Every value is validated at startup. A malformed entry aborts context creation with a message
  * naming the offending property, because a resource server that silently trusts a misconfigured
- * issuer is worse than one that refuses to start.
- *
- * <p>Two keys from the ticket's configuration schema are deliberately <strong>not</strong> bound
- * here, and an entry that declares either is rejected by {@link IdentityProviderRegistryValidator}
- * rather than ignored: {@code discovery-url}, because Micronaut Security derives the discovery
- * document from the issuer alone, and {@code jwks-cache-ttl}, because the JWKS cache TTL is global
- * rather than per provider (see {@code application.yml}). {@code @EachProperty} ignores an unknown
- * key silently, and a silently-ignored key on the security boundary is exactly the failure this
- * class exists to prevent.
+ * issuer is worse than one that refuses to start. {@code @EachProperty} ignores an unknown key
+ * silently, so {@link IdentityProviderRegistryValidator} additionally rejects any key below an
+ * entry that this class does not read.
  *
  * @see IdentityProviderRegistryValidator
  */
 @EachProperty(IdentityProviderConfiguration.PREFIX)
 public class IdentityProviderConfiguration {
 
-    /** Configuration prefix holding the per-provider claim settings. */
+    /** Configuration prefix holding the trust list, one sub-key per trusted provider. */
     public static final String PREFIX = "consent-manager.identity-providers";
-
-    /**
-     * Configuration prefix under which each trusted provider's issuer is declared.
-     *
-     * <p>Owned by Micronaut Security OAuth2, not by this application. Referenced here so that
-     * startup diagnostics can point an operator at the exact property they need to add.
-     */
-    public static final String OIDC_CLIENTS_PREFIX = "micronaut.security.oauth2.clients";
 
     /**
      * Wildcard form of a single entry's property path.
@@ -115,13 +102,26 @@ public class IdentityProviderConfiguration {
      */
     public static final Duration DEFAULT_CLOCK_SKEW = Duration.ofSeconds(30);
 
+    /**
+     * Default lifetime of a provider's cached JWK set when {@code jwks-cache-ttl} is not
+     * configured.
+     *
+     * <p>An hour is long enough that steady-state traffic never re-fetches, and short enough that a
+     * planned key rotation is picked up without a restart even if the unknown-{@code kid} refetch
+     * path (step 4) is somehow not exercised.
+     */
+    public static final Duration DEFAULT_JWKS_CACHE_TTL = Duration.ofHours(1);
+
     /** Default claim carrying the user identifier, per the published token contract. */
     public static final String DEFAULT_USER_IDENTIFIER_CLAIM = "sub";
 
     private final String name;
 
+    private String issuer;
+    private String discoveryUrl;
     private String audience;
     private Duration clockSkew = DEFAULT_CLOCK_SKEW;
+    private Duration jwksCacheTtl = DEFAULT_JWKS_CACHE_TTL;
     private ClaimsConfiguration claims = new ClaimsConfiguration();
     private Map<String, String> roleMapping = Map.of();
 
@@ -156,6 +156,56 @@ public class IdentityProviderConfiguration {
     }
 
     /**
+     * Returns the issuer this provider stamps into the {@code iss} claim of every token it mints.
+     *
+     * <p>This is the trust anchor: a token is only ever considered against the provider whose
+     * configured issuer matches its {@code iss} exactly, and the value is compared byte-for-byte
+     * rather than by suffix or host. It must equal the {@code issuer} field of the provider's
+     * discovery document; step 3 verifies that at startup and refuses the provider when they
+     * disagree.
+     *
+     * @return the expected issuer
+     */
+    @NotBlank(message = ENTRY_PATH + ".issuer must not be blank")
+    public String getIssuer() {
+        return issuer;
+    }
+
+    /**
+     * Sets the expected issuer.
+     *
+     * @param issuer the expected issuer
+     */
+    public void setIssuer(String issuer) {
+        this.issuer = issuer;
+    }
+
+    /**
+     * Returns the URL of this provider's OpenID Provider Metadata document.
+     *
+     * <p>Fetched once at startup to discover the provider's {@code jwks_uri}, then retried with
+     * backoff while it is unreachable (step 3). Kept separate from {@link #getIssuer()} because a
+     * provider may publish its metadata at a path that is not the issuer plus the well-known
+     * suffix, and because the two are compared against each other rather than derived from one
+     * another.
+     *
+     * @return the discovery document URL
+     */
+    @NotBlank(message = ENTRY_PATH + ".discovery-url must not be blank")
+    public String getDiscoveryUrl() {
+        return discoveryUrl;
+    }
+
+    /**
+     * Sets the discovery document URL.
+     *
+     * @param discoveryUrl the discovery document URL
+     */
+    public void setDiscoveryUrl(String discoveryUrl) {
+        this.discoveryUrl = discoveryUrl;
+    }
+
+    /**
      * Returns the audience this service expects to find in the token's {@code aud} claim.
      *
      * <p>Micronaut's {@code micronaut.security.token.jwt.claims-validators.audience} is a single
@@ -181,9 +231,13 @@ public class IdentityProviderConfiguration {
     /**
      * Returns the tolerance applied when validating time-based claims against this provider.
      *
+     * <p>Carries no {@code @NotNull}: {@link #setClockSkew(Duration)} substitutes {@link
+     * #DEFAULT_CLOCK_SKEW} for a {@code null}, so the field is non-null by construction and such a
+     * constraint could never fail. A constraint that cannot fire is worse than none, because the
+     * next reader reads it as evidence the case is covered.
+     *
      * @return the permitted clock skew, never {@code null}
      */
-    @NotNull(message = ENTRY_PATH + ".clock-skew must not be null")
     public Duration getClockSkew() {
         return clockSkew;
     }
@@ -198,12 +252,38 @@ public class IdentityProviderConfiguration {
     }
 
     /**
+     * Returns how long this provider's fetched JWK set stays usable before it is refreshed.
+     *
+     * <p>Per-provider rather than global: a provider that rotates keys hourly and one that rotates
+     * them yearly should not share a refresh cadence. Carries no {@code @NotNull} for the reason
+     * given on {@link #getClockSkew()}.
+     *
+     * @return the JWKS cache lifetime, never {@code null}
+     */
+    public Duration getJwksCacheTtl() {
+        return jwksCacheTtl;
+    }
+
+    /**
+     * Sets the JWKS cache lifetime.
+     *
+     * @param jwksCacheTtl the lifetime; {@code null} restores {@link #DEFAULT_JWKS_CACHE_TTL}
+     */
+    public void setJwksCacheTtl(Duration jwksCacheTtl) {
+        this.jwksCacheTtl = jwksCacheTtl == null ? DEFAULT_JWKS_CACHE_TTL : jwksCacheTtl;
+    }
+
+    /**
      * Returns the per-provider claim names used to extract identifiers and roles.
+     *
+     * <p>Carries no {@code @NotNull} for the same reason as {@link #getClockSkew()}: {@link
+     * #setClaims(ClaimsConfiguration)} substitutes a fresh instance for a {@code null}, so the
+     * field is non-null by construction. {@code @Valid} remains, because the nested object's own
+     * constraints very much can fail.
      *
      * @return the claim configuration, never {@code null}
      */
     @Valid
-    @NotNull(message = ENTRY_PATH + ".claims must not be null")
     public ClaimsConfiguration getClaims() {
         return claims;
     }
@@ -284,6 +364,7 @@ public class IdentityProviderConfiguration {
     @PostConstruct
     public void validate() {
         requireNonNegative("clock-skew", clockSkew);
+        requireNonNegative("jwks-cache-ttl", jwksCacheTtl);
         this.resolvedRoleMapping = resolveRoleMapping();
     }
 
