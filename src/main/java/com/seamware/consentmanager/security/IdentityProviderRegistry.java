@@ -436,8 +436,19 @@ public class IdentityProviderRegistry implements AutoCloseable {
      * this client refuses to follow, an error status - as a {@link DisabledBeanException}, named
      * for what the module would do about it: give that provider up for the life of the process.
      * That is the one outcome AC 3 rules out, so it is translated into an ordinary failure and the
-     * caller retries it like any other outage. The message is replaced along with it, because the
-     * module's wording describes a disabled bean, which is not something that happens here.
+     * caller retries it like any other outage. The module's own wording describes a disabled bean,
+     * which is not something that happens here, so it is quoted rather than presented as the whole
+     * story.
+     *
+     * <p><strong>The underlying cause is unavailable by construction, and that is not a bug here.
+     * </strong> The module constructs its {@link DisabledBeanException} from a message alone and
+     * discards the {@code HttpClientException} / {@code HttpClientResponseException} it caught, so
+     * nothing this class can catch distinguishes a refused connection from a timeout, a 503 or a
+     * 404. Whatever the module chose to put in that message is appended below so the most that
+     * survives reaches {@link ResolvedIdentityProvider#failureReason()} and, through it, the {@code
+     * error} detail on {@code /health/readiness}; the full stack trace exists only in the module's
+     * own ERROR log line. Recovering more would mean issuing the request here again, which is
+     * exactly what ADR 0003 stopped doing.
      *
      * @param configuration the provider whose {@code discovery-url} to fetch
      * @return the parsed metadata document, or {@code null} if the provider returned an empty body
@@ -451,7 +462,8 @@ public class IdentityProviderRegistry implements AutoCloseable {
             throw new IllegalStateException(
                     "the discovery request to "
                             + configuration.getDiscoveryUrl()
-                            + " did not complete",
+                            + " did not complete: "
+                            + unreachable.getMessage(),
                     unreachable);
         }
     }

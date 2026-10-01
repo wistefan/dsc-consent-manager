@@ -9,6 +9,7 @@ import io.micronaut.management.health.indicator.HealthResult;
 import io.micronaut.management.health.indicator.annotation.Readiness;
 import jakarta.inject.Singleton;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.reactivestreams.Publisher;
 
@@ -90,15 +91,26 @@ public class IdentityProviderHealthIndicator implements HealthIndicator {
      * slower than the registry's own bounded discovery, and probing more often cannot add load on
      * an identity provider that is already struggling.
      *
+     * <p>The status and the per-provider detail are derived from a <em>single</em> {@link
+     * IdentityProviderRegistry#snapshot()}. Taking two - one for the detail and {@link
+     * IdentityProviderRegistry#isFullyResolved()} for the status - would let a discovery that
+     * completes between the reads produce a result reporting {@code UP} beside a provider detail
+     * still saying {@code PENDING}, which is self-contradictory in exactly the situation the detail
+     * exists to explain.
+     *
      * @return a single-element publisher carrying the result
      */
     @Override
     public Publisher<HealthResult> getResult() {
+        List<ResolvedIdentityProvider> providers = registry.snapshot();
         Map<String, Object> details = new LinkedHashMap<>();
-        for (ResolvedIdentityProvider provider : registry.snapshot()) {
+        for (ResolvedIdentityProvider provider : providers) {
             details.put(provider.name(), describe(provider));
         }
-        HealthStatus status = registry.isFullyResolved() ? HealthStatus.UP : HealthStatus.DOWN;
+        HealthStatus status =
+                providers.stream().allMatch(ResolvedIdentityProvider::isUsable)
+                        ? HealthStatus.UP
+                        : HealthStatus.DOWN;
         return Publishers.just(HealthResult.builder(NAME, status).details(details).build());
     }
 

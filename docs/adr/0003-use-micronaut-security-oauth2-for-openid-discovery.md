@@ -67,9 +67,17 @@ Consequences:
 
 - This service no longer composes a `.well-known` path, issues a discovery request or
   declares a metadata type. `OpenIdProviderMetadata` is deleted.
-- `micronaut-security-oauth2` becomes a `compile` dependency. No bean of its own is
-  activated, because no `micronaut.security.oauth2.clients.*` property is set — the
-  module's beans are `@Requires`-gated on that configuration.
+- `micronaut-security-oauth2` becomes a `compile` dependency, and it does not publish a
+  route. Its login, callback and logout routes are `@Requires`-gated on
+  `micronaut.security.oauth2.clients.*`, which this service never sets, so they stay
+  unregistered on their own. Its RFC 9728 protected-resource-metadata beans are **not**
+  gated on `clients.*` and default to *enabled*: `ProtectedResourceMetadataController`
+  serves `/.well-known/oauth-protected-resource`, and
+  `ResourceMetadataWwwAuthenticateChallengeProvider` appends a `resource_metadata`
+  parameter to every 401 challenge. The two are gated on
+  `micronaut.security.oauth2.protected-resource-metadata.enabled` and
+  `.www-authenticate` *independently* — switching the controller off does not switch the
+  challenge provider off — so `application.yml` sets both to `false` explicitly.
 - The fetcher reports a request that did not complete as a `DisabledBeanException`, named
   for what the module would do about it: disable that provider for the life of the
   process. That is precisely the AC 3 violation ADR 0002 worried about — but it is only a

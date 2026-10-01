@@ -23,17 +23,33 @@ micronaut:
     # Keep every route-publishing bean of micronaut-security-oauth2 switched off.
     #
     # That module is a compile dependency for its OpenID discovery components alone
-    # (docs/adr/0003-use-micronaut-security-oauth2-for-openid-discovery.md): this
-    # service is a resource server, it issues no tokens and runs no OAuth2 client.
-    # Its login, callback and logout routes stay unregistered on their own because no
-    # `micronaut.security.oauth2.clients.*` property is set, but the RFC 9728
-    # protected-resource-metadata controller does NOT: it defaults to enabled and
-    # serves `/.well-known/oauth-protected-resource` anonymously, advertising the
-    # service's own base URL and, once authorization servers are listed, the trusted
-    # issuers the trust list is deliberately not disclosing (US-ID-008). Turn it and
-    # its `resource_metadata` WWW-Authenticate challenge parameter off explicitly, so
-    # adding the dependency changes nothing about what this service exposes.
-    # TokenSignatureEnforcementIT.exposesNoOAuth2Routes pins both.
+    # (docs/adr/0003-use-micronaut-security-oauth2-for-openid-discovery.md):
+    # `IdentityProviderRegistry` drives its `DefaultOpenIdProviderMetadataFetcher`
+    # directly. This service is a resource server - it issues no tokens and runs no
+    # OAuth2 client.
+    #
+    # The login, callback and logout routes stay unregistered on their own because no
+    # `micronaut.security.oauth2.clients.*` property is set. The RFC 9728
+    # protected-resource-metadata beans do NOT: they are gated on the two properties
+    # below and default to ENABLED, so both have to be switched off by hand.
+    #
+    #   enabled:          serves `/.well-known/oauth-protected-resource` anonymously,
+    #                     advertising this service's own base URL and, once
+    #                     authorization servers are listed, the very issuers the trust
+    #                     list deliberately does not disclose (US-ID-008).
+    #   www-authenticate: adds a `resource_metadata="<base-url>/.well-known/
+    #                     oauth-protected-resource"` parameter to every 401 challenge.
+    #                     It is a SEPARATE switch: the challenge provider is gated on
+    #                     this property alone and is NOT gated on `enabled`, so turning
+    #                     the controller off would otherwise leave every 401 pointing
+    #                     at a route that 404s while still leaking the base URL.
+    #
+    # This block must stay the only `micronaut.security.oauth2` key in this file: YAML
+    # takes the last of two duplicate keys, so a second block would silently drop
+    # whichever of these two lines it did not repeat.
+    #
+    # TokenSignatureEnforcementIT pins both: `exposesNoOAuth2Routes` for the routes and
+    # `challengeCarriesNoResourceMetadataParameter` for the challenge parameter.
     oauth2:
       protected-resource-metadata:
         enabled: false
@@ -96,19 +112,6 @@ micronaut:
     token:
       jwt:
         enabled: true
-    # `micronaut-security-oauth2` is on the classpath for its OpenID discovery
-    # components only - `IdentityProviderRegistry` drives its
-    # `DefaultOpenIdProviderMetadataFetcher` directly, see
-    # docs/adr/0003-use-micronaut-security-oauth2-for-openid-discovery.md. Its login
-    # support stays dormant because no `micronaut.security.oauth2.clients.*` property is
-    # set, but its RFC 9728 protected-resource metadata document is published by default
-    # and must be switched off explicitly: this service is not an OAuth2 client, and the
-    # document would anonymously advertise the configured issuer URLs, which US-ID-008
-    # forbids. TokenSignatureEnforcementIT asserts the route stays unserved.
-    oauth2:
-      protected-resource-metadata:
-        enabled: false
-
   metrics:
     enabled: true
     export:

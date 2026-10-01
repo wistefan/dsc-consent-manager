@@ -15,6 +15,7 @@ import com.nimbusds.jwt.SignedJWT;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.context.env.Environment;
+import io.micronaut.http.HttpHeaders;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
@@ -142,6 +143,14 @@ class TokenSignatureEnforcementIT {
     /** Subject every minted token carries. */
     private static final String SUBJECT = "subject-under-test";
 
+    /**
+     * Challenge parameter RFC 9728 adds to {@code WWW-Authenticate}, which must never appear.
+     *
+     * <p>It names a {@code /.well-known/oauth-protected-resource} document this service does not
+     * serve, and leaks the service's own base URL to an unauthenticated caller.
+     */
+    private static final String RESOURCE_METADATA_CHALLENGE_PARAMETER = "resource_metadata";
+
     private static RSAKey signingKey;
 
     private static ApplicationContext context;
@@ -253,7 +262,9 @@ class TokenSignatureEnforcementIT {
      *
      * <p>Only the infrastructure a route probe has no use for is switched off, plus {@code
      * micronaut.security.enabled}, which {@code application-test.yml} turns off for the rest of the
-     * suite and which the shipped {@code application.yml} turns on.
+     * suite and which the shipped {@code application.yml} turns on. The probe route is switched on
+     * here as well, so {@link #challengeCarriesNoResourceMetadataParameter()} has a secured route
+     * of the shipped deployment's own to be challenged by.
      *
      * @return the started context
      */
@@ -261,11 +272,18 @@ class TokenSignatureEnforcementIT {
         return ApplicationContext.builder(Environment.TEST)
                 .properties(
                         Map.of(
-                                "micronaut.security.enabled", true,
-                                "micronaut.server.port", -1,
-                                "datasources.default.enabled", false,
-                                "flyway.enabled", false,
-                                "endpoints.all.enabled", false))
+                                PROBE_ROUTE_ENABLED,
+                                true,
+                                "micronaut.security.enabled",
+                                true,
+                                "micronaut.server.port",
+                                -1,
+                                "datasources.default.enabled",
+                                false,
+                                "flyway.enabled",
+                                false,
+                                "endpoints.all.enabled",
+                                false))
                 .build()
                 .start();
     }
@@ -515,6 +533,30 @@ class TokenSignatureEnforcementIT {
                                     + " anything")
                     .isEqualTo(HttpStatus.OK.getCode());
         }
+    }
+
+    @Test
+    @DisplayName("challenges without advertising a protected-resource metadata document")
+    void challengeCarriesNoResourceMetadataParameter() {
+        HttpResponse<?> response = responseFor(shippedClient, null);
+
+        assertThat(response.getStatus().getCode())
+                .as("the probe route is @Secured(IS_AUTHENTICATED) and the call carries no token")
+                .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+        assertThat(response.getHeaders().getAll(HttpHeaders.WWW_AUTHENTICATE))
+                .as(
+                        "micronaut-security-oauth2's RFC 9728 challenge provider is gated on"
+                                + " micronaut.security.oauth2.protected-resource-metadata"
+                                + ".www-authenticate ALONE - not on .enabled - so losing that one"
+                                + " line (a duplicate `oauth2` key in application.yml is enough,"
+                                + " YAML keeps the last) puts a %s parameter naming this service's"
+                                + " base URL into every 401, pointing at a route that is"
+                                + " deliberately not served",
+                        RESOURCE_METADATA_CHALLENGE_PARAMETER)
+                .allSatisfy(
+                        value ->
+                                assertThat(value)
+                                        .doesNotContain(RESOURCE_METADATA_CHALLENGE_PARAMETER));
     }
 
     @ParameterizedTest(name = "{0} is not served")
