@@ -19,8 +19,14 @@ datasources:
 
 # Management endpoints. Note that with security enabled above, the
 # `intercept-url-map` in application.yml still governs access: /metrics and
-# /prometheus require a bearer token in dev too, so obtain one from the local
-# Keycloak. `sensitive: false` only waives Micronaut's own endpoint-level check.
+# /prometheus require a bearer token in dev too. `sensitive: false` only waives
+# Micronaut's own endpoint-level check, it does not make the paths anonymous.
+#
+# Until the token-validation pipeline lands in steps 3-5 of this ticket no bearer
+# token authenticates at all, so in dev these two endpoints are currently
+# unreachable by design - a token from the local Keycloak opens them once that
+# pipeline exists. /health stays anonymous throughout and is the probe to use in
+# the meantime.
 endpoints:
   all:
     port: ${MANAGEMENT_PORT:9090}

@@ -477,6 +477,24 @@ class IdentityProviderConfigurationTest {
         }
 
         @Test
+        @DisplayName("does not report the guard removed when its switch did not remove it")
+        void doesNotReportTheGuardRemovedWhenItIsStillRegistered() {
+            Map<String, Object> properties = validTrustList();
+            // The @Requires that decides the bean's fate compares the property to "false" as an
+            // exact, case-sensitive string, so this spelling leaves the guard registered. A check
+            // that re-derived the state by reading the property back as a Boolean would convert
+            // this to false and abort startup, reporting a guard removed that is in fact present.
+            properties.put(UnsignedTokenRejector.ENABLED_PROPERTY, "FALSE");
+
+            try (ApplicationContext context =
+                    startContextInEnvironments(properties, DEPLOYMENT_ENVIRONMENT)) {
+                assertThat(context.findBean(UnsignedTokenRejector.class))
+                        .as("the startup check must observe the bean, not re-derive it")
+                        .isPresent();
+            }
+        }
+
+        @Test
         @DisplayName("keeps the unsigned-token guard registered by default")
         void registersUnsignedTokenRejectorByDefault() {
             try (ApplicationContext context =

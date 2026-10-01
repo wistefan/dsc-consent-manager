@@ -64,6 +64,15 @@ class ManagementEndpointSecurityIT {
     /** Static-resource mapping serving the published OpenAPI specification. */
     private static final String OPENAPI_SPEC_PATH = "/static/openapi.yaml";
 
+    /** The one real API operation, declared {@code security: []} in the specification. */
+    private static final String API_STATUS_PATH = "/api-status";
+
+    /** Metrics endpoint, protected only by its {@code intercept-url-map} entry in dev. */
+    private static final String METRICS_PATH = "/metrics";
+
+    /** Prometheus scrape endpoint, protected only by its {@code intercept-url-map} entry in dev. */
+    private static final String PROMETHEUS_PATH = "/prometheus";
+
     /** Selects the client bound to the dedicated management port. */
     private static final String MANAGEMENT = "management port";
 
@@ -88,6 +97,27 @@ class ManagementEndpointSecurityIT {
 
     /** Pattern the entry at {@link #SWAGGER_UI_INTERCEPT_INDEX} is expected to carry. */
     private static final String SWAGGER_UI_INTERCEPT_PATTERN = "/swagger-ui/**";
+
+    /**
+     * Index of the {@code /metrics/**} entry in {@code application.yml}'s {@code
+     * intercept-url-map}. Read back before the control case relaxes it, so a reordering of that
+     * list fails with a clear message instead of quietly relaxing the wrong rule.
+     */
+    private static final int METRICS_INTERCEPT_INDEX = 4;
+
+    /** Property holding the pattern of the metrics intercept entry. */
+    private static final String METRICS_INTERCEPT_PATTERN_PROPERTY =
+            "micronaut.security.intercept-url-map[" + METRICS_INTERCEPT_INDEX + "].pattern";
+
+    /** Property holding the access expression of the metrics intercept entry. */
+    private static final String METRICS_INTERCEPT_ACCESS_PROPERTY =
+            "micronaut.security.intercept-url-map[" + METRICS_INTERCEPT_INDEX + "].access[0]";
+
+    /** Pattern the entry at {@link #METRICS_INTERCEPT_INDEX} is expected to carry. */
+    private static final String METRICS_INTERCEPT_PATTERN = "/metrics/**";
+
+    /** Access expression the control case substitutes for {@code isAuthenticated()}. */
+    private static final String ANONYMOUS_ACCESS = "isAnonymous()";
 
     /** Access expression the control case substitutes for {@code isAnonymous()}. */
     private static final String AUTHENTICATED_ACCESS = "isAuthenticated()";
@@ -130,6 +160,13 @@ class ManagementEndpointSecurityIT {
         properties.put("micronaut.server.port", -1);
         properties.put("endpoints.all.enabled", true);
         properties.put("endpoints.all.port", port);
+        // Mirror application-dev.yml, which waives Micronaut's own endpoint-level
+        // `sensitive` check for these two. That leaves the intercept-url-map entries as
+        // the only thing standing between an anonymous caller and the metrics, so the
+        // 401 rows below fail if the security filter is not applied on this listener —
+        // and fail if the patterns do not cover the paths actually served.
+        properties.put("endpoints.metrics.sensitive", false);
+        properties.put("endpoints.prometheus.sensitive", false);
         properties.put("datasources.default.enabled", false);
         properties.put("flyway.enabled", false);
         properties.putAll(overrides);
@@ -199,7 +236,28 @@ class ManagementEndpointSecurityIT {
                         API_CONTEXT_PATH + OPENAPI_SPEC_PATH,
                         HttpStatus.OK,
                         "the published specification stays anonymously readable with security"
-                                + " enabled"));
+                                + " enabled"),
+                Arguments.of(
+                        API,
+                        API_CONTEXT_PATH + API_STATUS_PATH,
+                        HttpStatus.OK,
+                        "the generated controller carries @Secured(IS_ANONYMOUS) for the"
+                                + " specification's `security: []`, so the reachability probe stays"
+                                + " open once the filter is enabled"),
+                Arguments.of(
+                        MANAGEMENT,
+                        API_CONTEXT_PATH + METRICS_PATH,
+                        HttpStatus.UNAUTHORIZED,
+                        "the security filter applies on the dedicated management listener, so"
+                                + " metrics are not anonymously readable even with Micronaut's own"
+                                + " endpoint-level check waived"),
+                Arguments.of(
+                        MANAGEMENT,
+                        API_CONTEXT_PATH + PROMETHEUS_PATH,
+                        HttpStatus.UNAUTHORIZED,
+                        "the security filter applies on the dedicated management listener, so the"
+                                + " scrape endpoint is not anonymously readable even with"
+                                + " Micronaut's own endpoint-level check waived"));
     }
 
     @ParameterizedTest(name = "GET {1} on the {0} answers {2}")
@@ -238,6 +296,47 @@ class ManagementEndpointSecurityIT {
                         .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
             } finally {
                 closeQuietly(restrictedServer);
+            }
+        }
+    }
+
+    /**
+     * Shows that the metrics 401 is produced by the {@code /metrics/**} intercept entry, and not by
+     * a rule that would protect the path whatever that entry said.
+     *
+     * <p>The matrix above proves metrics are not anonymously readable, but a 401 alone cannot say
+     * which rule refused: Micronaut also rejects a request that no rule matched at all. That
+     * distinction is load-bearing for the dev profile, which waives {@code sensitive} on these two
+     * endpoints and is therefore relying on the intercept entry specifically. Relaxing exactly that
+     * entry to {@code isAnonymous()} must make the same request succeed — if the pattern did not
+     * cover the served path, the response would stay a 401 and this test fails.
+     *
+     * @throws Exception if the management URL cannot be built
+     */
+    @Test
+    @DisplayName("control: metrics become readable once their intercept entry turns anonymous")
+    void metricsAreRefusedByTheirInterceptEntry() throws Exception {
+        assertThat(
+                        context.getEnvironment()
+                                .getProperty(METRICS_INTERCEPT_PATTERN_PROPERTY, String.class))
+                .as(
+                        "the control case relaxes intercept entry %d, which must still be the"
+                                + " metrics rule",
+                        METRICS_INTERCEPT_INDEX)
+                .hasValue(METRICS_INTERCEPT_PATTERN);
+
+        int port = SocketUtils.findAvailableTcpPort();
+        try (ApplicationContext relaxed =
+                start(Map.of(METRICS_INTERCEPT_ACCESS_PROPERTY, ANONYMOUS_ACCESS), port)) {
+            relaxed.getBean(EmbeddedServer.class).start();
+            try (HttpClient client =
+                    HttpClient.create(URI.create("http://localhost:" + port).toURL())) {
+                assertThat(statusOf(client, API_CONTEXT_PATH + METRICS_PATH).getCode())
+                        .as(
+                                "the %s entry is what refuses %s, so relaxing it must let the same"
+                                        + " anonymous request through",
+                                METRICS_INTERCEPT_PATTERN, API_CONTEXT_PATH + METRICS_PATH)
+                        .isEqualTo(HttpStatus.OK.getCode());
             }
         }
     }

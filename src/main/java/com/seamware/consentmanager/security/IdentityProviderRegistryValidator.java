@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.security;
 
+import io.micronaut.context.BeanContext;
 import io.micronaut.context.annotation.Context;
 import io.micronaut.context.env.Environment;
 import io.micronaut.context.env.PropertySource;
@@ -122,19 +123,26 @@ public class IdentityProviderRegistryValidator {
 
     private final Environment environment;
 
+    private final BeanContext beanContext;
+
     private final List<IdentityProviderConfiguration> providers;
 
     /**
      * Collects the configured trust list in a stable order.
      *
      * @param environment the resolved configuration, used to detect keys that bind to nothing and
-     *     to read the unsigned-token guard's switch
+     *     to read the active environment names
+     * @param beanContext the bean context, used to observe whether the unsigned-token guard is
+     *     actually registered rather than re-deriving that from its switch
      * @param providers one bean per {@code consent-manager.identity-providers} entry, injected by
      *     Micronaut; empty when the block is absent
      */
     public IdentityProviderRegistryValidator(
-            Environment environment, List<IdentityProviderConfiguration> providers) {
+            Environment environment,
+            BeanContext beanContext,
+            List<IdentityProviderConfiguration> providers) {
         this.environment = environment;
+        this.beanContext = beanContext;
         var ordered = new ArrayList<>(providers);
         ordered.sort(Comparator.comparing(IdentityProviderConfiguration::getName));
         this.providers = List.copyOf(ordered);
@@ -438,25 +446,28 @@ public class IdentityProviderRegistryValidator {
      * is unaffected; a production deployment that sets the property fails fast instead of failing
      * open.
      *
-     * @throws ConfigurationException if the guard is disabled and {@code test} is not among the
-     *     active environments
+     * <p>The guard's absence is <em>observed</em> through the bean context rather than re-derived
+     * by reading {@link UnsignedTokenRejector#ENABLED_PROPERTY} back. The {@code @Requires} that
+     * decides the bean's fate compares the property to {@code "false"} as an exact, case-sensitive
+     * string, while a {@code Boolean} conversion here would also treat {@code "FALSE"} as disabled
+     * - so the two could disagree and report a guard removed that is in fact registered. Asking the
+     * context which beans exist cannot drift from the annotation that created them.
+     *
+     * @throws ConfigurationException if the guard is not registered and {@code test} is not among
+     *     the active environments
      */
     private void rejectDisabledUnsignedTokenRejector() {
-        boolean enabled =
-                environment
-                        .getProperty(UnsignedTokenRejector.ENABLED_PROPERTY, Boolean.class)
-                        .orElse(Boolean.TRUE);
-        if (enabled || environment.getActiveNames().contains(Environment.TEST)) {
+        if (beanContext.findBean(UnsignedTokenRejector.class).isPresent()
+                || environment.getActiveNames().contains(Environment.TEST)) {
             return;
         }
         throw new ConfigurationException(
-                "'"
+                "The unsigned-token guard is not registered outside a test context, which means '"
                         + UnsignedTokenRejector.ENABLED_PROPERTY
-                        + "' is set to false outside a test context. That property removes the"
-                        + " only guard against unsigned tokens: with it disabled, a token bearing"
-                        + " 'alg: none' authenticates whenever no signature configuration is"
-                        + " registered. It exists solely so an integration test can demonstrate"
-                        + " that the guard is load-bearing. Remove it from this deployment's"
-                        + " configuration.");
+                        + "' has been set to false. That property removes the only guard against"
+                        + " unsigned tokens: with it disabled, a token bearing 'alg: none'"
+                        + " authenticates whenever no signature configuration is registered. It"
+                        + " exists solely so an integration test can demonstrate that the guard is"
+                        + " load-bearing. Remove it from this deployment's configuration.");
     }
 }
