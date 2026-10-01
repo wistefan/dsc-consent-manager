@@ -46,8 +46,8 @@ logger:
     # fails for the lifetime of every context that does not override it. Each failure is a
     # connection refusal logged at ERROR with a stack trace, repeating on the backoff schedule,
     # which would bury a real failure in a green build. Discovery behaviour itself is asserted in
-    # IdentityProviderDiscoveryIT, which configures reachable stubs, so nothing here needs the
-    # output.
+    # IdentityProviderDiscoveryIT, which configures reachable stubs and turns this logger back on
+    # in its own property source, so the one suite that needs the output has it.
     com.seamware.consentmanager.security.IdentityProviderRegistry: 'OFF'
 
 # Dummy identity provider trust list.

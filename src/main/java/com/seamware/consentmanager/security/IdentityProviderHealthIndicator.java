@@ -30,6 +30,20 @@ import org.reactivestreams.Publisher;
  * because a token from the one provider that did not resolve would be rejected, and an instance
  * that silently rejects a subset of valid tokens is worse than one that is plainly not ready.
  *
+ * <p><strong>Known consequence with more than one provider.</strong> All-or-nothing readiness is
+ * what the implementation plan for this ticket specifies, and it is exactly right for the
+ * single-provider deployment and for the cold start AC 3 is about. It is not obviously right once
+ * several providers are configured: every replica shares the same trust list, so one provider being
+ * unreachable drains the whole deployment, and tokens from the providers that <em>did</em> resolve
+ * stop being served even though this instance could validate them. A {@link ResolutionState#FAILED}
+ * entry makes that permanent - a third party that re-points its issuer can hold the deployment
+ * {@code DOWN} until an operator restarts without it. The alternative - {@code DOWN} only while
+ * <em>no</em> provider has resolved, with the per-provider detail below plus a WARN covering the
+ * partial case - trades a louder failure for a smaller blast radius. Which of the two is wanted is
+ * a deployment-policy decision that outlives this step, so it is raised on the ticket rather than
+ * settled here; until it is decided, the planned behaviour stands and this paragraph is the record
+ * of what it costs.
+ *
  * <p>Per-provider detail is attached to the result so an operator can see which provider is holding
  * readiness down and why. That detail is published under {@code endpoints.health.details-visible},
  * which this service sets to {@code AUTHENTICATED}: an anonymous probe learns only {@code UP} or

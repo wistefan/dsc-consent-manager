@@ -1,13 +1,15 @@
 package com.seamware.consentmanager.security;
 
 import io.micronaut.context.annotation.Context;
-import io.micronaut.http.HttpRequest;
-import io.micronaut.http.MediaType;
+import io.micronaut.context.exceptions.DisabledBeanException;
 import io.micronaut.http.client.DefaultHttpClientConfiguration;
 import io.micronaut.http.client.HttpClient;
 import io.micronaut.http.client.HttpClientConfiguration;
 import io.micronaut.scheduling.TaskExecutors;
 import io.micronaut.scheduling.TaskScheduler;
+import io.micronaut.security.oauth2.client.DefaultOpenIdProviderMetadata;
+import io.micronaut.security.oauth2.client.DefaultOpenIdProviderMetadataFetcher;
+import io.micronaut.security.oauth2.client.OpenIdProviderMetadataFetcher;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
@@ -82,22 +84,28 @@ import org.slf4j.LoggerFactory;
  * fetches from it, because by then the entry has already been published to {@link
  * #findByIssuer(String)} callers as usable.
  *
- * <p><strong>Why this is not {@code micronaut-security-oauth2}.</strong> That module does perform
- * OpenID discovery, and delegating to it was implemented, reviewed and rejected; the evidence is in
- * {@code docs/adr/0002-own-identity-provider-registry-on-nimbus.md}, which supersedes ADR 0001. In
- * short: it does not compare the discovered {@code issuer} with the configured one (AC 2), its
- * {@code DefaultOpenIdProviderMetadataFetcher} turns a connection failure into a {@code
- * DisabledBeanException}, which the context catches and logs at DEBUG - so one failed attempt
- * leaves that provider silently without metadata or a signature configuration until the process
- * restarts, with no retry and nothing to report readiness from, which is the opposite of AC 3 - its
- * JWKS cache TTL is global rather than per provider (AC 13), it does not refetch on an unknown
- * {@code kid} (AC 14), and its {@code claims-validators.issuer}/{@code .audience} hold one global
- * value each while every registered key set is tried, so a second provider's key would authenticate
- * a token claiming the first provider's issuer. What this class hand-writes is therefore only what
- * the framework does not supply: the fetch, the issuer comparison, the retry schedule and the
- * per-issuer routing. The JWS verification, the key cache, the rate limiter and the single-flight
- * refresh are Nimbus's (step 4), because that is where a subtle concurrency bug would be a security
- * bug.
+ * <p><strong>Discovery itself is {@code micronaut-security-oauth2}'s.</strong> The request to a
+ * provider's {@code discovery-url} and the parsing of the OpenID Provider Metadata document it
+ * returns are performed by that module's {@link DefaultOpenIdProviderMetadataFetcher}, over its
+ * {@link DefaultOpenIdProviderMetadata} model. This service therefore composes no {@code
+ * .well-known} path, issues no discovery request and declares no metadata type of its own.
+ *
+ * <p>The module is consumed through its {@link
+ * io.micronaut.security.oauth2.configuration.OpenIdClientConfiguration} interface rather than
+ * through its {@code micronaut.security.oauth2.clients.*} configuration binding, because that
+ * binding models a provider as a <em>login client</em>: it requires a client id and switches on
+ * authorization-code login routes, which a service that issues no tokens, stores no credentials and
+ * keeps no sessions must not expose. {@link OpenIdClientConfigurationAdapter} presents one
+ * trust-list entry in the shape the fetcher expects, so only the discovery half of the module is
+ * taken. The reasoning is recorded in {@code
+ * docs/adr/0003-use-micronaut-security-oauth2-for-openid-discovery.md}, which supersedes ADR 0002.
+ *
+ * <p>What this class owns around that call is what the module has no opinion about: the trust list
+ * and its resolution state, the byte-for-byte issuer comparison (AC 2), the retry schedule that
+ * keeps an identity provider's outage from failing startup (AC 3), and the per-issuer routing the
+ * token validator looks up. The JWS verification, the key cache, the rate limiter and the
+ * single-flight refresh are Nimbus's (step 4), because that is where a subtle concurrency bug would
+ * be a security bug.
  *
  * <p><strong>A resolved entry is not re-discovered.</strong> Once a provider reaches {@link
  * ResolutionState#RESOLVED} its {@code jwks_uri} is kept for the life of the process. Key
@@ -169,11 +177,25 @@ public class IdentityProviderRegistry implements AutoCloseable {
     /** The fixed trust list, keyed by configured issuer. Keys never change; values do. */
     private final Map<String, ResolvedIdentityProvider> entries;
 
-    /** The configured issuers in configuration order, so reports read the same way every time. */
+    /**
+     * The configured issuers ordered by provider name, so reports read the same way every time.
+     *
+     * <p>{@link IdentityProviderRegistryValidator} sorts the trust list by entry name before
+     * handing it over, and that order is preserved here; it is not the order the entries happen to
+     * appear in the configuration source, which for a YAML map is not meaningful anyway.
+     */
     private final List<String> issuersInOrder;
 
     /** The outstanding retry per issuer, kept only so shutdown can cancel it. */
     private final Map<String, ScheduledFuture<?>> scheduledAttempts = new ConcurrentHashMap<>();
+
+    /**
+     * One {@code micronaut-security-oauth2} metadata fetcher per configured issuer.
+     *
+     * <p>Built once, in the constructor, from the same fixed trust list the entries come from, so
+     * this map has exactly the key set of {@link #entries} and never changes either.
+     */
+    private final Map<String, OpenIdProviderMetadataFetcher> metadataFetchers;
 
     private final TaskScheduler scheduler;
 
@@ -220,11 +242,18 @@ public class IdentityProviderRegistry implements AutoCloseable {
         this.discoveryExecutor = discoveryExecutor;
         this.discoveryClient = createDiscoveryClient(globalClientConfiguration);
         Map<String, ResolvedIdentityProvider> initial = new LinkedHashMap<>();
+        Map<String, OpenIdProviderMetadataFetcher> fetchers = new LinkedHashMap<>();
         for (IdentityProviderConfiguration configuration : validatedProviders.getProviders()) {
             initial.put(configuration.getIssuer(), ResolvedIdentityProvider.pending(configuration));
+            fetchers.put(
+                    configuration.getIssuer(),
+                    new DefaultOpenIdProviderMetadataFetcher(
+                            OpenIdClientConfigurationAdapter.forEntry(configuration),
+                            discoveryClient));
         }
         this.issuersInOrder = List.copyOf(initial.keySet());
         this.entries = new ConcurrentHashMap<>(initial);
+        this.metadataFetchers = Map.copyOf(fetchers);
     }
 
     /**
@@ -299,7 +328,7 @@ public class IdentityProviderRegistry implements AutoCloseable {
     }
 
     /**
-     * Returns every configured entry, usable or not, in configuration order.
+     * Returns every configured entry, usable or not, ordered by provider name.
      *
      * <p>This is the readiness view, not the validation view: it deliberately exposes providers
      * {@link #findByIssuer(String)} hides, because an operator reading {@code /health/readiness}
@@ -360,23 +389,25 @@ public class IdentityProviderRegistry implements AutoCloseable {
         IdentityProviderConfiguration configuration = current.configuration();
         int attempt = current.attempts() + 1;
         try {
-            OpenIdProviderMetadata metadata = fetchMetadata(configuration);
+            DefaultOpenIdProviderMetadata metadata = fetchMetadata(configuration);
             // A document that is absent or silent about its issuer says nothing about whether the
             // provider is the configured one, so it cannot condemn the entry. An empty 200 is what
             // a reverse proxy mid-reload, a truncated response or a load balancer with no healthy
             // backend returns - all outages - and only a document that names a *different* issuer
             // is the misconfiguration that must never be retried.
-            if (metadata == null || metadata.issuer() == null || metadata.issuer().isBlank()) {
+            if (metadata == null
+                    || metadata.getIssuer() == null
+                    || metadata.getIssuer().isBlank()) {
                 throw new IllegalStateException(
                         "the discovery response carried no issuer, so the provider's identity could"
                                 + " not be confirmed");
             }
-            String discoveredIssuer = metadata.issuer();
+            String discoveredIssuer = metadata.getIssuer();
             if (!issuer.equals(discoveredIssuer)) {
                 rejectPermanently(configuration, attempt, discoveredIssuer);
                 return;
             }
-            String jwksUri = metadata.jwksUri();
+            String jwksUri = metadata.getJwksUri();
             Optional<String> problem =
                     jwksUriProblem(jwksUri, configuration.isAllowInsecureTransport());
             if (problem.isPresent()) {
@@ -396,16 +427,33 @@ public class IdentityProviderRegistry implements AutoCloseable {
     }
 
     /**
-     * Performs the discovery request itself.
+     * Performs the discovery request, by handing the entry to {@code micronaut-security-oauth2}.
+     *
+     * <p>The fetcher composes the metadata URL, issues the request and deserializes the OpenID
+     * Provider Metadata document; nothing of that is written here.
+     *
+     * <p>It reports a request that did not complete - a connection failure, a timeout, a redirect
+     * this client refuses to follow, an error status - as a {@link DisabledBeanException}, named
+     * for what the module would do about it: give that provider up for the life of the process.
+     * That is the one outcome AC 3 rules out, so it is translated into an ordinary failure and the
+     * caller retries it like any other outage. The message is replaced along with it, because the
+     * module's wording describes a disabled bean, which is not something that happens here.
      *
      * @param configuration the provider whose {@code discovery-url} to fetch
      * @return the parsed metadata document, or {@code null} if the provider returned an empty body
+     * @throws IllegalStateException if the discovery request did not complete
      */
-    private OpenIdProviderMetadata fetchMetadata(IdentityProviderConfiguration configuration) {
-        HttpRequest<?> request =
-                HttpRequest.GET(URI.create(configuration.getDiscoveryUrl()))
-                        .accept(MediaType.APPLICATION_JSON_TYPE);
-        return discoveryClient.toBlocking().retrieve(request, OpenIdProviderMetadata.class);
+    private DefaultOpenIdProviderMetadata fetchMetadata(
+            IdentityProviderConfiguration configuration) {
+        try {
+            return metadataFetchers.get(configuration.getIssuer()).fetch();
+        } catch (DisabledBeanException unreachable) {
+            throw new IllegalStateException(
+                    "the discovery request to "
+                            + configuration.getDiscoveryUrl()
+                            + " did not complete",
+                    unreachable);
+        }
     }
 
     /**

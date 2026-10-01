@@ -19,6 +19,26 @@ micronaut:
 
   security:
     enabled: true
+
+    # Keep every route-publishing bean of micronaut-security-oauth2 switched off.
+    #
+    # That module is a compile dependency for its OpenID discovery components alone
+    # (docs/adr/0003-use-micronaut-security-oauth2-for-openid-discovery.md): this
+    # service is a resource server, it issues no tokens and runs no OAuth2 client.
+    # Its login, callback and logout routes stay unregistered on their own because no
+    # `micronaut.security.oauth2.clients.*` property is set, but the RFC 9728
+    # protected-resource-metadata controller does NOT: it defaults to enabled and
+    # serves `/.well-known/oauth-protected-resource` anonymously, advertising the
+    # service's own base URL and, once authorization servers are listed, the trusted
+    # issuers the trust list is deliberately not disclosing (US-ID-008). Turn it and
+    # its `resource_metadata` WWW-Authenticate challenge parameter off explicitly, so
+    # adding the dependency changes nothing about what this service exposes.
+    # TokenSignatureEnforcementIT.exposesNoOAuth2Routes pins both.
+    oauth2:
+      protected-resource-metadata:
+        enabled: false
+        www-authenticate: false
+
     # Allow unauthenticated access to the health endpoints.
     #
     # These patterns are matched against the request path with the server context
@@ -76,6 +96,18 @@ micronaut:
     token:
       jwt:
         enabled: true
+    # `micronaut-security-oauth2` is on the classpath for its OpenID discovery
+    # components only - `IdentityProviderRegistry` drives its
+    # `DefaultOpenIdProviderMetadataFetcher` directly, see
+    # docs/adr/0003-use-micronaut-security-oauth2-for-openid-discovery.md. Its login
+    # support stays dormant because no `micronaut.security.oauth2.clients.*` property is
+    # set, but its RFC 9728 protected-resource metadata document is published by default
+    # and must be switched off explicitly: this service is not an OAuth2 client, and the
+    # document would anonymously advertise the configured issuer URLs, which US-ID-008
+    # forbids. TokenSignatureEnforcementIT asserts the route stays unserved.
+    oauth2:
+      protected-resource-metadata:
+        enabled: false
 
   metrics:
     enabled: true
@@ -110,8 +142,11 @@ endpoints:
     # Serve management endpoints on a dedicated port so they can be exposed to an
     # orchestrator without exposing the API port. The dedicated port does NOT take
     # them out of `micronaut.server.context-path`: with a context path of /v1 the
-    # health endpoint is at http://<host>:${MANAGEMENT_PORT}/v1/health, which is
-    # what compose.yaml's healthcheck probes. ManagementEndpointSecurityIT pins it.
+    # health endpoints are under http://<host>:${MANAGEMENT_PORT}/v1/health. The
+    # healthcheck in compose.yaml probes the readiness branch of that tree,
+    # .../v1/health/readiness, not the aggregate .../v1/health - the aggregate also
+    # folds in liveness, so an identity provider outage would restart the container
+    # instead of draining it. ManagementEndpointSecurityIT pins both paths.
     port: ${MANAGEMENT_PORT:9090}
   health:
     enabled: true

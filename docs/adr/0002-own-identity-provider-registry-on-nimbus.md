@@ -1,8 +1,14 @@
 # ADR 0002 — Own the identity provider registry, build it on Nimbus
 
-- **Status:** Accepted.
+- **Status:** **Partly superseded** by
+  [ADR 0003](0003-use-micronaut-security-oauth2-for-openid-discovery.md), which moves the
+  discovery request itself onto `micronaut-security-oauth2`'s
+  `DefaultOpenIdProviderMetadataFetcher`. Everything this ADR decides about the
+  configuration schema, the trust list, per-provider claims and role mapping, and Nimbus for
+  JWS verification and JWKS caching still stands.
 - **Date:** 2025-10-01
 - **Ticket:** TICKET-003 (Taiga #67), step 2
+- **Superseded in part by:** [ADR 0003](0003-use-micronaut-security-oauth2-for-openid-discovery.md)
 - **Supersedes:** [ADR 0001](0001-delegate-oidc-discovery-and-jwks-to-micronaut-security.md)
 - **Keeps:** implementation plan convention 6 ("custom validation, not declarative JWKS")
   and the ticket's `consent-manager.identity-providers` configuration schema.

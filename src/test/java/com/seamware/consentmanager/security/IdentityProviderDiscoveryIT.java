@@ -77,6 +77,15 @@ class IdentityProviderDiscoveryIT {
     /** Prefix of a trust-list entry's configuration properties. */
     private static final String PROVIDER_PREFIX = "consent-manager.identity-providers.";
 
+    /** Property that sets the log level of the class under test. */
+    private static final String REGISTRY_LOG_LEVEL_PROPERTY =
+            "logger.levels.com.seamware.consentmanager.security.IdentityProviderRegistry";
+
+    /**
+     * Level this suite restores the registry's logger to, overriding the suite-wide {@code OFF}.
+     */
+    private static final String REGISTRY_LOG_LEVEL = "DEBUG";
+
     /** Audience every stub provider's entry declares; discovery never looks at it. */
     private static final String STUB_AUDIENCE = "consent-manager";
 
@@ -286,12 +295,12 @@ class IdentityProviderDiscoveryIT {
                         .isEmpty();
 
                 assertThat(registry.snapshot().stream().map(ResolvedIdentityProvider::name))
-                        .as("the trust list is reported in configuration order")
+                        .as("the trust list is reported ordered by provider name")
                         .containsExactly(PRIMARY, SECONDARY);
                 assertThat(stateByProviderName(context))
                         .as(
-                                "the health detail names every provider, in configuration order, so"
-                                        + " an operator can see which one is holding readiness"
+                                "the health detail names every provider, ordered by provider name,"
+                                        + " so an operator can see which one is holding readiness"
                                         + " down")
                         .containsExactly(
                                 Map.entry(PRIMARY, ResolutionState.RESOLVED.name()),
@@ -329,6 +338,12 @@ class IdentityProviderDiscoveryIT {
         all.put("datasources.default.enabled", false);
         all.put("flyway.enabled", false);
         all.put("micronaut.server.port", -1);
+        // application-test.yml silences the registry for the rest of the suite, where the shared
+        // dummy entry points at a dead port and every retry would log a connection refusal. This
+        // suite is the one whose subject *is* discovery failure and retry timing, and it talks to
+        // reachable stubs, so it turns the logger back on: a flaky run here has to be diagnosable
+        // from the build output.
+        all.put(REGISTRY_LOG_LEVEL_PROPERTY, REGISTRY_LOG_LEVEL);
         all.putAll(properties);
         return ApplicationContext.builder().environments("test").properties(all).start();
     }
