@@ -5,19 +5,24 @@ import io.micronaut.http.HttpRequest;
 import io.micronaut.http.MediaType;
 import io.micronaut.http.client.DefaultHttpClientConfiguration;
 import io.micronaut.http.client.HttpClient;
+import io.micronaut.http.client.HttpClientConfiguration;
 import io.micronaut.scheduling.TaskExecutors;
 import io.micronaut.scheduling.TaskScheduler;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -57,6 +62,25 @@ import org.slf4j.LoggerFactory;
  * tampered or mistaken {@code discovery-url} could silently re-point a trust-list entry at a
  * different provider's signing keys, and tokens minted by that provider would authenticate as the
  * configured one.
+ *
+ * <p>An error <em>status</em> is an outage too, 404 included. A 404 at a {@code .well-known} path
+ * is often a mistyped {@code discovery-url}, which no amount of retrying fixes - but it is equally
+ * what a gateway with no healthy backend, a provider whose realm is still being imported or a
+ * half-finished deployment returns, and guessing wrong is not symmetric: a retried misconfiguration
+ * costs an ERROR line per backoff interval until somebody reads it, while a condemned outage needs
+ * a restart nobody may know to perform. The same reasoning covers a document whose {@code jwks_uri}
+ * is missing, malformed or cleartext - the provider has not claimed to be anybody else, so the
+ * entry stays retryable.
+ *
+ * <p><strong>The transport rule covers the whole fetch chain.</strong> {@link
+ * IdentityProviderRegistryValidator} refuses a cleartext {@code issuer} or {@code discovery-url}
+ * unless the entry opts in, and justifies that by what the document carries: the issuer that is
+ * verified and the {@code jwks_uri} signing keys are fetched from. A provider served over https can
+ * still publish an {@code http} JWK Set URL, so that second half of the chain is checked here, by
+ * {@link #jwksUriProblem(String, boolean)}, under the same per-entry opt-in. It is checked at this
+ * point - where the URL would become part of the trust anchor - rather than when step 4 first
+ * fetches from it, because by then the entry has already been published to {@link
+ * #findByIssuer(String)} callers as usable.
  *
  * <p><strong>Why this is not {@code micronaut-security-oauth2}.</strong> That module does perform
  * OpenID discovery, and delegating to it was implemented, reviewed and rejected; the evidence is in
@@ -126,6 +150,22 @@ public class IdentityProviderRegistry implements AutoCloseable {
     /** Delay used for the very first attempt, scheduled rather than run inline so boot proceeds. */
     private static final Duration INITIAL_DISCOVERY_DELAY = Duration.ZERO;
 
+    /**
+     * URL schemes a JWK Set may be published under.
+     *
+     * <p>The keys are fetched over the network like any other document, so the two HTTP schemes are
+     * the only meaningful ones. Mirrors the rule {@link IdentityProviderRegistryValidator} applies
+     * to the configured URLs, applied here to the one URL that is discovered rather than
+     * configured.
+     */
+    private static final Set<String> SUPPORTED_JWKS_URL_SCHEMES = Set.of("http", "https");
+
+    /** The only scheme that authenticates a JWK Set in transit. */
+    private static final String SECURE_URL_SCHEME = "https";
+
+    /** Per-entry opt-in quoted in the failure reason when a cleartext JWK Set URL is refused. */
+    private static final String ALLOW_INSECURE_TRANSPORT_KEY = "allow-insecure-transport";
+
     /** The fixed trust list, keyed by configured issuer. Keys never change; values do. */
     private final Map<String, ResolvedIdentityProvider> entries;
 
@@ -168,14 +208,17 @@ public class IdentityProviderRegistry implements AutoCloseable {
      * @param scheduler the scheduled executor that times discovery attempts, off the startup thread
      * @param discoveryExecutor the blocking executor each attempt's HTTP fetch is run on, so a slow
      *     provider cannot occupy the scheduler
+     * @param globalClientConfiguration the application's {@code micronaut.http.client} settings,
+     *     whose TLS and proxy configuration the discovery client inherits
      */
     public IdentityProviderRegistry(
             IdentityProviderRegistryValidator validatedProviders,
             @Named(TaskExecutors.SCHEDULED) TaskScheduler scheduler,
-            @Named(TaskExecutors.BLOCKING) ExecutorService discoveryExecutor) {
+            @Named(TaskExecutors.BLOCKING) ExecutorService discoveryExecutor,
+            HttpClientConfiguration globalClientConfiguration) {
         this.scheduler = scheduler;
         this.discoveryExecutor = discoveryExecutor;
-        this.discoveryClient = createDiscoveryClient();
+        this.discoveryClient = createDiscoveryClient(globalClientConfiguration);
         Map<String, ResolvedIdentityProvider> initial = new LinkedHashMap<>();
         for (IdentityProviderConfiguration configuration : validatedProviders.getProviders()) {
             initial.put(configuration.getIssuer(), ResolvedIdentityProvider.pending(configuration));
@@ -188,21 +231,38 @@ public class IdentityProviderRegistry implements AutoCloseable {
      * Creates the HTTP client discovery requests are issued with.
      *
      * <p>The client is built without a base URL because each provider's {@code discovery-url} is an
-     * absolute URL of its own; requests therefore carry absolute URIs. It is created here rather
-     * than injected so that its timeouts and redirect policy cannot be widened by unrelated global
-     * client configuration - a discovery fetch is a background health probe and must stay strictly
-     * bounded.
+     * absolute URL of its own; requests therefore carry absolute URIs.
      *
+     * <p>It starts from the application's own {@code micronaut.http.client} settings rather than
+     * from a bare default, so that the things an operator can only express as client configuration
+     * still apply: a provider fronted by a private certificate authority, or reachable only through
+     * an HTTP proxy, is discoverable by configuring {@code micronaut.http.client.ssl.*} and the
+     * proxy properties like any other client. That matters more now that https is effectively
+     * mandatory for a provider URL - otherwise the only way to trust a private CA here would be a
+     * JVM-wide trust store, which nothing in this service's configuration would hint at.
+     *
+     * <p>Two things are then pinned on top and are deliberately not configurable: the timeouts,
+     * because a discovery fetch is a background probe whose worst case must stay well inside the
+     * retry interval, and the redirect policy. A redirect on the discovery URL would otherwise be
+     * followed silently, including to another host, quietly moving the trust anchor somewhere the
+     * operator never configured; a provider that has moved its metadata is a configuration change,
+     * so a 3xx is surfaced as a failure rather than chased.
+     *
+     * @param globalClientConfiguration the application's default client configuration, copied
+     *     rather than mutated - it is a shared bean every other client in the process also uses
      * @return a client that accepts absolute request URIs
      */
-    private static HttpClient createDiscoveryClient() {
+    private static HttpClient createDiscoveryClient(
+            HttpClientConfiguration globalClientConfiguration) {
         DefaultHttpClientConfiguration configuration = new DefaultHttpClientConfiguration();
+        configuration.setSslConfiguration(globalClientConfiguration.getSslConfiguration());
+        configuration.setProxyType(globalClientConfiguration.getProxyType());
+        globalClientConfiguration.getProxyAddress().ifPresent(configuration::setProxyAddress);
+        globalClientConfiguration.getProxySelector().ifPresent(configuration::setProxySelector);
+        globalClientConfiguration.getProxyUsername().ifPresent(configuration::setProxyUsername);
+        globalClientConfiguration.getProxyPassword().ifPresent(configuration::setProxyPassword);
         configuration.setConnectTimeout(DISCOVERY_REQUEST_TIMEOUT);
         configuration.setReadTimeout(DISCOVERY_REQUEST_TIMEOUT);
-        // A redirect on the discovery URL would be followed silently, including to another host,
-        // which would quietly move the trust anchor somewhere the operator never configured. A
-        // provider that has moved its metadata is a configuration change, so a 3xx is surfaced as
-        // a failure rather than chased.
         configuration.setFollowRedirects(false);
         return HttpClient.create(null, configuration);
     }
@@ -317,10 +377,10 @@ public class IdentityProviderRegistry implements AutoCloseable {
                 return;
             }
             String jwksUri = metadata.jwksUri();
-            if (jwksUri == null || jwksUri.isBlank()) {
-                throw new IllegalStateException(
-                        "the discovery document declares no jwks_uri, so no signing key can be"
-                                + " located");
+            Optional<String> problem =
+                    jwksUriProblem(jwksUri, configuration.isAllowInsecureTransport());
+            if (problem.isPresent()) {
+                throw new IllegalStateException(problem.get());
             }
             entries.put(issuer, ResolvedIdentityProvider.resolved(configuration, jwksUri, attempt));
             LOG.info(
@@ -346,6 +406,81 @@ public class IdentityProviderRegistry implements AutoCloseable {
                 HttpRequest.GET(URI.create(configuration.getDiscoveryUrl()))
                         .accept(MediaType.APPLICATION_JSON_TYPE);
         return discoveryClient.toBlocking().retrieve(request, OpenIdProviderMetadata.class);
+    }
+
+    /**
+     * Checks the {@code jwks_uri} a discovery document hands back, before it is kept as part of the
+     * trust anchor.
+     *
+     * <p>Three things disqualify it. It may be absent, in which case there is nowhere to fetch
+     * signing keys from. It may not be an absolute {@code http} or {@code https} URL with a host,
+     * which a resource server cannot fetch at all. Or it may be cleartext {@code http} while the
+     * entry has not opted into insecure transport: keys fetched over cleartext can be substituted
+     * by anyone on the network path, and a substituted JWK Set makes every token the attacker mints
+     * for that issuer validate - which is precisely the risk the opt-in exists to make an operator
+     * acknowledge, so it must not be bypassable by an https document that points at an http URL.
+     *
+     * <p>All three are reported as retryable reasons rather than permanent failures: none of them
+     * is the provider claiming to be somebody else, and all three are things the provider can
+     * correct in its own document without this service restarting.
+     *
+     * <p>Package-private so the rules can be asserted directly; an end-to-end test cannot reach the
+     * cleartext case, because a stub reachable over {@code http} at all requires the very opt-in
+     * that suppresses it.
+     *
+     * @param jwksUri the {@code jwks_uri} member of the discovery document; may be {@code null}
+     * @param allowInsecureTransport whether this entry has opted into cleartext, per {@link
+     *     IdentityProviderConfiguration#isAllowInsecureTransport()}
+     * @return the reason the URL is unusable, or {@link Optional#empty()} if keys may be fetched
+     *     from it
+     */
+    static Optional<String> jwksUriProblem(String jwksUri, boolean allowInsecureTransport) {
+        if (jwksUri == null || jwksUri.isBlank()) {
+            return Optional.of(
+                    "the discovery document declares no jwks_uri, so no signing key can be"
+                            + " located");
+        }
+        URI parsed;
+        try {
+            parsed = new URI(jwksUri);
+        } catch (URISyntaxException malformed) {
+            return Optional.of(
+                    "the discovery document declares an unparseable jwks_uri: " + quote(jwksUri));
+        }
+        String scheme =
+                parsed.getScheme() == null ? null : parsed.getScheme().toLowerCase(Locale.ROOT);
+        if (scheme == null
+                || !SUPPORTED_JWKS_URL_SCHEMES.contains(scheme)
+                || parsed.getHost() == null) {
+            return Optional.of(
+                    "the discovery document declares a jwks_uri that is not an absolute "
+                            + new TreeSet<>(SUPPORTED_JWKS_URL_SCHEMES)
+                            + " URL with a host: "
+                            + quote(jwksUri));
+        }
+        if (!SECURE_URL_SCHEME.equals(scheme) && !allowInsecureTransport) {
+            return Optional.of(
+                    "the discovery document declares a cleartext jwks_uri "
+                            + quote(jwksUri)
+                            + ", so the signing keys it serves could be substituted in transit and"
+                            + " every token forged with the substituted key would validate. Have"
+                            + " the provider publish an https jwks_uri, or - for a local provider"
+                            + " only - set '"
+                            + ALLOW_INSECURE_TRANSPORT_KEY
+                            + ": true' on this entry to accept that risk explicitly");
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Wraps a configured or discovered value in quotes so an empty or padded one is visible in a
+     * log line.
+     *
+     * @param value the value to render
+     * @return the value in single quotes
+     */
+    private static String quote(String value) {
+        return "'" + value + "'";
     }
 
     /**

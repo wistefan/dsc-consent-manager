@@ -114,6 +114,33 @@ public final class OidcDiscoveryStub implements AutoCloseable {
     }
 
     /**
+     * Serves a well-formed document that carries a {@code jwks_uri} but no {@code issuer} member.
+     *
+     * <p>Unlike an empty body this is valid JSON the registry can deserialize - it simply declines
+     * to say who the provider is, as a provider whose metadata is still being written or a gateway
+     * serving a stripped-down document does. The provider has not claimed to be anybody else, so
+     * the entry must be retried rather than condemned, and this is the case that pins that rule: an
+     * empty body never reaches the issuer check at all.
+     */
+    public void serveMetadataWithoutIssuer() {
+        server.resetMappings();
+        server.stubFor(
+                get(urlEqualTo(DISCOVERY_PATH))
+                        .willReturn(
+                                aResponse()
+                                        .withStatus(200)
+                                        .withHeader("Content-Type", JSON)
+                                        .withBody(
+                                                """
+                                                {
+                                                  "jwks_uri": "%s",
+                                                  "response_types_supported": ["code"]
+                                                }
+                                                """
+                                                        .formatted(jwksUri()))));
+    }
+
+    /**
      * Serves a well-formed document that confirms the issuer but advertises no {@code jwks_uri}.
      *
      * <p>Without it there is nowhere to fetch signing keys from, so the entry cannot become usable

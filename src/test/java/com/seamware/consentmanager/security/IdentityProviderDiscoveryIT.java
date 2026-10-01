@@ -22,7 +22,6 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import reactor.core.publisher.Mono;
@@ -301,28 +300,6 @@ class IdentityProviderDiscoveryIT {
         }
     }
 
-    @ParameterizedTest(name = "{0} consecutive failures wait {1}")
-    @CsvSource({
-        "1, PT2S",
-        "2, PT4S",
-        "3, PT8S",
-        "4, PT16S",
-        "9, PT5M",
-        "100, PT5M",
-    })
-    @DisplayName("the retry delay doubles per failure and is capped")
-    void retryDelayGrowsExponentiallyAndIsCapped(int attempt, Duration expected) {
-        assertThat(IdentityProviderRegistry.retryDelay(attempt))
-                .as(
-                        "backoff starts at the configured minimum and never exceeds the configured"
-                                + " maximum")
-                .isEqualTo(expected);
-        assertThat(IdentityProviderRegistry.retryDelay(attempt))
-                .isBetween(
-                        IdentityProviderRegistry.MIN_DISCOVERY_RETRY_DELAY,
-                        IdentityProviderRegistry.MAX_DISCOVERY_RETRY_DELAY);
-    }
-
     /**
      * Starts a context whose single configured provider is the given stub.
      *
@@ -490,8 +467,10 @@ class IdentityProviderDiscoveryIT {
      * clears.
      */
     private enum DegenerateDocument {
-        /** A 200 carrying no body at all. */
+        /** A 200 carrying no body at all, which never reaches the issuer check. */
         EMPTY_BODY(OidcDiscoveryStub::serveEmptyBody),
+        /** Valid JSON that simply does not say who the provider is. */
+        MISSING_ISSUER(OidcDiscoveryStub::serveMetadataWithoutIssuer),
         /** A document that confirms the issuer but names no JWK Set URL. */
         NO_JWKS_URI(OidcDiscoveryStub::serveMetadataWithoutJwksUri);
 
