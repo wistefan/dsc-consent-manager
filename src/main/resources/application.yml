@@ -116,9 +116,33 @@ endpoints:
   health:
     enabled: true
     sensitive: false
+    # Per-indicator detail — including which identity providers are configured and
+    # how far their discovery has got — is shown only to an authenticated caller.
+    # An anonymous probe sees the aggregate UP/DOWN and nothing else, so the
+    # readiness endpoint cannot be used to enumerate this deployment's trust list.
     details-visible: AUTHENTICATED
-    # Health indicators (DiskSpaceHealthIndicator, JdbcHealthIndicator) are
-    # auto-discovered from the classpath — no explicit enablement needed.
+    # Health indicators (DiskSpaceHealthIndicator, JdbcHealthIndicator,
+    # IdentityProviderHealthIndicator) are auto-discovered from the classpath — no
+    # explicit enablement needed.
+    #
+    # Micronaut serves three distinct routes off this one endpoint, and an
+    # orchestrator must use them for different purposes:
+    #
+    #   /health            — the aggregate: UP only when liveness AND readiness are UP.
+    #   /health/liveness   — "is the process alive?". No indicator here depends on an
+    #                        external system, so this stays UP through a database or
+    #                        identity-provider outage. This is the one a restart policy
+    #                        may act on; probing /health instead would restart the
+    #                        service over someone else's downtime.
+    #   /health/readiness  — "can this instance serve?". Covers the datasource and
+    #                        IdentityProviderHealthIndicator, so an instance whose
+    #                        identity providers are not yet discovered is drained
+    #                        rather than killed. This is the one a load balancer uses.
+    #
+    # compose.yaml's healthcheck probes /health/readiness, because a Compose
+    # dependency must wait for an instance that can actually serve; its restart
+    # policy deliberately does not act on that signal. ManagementEndpointSecurityIT
+    # pins where these routes resolve.
   metrics:
     enabled: true
     sensitive: true

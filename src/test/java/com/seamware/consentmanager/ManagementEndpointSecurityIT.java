@@ -34,9 +34,10 @@ import org.junit.jupiter.params.provider.MethodSource;
  *   <li><strong>{@code endpoints.all.port} moves management endpoints to their own port but does
  *       <em>not</em> take them out of {@code micronaut.server.context-path}.</strong> With a
  *       context path of {@code /v1} the health endpoint is at {@code :${MANAGEMENT_PORT}/v1/health}
- *       and the bare {@code :${MANAGEMENT_PORT}/health} is a 404. The Compose healthcheck must
- *       therefore carry {@code ${API_PREFIX}}; an earlier comment in {@code application.yml}
- *       claimed the opposite and was wrong.
+ *       and the bare {@code :${MANAGEMENT_PORT}/health} is a 404 - the same holds for the {@code
+ *       /health/liveness} and {@code /health/readiness} routes served off it. The Compose
+ *       healthcheck must therefore carry {@code ${API_PREFIX}}; an earlier comment in {@code
+ *       application.yml} claimed the opposite and was wrong.
  *   <li><strong>{@code intercept-url-map} patterns are matched against the path with the context
  *       path already stripped.</strong> {@code /swagger-ui/**} therefore still covers {@code
  *       /v1/swagger-ui/**} once a context path is configured. That is asserted rather than assumed:
@@ -57,6 +58,12 @@ class ManagementEndpointSecurityIT {
 
     /** Path the health endpoint is mapped to, before the context path is prepended. */
     private static final String HEALTH_PATH = "/health";
+
+    /** Health route reporting whether the process is alive, served off {@link #HEALTH_PATH}. */
+    private static final String LIVENESS_PATH = HEALTH_PATH + "/liveness";
+
+    /** Health route reporting whether this instance can serve, served off {@link #HEALTH_PATH}. */
+    private static final String READINESS_PATH = HEALTH_PATH + "/readiness";
 
     /** Static-resource mapping serving the Swagger UI entry page. */
     private static final String SWAGGER_UI_PATH = "/swagger-ui/index.html";
@@ -211,19 +218,30 @@ class ManagementEndpointSecurityIT {
         return Stream.of(
                 Arguments.of(
                         MANAGEMENT,
-                        API_CONTEXT_PATH + HEALTH_PATH,
+                        API_CONTEXT_PATH + LIVENESS_PATH,
                         HttpStatus.OK,
-                        "the Compose healthcheck probes the management port under the API prefix,"
-                                + " without credentials"),
+                        "liveness carries no indicator that depends on an external system, so it"
+                                + " answers UP anonymously on the management port under the API"
+                                + " prefix even though this context's trust list points at a dead"
+                                + " port"),
                 Arguments.of(
                         MANAGEMENT,
-                        HEALTH_PATH,
+                        API_CONTEXT_PATH + READINESS_PATH,
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "the Compose healthcheck probes readiness on the management port under the"
+                                + " API prefix, without credentials; this context's identity"
+                                + " provider never resolves, and a 503 - rather than the 401 a"
+                                + " protected route would give or the 404 a missing one would -"
+                                + " shows the route resolved and was answered anonymously"),
+                Arguments.of(
+                        MANAGEMENT,
+                        LIVENESS_PATH,
                         HttpStatus.NOT_FOUND,
                         "a dedicated management port does not remove the server context path, so a"
                                 + " probe omitting the API prefix never reaches the endpoint"),
                 Arguments.of(
                         API,
-                        API_CONTEXT_PATH + HEALTH_PATH,
+                        API_CONTEXT_PATH + LIVENESS_PATH,
                         HttpStatus.NOT_FOUND,
                         "endpoints.all.port moves management endpoints off the API port entirely"),
                 Arguments.of(

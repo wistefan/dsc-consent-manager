@@ -57,7 +57,15 @@ services:
       # does NOT take them out of `micronaut.server.context-path`, so the probe
       # must carry ${API_PREFIX}. Without it the probe 404s and the container
       # never reports healthy. Pinned by ManagementEndpointSecurityIT.
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health || exit 1"]
+      #
+      # `/health/readiness` rather than the aggregate `/health`, so this reports
+      # "can serve traffic" — it covers the datasource and the identity-provider
+      # registry, which is DOWN until OIDC discovery against keycloak succeeds.
+      # A restart policy must never act on this signal: restarting cannot fix an
+      # identity provider's outage. `restart: unless-stopped` below does not
+      # restart on unhealthy, so the container goes unhealthy, drains, and
+      # recovers on its own once discovery retries succeed.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health/readiness || exit 1"]
       interval: 15s
       timeout: 5s
       start_period: 45s
