@@ -112,6 +112,31 @@ micronaut:
     token:
       jwt:
         enabled: true
+
+  # ---------------------------------------------------------------------------
+  # JWK Set cache
+  # ---------------------------------------------------------------------------
+  # Declaring a cache named `jwks` is what switches `micronaut-security-jwt` from its
+  # built-in in-memory fetcher to `CacheableJwkSetFetcher`, so this block is not tuning -
+  # it selects the implementation. Keys are cached per (provider name, jwks_uri).
+  #
+  # `expire-after-write` is the only knob that matters here, and it sets both halves of
+  # the key-handling budget:
+  #
+  #   rotation latency   - a key minted after startup is honoured once the cached set
+  #                        expires, at most one TTL later, with no restart (AC 13).
+  #   outbound request   - at most one JWK Set request per provider per TTL, whatever
+  #     rate               the inbound traffic is. A flood of tokens bearing `kid` values
+  #                        no provider ever published costs no extra request at all,
+  #                        because nothing invalidates this cache on a miss (AC 14).
+  #
+  # Those pull in opposite directions, hence a default in minutes rather than hours:
+  # long enough that steady-state traffic re-fetches rarely, short enough that an
+  # emergency key rotation is picked up without an operator restarting anything.
+  caches:
+    jwks:
+      expire-after-write: ${IDP_JWKS_CACHE_TTL:5m}
+
   metrics:
     enabled: true
     export:
@@ -212,9 +237,16 @@ consent-manager:
   # ---------------------------------------------------------------------------
   # One entry per trusted OpenID Connect provider, keyed by name. Each entry is
   # self-contained: the issuer, the discovery document URL, the audience this service
-  # expects, the clock skew, the JWKS cache lifetime, the claim paths and the role
-  # mapping. No `client-id` and no `client-secret` appear anywhere - this service is a
-  # resource server, runs no OAuth2 flow and stores no credential.
+  # expects, the clock skew, the claim paths and the role mapping. No `client-id` and no
+  # `client-secret` appear anywhere - this service is a resource server, runs no OAuth2
+  # flow and stores no credential.
+  #
+  # The JWK Set cache is deliberately NOT per provider. Fetching and caching the keys is
+  # done by `micronaut-security-jwt`, whose cache is a single Micronaut Cache named
+  # `jwks` shared by every provider (see `micronaut.caches.jwks` above and
+  # docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md). A
+  # per-provider lifetime is not expressible without reimplementing the cache, which is
+  # not worth a knob nobody has asked to turn.
   #
   # The trust list is read ONCE at startup and is immutable for the lifetime of the
   # process: no runtime reload, no admin endpoint, no auto-registration. Adding,
@@ -254,10 +286,6 @@ consent-manager:
       allow-insecure-transport: ${IDP_ALLOW_INSECURE_TRANSPORT:false}
       # Tolerance applied to the exp, iat and nbf claims.
       clock-skew: ${IDP_CLOCK_SKEW:30s}
-      # How long this provider's fetched JWK set stays usable before it is refreshed.
-      # Per provider: one that rotates keys hourly and one that rotates them yearly
-      # should not share a refresh cadence.
-      jwks-cache-ttl: ${IDP_JWKS_CACHE_TTL:1h}
       # Claim names are per provider. Each may be a dot-separated nested path.
       claims:
         user-identifier: ${IDP_CLAIM_USER_IDENTIFIER:sub}

@@ -3,15 +3,20 @@
 - **Status:** **Partly superseded** by
   [ADR 0003](0003-use-micronaut-security-oauth2-for-openid-discovery.md), which moves the
   discovery request itself onto `micronaut-security-oauth2`'s
-  `DefaultOpenIdProviderMetadataFetcher`. Everything this ADR decides about the
-  configuration schema, the trust list, per-provider claims and role mapping, and Nimbus for
-  JWS verification and JWKS caching still stands.
+  `DefaultOpenIdProviderMetadataFetcher`, and by
+  [ADR 0004](0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md), which moves
+  JWK Set retrieval, caching and JWS verification onto `micronaut-security-jwt` and removes
+  the per-provider `jwks-cache-ttl` knob. What this ADR decides about the configuration
+  schema, the trust list being fixed at startup, per-provider claims and role mapping still
+  stands; its choice of hand-built Nimbus components for JWKS does not.
 - **Date:** 2025-10-01
 - **Ticket:** TICKET-003 (Taiga #67), step 2
-- **Superseded in part by:** [ADR 0003](0003-use-micronaut-security-oauth2-for-openid-discovery.md)
+- **Superseded in part by:** [ADR 0003](0003-use-micronaut-security-oauth2-for-openid-discovery.md),
+  [ADR 0004](0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md)
 - **Supersedes:** [ADR 0001](0001-delegate-oidc-discovery-and-jwks-to-micronaut-security.md)
-- **Keeps:** implementation plan convention 6 ("custom validation, not declarative JWKS")
-  and the ticket's `consent-manager.identity-providers` configuration schema.
+- **Keeps:** the ticket's `consent-manager.identity-providers` configuration schema. Its
+  reading of implementation plan convention 6 ("custom validation, not declarative JWKS")
+  was rewritten by ADR 0004.
 
 ## Context
 

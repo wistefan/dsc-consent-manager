@@ -8,10 +8,15 @@ import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -54,6 +59,9 @@ public final class OidcDiscoveryStub implements AutoCloseable {
 
     /** Sentinel for {@link #jwksFailureStatus} meaning "serve the key set normally". */
     private static final int JWKS_SERVED_NORMALLY = 0;
+
+    /** Algorithm the generated keys sign with, matching the RSA keys the stub publishes. */
+    private static final JWSAlgorithm SIGNING_ALGORITHM = JWSAlgorithm.RS256;
 
     private final WireMockServer server;
 
@@ -101,11 +109,56 @@ public final class OidcDiscoveryStub implements AutoCloseable {
     /**
      * Makes JWK Set requests fail, simulating a provider whose key endpoint is down.
      *
+     * <p>The failure outlives a subsequent {@link #rotateKeysTo(String...)} - a provider that
+     * rotates its keys while its endpoint is down still serves nothing. Call {@link
+     * #serveJwksNormally()} to bring it back.
+     *
      * @param statusCode the HTTP status to answer the JWK Set request with
      */
     public void failJwksRequests(int statusCode) {
         this.jwksFailureStatus = statusCode;
         stubJwks();
+    }
+
+    /**
+     * Serves the current key set again after {@link #failJwksRequests(int)}.
+     *
+     * <p>Without this the outage is one-way, and the test that matters most for key rotation - the
+     * provider goes down, rotates, comes back, and the new key is picked up with no restart -
+     * cannot be written at all.
+     */
+    public void serveJwksNormally() {
+        this.jwksFailureStatus = JWKS_SERVED_NORMALLY;
+        stubJwks();
+    }
+
+    /**
+     * Signs a token with one of the keys this stub publishes.
+     *
+     * <p>The {@code kid} header is set to the key used, as a provider does, so the relying party
+     * can match it against the published set. Signing with a key of <em>another</em> stub while
+     * claiming this stub's issuer is how a cross-issuer key-confusion attempt is expressed.
+     *
+     * @param keyId the identifier of a key currently published by this stub
+     * @param claims the claim set to sign
+     * @return the signed token
+     * @throws IllegalArgumentException if this stub publishes no key under that identifier
+     */
+    public SignedJWT signToken(String keyId, JWTClaimsSet claims) {
+        JWK key = jwkSet.getKeyByKeyId(keyId);
+        if (key == null) {
+            throw new IllegalArgumentException(
+                    "This stub publishes no key with kid '" + keyId + "'");
+        }
+        SignedJWT token =
+                new SignedJWT(
+                        new JWSHeader.Builder(SIGNING_ALGORITHM).keyID(keyId).build(), claims);
+        try {
+            token.sign(new RSASSASigner(key.toRSAKey()));
+        } catch (JOSEException failure) {
+            throw new IllegalStateException("Could not sign a test token", failure);
+        }
+        return token;
     }
 
     /**

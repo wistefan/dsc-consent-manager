@@ -88,7 +88,6 @@ class IdentityProviderConfigurationTest {
     private static final String NESTED_ROLES_CLAIM = "realm_access.roles";
     private static final String PARTICIPANT_ID_CLAIM = "participant_id";
     private static final String CONFIGURED_CLOCK_SKEW = "45s";
-    private static final String CONFIGURED_JWKS_CACHE_TTL = "15m";
 
     /**
      * Returns the configuration key prefix of a provider entry.
@@ -114,7 +113,6 @@ class IdentityProviderConfigurationTest {
         properties.put(prefix + ".discovery-url", issuer + DISCOVERY_SUFFIX);
         properties.put(prefix + ".audience", AUDIENCE);
         properties.put(prefix + ".clock-skew", CONFIGURED_CLOCK_SKEW);
-        properties.put(prefix + ".jwks-cache-ttl", CONFIGURED_JWKS_CACHE_TTL);
         properties.put(prefix + ".claims.user-identifier", "sub");
         properties.put(prefix + ".claims.participant-identifier", PARTICIPANT_ID_CLAIM);
         properties.put(prefix + ".claims.roles", NESTED_ROLES_CLAIM);
@@ -253,9 +251,6 @@ class IdentityProviderConfigurationTest {
                 assertThat(provider.getClockSkew())
                         .as("clock-skew: %s should parse", CONFIGURED_CLOCK_SKEW)
                         .isEqualTo(Duration.ofSeconds(45));
-                assertThat(provider.getJwksCacheTtl())
-                        .as("jwks-cache-ttl: %s should parse", CONFIGURED_JWKS_CACHE_TTL)
-                        .isEqualTo(Duration.ofMinutes(15));
             }
         }
 
@@ -292,7 +287,6 @@ class IdentityProviderConfigurationTest {
         void appliesDefaults() {
             Map<String, Object> properties = validTrustList();
             properties.remove(settingsKey(PROVIDER) + ".clock-skew");
-            properties.remove(settingsKey(PROVIDER) + ".jwks-cache-ttl");
             properties.remove(settingsKey(PROVIDER) + ".claims.user-identifier");
 
             try (ApplicationContext context = startContext(properties)) {
@@ -300,8 +294,6 @@ class IdentityProviderConfigurationTest {
 
                 assertThat(provider.getClockSkew())
                         .isEqualTo(IdentityProviderConfiguration.DEFAULT_CLOCK_SKEW);
-                assertThat(provider.getJwksCacheTtl())
-                        .isEqualTo(IdentityProviderConfiguration.DEFAULT_JWKS_CACHE_TTL);
                 assertThat(provider.getClaims().getUserIdentifier())
                         .isEqualTo(IdentityProviderConfiguration.DEFAULT_USER_IDENTIFIER_CLAIM);
                 assertThat(provider.isAllowInsecureTransport())
@@ -408,12 +400,7 @@ class IdentityProviderConfigurationTest {
                             "negative clock skew",
                             Map.of(prefix + ".clock-skew", "-5s"),
                             List.of(),
-                            "clock-skew must not be negative"),
-                    Arguments.of(
-                            "negative JWKS cache TTL",
-                            Map.of(prefix + ".jwks-cache-ttl", "-1m"),
-                            List.of(),
-                            "jwks-cache-ttl must not be negative"));
+                            "clock-skew must not be negative"));
         }
 
         @ParameterizedTest(name = "{0} aborts startup")
@@ -669,8 +656,8 @@ class IdentityProviderConfigurationTest {
         /**
          * Returns the environment-variable spelling of a key below the provider under test.
          *
-         * @param key the key as written in YAML, for example {@code jwks-cache-ttl}
-         * @return for example {@code CONSENT_MANAGER_IDENTITY_PROVIDERS_PRIMARY_JWKS_CACHE_TTL}
+         * @param key the key as written in YAML, for example {@code clock-skew}
+         * @return for example {@code CONSENT_MANAGER_IDENTITY_PROVIDERS_PRIMARY_CLOCK_SKEW}
          */
         private static String variableFor(String key) {
             return ENV_PREFIX
@@ -737,12 +724,6 @@ class IdentityProviderConfigurationTest {
                             (Function<IdentityProviderConfiguration, Object>)
                                     IdentityProviderConfiguration::getDiscoveryUrl,
                             (Object) (OTHER_ISSUER + DISCOVERY_SUFFIX)),
-                    Arguments.of(
-                            "jwks-cache-ttl",
-                            "5m",
-                            (Function<IdentityProviderConfiguration, Object>)
-                                    IdentityProviderConfiguration::getJwksCacheTtl,
-                            (Object) Duration.ofMinutes(5)),
                     Arguments.of(
                             "clock-skew",
                             "90s",
