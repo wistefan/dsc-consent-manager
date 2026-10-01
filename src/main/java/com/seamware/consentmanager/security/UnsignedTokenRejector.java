@@ -2,6 +2,7 @@ package com.seamware.consentmanager.security;
 
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jwt.SignedJWT;
+import io.micronaut.context.annotation.Requires;
 import io.micronaut.security.token.jwt.signature.SignatureConfiguration;
 import jakarta.inject.Singleton;
 
@@ -46,10 +47,37 @@ import jakarta.inject.Singleton;
  *
  * <p>The guarantee is "fail closed": with no usable signing key, every token is rejected.
  *
+ * <p>The bean can be switched off with {@link #ENABLED_PROPERTY}. That exists purely so a test can
+ * prove the bean is load-bearing: every assertion about this class is an assertion that a token is
+ * <em>rejected</em>, and a token is rejected for many reasons, so such an assertion would stay
+ * green if the bean were deleted as apparently dead code ({@link #supports(JWSAlgorithm)} returns
+ * {@code false} for every algorithm and {@link #verify(SignedJWT)} always {@code false}). The
+ * control case disables it and requires the same unsigned token to be <em>accepted</em>, which
+ * fails if the bean ever stops closing the bypass. <strong>No deployment should ever set this
+ * property:</strong> doing so authenticates {@code alg: none} tokens whenever no provider has
+ * contributed a signing key.
+ *
+ * <p>See {@code docs/adr/0001-delegate-oidc-discovery-and-jwks-to-micronaut-security.md} for why
+ * signature verification is delegated to Micronaut at all, and what else that delegation leaves to
+ * this service.
+ *
  * @see IdentityProviderRegistryValidator
  */
+@Requires(
+        property = UnsignedTokenRejector.ENABLED_PROPERTY,
+        notEquals = "false",
+        defaultValue = "true")
 @Singleton
 public class UnsignedTokenRejector implements SignatureConfiguration {
+
+    /**
+     * Property that disables this bean, re-opening the {@code alg: none} bypass.
+     *
+     * <p>Present only so the control case in {@code TokenSignatureEnforcementIT} can demonstrate
+     * that the bypass is real and that this bean is what closes it. Never set it in a deployment.
+     */
+    public static final String ENABLED_PROPERTY =
+            "consent-manager.security.unsigned-token-rejector.enabled";
 
     /**
      * Describes the algorithms this configuration accepts, for diagnostic messages.

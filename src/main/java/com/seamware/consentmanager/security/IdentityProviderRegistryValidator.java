@@ -67,12 +67,21 @@ public class IdentityProviderRegistryValidator {
     /** Number of providers the interim global claim validators can cover. */
     private static final int SINGLE_PROVIDER = 1;
 
-    /** Property holding the single issuer Micronaut's own claim validator enforces. */
-    private static final String GLOBAL_ISSUER_VALIDATOR_PROPERTY =
+    /**
+     * Property holding the single issuer Micronaut's own claim validator enforces.
+     *
+     * <p>Public because it names the interim guard that {@code application.yml} configures and that
+     * the tests pin; it disappears together with the guard when per-provider validation lands.
+     */
+    public static final String GLOBAL_ISSUER_VALIDATOR_PROPERTY =
             "micronaut.security.token.jwt.claims-validators.issuer";
 
-    /** Property holding the single audience Micronaut's own claim validator enforces. */
-    private static final String GLOBAL_AUDIENCE_VALIDATOR_PROPERTY =
+    /**
+     * Property holding the single audience Micronaut's own claim validator enforces.
+     *
+     * <p>Public for the same reason as {@link #GLOBAL_ISSUER_VALIDATOR_PROPERTY}.
+     */
+    public static final String GLOBAL_AUDIENCE_VALIDATOR_PROPERTY =
             "micronaut.security.token.jwt.claims-validators.audience";
 
     /**
@@ -98,6 +107,27 @@ public class IdentityProviderRegistryValidator {
     /** Keys a {@code consent-manager.identity-providers.<name>.claims} block may declare. */
     private static final Set<String> SUPPORTED_CLAIM_KEYS =
             Set.of("user-identifier", "participant-identifier", "roles");
+
+    /**
+     * Keys that appear in the ticket's own configuration example but that this service does not
+     * read, mapped to an explanation of where they went.
+     *
+     * <p>These are not typos: an operator who copies the YAML block out of the ticket writes them
+     * verbatim, so "unrecognised key" on its own would be a confusing abort. Each entry says why
+     * the key is absent and when, if ever, it returns.
+     */
+    private static final Map<String, String> KEYS_FROM_THE_TICKET_SCHEMA =
+            Map.of(
+                    "discovery-url",
+                            "is not configured separately: Micronaut Security derives the"
+                                    + " discovery URL from the issuer declared under '"
+                                    + IdentityProviderConfiguration.OIDC_CLIENTS_PREFIX
+                                    + ".<name>.openid.issuer', so remove it.",
+                    "jwks-cache-ttl",
+                            "is not yet expressible per provider: the signing-key cache is"
+                                    + " currently global ('micronaut.caches.jwks.expire-after-write')"
+                                    + " because one cache serves every provider. A per-provider TTL"
+                                    + " arrives with the JWKS work in step 4.");
 
     /**
      * URL schemes an issuer may use.
@@ -144,8 +174,8 @@ public class IdentityProviderRegistryValidator {
      * Verifies the assembled trust list during context startup.
      *
      * @throws ConfigurationException if no provider is configured, two providers declare the same
-     *     issuer, more than one provider is configured, the sole provider is not the one the
-     *     interim claim validators guard, or an entry declares an unrecognised key
+     *     issuer, more than one provider is configured, the interim claim validators do not resolve
+     *     to the sole provider's issuer and audience, or an entry declares an unrecognised key
      */
     @PostConstruct
     public void validate() {
@@ -161,7 +191,7 @@ public class IdentityProviderRegistryValidator {
         }
         rejectDuplicateIssuers();
         rejectMoreThanOneProvider();
-        requireTheInterimGuardToNameTheProvider();
+        requireTheInterimGuardToCoverTheProvider();
         rejectUnrecognisedSettingKeys();
         LOG.info(
                 "Identity provider trust list loaded with {} provider(s): {}",
@@ -220,35 +250,94 @@ public class IdentityProviderRegistryValidator {
     }
 
     /**
-     * Refuses to start when the sole provider is not the one the interim claim validators guard.
+     * Refuses to start unless the interim global claim validators actually guard the sole trusted
+     * provider.
      *
-     * <p>Issuer and audience are currently enforced by Micronaut's global claim validators, which
-     * hold one value each and are configured in {@code application.yml} as placeholders naming the
-     * {@value #INTERIM_GUARDED_PROVIDER_NAME} provider. A provider configured under a different
-     * name is therefore not guarded by them — and the placeholders become unresolvable, which
-     * aborts startup with a message about placeholder resolution that says nothing about the trust
-     * list. Failing here instead names the actual problem.
+     * <p>Issuer and audience are not yet checked per provider. Until step 5 they are enforced by
+     * Micronaut's two global claim validators, which hold one value each and are configured in
+     * {@code application.yml} as placeholders naming the {@value #INTERIM_GUARDED_PROVIDER_NAME}
+     * entry. Those placeholders are only a default: both properties are independently settable, so
+     * {@code MICRONAUT_SECURITY_TOKEN_JWT_CLAIMS_VALIDATORS_AUDIENCE=something-else} silently aims
+     * the only issuer and audience guard this step provides at a value no trusted provider uses,
+     * and the service starts cleanly. Checking that the provider is <em>named</em> {@value
+     * #INTERIM_GUARDED_PROVIDER_NAME} would not catch that: the name is a proxy for the property
+     * resolving correctly, not the thing that matters.
      *
-     * @throws ConfigurationException if the sole provider is configured under another name
+     * <p>So this asserts the resolved values themselves. The name requirement then falls out as a
+     * consequence — a differently named provider leaves the placeholders unresolvable or pointing
+     * elsewhere — and is reported with a dedicated message because it is by far the likeliest
+     * cause.
+     *
+     * <p>The comparison is exact. That is stricter than the validator it guards: Micronaut's {@code
+     * IssuerJwtClaimsValidator} suffix-matches a token's {@code iss} against this value. Being
+     * strict here costs nothing and means the property cannot drift from the trust list unnoticed.
+     *
+     * @throws ConfigurationException if either property is unset, unresolvable, or resolves to
+     *     anything other than the sole provider's issuer and audience
      */
-    private void requireTheInterimGuardToNameTheProvider() {
+    private void requireTheInterimGuardToCoverTheProvider() {
         TrustedIdentityProvider provider = providers.get(0);
-        if (INTERIM_GUARDED_PROVIDER_NAME.equals(provider.name())) {
+        requireGuardResolvesTo(GLOBAL_ISSUER_VALIDATOR_PROPERTY, provider.issuer(), provider);
+        requireGuardResolvesTo(
+                GLOBAL_AUDIENCE_VALIDATOR_PROPERTY, provider.settings().getAudience(), provider);
+    }
+
+    /**
+     * Asserts that one interim claim-validator property resolves to the value it is meant to guard.
+     *
+     * @param property the claim-validator property to read
+     * @param expected the trust-list value it must equal
+     * @param provider the sole trusted provider, for the failure message
+     * @throws ConfigurationException if the property is unset, unresolvable or differs
+     */
+    private void requireGuardResolvesTo(
+            String property, String expected, TrustedIdentityProvider provider) {
+
+        String configured;
+        try {
+            configured = environment.getProperty(property, String.class).orElse(null);
+        } catch (ConfigurationException e) {
+            // An unresolvable `${...}` placeholder. The placeholders in application.yml name the
+            // `primary` entry literally, because a placeholder cannot say "whichever provider is
+            // configured", so this is what a renamed provider looks like. Micronaut's own message
+            // talks about placeholder resolution and says nothing about the trust list.
+            throw new ConfigurationException(
+                    interimGuardFailure(property, provider)
+                            + " It is configured as a placeholder that could not be resolved: "
+                            + e.getMessage(),
+                    e);
+        }
+        if (expected.equals(configured)) {
             return;
         }
         throw new ConfigurationException(
-                "Identity provider '"
-                        + provider.name()
-                        + "' must be named '"
-                        + INTERIM_GUARDED_PROVIDER_NAME
-                        + "' until per-provider token validation is in place. Issuer and audience"
-                        + " are enforced by Micronaut's global claim validators, '"
-                        + GLOBAL_ISSUER_VALIDATOR_PROPERTY
-                        + "' and '"
-                        + GLOBAL_AUDIENCE_VALIDATOR_PROPERTY
-                        + "', which are configured as placeholders naming the '"
-                        + INTERIM_GUARDED_PROVIDER_NAME
-                        + "' entry; under any other name they would guard nothing.");
+                interimGuardFailure(property, provider)
+                        + " It must resolve to '"
+                        + expected
+                        + "', but resolved to "
+                        + (configured == null ? "nothing" : "'" + configured + "'")
+                        + ". Setting it independently of the trust list leaves tokens unguarded by"
+                        + " the only issuer and audience check this service currently performs.");
+    }
+
+    /**
+     * Builds the shared opening of an interim-guard failure message.
+     *
+     * @param property the claim-validator property at fault
+     * @param provider the sole trusted provider
+     * @return a sentence naming the property, the provider and the renaming trap
+     */
+    private static String interimGuardFailure(String property, TrustedIdentityProvider provider) {
+        return "The interim claim validator '"
+                + property
+                + "' does not guard identity provider '"
+                + provider.name()
+                + "'. Until per-provider token validation is in place, issuer and audience are"
+                + " enforced only by Micronaut's two global claim validators, which are configured"
+                + " in application.yml as placeholders naming the '"
+                + INTERIM_GUARDED_PROVIDER_NAME
+                + "' entry; a provider under any other name, or an override of this property, "
+                + "leaves them guarding nothing.";
     }
 
     /**
@@ -290,6 +379,13 @@ public class IdentityProviderRegistryValidator {
         if (unrecognised.isEmpty()) {
             return;
         }
+        var explained = new StringBuilder();
+        for (String key : unrecognised) {
+            String explanation = KEYS_FROM_THE_TICKET_SCHEMA.get(key);
+            if (explanation != null) {
+                explained.append(" '").append(key).append("' ").append(explanation);
+            }
+        }
         throw new ConfigurationException(
                 "Identity provider settings '"
                         + prefix
@@ -297,7 +393,8 @@ public class IdentityProviderRegistryValidator {
                         + unrecognised
                         + "; this service reads only "
                         + new TreeSet<>(supportedKeys)
-                        + ". An unrecognised key is bound to nothing and silently has no effect.");
+                        + ". An unrecognised key is bound to nothing and silently has no effect."
+                        + explained);
     }
 
     /**

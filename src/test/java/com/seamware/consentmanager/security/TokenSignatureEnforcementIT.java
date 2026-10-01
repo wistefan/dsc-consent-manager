@@ -167,14 +167,14 @@ class TokenSignatureEnforcementIT {
                                                 + publishedKey.toPublicJWK().toJSONString()
                                                 + "]}")));
 
-        reachableContext = startContext(reachableIssuer, reachableIssuer);
+        reachableContext = startContext(reachableIssuer, Map.of());
         reachableServer = reachableContext.getBean(EmbeddedServer.class).start();
         reachableClient = HttpClient.create(reachableServer.getURL());
 
-        // Trusts an issuer that can never be discovered, but still expects the `iss` and `aud` the
-        // minted tokens carry, so the missing signature configuration is the only possible ground
-        // for rejection. See startContext.
-        unreachableContext = startContext(UNREACHABLE_ISSUER, reachableIssuer);
+        // Trusts an issuer that can never be discovered. Its tokens carry that same `iss` and the
+        // expected `aud`, so the missing signature configuration is the only possible ground for
+        // rejection. See startContext.
+        unreachableContext = startContext(UNREACHABLE_ISSUER, Map.of());
         unreachableServer = unreachableContext.getBean(EmbeddedServer.class).start();
         unreachableClient = HttpClient.create(unreachableServer.getURL());
     }
@@ -230,24 +230,23 @@ class TokenSignatureEnforcementIT {
     }
 
     /**
-     * Starts an isolated context that trusts exactly one issuer and expects exactly one {@code iss}
-     * claim value.
+     * Starts an isolated context trusting exactly one issuer.
      *
-     * <p>The two are deliberately separate parameters. For the reachable context they are the same
-     * URL, but the outage context has to trust an issuer that can never be discovered while still
-     * accepting the {@code iss} the minted tokens carry. Were the interim issuer claims validator
-     * also pointed at the unreachable URL, every outage assertion would be satisfied by an issuer
-     * mismatch and the absence of a signature configuration — the thing those cases exist to pin —
-     * would never be reached. {@link UnsignedTokenRejector} could then be deleted without a single
-     * test going red.
+     * <p>The interim claims validators are pointed at that same issuer and audience, because {@link
+     * IdentityProviderRegistryValidator} refuses to start a context in which they diverge from the
+     * trust list. The outage context therefore trusts an issuer that can never be discovered
+     * <em>and</em> accepts the {@code iss} its tokens carry, which is what leaves the missing
+     * signature configuration as the only possible ground for rejection. Were the validator pointed
+     * anywhere else, every outage assertion would be satisfied by an issuer mismatch and {@link
+     * UnsignedTokenRejector} could be deleted without a single test going red.
      *
      * @param trustedIssuer the issuer registered as an OpenID client, whose discovery document
-     *     supplies the signing keys
-     * @param expectedTokenIssuer the {@code iss} value the interim claims validator accepts
+     *     supplies the signing keys and which minted tokens must name in {@code iss}
+     * @param overrides properties layered on top, for control cases that switch a bean off
      * @return the started context
      */
     private static ApplicationContext startContext(
-            String trustedIssuer, String expectedTokenIssuer) {
+            String trustedIssuer, Map<String, Object> overrides) {
         String settings = IdentityProviderConfiguration.PREFIX + "." + PROVIDER;
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put(PROBE_ROUTE_ENABLED, true);
@@ -266,12 +265,12 @@ class TokenSignatureEnforcementIT {
         // Mirrors the interim claims validators configured in application.yml. Default property
         // sources are disabled for this context, so they have to be restated here; without them
         // Micronaut's built-in validator checks neither `iss` nor `aud`.
-        properties.put(
-                "micronaut.security.token.jwt.claims-validators.issuer", expectedTokenIssuer);
+        properties.put("micronaut.security.token.jwt.claims-validators.issuer", trustedIssuer);
         properties.put("micronaut.security.token.jwt.claims-validators.audience", AUDIENCE);
         properties.put(settings + ".claims.participant-identifier", "participant_id");
         properties.put(settings + ".claims.roles", "realm_access.roles");
         properties.put(settings + ".role-mapping.user", "consent-user");
+        properties.putAll(overrides);
 
         return ApplicationContext.builder()
                 .enableDefaultPropertySources(false)
@@ -307,12 +306,13 @@ class TokenSignatureEnforcementIT {
     }
 
     /**
-     * Mints an unsigned {@code alg: none} token.
+     * Mints an unsigned {@code alg: none} token naming the given issuer.
      *
+     * @param issuer the {@code iss} the token claims
      * @return the serialized token
      */
-    private static String unsignedToken() {
-        return new PlainJWT(claims()).serialize();
+    private static String unsignedToken(String issuer) {
+        return new PlainJWT(claims(issuer, AUDIENCE)).serialize();
     }
 
     /**
@@ -323,6 +323,17 @@ class TokenSignatureEnforcementIT {
      */
     private static String rsaToken(RSAKey key) {
         return rsaToken(key, claims());
+    }
+
+    /**
+     * Mints an RS256 token signed with the given key and naming the given issuer.
+     *
+     * @param key the signing key
+     * @param issuer the {@code iss} the token claims
+     * @return the serialized token
+     */
+    private static String rsaToken(RSAKey key, String issuer) {
+        return rsaToken(key, claims(issuer, AUDIENCE));
     }
 
     /**
@@ -348,10 +359,11 @@ class TokenSignatureEnforcementIT {
     /**
      * Mints a token signed with a key the provider never published.
      *
+     * @param issuer the {@code iss} the token claims
      * @return the serialized token
      */
-    private static String foreignlySignedToken() {
-        return rsaToken(foreignKey);
+    private static String foreignlySignedToken(String issuer) {
+        return rsaToken(foreignKey, issuer);
     }
 
     /**
@@ -361,10 +373,11 @@ class TokenSignatureEnforcementIT {
      * validator lands, that check is the interim global {@code claims-validators.audience} setting
      * this service configures; this case is what keeps it from being dropped unnoticed.
      *
+     * @param issuer the {@code iss} the token claims
      * @return the serialized token
      */
-    private static String foreignAudienceToken() {
-        return rsaToken(publishedKey, claims(reachableIssuer, "some-other-service"));
+    private static String foreignAudienceToken(String issuer) {
+        return rsaToken(publishedKey, claims(issuer, "some-other-service"));
     }
 
     /**
@@ -382,14 +395,15 @@ class TokenSignatureEnforcementIT {
     /**
      * Mints an HS256 token bearing the published key identifier, the classic key-confusion shape.
      *
+     * @param issuer the {@code iss} the token claims
      * @return the serialized token
      */
-    private static String symmetricToken() {
+    private static String symmetricToken(String issuer) {
         try {
             SignedJWT jwt =
                     new SignedJWT(
                             new JWSHeader.Builder(JWSAlgorithm.HS256).keyID(SIGNING_KEY_ID).build(),
-                            claims());
+                            claims(issuer, AUDIENCE));
             jwt.sign(new MACSigner(SYMMETRIC_SECRET));
             return jwt.serialize();
         } catch (JOSEException e) {
@@ -428,33 +442,57 @@ class TokenSignatureEnforcementIT {
     }
 
     /**
-     * Supplies the token shapes that must never authenticate.
+     * Supplies the token shapes that must never authenticate against the given issuer.
      *
+     * <p>The issuer is a parameter because each context under test trusts a different one and
+     * refuses any {@code iss} but its own. A forged token whose issuer does not match the context
+     * it is presented to would be refused for that reason alone, which would mask the forgery the
+     * case exists to pin.
+     *
+     * @param issuer the {@code iss} the context under test trusts
      * @return case name and a supplier that mints the token when the case runs
      */
-    static Stream<Arguments> forgedTokens() {
+    private static Stream<Arguments> forgedTokens(String issuer) {
         return Stream.of(
                 Arguments.of("no Authorization header", (Supplier<String>) () -> null),
                 Arguments.of(
                         "an unsigned alg:none token",
-                        (Supplier<String>) TokenSignatureEnforcementIT::unsignedToken),
+                        (Supplier<String>) () -> unsignedToken(issuer)),
                 Arguments.of(
                         "an RS256 token signed with a key the provider does not publish",
-                        (Supplier<String>) TokenSignatureEnforcementIT::foreignlySignedToken),
+                        (Supplier<String>) () -> foreignlySignedToken(issuer)),
                 Arguments.of(
                         "an HS256 token claiming the published key id",
-                        (Supplier<String>) TokenSignatureEnforcementIT::symmetricToken),
+                        (Supplier<String>) () -> symmetricToken(issuer)),
                 Arguments.of("a syntactically invalid token", (Supplier<String>) () -> "not-a-jwt"),
                 Arguments.of(
                         "a genuinely signed token minted for another audience",
-                        (Supplier<String>) TokenSignatureEnforcementIT::foreignAudienceToken),
+                        (Supplier<String>) () -> foreignAudienceToken(issuer)),
                 Arguments.of(
                         "a genuinely signed token claiming another issuer",
                         (Supplier<String>) TokenSignatureEnforcementIT::foreignIssuerToken));
     }
 
+    /**
+     * Supplies the forged shapes aimed at the reachable provider.
+     *
+     * @return case name and token supplier
+     */
+    static Stream<Arguments> forgedTokensForReachableProvider() {
+        return forgedTokens(reachableIssuer);
+    }
+
+    /**
+     * Supplies the forged shapes aimed at the unreachable provider.
+     *
+     * @return case name and token supplier
+     */
+    static Stream<Arguments> forgedTokensForUnreachableProvider() {
+        return forgedTokens(UNREACHABLE_ISSUER);
+    }
+
     @ParameterizedTest(name = "{0} is refused")
-    @MethodSource("forgedTokens")
+    @MethodSource("forgedTokensForReachableProvider")
     @DisplayName("refuses every token the trusted provider did not sign")
     void refusesForgedTokens(String description, Supplier<String> token) {
         assertThat(statusFor(reachableClient, token.get()))
@@ -471,7 +509,7 @@ class TokenSignatureEnforcementIT {
     }
 
     @ParameterizedTest(name = "{0} is refused while the provider is unreachable")
-    @MethodSource("forgedTokens")
+    @MethodSource("forgedTokensForUnreachableProvider")
     @DisplayName("refuses every token while no provider has contributed a signing key")
     void refusesForgedTokensDuringOutage(String description, Supplier<String> token) {
         assertThat(statusFor(unreachableClient, token.get()))
@@ -485,9 +523,45 @@ class TokenSignatureEnforcementIT {
     @Test
     @DisplayName("refuses a genuinely signed token while the provider is unreachable")
     void refusesGenuineTokenDuringOutage() {
-        assertThat(statusFor(unreachableClient, rsaToken(publishedKey)))
+        assertThat(statusFor(unreachableClient, rsaToken(publishedKey, UNREACHABLE_ISSUER)))
                 .as("with no usable signing key the service must fail closed")
                 .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+    }
+
+    /**
+     * Control case proving {@link UnsignedTokenRejector} is what refuses the unsigned token.
+     *
+     * <p>Every other assertion about that bean is an assertion that a token is <em>rejected</em>,
+     * and a token is rejected for many reasons, so all of them would stay green if the bean were
+     * deleted as apparently dead code. Here the bean is switched off against the same unreachable
+     * provider, leaving the set of signature configurations genuinely empty, and the same {@code
+     * alg: none} token is required to be <em>accepted</em>. If this case ever stops returning 200,
+     * either the bypass has gone away in the framework or the context no longer reproduces it, and
+     * {@link #refusesForgedTokensDuringOutage} has stopped proving anything.
+     *
+     * <p>The context is built fresh rather than shared, so the disabling property cannot leak into
+     * any other case.
+     */
+    @Test
+    @DisplayName("control: the unsigned token authenticates once the rejector is switched off")
+    void acceptsUnsignedTokenWithoutTheRejector() {
+        try (ApplicationContext context =
+                startContext(
+                        UNREACHABLE_ISSUER,
+                        Map.of(UnsignedTokenRejector.ENABLED_PROPERTY, false))) {
+            EmbeddedServer server = context.getBean(EmbeddedServer.class).start();
+            try (HttpClient client = HttpClient.create(server.getURL())) {
+                assertThat(context.findBean(UnsignedTokenRejector.class))
+                        .as("the control case must actually remove the bean")
+                        .isEmpty();
+                assertThat(statusFor(client, unsignedToken(UNREACHABLE_ISSUER)))
+                        .as(
+                                "without the rejector an empty set of signature configurations"
+                                        + " makes Micronaut treat an unsigned token as verified, which"
+                                        + " is the bypass UnsignedTokenRejector exists to close")
+                        .isEqualTo(HttpStatus.OK.getCode());
+            }
+        }
     }
 
     /**

@@ -5,6 +5,8 @@
 #   1. (Optional) Copy .env.sample to .env and adjust values if needed
 #   2. docker compose up -d
 #   3. Health check: curl http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health
+#      (management port, but still behind the server context path - see
+#       endpoints.all.port in application.yml and ManagementEndpointSecurityIT)
 #   4. API base:     http://localhost:8080/v1
 # =============================================================================
 
@@ -52,6 +54,10 @@ services:
       # `iss: http://keycloak:8180/...` and is accepted here.
       IDP_ISSUER: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager
     healthcheck:
+      # `endpoints.all.port` moves management endpoints onto their own port but
+      # does NOT take them out of `micronaut.server.context-path`, so the probe
+      # must carry ${API_PREFIX}. Without it the probe 404s and the container
+      # never reports healthy. Pinned by ManagementEndpointSecurityIT.
       test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health || exit 1"]
       interval: 15s
       timeout: 5s

@@ -103,6 +103,26 @@ class IdentityProviderConfigurationTest {
     }
 
     /**
+     * Adds the interim global claim validators exactly as {@code application.yml} declares them.
+     *
+     * <p>They are placeholders pointing back at the two configuration halves rather than literal
+     * copies of {@link #ISSUER} and {@link #AUDIENCE}, so a test that overrides either half — from
+     * a property or from an environment variable — keeps the guard aimed at the trust list, which
+     * is precisely the production behaviour {@link IdentityProviderRegistryValidator} asserts.
+     *
+     * @param properties the map to populate
+     * @param name the provider name the guard should follow
+     */
+    private static void putInterimGuard(Map<String, Object> properties, String name) {
+        properties.put(
+                IdentityProviderRegistryValidator.GLOBAL_ISSUER_VALIDATOR_PROPERTY,
+                "${" + issuerKey(name) + "}");
+        properties.put(
+                IdentityProviderRegistryValidator.GLOBAL_AUDIENCE_VALIDATOR_PROPERTY,
+                "${" + settingsKey(name) + ".audience}");
+    }
+
+    /**
      * Builds a valid single-provider trust list covering both configuration halves.
      *
      * @return a mutable property map that individual tests mutate to produce variants
@@ -111,6 +131,7 @@ class IdentityProviderConfigurationTest {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put(issuerKey(PROVIDER), ISSUER);
         putValidSettings(properties, PROVIDER);
+        putInterimGuard(properties, PROVIDER);
         return properties;
     }
 
@@ -403,8 +424,60 @@ class IdentityProviderConfigurationTest {
             Map<String, Object> properties = new LinkedHashMap<>();
             properties.put(issuerKey(OTHER_PROVIDER), OTHER_ISSUER);
             putValidSettings(properties, OTHER_PROVIDER);
+            // The guard keeps naming `primary`, as application.yml does: a placeholder cannot say
+            // "whichever provider is configured", which is what makes renaming the entry unsafe.
+            putInterimGuard(properties, PROVIDER);
 
-            assertStartupFails(properties, "must be named '" + PROVIDER + "'");
+            assertStartupFails(
+                    properties,
+                    IdentityProviderRegistryValidator.GLOBAL_ISSUER_VALIDATOR_PROPERTY,
+                    "does not guard identity provider '" + OTHER_PROVIDER + "'");
+        }
+
+        /**
+         * Supplies one interim-guard property per case, with a value that does not match the trust
+         * list.
+         *
+         * @return the guard property and the trust-list value it was supposed to resolve to
+         */
+        static Stream<Arguments> misaimedGuards() {
+            return Stream.of(
+                    Arguments.of(
+                            IdentityProviderRegistryValidator.GLOBAL_ISSUER_VALIDATOR_PROPERTY,
+                            ISSUER),
+                    Arguments.of(
+                            IdentityProviderRegistryValidator.GLOBAL_AUDIENCE_VALIDATOR_PROPERTY,
+                            AUDIENCE));
+        }
+
+        @ParameterizedTest(name = "{0} pointed elsewhere aborts startup")
+        @MethodSource("misaimedGuards")
+        @DisplayName("rejects an interim claim validator aimed at a value no provider uses")
+        void rejectsMisaimedInterimGuard(String property, String expectedValue) {
+            Map<String, Object> properties = validTrustList();
+            properties.put(property, "something-else");
+
+            // The placeholders in application.yml are only defaults: either property can be set
+            // independently, which would aim the single issuer and audience check this step
+            // provides at a value no trusted provider uses - with a clean startup.
+            assertStartupFails(
+                    properties,
+                    property,
+                    "must resolve to '" + expectedValue + "', but resolved to 'something-else'");
+        }
+
+        @ParameterizedTest(name = "{0} left unset aborts startup")
+        @ValueSource(
+                strings = {
+                    "micronaut.security.token.jwt.claims-validators.issuer",
+                    "micronaut.security.token.jwt.claims-validators.audience"
+                })
+        @DisplayName("rejects an interim claim validator that is not configured at all")
+        void rejectsAbsentInterimGuard(String property) {
+            Map<String, Object> properties = validTrustList();
+            properties.remove(property);
+
+            assertStartupFails(properties, property, "but resolved to nothing");
         }
 
         @ParameterizedTest(name = "unrecognised key \"{0}\" aborts startup")
