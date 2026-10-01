@@ -175,7 +175,8 @@ public class IdentityProviderRegistryValidator {
      *
      * @throws ConfigurationException if no provider is configured, two providers declare the same
      *     issuer, more than one provider is configured, the interim claim validators do not resolve
-     *     to the sole provider's issuer and audience, or an entry declares an unrecognised key
+     *     to the sole provider's issuer and audience, an entry declares an unrecognised key, or the
+     *     unsigned-token guard is switched off outside a test context
      */
     @PostConstruct
     public void validate() {
@@ -193,6 +194,7 @@ public class IdentityProviderRegistryValidator {
         rejectMoreThanOneProvider();
         requireTheInterimGuardToCoverTheProvider();
         rejectUnrecognisedSettingKeys();
+        rejectDisabledUnsignedTokenRejector();
         LOG.info(
                 "Identity provider trust list loaded with {} provider(s): {}",
                 providers.size(),
@@ -375,6 +377,7 @@ public class IdentityProviderRegistryValidator {
      */
     private void rejectUnrecognisedKeys(String prefix, Set<String> supportedKeys) {
         var unrecognised = new TreeSet<>(environment.getPropertyEntries(prefix));
+        unrecognised.addAll(deniedKeysSuppliedAsEnvironmentVariables(prefix, supportedKeys));
         unrecognised.removeAll(supportedKeys);
         if (unrecognised.isEmpty()) {
             return;
@@ -395,6 +398,85 @@ public class IdentityProviderRegistryValidator {
                         + new TreeSet<>(supportedKeys)
                         + ". An unrecognised key is bound to nothing and silently has no effect."
                         + explained);
+    }
+
+    /**
+     * Finds keys from the ticket's configuration schema that were supplied as environment variables
+     * and would otherwise escape the {@link Environment#getPropertyEntries(String)} sweep.
+     *
+     * <p>{@code getPropertyEntries} reads only Micronaut's <em>normalized</em> property catalog.
+     * When a property arrives as an environment variable, {@code
+     * PropertySourcePropertyResolver.processPropertySource} writes every candidate spelling into
+     * the <em>generated</em> catalog but only the fully dot-separated one into the normalized
+     * catalog. So {@code CONSENT_MANAGER_IDENTITY_PROVIDERS_PRIMARY_JWKS_CACHE_TTL} is resolvable
+     * through {@link Environment#containsProperty(String)} at the kebab-cased path, while {@code
+     * getPropertyEntries} on the entry prefix never lists it. (Verified against micronaut-inject
+     * 5.2.8.)
+     *
+     * <p>That gap matters because environment variables are the configuration mechanism {@code
+     * .env.sample} and {@code application.yml} document as the supported one, and {@code
+     * discovery-url} and {@code jwks-cache-ttl} are exactly the keys an operator copies out of the
+     * ticket. Without this probe they would bind to nothing and start cleanly — the silent failure
+     * this class exists to prevent.
+     *
+     * <p>Only the keys this service knows it does not read can be probed; an arbitrary misspelling
+     * delivered as an environment variable remains invisible, because a direct lookup needs a name
+     * to look up.
+     *
+     * @param prefix the fully-qualified configuration prefix to inspect
+     * @param supportedKeys the keys that prefix may declare
+     * @return the denied keys that are set at that prefix, possibly empty
+     */
+    private Set<String> deniedKeysSuppliedAsEnvironmentVariables(
+            String prefix, Set<String> supportedKeys) {
+
+        var present = new TreeSet<String>();
+        for (String key : KEYS_FROM_THE_TICKET_SCHEMA.keySet()) {
+            if (!supportedKeys.contains(key) && environment.containsProperty(prefix + "." + key)) {
+                present.add(key);
+            }
+        }
+        return present;
+    }
+
+    /**
+     * Refuses to start when the unsigned-token guard has been switched off outside a test context.
+     *
+     * <p>{@link UnsignedTokenRejector} closes an authentication bypass: without it, an {@code alg:
+     * none} token authenticates whenever no provider has contributed a signing key — during
+     * startup, throughout an identity provider outage, and permanently on a misconfigured issuer.
+     * The bean carries a {@code @Requires} switch so an integration test can prove the bypass is
+     * real by disabling it and observing the forged token being accepted; without that control case
+     * every assertion about the bean would stay green if the bean were deleted.
+     *
+     * <p>That switch is also readable from a deployment's configuration, which would make an
+     * authentication bypass one environment variable away. A Javadoc warning is not a control, so
+     * this check turns the switch into a startup failure anywhere {@link Environment#TEST} is not
+     * active. The integration test builds its context with the {@code test} environment active and
+     * is unaffected; a production deployment that sets the property fails fast instead of failing
+     * open.
+     *
+     * @throws ConfigurationException if the guard is disabled and {@code test} is not among the
+     *     active environments
+     */
+    private void rejectDisabledUnsignedTokenRejector() {
+        boolean enabled =
+                environment
+                        .getProperty(UnsignedTokenRejector.ENABLED_PROPERTY, Boolean.class)
+                        .orElse(Boolean.TRUE);
+        if (enabled || environment.getActiveNames().contains(Environment.TEST)) {
+            return;
+        }
+        throw new ConfigurationException(
+                "'"
+                        + UnsignedTokenRejector.ENABLED_PROPERTY
+                        + "' is set to false outside a test context. That property removes the"
+                        + " only guard against unsigned tokens: with it disabled, a token bearing"
+                        + " 'alg: none' authenticates whenever no identity provider has"
+                        + " contributed a signing key — during startup, throughout a provider"
+                        + " outage, and permanently if the issuer is misconfigured. It exists"
+                        + " solely so an integration test can demonstrate that the guard is"
+                        + " load-bearing. Remove it from this deployment's configuration.");
     }
 
     /**

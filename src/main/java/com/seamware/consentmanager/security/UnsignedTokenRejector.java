@@ -53,9 +53,14 @@ import jakarta.inject.Singleton;
  * green if the bean were deleted as apparently dead code ({@link #supports(JWSAlgorithm)} returns
  * {@code false} for every algorithm and {@link #verify(SignedJWT)} always {@code false}). The
  * control case disables it and requires the same unsigned token to be <em>accepted</em>, which
- * fails if the bean ever stops closing the bypass. <strong>No deployment should ever set this
- * property:</strong> doing so authenticates {@code alg: none} tokens whenever no provider has
- * contributed a signing key.
+ * fails if the bean ever stops closing the bypass.
+ *
+ * <p>Because that switch would otherwise put an authentication bypass one environment variable away
+ * from any deployment, it is <strong>not usable outside a test context</strong>: {@link
+ * IdentityProviderRegistryValidator#validate()} aborts startup when the property is {@code false}
+ * and {@code test} is not among the active environment names. The control case keeps working, since
+ * it builds its own context with the {@code test} environment active, while a deployment that sets
+ * the property fails fast rather than failing open.
  *
  * <p>See {@code docs/adr/0001-delegate-oidc-discovery-and-jwks-to-micronaut-security.md} for why
  * signature verification is delegated to Micronaut at all, and what else that delegation leaves to
@@ -74,7 +79,9 @@ public class UnsignedTokenRejector implements SignatureConfiguration {
      * Property that disables this bean, re-opening the {@code alg: none} bypass.
      *
      * <p>Present only so the control case in {@code TokenSignatureEnforcementIT} can demonstrate
-     * that the bypass is real and that this bean is what closes it. Never set it in a deployment.
+     * that the bypass is real and that this bean is what closes it. Setting it to {@code false}
+     * outside a context with the {@code test} environment active is a startup failure, enforced by
+     * {@link IdentityProviderRegistryValidator#validate()}.
      */
     public static final String ENABLED_PROPERTY =
             "consent-manager.security.unsigned-token-rejector.enabled";

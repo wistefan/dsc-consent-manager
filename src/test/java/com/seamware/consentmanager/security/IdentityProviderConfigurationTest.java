@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micronaut.context.ApplicationContext;
+import io.micronaut.context.env.Environment;
 import io.micronaut.context.env.PropertySource;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -50,6 +51,13 @@ class IdentityProviderConfigurationTest {
 
     /** Name shared by both configuration halves of the provider under test. */
     private static final String PROVIDER = "primary";
+
+    /**
+     * An environment name that is not {@link Environment#TEST}, standing in for a deployment.
+     *
+     * <p>Used by the checks that must behave differently in a deployment than under test.
+     */
+    private static final String DEPLOYMENT_ENVIRONMENT = "deployment";
 
     /** Name of a second provider, used by the multi-provider and pairing tests. */
     private static final String OTHER_PROVIDER = "secondary";
@@ -167,6 +175,29 @@ class IdentityProviderConfigurationTest {
                                 "test-environment",
                                 environmentVariables,
                                 PropertySource.PropertyConvention.ENVIRONMENT_VARIABLE))
+                .build()
+                .start();
+    }
+
+    /**
+     * Starts an isolated application context with environment deduction switched off, so the active
+     * environment names are exactly those given.
+     *
+     * <p>Micronaut otherwise deduces {@link io.micronaut.context.env.Environment#TEST} from the
+     * JUnit frames on the stack, which would mask any check that treats a test context differently
+     * from a deployment.
+     *
+     * @param properties the complete configuration for the context
+     * @param environments the environment names to activate
+     * @return the started context; the caller is responsible for closing it
+     */
+    private static ApplicationContext startContextInEnvironments(
+            Map<String, Object> properties, String... environments) {
+        return ApplicationContext.builder()
+                .enableDefaultPropertySources(false)
+                .deduceEnvironment(false)
+                .environments(environments)
+                .properties(properties)
                 .build()
                 .start();
     }
@@ -494,6 +525,43 @@ class IdentityProviderConfigurationTest {
             assertStartupFails(properties, "unrecognised key(s)");
         }
 
+        @Test
+        @DisplayName("rejects the unsigned-token guard being disabled outside a test context")
+        void rejectsDisabledUnsignedTokenRejectorInDeployment() {
+            Map<String, Object> properties = validTrustList();
+            properties.put(UnsignedTokenRejector.ENABLED_PROPERTY, "false");
+
+            assertThatThrownBy(() -> startContextInEnvironments(properties, DEPLOYMENT_ENVIRONMENT))
+                    .as("disabling the alg:none guard must not be possible from a deployment")
+                    .hasStackTraceContaining(UnsignedTokenRejector.ENABLED_PROPERTY)
+                    .hasStackTraceContaining("outside a test context");
+        }
+
+        @Test
+        @DisplayName("allows the unsigned-token guard to be disabled in a test context")
+        void allowsDisabledUnsignedTokenRejectorInTests() {
+            Map<String, Object> properties = validTrustList();
+            properties.put(UnsignedTokenRejector.ENABLED_PROPERTY, "false");
+
+            try (ApplicationContext context =
+                    startContextInEnvironments(properties, Environment.TEST)) {
+                assertThat(context.findBean(UnsignedTokenRejector.class))
+                        .as("the control case that proves the guard is load-bearing must still run")
+                        .isEmpty();
+            }
+        }
+
+        @Test
+        @DisplayName("keeps the unsigned-token guard registered by default")
+        void registersUnsignedTokenRejectorByDefault() {
+            try (ApplicationContext context =
+                    startContextInEnvironments(validTrustList(), DEPLOYMENT_ENVIRONMENT)) {
+                assertThat(context.findBean(UnsignedTokenRejector.class))
+                        .as("the alg:none guard must be present without any opt-in")
+                        .isPresent();
+            }
+        }
+
         @ParameterizedTest(name = "issuer \"{0}\" aborts startup")
         @CsvSource({
             "not-a-url, 'URL with a host, but was'",
@@ -585,6 +653,28 @@ class IdentityProviderConfigurationTest {
                         .extracting(TrustedIdentityProvider::name)
                         .containsExactly(PROVIDER);
             }
+        }
+
+        @ParameterizedTest(name = "unrecognised key \"{0}\" supplied as a variable aborts startup")
+        @ValueSource(strings = {"jwks-cache-ttl", "discovery-url"})
+        @DisplayName("rejects an unrecognised key that arrives only as an environment variable")
+        void rejectsUnrecognisedKeyFromEnvironment(String key) {
+            String variable =
+                    ENV_PREFIX
+                            + PROVIDER.toUpperCase(Locale.ROOT)
+                            + "_"
+                            + key.replace('-', '_').toUpperCase(Locale.ROOT);
+
+            assertThatThrownBy(
+                            () ->
+                                    startContextWithEnvironmentVariables(
+                                                    validTrustList(), Map.of(variable, "5m"))
+                                            .close())
+                    .as(
+                            "a key Micronaut resolves but does not list under the entry prefix must"
+                                    + " still abort startup")
+                    .hasStackTraceContaining(key)
+                    .hasStackTraceContaining("unrecognised key(s)");
         }
 
         @Test
