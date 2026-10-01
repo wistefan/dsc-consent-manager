@@ -7,6 +7,13 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.jwk.JWK;
+import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.KeyUse;
+import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * A stand-in OpenID Connect provider that serves nothing but a discovery document.
@@ -16,6 +23,10 @@ import com.github.tomakehurst.wiremock.WireMockServer;
  * are the interesting ones, hard to produce on demand. This stub serves a well-formed metadata
  * document, a document naming the wrong issuer, or an error, and can switch between them while the
  * application under test is running.
+ *
+ * <p>It also publishes a JWK Set at the location its own metadata advertises, with keys it
+ * generates on demand, so a key rotation - which against a real provider means administrative
+ * action and a wait - is a single method call here.
  *
  * <p>The server listens on a dynamic port, so {@link #issuer()} is only known once the stub is
  * constructed. Tests therefore build the stub first and feed {@link #issuer()} and {@link
@@ -35,13 +46,135 @@ public final class OidcDiscoveryStub implements AutoCloseable {
     /** Content type of a discovery document. */
     private static final String JSON = "application/json";
 
+    /** Modulus length of the generated RSA signing keys, matching what Keycloak issues. */
+    private static final int KEY_SIZE_BITS = 2048;
+
+    /** Key identifier of the key the stub publishes before any rotation. */
+    private static final String INITIAL_KEY_ID = "initial-key";
+
+    /** Sentinel for {@link #jwksFailureStatus} meaning "serve the key set normally". */
+    private static final int JWKS_SERVED_NORMALLY = 0;
+
     private final WireMockServer server;
 
-    /** Starts the stub on a free port, initially serving a well-formed, matching document. */
+    /** The key set currently published, replaced wholesale by {@link #rotateKeysTo(String...)}. */
+    private volatile JWKSet jwkSet;
+
+    /** HTTP status to answer JWK Set requests with, or {@link #JWKS_SERVED_NORMALLY}. */
+    private volatile int jwksFailureStatus = JWKS_SERVED_NORMALLY;
+
+    /**
+     * Starts the stub on a free port, initially serving a well-formed, matching document and a key
+     * set holding exactly {@link #initialKeyId()}.
+     */
     public OidcDiscoveryStub() {
         this.server = new WireMockServer(options().dynamicPort());
         this.server.start();
+        this.jwkSet = generateKeySet(INITIAL_KEY_ID);
         serveMatchingMetadata();
+    }
+
+    /**
+     * Returns the key identifier the stub publishes until a test rotates it away.
+     *
+     * @return the initial {@code kid}
+     */
+    public String initialKeyId() {
+        return INITIAL_KEY_ID;
+    }
+
+    /**
+     * Replaces the published key set with freshly generated keys under the given identifiers.
+     *
+     * <p>This is a rotation as a relying party sees one: the old {@code kid} disappears and a new
+     * one takes its place, with no notification and no restart. Pass several identifiers to model
+     * the overlap window a careful provider leaves, during which both the retiring and the incoming
+     * key are published.
+     *
+     * @param keyIds the {@code kid} values the new key set holds, in order
+     */
+    public void rotateKeysTo(String... keyIds) {
+        this.jwkSet = generateKeySet(keyIds);
+        stubJwks();
+    }
+
+    /**
+     * Makes JWK Set requests fail, simulating a provider whose key endpoint is down.
+     *
+     * @param statusCode the HTTP status to answer the JWK Set request with
+     */
+    public void failJwksRequests(int statusCode) {
+        this.jwksFailureStatus = statusCode;
+        stubJwks();
+    }
+
+    /**
+     * Counts how many JWK Set requests have reached this stub.
+     *
+     * <p>The caching, the rate limit and the single-flight refresh all exist to keep this number
+     * down, and none of them can be observed any other way from outside.
+     *
+     * @return the number of requests for the key set so far
+     */
+    public int jwksRequestCount() {
+        return server.countRequestsMatching(getRequestedFor(urlEqualTo(JWKS_PATH)).build())
+                .getCount();
+    }
+
+    /**
+     * Generates an RSA signing key per identifier and collects them into a set.
+     *
+     * @param keyIds the {@code kid} values to generate keys for
+     * @return the generated key set, private halves included
+     */
+    private static JWKSet generateKeySet(String... keyIds) {
+        List<JWK> keys = new ArrayList<>(keyIds.length);
+        for (String keyId : keyIds) {
+            try {
+                keys.add(
+                        new RSAKeyGenerator(KEY_SIZE_BITS)
+                                .keyID(keyId)
+                                .keyUse(KeyUse.SIGNATURE)
+                                .generate());
+            } catch (JOSEException failure) {
+                throw new IllegalStateException("Could not generate a test signing key", failure);
+            }
+        }
+        return new JWKSet(keys);
+    }
+
+    /**
+     * Installs the JWK Set mapping, serving either the current key set or the configured failure.
+     *
+     * <p>Only the public halves are published, exactly as a real provider does.
+     */
+    private void stubJwks() {
+        if (jwksFailureStatus != JWKS_SERVED_NORMALLY) {
+            server.stubFor(
+                    get(urlEqualTo(JWKS_PATH))
+                            .willReturn(aResponse().withStatus(jwksFailureStatus)));
+            return;
+        }
+        server.stubFor(
+                get(urlEqualTo(JWKS_PATH))
+                        .willReturn(
+                                aResponse()
+                                        .withStatus(200)
+                                        .withHeader("Content-Type", JSON)
+                                        .withBody(jwkSet.toString())));
+    }
+
+    /**
+     * Clears the discovery mappings and reinstates the JWK Set one.
+     *
+     * <p>Every {@code serve*} method replaces the discovery stub wholesale, and WireMock's reset
+     * clears the key-set stub along with it. Routing those resets through here keeps the two
+     * documents independent: changing what discovery says never silently stops the keys being
+     * served.
+     */
+    private void resetDiscoveryMappings() {
+        server.resetMappings();
+        stubJwks();
     }
 
     /**
@@ -85,7 +218,7 @@ public final class OidcDiscoveryStub implements AutoCloseable {
      * @param declaredIssuer the value to put in the document's {@code issuer} member
      */
     public void serveMetadataDeclaring(String declaredIssuer) {
-        server.resetMappings();
+        resetDiscoveryMappings();
         server.stubFor(
                 get(urlEqualTo(DISCOVERY_PATH))
                         .willReturn(
@@ -103,7 +236,7 @@ public final class OidcDiscoveryStub implements AutoCloseable {
      * the outage it almost certainly is and retry, not condemn the entry permanently.
      */
     public void serveEmptyBody() {
-        server.resetMappings();
+        resetDiscoveryMappings();
         server.stubFor(
                 get(urlEqualTo(DISCOVERY_PATH))
                         .willReturn(
@@ -123,7 +256,7 @@ public final class OidcDiscoveryStub implements AutoCloseable {
      * empty body never reaches the issuer check at all.
      */
     public void serveMetadataWithoutIssuer() {
-        server.resetMappings();
+        resetDiscoveryMappings();
         server.stubFor(
                 get(urlEqualTo(DISCOVERY_PATH))
                         .willReturn(
@@ -147,7 +280,7 @@ public final class OidcDiscoveryStub implements AutoCloseable {
      * - but the provider has not claimed to be anybody else either, so this is retryable too.
      */
     public void serveMetadataWithoutJwksUri() {
-        server.resetMappings();
+        resetDiscoveryMappings();
         server.stubFor(
                 get(urlEqualTo(DISCOVERY_PATH))
                         .willReturn(
@@ -170,7 +303,7 @@ public final class OidcDiscoveryStub implements AutoCloseable {
      * @param statusCode the HTTP status to answer the discovery request with
      */
     public void serveFailure(int statusCode) {
-        server.resetMappings();
+        resetDiscoveryMappings();
         server.stubFor(
                 get(urlEqualTo(DISCOVERY_PATH)).willReturn(aResponse().withStatus(statusCode)));
     }
