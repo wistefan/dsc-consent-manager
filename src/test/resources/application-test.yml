@@ -67,3 +67,7 @@ consent-manager:
       # Clock skew, JWKS cache TTL, claim paths and role mapping are inherited per
       # leaf key from application.yml.
       audience: consent-manager
+      # The dead port, the WireMock stubs in IdentityProviderDiscoveryIT and the
+      # Testcontainers Keycloak step 8 adds are all plain http, so every test context
+      # opts in here; production configuration leaves this false.
+      allow-insecure-transport: true

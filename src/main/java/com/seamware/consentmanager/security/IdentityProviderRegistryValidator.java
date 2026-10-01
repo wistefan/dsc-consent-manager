@@ -65,7 +65,8 @@ public class IdentityProviderRegistryValidator {
                     "clock-skew",
                     "jwks-cache-ttl",
                     "claims",
-                    "role-mapping");
+                    "role-mapping",
+                    "allow-insecure-transport");
 
     /** Key of the nested block holding the per-provider claim paths. */
     private static final String CLAIMS_KEY = "claims";
@@ -90,7 +91,8 @@ public class IdentityProviderRegistryValidator {
                     "jwks.cache.ttl",
                     "claims.user.identifier",
                     "claims.participant.identifier",
-                    "claims.roles");
+                    "claims.roles",
+                    "allow.insecure.transport");
 
     /**
      * Normalised prefix of every key below a provider's {@code role-mapping} block.
@@ -120,6 +122,17 @@ public class IdentityProviderRegistryValidator {
      * only the two HTTP schemes are meaningful. Anything else is a configuration mistake.
      */
     private static final Set<String> SUPPORTED_URL_SCHEMES = Set.of("http", "https");
+
+    /**
+     * The only scheme that protects the trust anchor in transit.
+     *
+     * <p>An {@code http} URL is accepted only when the entry opts in; see {@link
+     * IdentityProviderConfiguration#DEFAULT_ALLOW_INSECURE_TRANSPORT}.
+     */
+    private static final String SECURE_URL_SCHEME = "https";
+
+    /** Key of the per-entry opt-in that tolerates a cleartext provider URL. */
+    private static final String ALLOW_INSECURE_TRANSPORT_KEY = "allow-insecure-transport";
 
     private final Environment environment;
 
@@ -163,9 +176,10 @@ public class IdentityProviderRegistryValidator {
      * Verifies the assembled trust list during context startup.
      *
      * @throws ConfigurationException if no provider is configured, an issuer or discovery URL is
-     *     not an absolute http(s) URL, two providers declare the same issuer, an entry declares an
-     *     unrecognised key, an environment variable names an undeclared provider or an unrecognised
-     *     key, or the unsigned-token guard is switched off outside a test context
+     *     not an absolute http(s) URL, a provider is addressed over cleartext http without its
+     *     opt-in, two providers declare the same issuer, an entry declares an unrecognised key, an
+     *     environment variable names an undeclared provider or an unrecognised key, or the
+     *     unsigned-token guard is switched off outside a test context
      */
     @PostConstruct
     public void validate() {
@@ -203,6 +217,79 @@ public class IdentityProviderRegistryValidator {
             requireAbsoluteHttpUrl(provider.getPropertyPath() + ".issuer", provider.getIssuer());
             requireAbsoluteHttpUrl(
                     provider.getPropertyPath() + ".discovery-url", provider.getDiscoveryUrl());
+            requireSecureTransport(provider);
+        }
+    }
+
+    /**
+     * Refuses a provider addressed over cleartext {@code http} unless its entry opts in.
+     *
+     * <p>Discovery fetches this service's trust anchor: the document it returns names the issuer
+     * the registry compares byte-for-byte and the {@code jwks_uri} step 4 fetches signing keys
+     * from. An on-path attacker who can rewrite a cleartext response supplies both, so the issuer
+     * check compares an attacker-chosen value against itself and the keys it points at validate
+     * forged tokens. The issuer is checked too: a provider that mints {@code iss} over {@code http}
+     * is the same provider, so allowing one without the other is a half-measure that only moves the
+     * inconsistency.
+     *
+     * <p>A local Keycloak and a WireMock stub are legitimately cleartext, so this is an opt-in
+     * rather than a prohibition - but one that must be written down per provider, and that is
+     * logged at WARN on every startup so it cannot quietly survive into a production profile.
+     *
+     * @param provider the entry to check
+     * @throws ConfigurationException if an {@code http} URL is configured without the opt-in
+     */
+    private void requireSecureTransport(IdentityProviderConfiguration provider) {
+        List<String> cleartext = new ArrayList<>();
+        if (isCleartext(provider.getIssuer())) {
+            cleartext.add(provider.getPropertyPath() + ".issuer");
+        }
+        if (isCleartext(provider.getDiscoveryUrl())) {
+            cleartext.add(provider.getPropertyPath() + ".discovery-url");
+        }
+        if (cleartext.isEmpty()) {
+            return;
+        }
+        if (!provider.isAllowInsecureTransport()) {
+            throw new ConfigurationException(
+                    cleartext
+                            + " use cleartext http. The discovery document is this service's trust"
+                            + " anchor: it names the issuer that is verified and the jwks_uri that"
+                            + " signing keys are fetched from, so anyone able to rewrite it in"
+                            + " transit can make this service accept tokens they minted"
+                            + " themselves. Use https, or - for a local provider only - set '"
+                            + provider.getPropertyPath()
+                            + "."
+                            + ALLOW_INSECURE_TRANSPORT_KEY
+                            + ": true' to accept that risk explicitly.");
+        }
+        LOG.warn(
+                "Identity provider '{}' is addressed over cleartext http ({}) because '{}.{}' is"
+                        + " set. Its discovery document and signing keys are unauthenticated in"
+                        + " transit, so anyone on the network path can make this service accept"
+                        + " tokens of their own making. This is for local development only.",
+                provider.getName(),
+                cleartext,
+                provider.getPropertyPath(),
+                ALLOW_INSECURE_TRANSPORT_KEY);
+    }
+
+    /**
+     * Reports whether a configured URL uses a scheme other than {@code https}.
+     *
+     * <p>Only called after {@link #requireAbsoluteHttpUrl(String, String)} has established that the
+     * value parses and carries a supported scheme, so an unparseable value is not cleartext here -
+     * it has already aborted startup.
+     *
+     * @param value the configured URL
+     * @return {@code true} if the URL is a valid absolute URL whose scheme is not {@code https}
+     */
+    private static boolean isCleartext(String value) {
+        try {
+            String scheme = new URI(value).getScheme();
+            return scheme != null && !SECURE_URL_SCHEME.equalsIgnoreCase(scheme);
+        } catch (URISyntaxException e) {
+            return false;
         }
     }
 

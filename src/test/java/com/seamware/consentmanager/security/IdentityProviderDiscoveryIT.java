@@ -11,16 +11,21 @@ import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
 import io.micronaut.http.client.HttpClient;
 import io.micronaut.http.client.exceptions.HttpClientResponseException;
+import io.micronaut.management.health.indicator.HealthResult;
 import io.micronaut.runtime.server.EmbeddedServer;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import reactor.core.publisher.Mono;
 
 /**
  * Pins the discovery half of the trust list: what the registry learns from an OpenID provider, what
@@ -63,6 +68,30 @@ class IdentityProviderDiscoveryIT {
     /** Reusable type argument for the health endpoint's JSON body. */
     private static final Argument<Map<String, Object>> HEALTH_BODY =
             Argument.mapOf(String.class, Object.class);
+
+    /** Entry name of the provider {@code application.yml} declares, filled in by every context. */
+    private static final String PRIMARY = "primary";
+
+    /** Entry name of the extra provider the multi-provider test adds. */
+    private static final String SECONDARY = "secondary";
+
+    /** Prefix of a trust-list entry's configuration properties. */
+    private static final String PROVIDER_PREFIX = "consent-manager.identity-providers.";
+
+    /** Audience every stub provider's entry declares; discovery never looks at it. */
+    private static final String STUB_AUDIENCE = "consent-manager";
+
+    /** Roles claim path the stub entries declare; discovery never looks at it either. */
+    private static final String STUB_ROLES_CLAIM = "realm_access.roles";
+
+    /** Participant identifier claim path the stub entries declare. */
+    private static final String STUB_PARTICIPANT_CLAIM = "participant_id";
+
+    /** Raw role string the stub entries map {@link Role#USER} to. */
+    private static final String STUB_USER_ROLE = "consent-user";
+
+    /** Detail key under which the health indicator reports an entry's resolution state. */
+    private static final String DETAIL_STATE_KEY = "state";
 
     @Test
     @DisplayName("a well-formed document resolves the provider's JWK Set URL")
@@ -191,6 +220,87 @@ class IdentityProviderDiscoveryIT {
         }
     }
 
+    @ParameterizedTest(name = "{0} is retried rather than condemning the provider")
+    @EnumSource(DegenerateDocument.class)
+    @DisplayName("a document that cannot confirm the issuer is an outage, not a misconfiguration")
+    void degenerateDocumentIsRetriedRatherThanFailedPermanently(DegenerateDocument document) {
+        try (OidcDiscoveryStub stub = new OidcDiscoveryStub()) {
+            document.serveFrom(stub);
+
+            try (ApplicationContext context = startContext(stub, Map.of())) {
+                IdentityProviderRegistry registry = context.getBean(IdentityProviderRegistry.class);
+
+                Await.until(
+                        "the first discovery attempt to fail",
+                        RESOLUTION_TIMEOUT,
+                        () -> onlyEntry(registry).attempts() > 0);
+
+                assertThat(onlyEntry(registry).state())
+                        .as(
+                                "only a document naming a *different* issuer is permanent; a"
+                                        + " response that says nothing about the issuer is an"
+                                        + " upstream blip and must not need a restart to clear")
+                        .isEqualTo(ResolutionState.PENDING);
+                assertThat(registry.findByIssuer(stub.issuer()))
+                        .as("an unconfirmed provider is never handed to the validator")
+                        .isEmpty();
+
+                stub.serveMatchingMetadata();
+
+                awaitState(registry, ResolutionState.RESOLVED);
+                assertThat(onlyEntry(registry).jwksUri())
+                        .as("the retry recovered the provider without restarting the service")
+                        .isEqualTo(stub.jwksUri());
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("one provider resolving does not make a partly-resolved trust list ready")
+    void partiallyResolvedTrustListIsNotReady() {
+        try (OidcDiscoveryStub healthy = new OidcDiscoveryStub();
+                OidcDiscoveryStub unreachable = new OidcDiscoveryStub()) {
+            unreachable.serveFailure(HttpStatus.SERVICE_UNAVAILABLE.getCode());
+
+            Map<String, Object> properties = new LinkedHashMap<>();
+            properties.putAll(providerProperties(PRIMARY, healthy));
+            properties.putAll(providerProperties(SECONDARY, unreachable));
+
+            try (ApplicationContext context = startContext(properties)) {
+                IdentityProviderRegistry registry = context.getBean(IdentityProviderRegistry.class);
+
+                Await.until(
+                        "the reachable provider to resolve",
+                        RESOLUTION_TIMEOUT,
+                        () -> registry.findByIssuer(healthy.issuer()).isPresent());
+
+                assertThat(registry.isFullyResolved())
+                        .as(
+                                "readiness is all-or-nothing: an instance that would reject every"
+                                        + " token from the provider that did not resolve is worse"
+                                        + " than one that is plainly not ready")
+                        .isFalse();
+                assertThat(registry.findByIssuer(unreachable.issuer()))
+                        .as(
+                                "the unresolved provider's tokens get the same generic 401 as an"
+                                        + " unregistered issuer's")
+                        .isEmpty();
+
+                assertThat(registry.snapshot().stream().map(ResolvedIdentityProvider::name))
+                        .as("the trust list is reported in configuration order")
+                        .containsExactly(PRIMARY, SECONDARY);
+                assertThat(stateByProviderName(context))
+                        .as(
+                                "the health detail names every provider, in configuration order, so"
+                                        + " an operator can see which one is holding readiness"
+                                        + " down")
+                        .containsExactly(
+                                Map.entry(PRIMARY, ResolutionState.RESOLVED.name()),
+                                Map.entry(SECONDARY, ResolutionState.PENDING.name()));
+            }
+        }
+    }
+
     @ParameterizedTest(name = "{0} consecutive failures wait {1}")
     @CsvSource({
         "1, PT2S",
@@ -226,14 +336,51 @@ class IdentityProviderDiscoveryIT {
     private static ApplicationContext startContext(
             OidcDiscoveryStub stub, Map<String, Object> overrides) {
         Map<String, Object> properties = new LinkedHashMap<>();
-        properties.put("datasources.default.enabled", false);
-        properties.put("flyway.enabled", false);
-        properties.put("micronaut.server.port", -1);
-        properties.put("consent-manager.identity-providers.primary.issuer", stub.issuer());
-        properties.put(
-                "consent-manager.identity-providers.primary.discovery-url", stub.discoveryUrl());
+        properties.putAll(providerProperties(PRIMARY, stub));
         properties.putAll(overrides);
-        return ApplicationContext.builder().environments("test").properties(properties).start();
+        return startContext(properties);
+    }
+
+    /**
+     * Starts a context whose trust list is exactly the given properties' providers.
+     *
+     * @param properties the provider entries, plus any override a test needs
+     * @return the started context
+     */
+    private static ApplicationContext startContext(Map<String, Object> properties) {
+        Map<String, Object> all = new LinkedHashMap<>();
+        all.put("datasources.default.enabled", false);
+        all.put("flyway.enabled", false);
+        all.put("micronaut.server.port", -1);
+        all.putAll(properties);
+        return ApplicationContext.builder().environments("test").properties(all).start();
+    }
+
+    /**
+     * Renders one trust-list entry pointing at a stub.
+     *
+     * <p>The {@code primary} entry could get away with overriding only the issuer and the discovery
+     * URL, because {@code application.yml} and {@code application-test.yml} already supply the rest
+     * of its leaves. A second entry inherits nothing, so every property the configuration requires
+     * is written out here and both entries are built the same way - a test that configures two
+     * providers must not be subtly differently configured from one that configures one.
+     *
+     * @param name the entry name, which is also the name the health detail is keyed by
+     * @param stub the provider the entry points at
+     * @return the entry's properties
+     */
+    private static Map<String, Object> providerProperties(String name, OidcDiscoveryStub stub) {
+        String prefix = PROVIDER_PREFIX + name + ".";
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put(prefix + "issuer", stub.issuer());
+        properties.put(prefix + "discovery-url", stub.discoveryUrl());
+        properties.put(prefix + "audience", STUB_AUDIENCE);
+        // WireMock serves plain http, so every entry here has to opt out of the https requirement.
+        properties.put(prefix + "allow-insecure-transport", true);
+        properties.put(prefix + "claims.participant-identifier", STUB_PARTICIPANT_CLAIM);
+        properties.put(prefix + "claims.roles", STUB_ROLES_CLAIM);
+        properties.put(prefix + "role-mapping.user", STUB_USER_ROLE);
+        return properties;
     }
 
     /**
@@ -303,6 +450,64 @@ class IdentityProviderDiscoveryIT {
             return client.toBlocking().exchange(HttpRequest.GET(path), HEALTH_BODY);
         } catch (HttpClientResponseException error) {
             return error.getResponse();
+        }
+    }
+
+    /**
+     * Reads the readiness indicator and reports each provider's state, keyed by provider name.
+     *
+     * <p>Goes to the bean rather than over HTTP because the per-provider detail is published only
+     * to authenticated callers, and this suite has no token to present.
+     *
+     * @param context the started context to read the indicator from
+     * @return the detail's provider names, in the order the indicator emitted them, each mapped to
+     *     its reported {@link ResolutionState} name
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Map.Entry<String, String>> stateByProviderName(ApplicationContext context) {
+        HealthResult result =
+                Mono.from(context.getBean(IdentityProviderHealthIndicator.class).getResult())
+                        .block();
+        Map<String, Object> details = (Map<String, Object>) result.getDetails();
+        return details.entrySet().stream()
+                .map(
+                        entry ->
+                                Map.entry(
+                                        entry.getKey(),
+                                        String.valueOf(
+                                                ((Map<String, Object>) entry.getValue())
+                                                        .get(DETAIL_STATE_KEY))))
+                .toList();
+    }
+
+    /**
+     * Discovery responses that are degenerate rather than wrong: they come back without telling the
+     * registry whether the provider is the configured one.
+     *
+     * <p>Each is something a healthy deployment produces transiently - a reverse proxy mid-reload,
+     * a load balancer with no backend up yet, a provider whose metadata is still being written - so
+     * none of them may move the entry to {@link ResolutionState#FAILED}, which only a restart
+     * clears.
+     */
+    private enum DegenerateDocument {
+        /** A 200 carrying no body at all. */
+        EMPTY_BODY(OidcDiscoveryStub::serveEmptyBody),
+        /** A document that confirms the issuer but names no JWK Set URL. */
+        NO_JWKS_URI(OidcDiscoveryStub::serveMetadataWithoutJwksUri);
+
+        private final Consumer<OidcDiscoveryStub> stubbing;
+
+        DegenerateDocument(Consumer<OidcDiscoveryStub> stubbing) {
+            this.stubbing = stubbing;
+        }
+
+        /**
+         * Configures the stub to serve this response.
+         *
+         * @param stub the provider stub to configure
+         */
+        void serveFrom(OidcDiscoveryStub stub) {
+            stubbing.accept(stub);
         }
     }
 

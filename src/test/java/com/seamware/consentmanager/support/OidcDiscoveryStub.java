@@ -96,6 +96,48 @@ public final class OidcDiscoveryStub implements AutoCloseable {
     }
 
     /**
+     * Serves a 200 with an empty body, as a reverse proxy mid-reload or a truncated response does.
+     *
+     * <p>The status says the request succeeded while the payload says nothing at all, so the
+     * provider's identity is unconfirmed rather than contradicted. The registry must treat this as
+     * the outage it almost certainly is and retry, not condemn the entry permanently.
+     */
+    public void serveEmptyBody() {
+        server.resetMappings();
+        server.stubFor(
+                get(urlEqualTo(DISCOVERY_PATH))
+                        .willReturn(
+                                aResponse()
+                                        .withStatus(200)
+                                        .withHeader("Content-Type", JSON)
+                                        .withBody("")));
+    }
+
+    /**
+     * Serves a well-formed document that confirms the issuer but advertises no {@code jwks_uri}.
+     *
+     * <p>Without it there is nowhere to fetch signing keys from, so the entry cannot become usable
+     * - but the provider has not claimed to be anybody else either, so this is retryable too.
+     */
+    public void serveMetadataWithoutJwksUri() {
+        server.resetMappings();
+        server.stubFor(
+                get(urlEqualTo(DISCOVERY_PATH))
+                        .willReturn(
+                                aResponse()
+                                        .withStatus(200)
+                                        .withHeader("Content-Type", JSON)
+                                        .withBody(
+                                                """
+                                                {
+                                                  "issuer": "%s",
+                                                  "response_types_supported": ["code"]
+                                                }
+                                                """
+                                                        .formatted(issuer()))));
+    }
+
+    /**
      * Serves an error instead of a document, simulating an outage.
      *
      * @param statusCode the HTTP status to answer the discovery request with

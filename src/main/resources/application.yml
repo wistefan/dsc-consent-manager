@@ -208,6 +208,12 @@ consent-manager:
       # equals the value above and refuses the provider when they disagree.
       discovery-url: ${IDP_DISCOVERY_URL:}
       audience: ${IDP_AUDIENCE:}
+      # The discovery document is this service's trust anchor: it names the issuer that
+      # is verified byte-for-byte and the jwks_uri signing keys are fetched from. Over
+      # cleartext http anyone on the network path supplies both, so an http issuer or
+      # discovery-url aborts startup unless this is switched on. Leave it false outside
+      # local development; it is logged at WARN on every startup when it is not.
+      allow-insecure-transport: ${IDP_ALLOW_INSECURE_TRANSPORT:false}
       # Tolerance applied to the exp, iat and nbf claims.
       clock-skew: ${IDP_CLOCK_SKEW:30s}
       # How long this provider's fetched JWK set stays usable before it is refreshed.

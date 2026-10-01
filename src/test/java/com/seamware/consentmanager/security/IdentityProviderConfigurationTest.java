@@ -46,8 +46,21 @@ import org.junit.jupiter.params.provider.ValueSource;
 @DisplayName("Identity provider trust list configuration")
 class IdentityProviderConfigurationTest {
 
-    /** Host and port that refuse connections instantly, keeping any discovery attempt cheap. */
-    private static final String UNREACHABLE_AUTHORITY = "http://localhost:1";
+    /**
+     * Host and port that refuse connections instantly, keeping any discovery attempt cheap.
+     *
+     * <p>{@code https} rather than {@code http} so the baseline trust list every test starts from
+     * is the one a deployment is meant to have: cleartext is refused unless the entry opts in, and
+     * that opt-in is exercised explicitly in {@link RegistryValidation} rather than baked into
+     * every other test here.
+     */
+    private static final String UNREACHABLE_AUTHORITY = "https://localhost:1";
+
+    /** Cleartext counterpart of {@link #UNREACHABLE_AUTHORITY}, for the transport checks. */
+    private static final String CLEARTEXT_AUTHORITY = "http://localhost:1";
+
+    /** Per-entry key that tolerates a cleartext provider URL. */
+    private static final String ALLOW_INSECURE_TRANSPORT = ".allow-insecure-transport";
 
     /** Name of the provider under test. */
     private static final String PROVIDER = "primary";
@@ -291,6 +304,9 @@ class IdentityProviderConfigurationTest {
                         .isEqualTo(IdentityProviderConfiguration.DEFAULT_JWKS_CACHE_TTL);
                 assertThat(provider.getClaims().getUserIdentifier())
                         .isEqualTo(IdentityProviderConfiguration.DEFAULT_USER_IDENTIFIER_CLAIM);
+                assertThat(provider.isAllowInsecureTransport())
+                        .as("cleartext is something an operator has to ask for in writing")
+                        .isEqualTo(IdentityProviderConfiguration.DEFAULT_ALLOW_INSECURE_TRANSPORT);
             }
         }
 
@@ -505,6 +521,55 @@ class IdentityProviderConfigurationTest {
             }
         }
 
+        @ParameterizedTest(name = "a cleartext {0} aborts startup")
+        @CsvSource({"issuer", "discovery-url"})
+        @DisplayName("rejects a provider addressed over cleartext http without its opt-in")
+        void rejectsCleartextProviderUrl(String key) {
+            Map<String, Object> properties = validTrustList();
+            properties.put(
+                    settingsKey(PROVIDER) + "." + key,
+                    cleartext(String.valueOf(properties.get(settingsKey(PROVIDER) + "." + key))));
+
+            // The trust anchor is what is at stake, so the message has to say so rather than just
+            // name a property: an operator who reads only "use https" will reach for the opt-in.
+            assertStartupFails(
+                    properties,
+                    settingsKey(PROVIDER) + "." + key,
+                    "trust anchor",
+                    ALLOW_INSECURE_TRANSPORT.substring(1));
+        }
+
+        @Test
+        @DisplayName("accepts a cleartext provider once its entry opts in")
+        void acceptsCleartextProviderWithOptIn() {
+            Map<String, Object> properties = validTrustList();
+            properties.put(settingsKey(PROVIDER) + ".issuer", cleartext(ISSUER));
+            properties.put(
+                    settingsKey(PROVIDER) + ".discovery-url", cleartext(ISSUER + DISCOVERY_SUFFIX));
+            properties.put(settingsKey(PROVIDER) + ALLOW_INSECURE_TRANSPORT, true);
+
+            try (ApplicationContext context = startContext(properties)) {
+                assertThat(providersOf(context).get(0).isAllowInsecureTransport())
+                        .as(
+                                "a local Keycloak is legitimately cleartext, so this is an opt-in"
+                                        + " rather than a prohibition")
+                        .isTrue();
+            }
+        }
+
+        @Test
+        @DisplayName("keeps the opt-in to the entry that declares it")
+        void optInDoesNotLeakToAnotherProvider() {
+            Map<String, Object> properties = validTrustList();
+            properties.put(settingsKey(PROVIDER) + ".issuer", cleartext(ISSUER));
+            properties.put(
+                    settingsKey(PROVIDER) + ".discovery-url", cleartext(ISSUER + DISCOVERY_SUFFIX));
+            properties.put(settingsKey(PROVIDER) + ALLOW_INSECURE_TRANSPORT, true);
+            putValidProvider(properties, OTHER_PROVIDER, cleartext(OTHER_ISSUER));
+
+            assertStartupFails(properties, settingsKey(OTHER_PROVIDER) + ".issuer", "trust anchor");
+        }
+
         @ParameterizedTest(name = "issuer \"{0}\" aborts startup")
         @CsvSource({
             "not-a-url, 'URL with a host, but was'",
@@ -538,6 +603,16 @@ class IdentityProviderConfigurationTest {
             assertStartupFails(
                     properties, settingsKey(PROVIDER) + ".discovery-url", expectedMessage);
         }
+    }
+
+    /**
+     * Rewrites a configured URL to its cleartext equivalent.
+     *
+     * @param url a URL built on {@link #UNREACHABLE_AUTHORITY}
+     * @return the same URL served over {@code http}
+     */
+    private static String cleartext(String url) {
+        return url.replace(UNREACHABLE_AUTHORITY, CLEARTEXT_AUTHORITY);
     }
 
     @Nested

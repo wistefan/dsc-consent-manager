@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,14 +46,45 @@ import org.slf4j.LoggerFactory;
  * DOWN} via {@link IdentityProviderHealthIndicator}, and the instance is drained rather than killed
  * until discovery succeeds.
  *
- * <p><strong>Two kinds of failure, treated differently.</strong> A transport error, a timeout or an
- * error response is an outage: it is logged and retried with exponential backoff between {@link
- * #MIN_DISCOVERY_RETRY_DELAY} and {@link #MAX_DISCOVERY_RETRY_DELAY}. A discovery document whose
- * {@code issuer} disagrees with the configured one is a misconfiguration: retrying cannot fix it,
- * so the entry moves to {@link ResolutionState#FAILED} and is never polled again. That check is the
- * point of doing discovery at all - without it a tampered or mistaken {@code discovery-url} could
- * silently re-point a trust-list entry at a different provider's signing keys, and tokens minted by
- * that provider would authenticate as the configured one.
+ * <p><strong>Two kinds of failure, treated differently.</strong> A transport error, a timeout, an
+ * error response, an empty or truncated body and a document that is silent about its issuer are all
+ * outages: they are logged and retried with exponential backoff between {@link
+ * #MIN_DISCOVERY_RETRY_DELAY} and {@link #MAX_DISCOVERY_RETRY_DELAY}. Only a document that declares
+ * a <em>different</em> issuer is a misconfiguration: retrying cannot fix it, so the entry moves to
+ * {@link ResolutionState#FAILED} and is never polled again. The asymmetry is deliberate - a
+ * permanent failure needs a restart to clear, so nothing that a provider might recover from on its
+ * own is allowed into that branch. That check is the point of doing discovery at all - without it a
+ * tampered or mistaken {@code discovery-url} could silently re-point a trust-list entry at a
+ * different provider's signing keys, and tokens minted by that provider would authenticate as the
+ * configured one.
+ *
+ * <p><strong>Why this is not {@code micronaut-security-oauth2}.</strong> That module does perform
+ * OpenID discovery, and delegating to it was implemented, reviewed and rejected; the evidence is in
+ * {@code docs/adr/0002-own-identity-provider-registry-on-nimbus.md}, which supersedes ADR 0001. In
+ * short: it does not compare the discovered {@code issuer} with the configured one (AC 2), its
+ * {@code DefaultOpenIdProviderMetadataFetcher} turns a connection failure into a {@code
+ * DisabledBeanException}, which the context catches and logs at DEBUG - so one failed attempt
+ * leaves that provider silently without metadata or a signature configuration until the process
+ * restarts, with no retry and nothing to report readiness from, which is the opposite of AC 3 - its
+ * JWKS cache TTL is global rather than per provider (AC 13), it does not refetch on an unknown
+ * {@code kid} (AC 14), and its {@code claims-validators.issuer}/{@code .audience} hold one global
+ * value each while every registered key set is tried, so a second provider's key would authenticate
+ * a token claiming the first provider's issuer. What this class hand-writes is therefore only what
+ * the framework does not supply: the fetch, the issuer comparison, the retry schedule and the
+ * per-issuer routing. The JWS verification, the key cache, the rate limiter and the single-flight
+ * refresh are Nimbus's (step 4), because that is where a subtle concurrency bug would be a security
+ * bug.
+ *
+ * <p><strong>A resolved entry is not re-discovered.</strong> Once a provider reaches {@link
+ * ResolutionState#RESOLVED} its {@code jwks_uri} is kept for the life of the process. Key
+ * <em>rotation</em> does not need re-discovery - the keys are refetched from that same URL by the
+ * JWKS cache (step 4), which is what AC 13 asks for. Only a provider that *moves* its JWK Set to a
+ * different URL goes stale, and that is a deliberate trade: a periodic re-resolve would have to
+ * decide what to do when the re-fetched document disagrees with the one the trust list was built
+ * on, and silently re-pointing a live trust anchor from a background task is exactly the
+ * substitution the byte-for-byte issuer check exists to prevent. Moving a JWK Set is a
+ * configuration event on the provider's side; it is handled by restarting this service, like any
+ * other change to the trust list (convention 5).
  *
  * <p>This type is thread-safe. Entries live in a {@link ConcurrentHashMap} whose key set never
  * changes, and each entry is replaced wholesale by the single scheduled task that owns it, so a
@@ -104,6 +136,20 @@ public class IdentityProviderRegistry implements AutoCloseable {
     private final Map<String, ScheduledFuture<?>> scheduledAttempts = new ConcurrentHashMap<>();
 
     private final TaskScheduler scheduler;
+
+    /**
+     * Where the discovery request itself runs.
+     *
+     * <p>The fetch is blocking and bounded by {@link #DISCOVERY_REQUEST_TIMEOUT}, so running it on
+     * the scheduled executor would park a pool Micronaut sizes from the available processors for up
+     * to twenty seconds per unreachable provider. On a small container a handful of providers being
+     * down would then serialise their own retries and delay every other scheduled task in the
+     * process - including the JWKS refresh of step 4 - behind somebody else's outage. The scheduler
+     * is therefore used for timing only and hands each attempt straight to the blocking pool, which
+     * is virtual-thread-backed and expects exactly this.
+     */
+    private final ExecutorService discoveryExecutor;
+
     private final HttpClient discoveryClient;
 
     /** Set on shutdown so an attempt already queued does not start fetching during teardown. */
@@ -119,12 +165,16 @@ public class IdentityProviderRegistry implements AutoCloseable {
      * @param validatedProviders the startup-validated trust list; injected as the validator rather
      *     than as a raw {@code List} so that its configuration checks are guaranteed to have run
      *     before any discovery is attempted
-     * @param scheduler the scheduled executor that runs discovery off the startup thread
+     * @param scheduler the scheduled executor that times discovery attempts, off the startup thread
+     * @param discoveryExecutor the blocking executor each attempt's HTTP fetch is run on, so a slow
+     *     provider cannot occupy the scheduler
      */
     public IdentityProviderRegistry(
             IdentityProviderRegistryValidator validatedProviders,
-            @Named(TaskExecutors.SCHEDULED) TaskScheduler scheduler) {
+            @Named(TaskExecutors.SCHEDULED) TaskScheduler scheduler,
+            @Named(TaskExecutors.BLOCKING) ExecutorService discoveryExecutor) {
         this.scheduler = scheduler;
+        this.discoveryExecutor = discoveryExecutor;
         this.discoveryClient = createDiscoveryClient();
         Map<String, ResolvedIdentityProvider> initial = new LinkedHashMap<>();
         for (IdentityProviderConfiguration configuration : validatedProviders.getProviders()) {
@@ -139,8 +189,9 @@ public class IdentityProviderRegistry implements AutoCloseable {
      *
      * <p>The client is built without a base URL because each provider's {@code discovery-url} is an
      * absolute URL of its own; requests therefore carry absolute URIs. It is created here rather
-     * than injected so that its timeouts cannot be widened by unrelated global client configuration
-     * - a discovery fetch is a background health probe and must stay strictly bounded.
+     * than injected so that its timeouts and redirect policy cannot be widened by unrelated global
+     * client configuration - a discovery fetch is a background health probe and must stay strictly
+     * bounded.
      *
      * @return a client that accepts absolute request URIs
      */
@@ -148,6 +199,11 @@ public class IdentityProviderRegistry implements AutoCloseable {
         DefaultHttpClientConfiguration configuration = new DefaultHttpClientConfiguration();
         configuration.setConnectTimeout(DISCOVERY_REQUEST_TIMEOUT);
         configuration.setReadTimeout(DISCOVERY_REQUEST_TIMEOUT);
+        // A redirect on the discovery URL would be followed silently, including to another host,
+        // which would quietly move the trust anchor somewhere the operator never configured. A
+        // provider that has moved its metadata is a configuration change, so a 3xx is surfaced as
+        // a failure rather than chased.
+        configuration.setFollowRedirects(false);
         return HttpClient.create(null, configuration);
     }
 
@@ -221,15 +277,18 @@ public class IdentityProviderRegistry implements AutoCloseable {
         if (closed) {
             return;
         }
-        scheduledAttempts.put(issuer, scheduler.schedule(delay, () -> attemptDiscovery(issuer)));
+        scheduledAttempts.put(
+                issuer,
+                scheduler.schedule(
+                        delay, () -> discoveryExecutor.execute(() -> attemptDiscovery(issuer))));
     }
 
     /**
      * Fetches one provider's metadata and advances its entry.
      *
-     * <p>Runs on the scheduled executor. Only one attempt per issuer is ever in flight, because the
-     * next one is scheduled from inside this method, so replacing the entry needs no further
-     * synchronisation.
+     * <p>Runs on the blocking executor, never on the scheduler. Only one attempt per issuer is ever
+     * in flight, because the next one is scheduled from inside this method, so replacing the entry
+     * needs no further synchronisation.
      *
      * @param issuer the configured issuer identifying the entry
      */
@@ -242,7 +301,17 @@ public class IdentityProviderRegistry implements AutoCloseable {
         int attempt = current.attempts() + 1;
         try {
             OpenIdProviderMetadata metadata = fetchMetadata(configuration);
-            String discoveredIssuer = metadata == null ? null : metadata.issuer();
+            // A document that is absent or silent about its issuer says nothing about whether the
+            // provider is the configured one, so it cannot condemn the entry. An empty 200 is what
+            // a reverse proxy mid-reload, a truncated response or a load balancer with no healthy
+            // backend returns - all outages - and only a document that names a *different* issuer
+            // is the misconfiguration that must never be retried.
+            if (metadata == null || metadata.issuer() == null || metadata.issuer().isBlank()) {
+                throw new IllegalStateException(
+                        "the discovery response carried no issuer, so the provider's identity could"
+                                + " not be confirmed");
+            }
+            String discoveredIssuer = metadata.issuer();
             if (!issuer.equals(discoveredIssuer)) {
                 rejectPermanently(configuration, attempt, discoveredIssuer);
                 return;
@@ -282,9 +351,13 @@ public class IdentityProviderRegistry implements AutoCloseable {
     /**
      * Marks a provider permanently unusable because its discovery document named another issuer.
      *
+     * <p>Only ever called for a document that declares a non-blank issuer differing from the
+     * configured one. A missing or blank issuer is an outage, not a misconfiguration, and is
+     * retried by {@link #retryLater(IdentityProviderConfiguration, int, Exception)} instead.
+     *
      * @param configuration the provider whose document disagreed
      * @param attempt the attempt number that produced the mismatch
-     * @param discoveredIssuer the issuer the document declared, possibly {@code null}
+     * @param discoveredIssuer the issuer the document declared, never {@code null} or blank
      */
     private void rejectPermanently(
             IdentityProviderConfiguration configuration, int attempt, String discoveredIssuer) {
@@ -320,6 +393,19 @@ public class IdentityProviderRegistry implements AutoCloseable {
                 configuration.getIssuer(),
                 ResolvedIdentityProvider.retrying(configuration, reason, attempt));
         Duration delay = retryDelay(attempt);
+        if (closed) {
+            // Shutdown cancels in-flight attempts and closes the client, so an attempt that was
+            // already running fails here on the way down. That is teardown, not an incident, and
+            // `scheduleAttempt` will not queue anything either - so logging it at ERROR with a
+            // "retrying in ..." that is not going to happen would be both alarming and untrue. A
+            // test suite that builds a context per class would print a stream of them.
+            LOG.debug(
+                    "Discovery for identity provider '{}' was interrupted by shutdown ({}); no"
+                            + " retry is scheduled.",
+                    configuration.getName(),
+                    reason);
+            return;
+        }
         LOG.error(
                 "Discovery for identity provider '{}' failed on attempt {} ({}); retrying in {}."
                         + " The service stays up and reports readiness DOWN until it succeeds.",

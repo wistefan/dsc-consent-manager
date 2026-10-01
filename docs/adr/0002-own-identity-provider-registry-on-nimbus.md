@@ -17,16 +17,16 @@ framework behaviour behind it and the gaps it leaves. It was proposed, reviewed 
 **rejected**; this ADR records what replaces it and why.
 
 The evidence against delegation — all of it verified against the
-**micronaut-security 5.4.0** / **micronaut-security-oauth2 4.11.x** sources and written
-up in ADR 0001 — is:
+**micronaut-security 5.4.0** / **micronaut-security-oauth2 5.4.0** artefacts (the version
+`micronaut-parent:5.2.0` pins) and written up in ADR 0001 — is:
 
 | Requirement | `micronaut-security-oauth2` |
 |---|---|
 | AC 2: discovered `issuer` compared byte-for-byte with the configured one | not performed; the discovered `jwks_uri` is used unverified |
-| AC 3: discovery retried with backoff, readiness `DOWN`, liveness `UP` | `DefaultOpenIdProviderMetadataFetcher` turns a connection failure into a `DisabledBeanException` — one attempt, no retry, no backoff, and the signature configuration never appears until the process restarts |
+| AC 3: discovery retried with backoff, readiness `DOWN`, liveness `UP` | `DefaultOpenIdProviderMetadataFetcher` turns a connection failure into a `DisabledBeanException`, which `DefaultBeanContext.initializeContext` catches and logs at DEBUG — one attempt, no retry, no backoff, no readiness signal, and the provider is *silently* left without metadata or a signature configuration until the process restarts |
 | AC 13: per-provider JWKS cache TTL | `JwksUriSignatureFactory` sets only the URL, so cache expiration is global and not configurable per provider |
 | AC 14: rate-limited refetch on an unknown `kid` | `JwksSignatureUtils.verify` does not refetch |
-| Per-provider `iss`/`aud` validation | `claims-validators.issuer` / `.audience` hold a single global value each; every registered key set is tried and the first match wins, so a second provider's key would authenticate a token claiming the first provider's issuer |
+| Per-provider `iss`/`aud` validation | `claims-validators.issuer` / `.audience` hold a single global value each (and `IssuerJwtClaimsValidator` suffix-compares rather than equals); `NimbusReactiveJsonWebTokenSignatureValidator` is handed a flat `List<SignatureConfiguration>` with no issuer binding and tries each until one verifies, so a second provider's key would authenticate a token claiming the first provider's issuer |
 
 Two further consequences of the delegated design were live in the rejected
 implementation and are worth stating, because they are what moved this from a style
@@ -115,3 +115,27 @@ list. The name is carried on the bean so diagnostics can name the offending bloc
   issuer comparison, the retry schedule and the per-issuer routing. The cache, the rate
   limiter, the single-flight refresh and the JWS verification are Nimbus's, because that
   is where a subtle concurrency bug would be a security bug.
+
+## Addendum — reaffirmed on PR #4 (step 3), 2026-10-01
+
+The step-3 review asked the same question this ADR answers: *why is all of this
+individually implemented instead of using the Micronaut OIDC dependency?* The module's
+API was re-inspected at the pinned version (`micronaut-security-oauth2:5.4.0`) rather
+than taken on trust from the step-2 write-up. Nothing changed:
+
+- `OpenIdProviderMetadataFetcher.fetch()` is the only discovery entry point; it is driven
+  eagerly by `@Context @EachBean(OpenIdClientConfiguration.class)` in the `@Internal`
+  `OpenIdClientFactory`, so there is no seam to hang a retry schedule or a resolution
+  state off — step 3 would have to *replace* that bean, not extend it.
+- `JwkSetFetcher`'s caching implementations (`CacheableJwkSetFetcher`,
+  `ReactorCacheJwkSetFetcher`) are package-private, and `JwksSignatureConfiguration`
+  exposes a single global `getCacheExpiration()`, so AC 13's per-provider TTL and AC 14's
+  rate-limited unknown-`kid` refetch have no configuration surface at all.
+- There is still no issuer-to-key-set binding anywhere in the module.
+
+What the module *does* supply well — an HTTP GET of a discovery document and RSA
+signature verification — this service does not reimplement either: the GET is a plain
+Micronaut `HttpClient` call, and every cryptographic operation from step 4 on is Nimbus,
+which `micronaut-security-jwt` brings transitively. `micronaut-security-jwt` itself is
+kept and is what `ConsentManagerTokenValidator` plugs into. The decision is narrow: the
+*trust list* is ours because the module does not have one.

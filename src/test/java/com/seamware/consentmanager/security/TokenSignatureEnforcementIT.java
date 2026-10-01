@@ -90,6 +90,15 @@ class TokenSignatureEnforcementIT {
             TRUSTED_ISSUER + "/.well-known/openid-configuration";
 
     /**
+     * Per-entry key that tolerates a cleartext provider URL.
+     *
+     * <p>{@link #TRUSTED_ISSUER} is deliberately an unreachable {@code http} address - this class
+     * mints its own tokens and never performs discovery - and the trust-list validator refuses
+     * cleartext unless the entry says so in writing.
+     */
+    private static final String ALLOW_INSECURE_TRANSPORT_KEY = ".allow-insecure-transport";
+
+    /**
      * Issuer no provider is configured under.
      *
      * <p>Its host is asserted absent from the rejection response, so it must be a string that
@@ -208,6 +217,7 @@ class TokenSignatureEnforcementIT {
         properties.put(settings + ".claims.participant-identifier", PARTICIPANT_IDENTIFIER_CLAIM);
         properties.put(settings + ".claims.roles", ROLES_CLAIM);
         properties.put(settings + ".role-mapping.user", USER_ROLE_VALUE);
+        properties.put(settings + ALLOW_INSECURE_TRANSPORT_KEY, true);
         properties.putAll(overrides);
 
         return ApplicationContext.builder(Environment.TEST)

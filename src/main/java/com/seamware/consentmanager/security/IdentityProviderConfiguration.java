@@ -115,6 +115,19 @@ public class IdentityProviderConfiguration {
     /** Default claim carrying the user identifier, per the published token contract. */
     public static final String DEFAULT_USER_IDENTIFIER_CLAIM = "sub";
 
+    /**
+     * Whether a provider may be reached over cleartext {@code http} when it does not say otherwise.
+     *
+     * <p>{@code false}: the discovery document is this service's trust anchor. It names the issuer
+     * that the byte-for-byte check compares against and the {@code jwks_uri} the signing keys are
+     * fetched from, so an on-path attacker who can rewrite it chooses both - the issuer check
+     * agrees with itself and the forged keys validate forged tokens. Over TLS that attack needs a
+     * certificate for the provider's host; over cleartext it needs nothing. The default therefore
+     * refuses {@code http} and an operator who wants it - a local Keycloak, a WireMock stub - opts
+     * in per provider and is warned at startup.
+     */
+    public static final boolean DEFAULT_ALLOW_INSECURE_TRANSPORT = false;
+
     private final String name;
 
     private String issuer;
@@ -124,6 +137,7 @@ public class IdentityProviderConfiguration {
     private Duration jwksCacheTtl = DEFAULT_JWKS_CACHE_TTL;
     private ClaimsConfiguration claims = new ClaimsConfiguration();
     private Map<String, String> roleMapping = Map.of();
+    private boolean allowInsecureTransport = DEFAULT_ALLOW_INSECURE_TRANSPORT;
 
     private Map<Role, String> resolvedRoleMapping = Map.of();
 
@@ -271,6 +285,29 @@ public class IdentityProviderConfiguration {
      */
     public void setJwksCacheTtl(Duration jwksCacheTtl) {
         this.jwksCacheTtl = jwksCacheTtl == null ? DEFAULT_JWKS_CACHE_TTL : jwksCacheTtl;
+    }
+
+    /**
+     * Reports whether this provider may be addressed over cleartext {@code http}.
+     *
+     * <p>See {@link #DEFAULT_ALLOW_INSECURE_TRANSPORT} for why this is off by default. {@code
+     * IdentityProviderRegistryValidator} fails startup when an {@code http} issuer or discovery URL
+     * is configured without this flag, and warns when it is configured with it.
+     *
+     * @return {@code true} if an {@code http} issuer and discovery URL are tolerated
+     */
+    public boolean isAllowInsecureTransport() {
+        return allowInsecureTransport;
+    }
+
+    /**
+     * Sets whether cleartext {@code http} is tolerated for this provider.
+     *
+     * @param allowInsecureTransport {@code true} to permit {@code http}; intended for local
+     *     development and tests only
+     */
+    public void setAllowInsecureTransport(boolean allowInsecureTransport) {
+        this.allowInsecureTransport = allowInsecureTransport;
     }
 
     /**
