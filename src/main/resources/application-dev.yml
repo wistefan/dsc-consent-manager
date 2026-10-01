@@ -3,17 +3,13 @@
 
 micronaut:
   security:
-    enabled: false
-    # Disable JWT token validation in dev — no IdP is required locally.
-    token:
-      jwt:
-        enabled: false
-        # Override JWKS signatures to prevent the JWKS fetcher from starting.
-        # In dev mode no Identity Provider is available, so no keys to fetch.
-        signatures:
-          jwks:
-            keycloak:
-              url: ""
+    # Security is ENABLED in dev so the local stack exercises the same wiring as
+    # production: the Keycloak service in compose.yaml is discovered, its JWKS is
+    # fetched and bearer tokens are actually verified. Running without that Keycloak
+    # (plain `./mvnw mn:run`) still starts the service — discovery simply fails, no
+    # signing key is registered and every bearer token is rejected, while the
+    # anonymous routes (/health, /swagger-ui, /static) stay reachable.
+    enabled: true
 
 datasources:
   default:
@@ -21,6 +17,16 @@ datasources:
     username: ${DB_USER:consent_manager}
     password: ${DB_PASSWORD:consent_manager}
 
+# Management endpoints. Note that with security enabled above, the
+# `intercept-url-map` in application.yml still governs access: /metrics and
+# /prometheus require a bearer token in dev too. `sensitive: false` only waives
+# Micronaut's own endpoint-level check, it does not make the paths anonymous.
+#
+# Until the token-validation pipeline lands in steps 3-5 of this ticket no bearer
+# token authenticates at all, so in dev these two endpoints are currently
+# unreachable by design - a token from the local Keycloak opens them once that
+# pipeline exists. /health stays anonymous throughout and is the probe to use in
+# the meantime.
 endpoints:
   all:
     port: ${MANAGEMENT_PORT:9090}
@@ -35,3 +41,21 @@ endpoints:
 tracing:
   opentelemetry:
     enabled: false
+
+# Local Keycloak trust list entry, matching the `keycloak` service in compose.yaml.
+#
+# Only the values application.yml leaves blank are filled in here; clock skew, the
+# JWKS cache TTL, the claim paths and the role mapping of the `primary` entry are
+# inherited per leaf key from application.yml.
+#
+# The entry must be present whatever `micronaut.security.enabled` says: the trust-list
+# check is unconditional, because a resource server with no trust list is
+# misconfigured either way. An unreachable Keycloak does not abort startup - from
+# step 3 on, discovery is retried with backoff and readiness reports DOWN until it
+# succeeds, so `./mvnw mn:run` without the compose stack still starts.
+consent-manager:
+  identity-providers:
+    primary:
+      issuer: ${IDP_ISSUER:`http://localhost:8180/realms/consent-manager`}
+      discovery-url: ${IDP_DISCOVERY_URL:`http://localhost:8180/realms/consent-manager/.well-known/openid-configuration`}
+      audience: ${IDP_AUDIENCE:consent-manager}

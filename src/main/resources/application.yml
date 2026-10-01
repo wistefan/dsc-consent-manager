@@ -19,10 +19,26 @@ micronaut:
 
   security:
     enabled: true
-    # Allow unauthenticated access to management endpoints.
-    # TODO: With management endpoints on a dedicated port (see endpoints.all.port),
-    #   these patterns may need revisiting once the security layer is fully wired.
+    # Allow unauthenticated access to the health endpoints.
+    #
+    # These patterns are matched against the request path with the server context
+    # path already stripped, so `/swagger-ui/**` still covers `${API_PREFIX}/swagger-ui/**`.
+    # ManagementEndpointSecurityIT pins that, including a control case that tightens
+    # the Swagger UI entry and requires the request to be challenged.
+    #
+    # Note that `endpoints.all.port` moves management endpoints to their own port but
+    # does NOT take them out of the context path: the health endpoint is reached at
+    # `http://<host>:${MANAGEMENT_PORT}${API_PREFIX}/health`. That is the URL the
+    # compose healthcheck and any orchestrator probe must use.
+    #
+    # Both `/health` and `/health/**` are listed: the bare path is what a liveness
+    # probe actually requests, and relying on `/**` to also match the empty remainder
+    # is an assumption about the matcher rather than something this file states.
     intercept-url-map:
+      - pattern: /health
+        http-method: GET
+        access:
+          - isAnonymous()
       - pattern: /health/**
         http-method: GET
         access:
@@ -43,14 +59,23 @@ micronaut:
         http-method: GET
         access:
           - isAuthenticated()
-    # JWT/JWKS configuration placeholder (detailed in TICKET-003)
+    # Micronaut's own JWT support stays ENABLED: the flag gates the whole
+    # `io.micronaut.security.token.jwt` package - the security filter, the bearer-token
+    # reader and the `TokenValidator` SPI that ConsentManagerTokenValidator plugs into
+    # in step 5. No signature configuration is registered yet, so until that validator
+    # lands EVERY bearer token is rejected and no request authenticates. That is the
+    # fail-closed direction, and it is what UnsignedTokenRejector keeps true for
+    # `alg: none` tokens, which the framework would otherwise accept precisely because
+    # no signature configuration exists.
+    #
+    # There are deliberately no `claims-validators.issuer` / `.audience` entries: both
+    # hold a single global value, and the trust list holds a configurable number of
+    # providers each with its own issuer and audience. Those checks are per provider and
+    # belong to ConsentManagerTokenValidator (step 5). See
+    # docs/adr/0002-own-identity-provider-registry-on-nimbus.md.
     token:
       jwt:
         enabled: true
-        signatures:
-          jwks:
-            keycloak:
-              url: ${IDP_JWKS_URL:`https://localhost/realms/master/protocol/openid-connect/certs`}
 
   metrics:
     enabled: true
@@ -82,8 +107,11 @@ flyway:
 
 endpoints:
   all:
-    # Serve management endpoints on a dedicated port, outside the API context path.
-    # This ensures health/metrics are reachable without the /v1 prefix.
+    # Serve management endpoints on a dedicated port so they can be exposed to an
+    # orchestrator without exposing the API port. The dedicated port does NOT take
+    # them out of `micronaut.server.context-path`: with a context path of /v1 the
+    # health endpoint is at http://<host>:${MANAGEMENT_PORT}/v1/health, which is
+    # what compose.yaml's healthcheck probes. ManagementEndpointSecurityIT pins it.
     port: ${MANAGEMENT_PORT:9090}
   health:
     enabled: true
@@ -116,3 +144,61 @@ tracing:
 consent-manager:
   url: ${CONSENT_MANAGER_URL:`http://localhost:8080`}
   contract-service-url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
+
+  # ---------------------------------------------------------------------------
+  # Identity provider trust list
+  # ---------------------------------------------------------------------------
+  # One entry per trusted OpenID Connect provider, keyed by name. Each entry is
+  # self-contained: the issuer, the discovery document URL, the audience this service
+  # expects, the clock skew, the JWKS cache lifetime, the claim paths and the role
+  # mapping. No `client-id` and no `client-secret` appear anywhere - this service is a
+  # resource server, runs no OAuth2 flow and stores no credential.
+  #
+  # The trust list is read ONCE at startup and is immutable for the lifetime of the
+  # process: no runtime reload, no admin endpoint, no auto-registration. Adding,
+  # removing or re-pointing a provider requires a config change and a restart. Only the
+  # per-provider metadata discovered for that fixed set (the jwks_uri and the cached
+  # signing keys) changes afterwards, which is what lets a key rotation be picked up
+  # without a restart.
+  #
+  # Startup FAILS when the list is empty, an entry is malformed, two entries declare the
+  # same issuer, or an entry declares a key this service does not read. `IDP_ISSUER`,
+  # `IDP_DISCOVERY_URL` and `IDP_AUDIENCE` intentionally have no default, so a deployment
+  # that forgets to configure an IdP aborts at startup with a message naming the missing
+  # property rather than silently trusting something.
+  #
+  # Environment variables can only OVERRIDE values of a provider already declared here;
+  # they cannot ADD one. A name that appears only in an environment variable never
+  # becomes a configuration entry and is silently ignored - add the second provider to
+  # this file (or to a deployment overlay) and parameterise its values.
+  #
+  # Why the issuer, discovery and key caching are configured here rather than delegated
+  # to `micronaut.security.oauth2.clients.<name>.openid.issuer`:
+  #   docs/adr/0002-own-identity-provider-registry-on-nimbus.md
+  identity-providers:
+    primary:
+      issuer: ${IDP_ISSUER:}
+      # Fetched at startup to discover the provider's jwks_uri. Kept separate from the
+      # issuer because a provider may publish its metadata at a path that is not the
+      # issuer plus the well-known suffix; step 3 verifies that the document's `issuer`
+      # equals the value above and refuses the provider when they disagree.
+      discovery-url: ${IDP_DISCOVERY_URL:}
+      audience: ${IDP_AUDIENCE:}
+      # Tolerance applied to the exp, iat and nbf claims.
+      clock-skew: ${IDP_CLOCK_SKEW:30s}
+      # How long this provider's fetched JWK set stays usable before it is refreshed.
+      # Per provider: one that rotates keys hourly and one that rotates them yearly
+      # should not share a refresh cadence.
+      jwks-cache-ttl: ${IDP_JWKS_CACHE_TTL:1h}
+      # Claim names are per provider. Each may be a dot-separated nested path.
+      claims:
+        user-identifier: ${IDP_CLAIM_USER_IDENTIFIER:sub}
+        participant-identifier: ${IDP_CLAIM_PARTICIPANT_IDENTIFIER:participant_id}
+        roles: ${IDP_CLAIM_ROLES:realm_access.roles}
+      # Maps this service's roles to the raw role strings the provider emits.
+      # Keys are written in lower case so that an override replaces the configured
+      # value instead of adding a second entry for the same role.
+      role-mapping:
+        user: ${IDP_ROLE_USER:consent-user}
+        participant: ${IDP_ROLE_PARTICIPANT:consent-participant}
+        catalog: ${IDP_ROLE_CATALOG:consent-catalog}
