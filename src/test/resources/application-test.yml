@@ -42,6 +42,13 @@ logger:
     org.testcontainers: WARN
     com.github.dockerjava: WARN
     io.micronaut: WARN
+    # The dummy trust-list entry below points at a dead port on purpose, so discovery for it
+    # fails for the lifetime of every context that does not override it. Each failure is a
+    # connection refusal logged at ERROR with a stack trace, repeating on the backoff schedule,
+    # which would bury a real failure in a green build. Discovery behaviour itself is asserted in
+    # IdentityProviderDiscoveryIT, which configures reachable stubs and turns this logger back on
+    # in its own property source, so the one suite that needs the output has it.
+    com.seamware.consentmanager.security.IdentityProviderRegistry: 'OFF'
 
 # Dummy identity provider trust list.
 #
@@ -67,3 +74,7 @@ consent-manager:
       # Clock skew, JWKS cache TTL, claim paths and role mapping are inherited per
       # leaf key from application.yml.
       audience: consent-manager
+      # The dead port, the WireMock stubs in IdentityProviderDiscoveryIT and the
+      # Testcontainers Keycloak step 8 adds are all plain http, so every test context
+      # opts in here; production configuration leaves this false.
+      allow-insecure-transport: true

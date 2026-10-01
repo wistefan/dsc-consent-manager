@@ -15,6 +15,7 @@ import com.nimbusds.jwt.SignedJWT;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.context.env.Environment;
+import io.micronaut.http.HttpHeaders;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
@@ -90,6 +91,15 @@ class TokenSignatureEnforcementIT {
             TRUSTED_ISSUER + "/.well-known/openid-configuration";
 
     /**
+     * Per-entry key that tolerates a cleartext provider URL.
+     *
+     * <p>{@link #TRUSTED_ISSUER} is deliberately an unreachable {@code http} address - this class
+     * mints its own tokens and never performs discovery - and the trust-list validator refuses
+     * cleartext unless the entry says so in writing.
+     */
+    private static final String ALLOW_INSECURE_TRANSPORT_KEY = ".allow-insecure-transport";
+
+    /**
      * Issuer no provider is configured under.
      *
      * <p>Its host is asserted absent from the rejection response, so it must be a string that
@@ -133,11 +143,23 @@ class TokenSignatureEnforcementIT {
     /** Subject every minted token carries. */
     private static final String SUBJECT = "subject-under-test";
 
+    /**
+     * Challenge parameter RFC 9728 adds to {@code WWW-Authenticate}, which must never appear.
+     *
+     * <p>It names a {@code /.well-known/oauth-protected-resource} document this service does not
+     * serve, and leaks the service's own base URL to an unauthenticated caller.
+     */
+    private static final String RESOURCE_METADATA_CHALLENGE_PARAMETER = "resource_metadata";
+
     private static RSAKey signingKey;
 
     private static ApplicationContext context;
     private static EmbeddedServer server;
     private static HttpClient client;
+
+    private static ApplicationContext shippedContext;
+    private static EmbeddedServer shippedServer;
+    private static HttpClient shippedClient;
 
     /**
      * Generates the key material and starts the application context and its server.
@@ -155,11 +177,18 @@ class TokenSignatureEnforcementIT {
         context = startContext(Map.of());
         server = context.getBean(EmbeddedServer.class).start();
         client = HttpClient.create(server.getURL());
+
+        shippedContext = startShippedContext();
+        shippedServer = shippedContext.getBean(EmbeddedServer.class).start();
+        shippedClient = HttpClient.create(shippedServer.getURL());
     }
 
     /** Shuts the client, server and context down. */
     @AfterAll
     static void stopFixtures() {
+        closeQuietly(shippedClient);
+        closeQuietly(shippedServer);
+        closeQuietly(shippedContext);
         closeQuietly(client);
         closeQuietly(server);
         closeQuietly(context);
@@ -208,11 +237,53 @@ class TokenSignatureEnforcementIT {
         properties.put(settings + ".claims.participant-identifier", PARTICIPANT_IDENTIFIER_CLAIM);
         properties.put(settings + ".claims.roles", ROLES_CLAIM);
         properties.put(settings + ".role-mapping.user", USER_ROLE_VALUE);
+        properties.put(settings + ALLOW_INSECURE_TRANSPORT_KEY, true);
         properties.putAll(overrides);
 
         return ApplicationContext.builder(Environment.TEST)
                 .enableDefaultPropertySources(false)
                 .properties(properties)
+                .build()
+                .start();
+    }
+
+    /**
+     * Starts a context under the <strong>shipped</strong> configuration, with {@code
+     * application.yml} and {@code application-test.yml} loaded as they are in a real run.
+     *
+     * <p>{@link #startContext(Map)} switches default property sources off on purpose, so a context
+     * it builds cannot say anything about what a deployment exposes. The route probes below are
+     * exactly a statement about a deployment: {@code micronaut-security-oauth2} is a compile
+     * dependency for its discovery components alone (ADR 0003), and its RFC 9728
+     * protected-resource-metadata controller is <em>enabled by default</em> — only the {@code
+     * micronaut.security.oauth2.protected-resource-metadata} block in {@code application.yml} keeps
+     * it off. Probing a context that never read that block would assert the opposite of the
+     * intended property and pass the moment the block is deleted.
+     *
+     * <p>Only the infrastructure a route probe has no use for is switched off, plus {@code
+     * micronaut.security.enabled}, which {@code application-test.yml} turns off for the rest of the
+     * suite and which the shipped {@code application.yml} turns on. The probe route is switched on
+     * here as well, so {@link #challengeCarriesNoResourceMetadataParameter()} has a secured route
+     * of the shipped deployment's own to be challenged by.
+     *
+     * @return the started context
+     */
+    private static ApplicationContext startShippedContext() {
+        return ApplicationContext.builder(Environment.TEST)
+                .properties(
+                        Map.of(
+                                PROBE_ROUTE_ENABLED,
+                                true,
+                                "micronaut.security.enabled",
+                                true,
+                                "micronaut.server.port",
+                                -1,
+                                "datasources.default.enabled",
+                                false,
+                                "flyway.enabled",
+                                false,
+                                "endpoints.all.enabled",
+                                false))
                 .build()
                 .start();
     }
@@ -464,6 +535,30 @@ class TokenSignatureEnforcementIT {
         }
     }
 
+    @Test
+    @DisplayName("challenges without advertising a protected-resource metadata document")
+    void challengeCarriesNoResourceMetadataParameter() {
+        HttpResponse<?> response = responseFor(shippedClient, null);
+
+        assertThat(response.getStatus().getCode())
+                .as("the probe route is @Secured(IS_AUTHENTICATED) and the call carries no token")
+                .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+        assertThat(response.getHeaders().getAll(HttpHeaders.WWW_AUTHENTICATE))
+                .as(
+                        "micronaut-security-oauth2's RFC 9728 challenge provider is gated on"
+                                + " micronaut.security.oauth2.protected-resource-metadata"
+                                + ".www-authenticate ALONE - not on .enabled - so losing that one"
+                                + " line (a duplicate `oauth2` key in application.yml is enough,"
+                                + " YAML keeps the last) puts a %s parameter naming this service's"
+                                + " base URL into every 401, pointing at a route that is"
+                                + " deliberately not served",
+                        RESOURCE_METADATA_CHALLENGE_PARAMETER)
+                .allSatisfy(
+                        value ->
+                                assertThat(value)
+                                        .doesNotContain(RESOURCE_METADATA_CHALLENGE_PARAMETER));
+    }
+
     @ParameterizedTest(name = "{0} is not served")
     @ValueSource(
             strings = {
@@ -478,7 +573,8 @@ class TokenSignatureEnforcementIT {
         int status;
         try {
             status =
-                    client.toBlocking()
+                    shippedClient
+                            .toBlocking()
                             .exchange(HttpRequest.GET(path), String.class)
                             .getStatus()
                             .getCode();
@@ -488,9 +584,18 @@ class TokenSignatureEnforcementIT {
 
         assertThat(status)
                 .as(
-                        "%s is a micronaut-security-oauth2 route. That module was removed in favour"
-                                + " of this service's own registry (ADR 0002); re-adding it would"
-                                + " publish the configured issuer URLs anonymously",
+                        "%s is a micronaut-security-oauth2 login or metadata route. That module is"
+                                + " on the classpath for its discovery components only (ADR 0003);"
+                                + " this service runs no OAuth2 client and issues no tokens, so it"
+                                + " must serve none of them. The login, callback and logout routes"
+                                + " stay unregistered on their own because no"
+                                + " micronaut.security.oauth2.clients.* property is set, but the"
+                                + " RFC 9728 /.well-known/oauth-protected-resource controller"
+                                + " defaults to ENABLED and is held off only by the"
+                                + " micronaut.security.oauth2.protected-resource-metadata block in"
+                                + " application.yml. Serving it would advertise this service's base"
+                                + " URL anonymously and, once authorization servers are listed,"
+                                + " the very issuers the trust list does not disclose (US-ID-008)",
                         path)
                 .isNotEqualTo(HttpStatus.OK.getCode());
     }

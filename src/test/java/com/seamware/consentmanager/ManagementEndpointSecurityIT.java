@@ -34,9 +34,10 @@ import org.junit.jupiter.params.provider.MethodSource;
  *   <li><strong>{@code endpoints.all.port} moves management endpoints to their own port but does
  *       <em>not</em> take them out of {@code micronaut.server.context-path}.</strong> With a
  *       context path of {@code /v1} the health endpoint is at {@code :${MANAGEMENT_PORT}/v1/health}
- *       and the bare {@code :${MANAGEMENT_PORT}/health} is a 404. The Compose healthcheck must
- *       therefore carry {@code ${API_PREFIX}}; an earlier comment in {@code application.yml}
- *       claimed the opposite and was wrong.
+ *       and the bare {@code :${MANAGEMENT_PORT}/health} is a 404 - the same holds for the {@code
+ *       /health/liveness} and {@code /health/readiness} routes served off it. The Compose
+ *       healthcheck must therefore carry {@code ${API_PREFIX}}; an earlier comment in {@code
+ *       application.yml} claimed the opposite and was wrong.
  *   <li><strong>{@code intercept-url-map} patterns are matched against the path with the context
  *       path already stripped.</strong> {@code /swagger-ui/**} therefore still covers {@code
  *       /v1/swagger-ui/**} once a context path is configured. That is asserted rather than assumed:
@@ -57,6 +58,12 @@ class ManagementEndpointSecurityIT {
 
     /** Path the health endpoint is mapped to, before the context path is prepended. */
     private static final String HEALTH_PATH = "/health";
+
+    /** Health route reporting whether the process is alive, served off {@link #HEALTH_PATH}. */
+    private static final String LIVENESS_PATH = HEALTH_PATH + "/liveness";
+
+    /** Health route reporting whether this instance can serve, served off {@link #HEALTH_PATH}. */
+    private static final String READINESS_PATH = HEALTH_PATH + "/readiness";
 
     /** Static-resource mapping serving the Swagger UI entry page. */
     private static final String SWAGGER_UI_PATH = "/swagger-ui/index.html";
@@ -122,6 +129,31 @@ class ManagementEndpointSecurityIT {
     /** Access expression the control case substitutes for {@code isAnonymous()}. */
     private static final String AUTHENTICATED_ACCESS = "isAuthenticated()";
 
+    /**
+     * Property prefix of the one trust-list entry every test context configures.
+     *
+     * <p>{@code application.yml} leaves this entry's issuer, discovery URL and audience blank so a
+     * misconfigured deployment aborts at startup, so a context must fill them in place rather than
+     * declare an entry of its own.
+     */
+    private static final String PROVIDER_PREFIX = "consent-manager.identity-providers.primary.";
+
+    /**
+     * Discovery address this context deliberately points its only provider at.
+     *
+     * <p>Port 1 is reserved and never listening, so discovery can never succeed here and readiness
+     * is {@code DOWN} for the whole class. That is pinned in {@link #start(Map, int)} rather than
+     * inherited from {@code application-test.yml}: the 503 row of {@link #routingMatrix()} asserts
+     * that the readiness <em>route</em> resolved and was answered anonymously, and it would turn
+     * into a confusing failure the day the shared test configuration grows a provider that actually
+     * resolves - a Testcontainers Keycloak, say. The unreachable address is this class's own
+     * fixture, so that cannot happen.
+     */
+    private static final String UNREACHABLE_PROVIDER_BASE_URL = "http://localhost:1/realms/dead";
+
+    /** Audience the unreachable provider's entry declares; never used, but must not be blank. */
+    private static final String UNREACHABLE_PROVIDER_AUDIENCE = "consent-manager";
+
     private static int managementPort;
     private static ApplicationContext context;
     private static EmbeddedServer server;
@@ -169,6 +201,16 @@ class ManagementEndpointSecurityIT {
         properties.put("endpoints.prometheus.sensitive", false);
         properties.put("datasources.default.enabled", false);
         properties.put("flyway.enabled", false);
+        // Deliberately unresolvable: see UNREACHABLE_PROVIDER_BASE_URL. The readiness row of
+        // routingMatrix() expects 503 and must not depend on what the shared test configuration
+        // happens to point the trust list at.
+        properties.put(PROVIDER_PREFIX + "issuer", UNREACHABLE_PROVIDER_BASE_URL);
+        properties.put(
+                PROVIDER_PREFIX + "discovery-url",
+                UNREACHABLE_PROVIDER_BASE_URL + "/.well-known/openid-configuration");
+        properties.put(PROVIDER_PREFIX + "audience", UNREACHABLE_PROVIDER_AUDIENCE);
+        // That address is cleartext http, which the validator refuses without this opt-in.
+        properties.put(PROVIDER_PREFIX + "allow-insecure-transport", true);
         properties.putAll(overrides);
 
         ApplicationContext started =
@@ -211,19 +253,31 @@ class ManagementEndpointSecurityIT {
         return Stream.of(
                 Arguments.of(
                         MANAGEMENT,
-                        API_CONTEXT_PATH + HEALTH_PATH,
+                        API_CONTEXT_PATH + LIVENESS_PATH,
                         HttpStatus.OK,
-                        "the Compose healthcheck probes the management port under the API prefix,"
-                                + " without credentials"),
+                        "liveness carries no indicator that depends on an external system, so it"
+                                + " answers UP anonymously on the management port under the API"
+                                + " prefix even though this context pins its trust list at an"
+                                + " unreachable address"),
                 Arguments.of(
                         MANAGEMENT,
-                        HEALTH_PATH,
+                        API_CONTEXT_PATH + READINESS_PATH,
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "the Compose healthcheck probes readiness on the management port under the"
+                                + " API prefix, without credentials; this context pins its only"
+                                + " provider at an unreachable address on purpose, so a 503 -"
+                                + " rather than the 401 a protected route would give or the 404 a"
+                                + " missing one would - shows the route resolved and was answered"
+                                + " anonymously"),
+                Arguments.of(
+                        MANAGEMENT,
+                        LIVENESS_PATH,
                         HttpStatus.NOT_FOUND,
                         "a dedicated management port does not remove the server context path, so a"
                                 + " probe omitting the API prefix never reaches the endpoint"),
                 Arguments.of(
                         API,
-                        API_CONTEXT_PATH + HEALTH_PATH,
+                        API_CONTEXT_PATH + LIVENESS_PATH,
                         HttpStatus.NOT_FOUND,
                         "endpoints.all.port moves management endpoints off the API port entirely"),
                 Arguments.of(

@@ -59,3 +59,7 @@ consent-manager:
       issuer: ${IDP_ISSUER:`http://localhost:8180/realms/consent-manager`}
       discovery-url: ${IDP_DISCOVERY_URL:`http://localhost:8180/realms/consent-manager/.well-known/openid-configuration`}
       audience: ${IDP_AUDIENCE:consent-manager}
+      # The local Keycloak in compose.yaml is served over plain http. Accepting that is
+      # a development-only decision, so it is written down here rather than defaulted:
+      # application.yml leaves it false, and this override is logged at WARN on startup.
+      allow-insecure-transport: ${IDP_ALLOW_INSECURE_TRANSPORT:true}
