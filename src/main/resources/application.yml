@@ -123,19 +123,29 @@ micronaut:
   # `expire-after-write` is the only knob that matters here, and it sets both halves of
   # the key-handling budget:
   #
-  #   rotation latency   - a key minted after startup is honoured once the cached set
-  #                        expires, at most one TTL later, with no restart (AC 13).
-  #   outbound request   - at most one JWK Set request per provider per TTL, whatever
-  #     rate               the inbound traffic is. A flood of tokens bearing `kid` values
-  #                        no provider ever published costs no extra request at all,
-  #                        because nothing invalidates this cache on a miss (AC 14).
+  #   rotation latency   - the module has no refresh-on-miss path, so from the moment a
+  #                        provider starts signing with a newly published key until this
+  #                        cache expires, EVERY token signed by that key is rejected.
+  #                        Keycloak publishes the new key and starts signing with it at
+  #                        the same moment, so this window is a total authentication
+  #                        outage, not a degraded mode. No restart is needed to recover,
+  #                        it just takes up to one TTL (AC 13).
+  #   outbound request   - in steady state, at most one JWK Set request per provider per
+  #     rate               TTL whatever the inbound traffic is. A flood of tokens bearing
+  #                        `kid` values no provider ever published costs no extra request
+  #                        at all, because nothing invalidates this cache on a miss
+  #                        (AC 14). Only a burst of concurrent FIRST-EVER verifications
+  #                        for one provider can exceed one load, and that is bounded by
+  #                        concurrency at that instant, not by traffic.
   #
-  # Those pull in opposite directions, hence a default in minutes rather than hours:
-  # long enough that steady-state traffic re-fetches rarely, short enough that an
-  # emergency key rotation is picked up without an operator restarting anything.
+  # The two pull in opposite directions, and the trade is lopsided: a short lifetime costs
+  # one request per provider per minute, which no provider notices, while a long one buys
+  # that back with minutes of blanket 401s after every rotation. Hence 60s rather than the
+  # 5m first proposed. RAISING THIS VALUE BUYS ROTATION DOWNTIME - see
+  # docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md.
   caches:
     jwks:
-      expire-after-write: ${IDP_JWKS_CACHE_TTL:5m}
+      expire-after-write: ${IDP_JWKS_CACHE_TTL:60s}
 
   metrics:
     enabled: true

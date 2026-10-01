@@ -11,6 +11,7 @@ import io.micronaut.security.token.jwt.nimbus.ReactiveJwksSignature;
 import io.micronaut.security.token.jwt.signature.jwks.JwkSetFetcher;
 import io.micronaut.security.token.jwt.signature.jwks.JwkValidator;
 import jakarta.inject.Singleton;
+import java.text.ParseException;
 import java.util.Optional;
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
@@ -32,10 +33,15 @@ import reactor.core.publisher.Mono;
  * constructed per provider the same way {@code IdentityProviderRegistry} constructs the module's
  * discovery fetcher (see {@code
  * docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md}). None of that
- * behaviour is written here, which also means none of its edge cases are: a provider that publishes
- * no {@code kid} at all, or two keys under one {@code kid}, is handled by the module's matcher,
- * which falls back to offering every published key and accepts the token if the signature verifies
- * against any of them.
+ * behaviour is written here, which also means its {@code kid} rules are the module's, not this
+ * service's: the matcher constrains on {@code kid} only when the <em>token</em> carries one, so a
+ * token without a {@code kid} is offered every published key, and two keys published under one
+ * {@code kid} are both tried with the token accepted if either verifies. A token whose {@code kid}
+ * matches nothing in the cached set is rejected outright - the module has no refresh-on-miss path -
+ * so a provider that publishes keys <em>without</em> a {@code kid} while minting tokens that carry
+ * one cannot be used with this service. No such provider is on the trust list today; supporting one
+ * would be a change to the module or a reason to revisit ADR 0004, not something this class can
+ * paper over.
  *
  * <p>What is <em>not</em> delegated is the routing. The module's own wiring registers every
  * configured JWKS endpoint as a global verifier and checks a token against each in turn until one
@@ -48,11 +54,19 @@ import reactor.core.publisher.Mono;
  *
  * <p>The key set is cached by Micronaut Cache under the name {@code jwks}; its lifetime is {@code
  * micronaut.caches.jwks.expire-after-write}. That one setting covers both halves of the
- * requirement. A key minted after startup is picked up when the cached set next expires, with no
- * restart; and because the cache is never invalidated on demand, a flood of tokens bearing {@code
- * kid} values no provider ever published costs <em>no</em> outbound request at all - the request
+ * requirement, and it is the only lever over either.
+ *
+ * <p>Because the cache is never invalidated on demand, a flood of tokens bearing {@code kid} values
+ * no provider ever published costs <em>no</em> outbound request at all: in steady state the request
  * rate this service can put on an identity provider is bounded by the cache lifetime and nothing
- * else, whatever an attacker sends.
+ * else, whatever an attacker sends. The bound is a steady-state one - a burst of concurrent
+ * <em>first-ever</em> verifications for one provider can each miss before the first load is cached,
+ * which is bounded by concurrency at that instant rather than by traffic.
+ *
+ * <p>The same absence of a refresh-on-miss path is what makes the lifetime expensive in the other
+ * direction: from the moment a provider starts signing with a newly published key until the cached
+ * set expires, every token it issues is rejected. Recovery needs no restart, but it does take up to
+ * one lifetime, which is why the default is measured in seconds.
  */
 @Singleton
 public class IssuerSignatureVerifier {
@@ -136,6 +150,13 @@ public class IssuerSignatureVerifier {
             LOG.debug("No resolved identity provider is registered for the token's issuer");
             return Mono.just(Boolean.FALSE);
         }
+        if (!issuer.equals(claimedIssuer(jwt))) {
+            LOG.warn(
+                    "A signature check was routed to provider '{}' for a token that claims a"
+                            + " different issuer; refusing to check it against those keys",
+                    provider.get().name());
+            return Mono.just(Boolean.FALSE);
+        }
         ResolvedIdentityProvider resolved = provider.get();
         ReactiveJwksSignature signature =
                 new ReactiveJwksSignature(
@@ -144,7 +165,45 @@ public class IssuerSignatureVerifier {
                         jwkSetFetcher);
         return Mono.from(signature.verify(jwt))
                 .defaultIfEmpty(Boolean.FALSE)
+                .onErrorResume(error -> Mono.just(failed(resolved, error)))
                 .doOnNext(verified -> record(resolved, jwt, verified));
+    }
+
+    /**
+     * Reads the issuer the token claims, without trusting it.
+     *
+     * @param jwt the token to read
+     * @return the {@code iss} claim, or {@code null} if the token carries none or cannot be read
+     */
+    @Nullable
+    private static String claimedIssuer(SignedJWT jwt) {
+        try {
+            return jwt.getJWTClaimsSet().getIssuer();
+        } catch (ParseException e) {
+            LOG.debug("A token presented a claim set that cannot be parsed", e);
+            return null;
+        }
+    }
+
+    /**
+     * Turns a failure of the key-set lookup into a rejection.
+     *
+     * <p>Anything thrown while resolving or calling the provider's key endpoint has to come out of
+     * this publisher as {@code false} rather than as an error signal. An error would surface to the
+     * caller as a 500 carrying internal detail, which both tells an unauthenticated caller
+     * something about this deployment's upstreams and makes an unreachable provider look different
+     * from a bad signature - the distinction US-ID-008 exists to deny.
+     *
+     * @param provider the provider whose keys could not be consulted
+     * @param error what went wrong
+     * @return {@code false}, always
+     */
+    private static boolean failed(ResolvedIdentityProvider provider, Throwable error) {
+        LOG.warn(
+                "Could not consult the key set of provider '{}'; treating the token as unverified",
+                provider.name(),
+                error);
+        return false;
     }
 
     /**

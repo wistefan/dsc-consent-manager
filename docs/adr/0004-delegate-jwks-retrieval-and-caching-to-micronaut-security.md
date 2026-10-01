@@ -83,30 +83,60 @@ global-verifier hole above.
 Micronaut Cache named `jwks`, keyed by `(providerName, url)`, so entries do not collide
 between providers but the *lifetime* is one global setting:
 `micronaut.caches.jwks.expire-after-write`, exposed as `IDP_JWKS_CACHE_TTL` and defaulting
-to 5 minutes. The per-provider knob is deleted from the configuration schema,
+to 60 seconds (see the rotation-latency note below). The per-provider knob is deleted from the configuration schema,
 `application.yml`, `application-test.yml` and `.env.sample` rather than left in place to be
 silently ignored. `JwksSignatureConfiguration#getCacheExpiration()` is
 `@Deprecated(forRemoval = true, since = "4.11.0")` ("Not used. JWKS is cached via Micronaut
 Cache") and is not read on this path; the adapter returns the module's own default for it.
 
-That single TTL carries both halves of what step 4 owed. A key rotated at the provider is
-honoured at most one TTL after the cached set expires, with no restart (AC 13); and because
-the cache is never invalidated on demand, this service issues at most one JWK Set request
-per provider per TTL no matter what arrives — **a flood of tokens bearing `kid` values no
-provider ever published costs no outbound request at all** (AC 14).
+That single TTL carries both halves of what step 4 owed, and it is the only lever over
+either. In steady state this service issues at most one JWK Set request per provider per
+TTL whatever arrives — because the cache is never invalidated on demand, **a flood of
+tokens bearing `kid` values no provider ever published costs no outbound request at all**
+(AC 14). (The bound is a steady-state one: a burst of concurrent *first-ever* verifications
+for one provider can each miss before the first load is cached, since Micronaut's
+`@Cacheable` over a reactive return type does not deduplicate in-flight loads. That is
+bounded by concurrency at that one instant, not by traffic, and it is the cold-start case
+only.)
+
+**The same TTL is the whole of the rotation latency, and that is the expensive half of the
+trade.** The module has no refresh-on-miss path — `clearCache` has no caller on the
+verification path and `CacheableJwkSetFetcher` declares no `@CacheInvalidate` — so from the
+moment a provider starts signing with a newly published key until the cached set expires,
+*every* token signed by that key is rejected. Keycloak's default rotation publishes the new
+key and starts signing with it at the same moment, so that window is a total authentication
+outage for this service, not a degraded mode. The deleted `JwksKeySource` refetched on an
+unknown `kid` and so had near-zero rotation latency; delegating to the module gives that up.
+
+**The default TTL is therefore 60 seconds, not the 5 minutes first proposed.** The cost of
+a short TTL is one JWK Set request per provider per minute, which no provider notices; the
+cost of a long one is minutes of blanket 401s after every rotation. With the request rate
+bounded regardless of traffic, there is nothing on the other side of the trade worth
+minutes of outage. AC 13 is met either way; 60s is the operationally defensible point.
+Anyone raising `IDP_JWKS_CACHE_TTL` is buying rotation downtime with it.
 
 **This is strictly stronger than the rate limiter it replaces.** The automated review of
 PR #5 established that Nimbus's `RateLimitedJWKSetSource` opens a window with `counter = 1`
 *and allows that call*, then allows one more — two requests per window reach the provider,
 not the one the deleted javadoc claimed. The cache allows zero.
 
-**Two advisory findings against `JwksKeySource` are resolved rather than fixed.** Both
-concerned its `kid` handling: a provider that publishes no `kid` was unusable, and two keys
-sharing one `kid` meant `matches.getFirst()` could pick the wrong one. The module's matcher
-has neither problem — when no key matches on `kid` it offers every published key, and
-`JwksSignatureUtils.verify` accepts the token if the signature verifies against any
-candidate. Trying each candidate is not key confusion: the signature still has to verify,
-and the candidate list never leaves the issuer the token claimed.
+**One advisory finding against `JwksKeySource` is resolved by the move; one is inherited.**
+Both concerned its `kid` handling. Two keys sharing one `kid` no longer pick a winner:
+`JWKMatcher.keyID` selects both and `JwksSignatureUtils.verify` accepts the token if the
+signature verifies against *any* candidate (`matches.stream().anyMatch(...)`). Trying each
+candidate is not key confusion — the signature still has to verify, and the candidate list
+never leaves the issuer the token claimed.
+
+The kid-less-provider finding is **not** fixed, and an earlier revision of this ADR claimed
+otherwise. Read against the 5.4.0 sources, `JwksSignatureUtils.matches` adds a `keyID`
+constraint only when the *token* carries a `kid` (`if (keyId != null) { builder =
+builder.keyID(keyId); }`), and when the resulting selection is empty `verify` returns false
+with no fallback. So a provider that publishes kid-less keys is supported only in the
+sub-case where it also mints kid-less tokens — those are offered every published key. A
+provider publishing keys without a `kid` while minting tokens that carry one remains
+unusable, exactly as under `JwksKeySource`. That is now the module's behaviour rather than
+ours to change: no such provider is on the trust list, and supporting one would mean an
+upstream change or a revision of this ADR, not a local matcher.
 
 **Observability is the one thing kept.** The deleted class's fetch counters are replaced by
 `consentmanager.token.signature.verifications`, tagged `provider` and `outcome`, plus a WARN

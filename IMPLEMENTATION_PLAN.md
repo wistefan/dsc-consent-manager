@@ -280,14 +280,18 @@ Create in `com.seamware.consentmanager.security`:
   so that a key rotation the cache has not caught up with can be told from a flood of forged tokens.
 
 Configure `micronaut.caches.jwks.expire-after-write` in `application.yml` (environment variable
-`IDP_JWKS_CACHE_TTL`, default `5m`). Declaring a cache under that name is what switches the module
+`IDP_JWKS_CACHE_TTL`, default `60s`). Declaring a cache under that name is what switches the module
 from its built-in fetcher to `CacheableJwkSetFetcher`, so the block selects an implementation rather
 than tuning one. That single lifetime bounds both halves of the key-handling budget: **rotation
 latency** — a key minted after startup is honoured once the cached set expires, at most one TTL
 later, with no restart (AC 13) — and **outbound request rate** — at most one JWK Set request per
 provider per TTL whatever the inbound traffic, so a flood of tokens bearing `kid` values no provider
 ever published costs no extra request at all, because nothing invalidates this cache on a miss
-(AC 14). Those pull in opposite directions, hence a default in minutes rather than hours. Remove
+(AC 14). Those pull in opposite directions, and the trade is lopsided rather than balanced: the
+module has **no refresh-on-miss path**, so the full TTL elapses between a provider starting to sign
+with a newly published key and this service accepting any token bearing it — a blanket 401 window,
+not a degraded mode. A short lifetime costs one request per provider per minute, which no provider
+notices; a long one buys that back in authentication downtime. Hence a default in seconds. Remove
 `jwks-cache-ttl` from the `consent-manager.identity-providers` schema, `application.yml`,
 `application-dev.yml`, `application-test.yml` and `.env.sample` rather than leave a knob that is
 silently ignored.

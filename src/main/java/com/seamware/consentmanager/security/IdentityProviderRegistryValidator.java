@@ -87,7 +87,6 @@ public class IdentityProviderRegistryValidator {
                     "discovery.url",
                     "audience",
                     "clock.skew",
-                    "jwks.cache.ttl",
                     "claims.user.identifier",
                     "claims.participant.identifier",
                     "claims.roles",

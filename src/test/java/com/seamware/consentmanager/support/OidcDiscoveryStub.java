@@ -164,8 +164,9 @@ public final class OidcDiscoveryStub implements AutoCloseable {
     /**
      * Counts how many JWK Set requests have reached this stub.
      *
-     * <p>The caching, the rate limit and the single-flight refresh all exist to keep this number
-     * down, and none of them can be observed any other way from outside.
+     * <p>The JWK Set cache exists to keep this number down and cannot be observed any other way
+     * from outside, so the request count - not the verification result - is what the caching tests
+     * assert on.
      *
      * @return the number of requests for the key set so far
      */

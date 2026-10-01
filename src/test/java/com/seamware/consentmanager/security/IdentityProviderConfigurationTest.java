@@ -69,6 +69,17 @@ class IdentityProviderConfigurationTest {
     private static final String OTHER_PROVIDER = "secondary";
 
     /**
+     * Per-entry key that step 2 shipped and step 4 retired.
+     *
+     * <p>The JWK Set cache is {@code micronaut-security-jwt}'s and is a single Micronaut Cache
+     * shared by every provider ({@code micronaut.caches.jwks}), so a per-provider lifetime cannot
+     * be honoured. Both spellings of the key must therefore abort startup rather than bind to
+     * nothing: an operator who still sets it would otherwise get a clean start, no warning, and a
+     * cache lifetime other than the one they asked for.
+     */
+    private static final String RETIRED_JWKS_CACHE_TTL_KEY = "jwks-cache-ttl";
+
+    /**
      * An environment name that is not {@link Environment#TEST}, standing in for a deployment.
      *
      * <p>Used by the checks that must behave differently in a deployment than under test.
@@ -441,7 +452,18 @@ class IdentityProviderConfigurationTest {
         }
 
         @ParameterizedTest(name = "unrecognised key \"{0}\" aborts startup")
-        @ValueSource(strings = {"audiance", "claims.email", "role-mappings.user", "jwks-url"})
+        @ValueSource(
+                strings = {
+                    "audiance",
+                    "claims.email",
+                    "role-mappings.user",
+                    "jwks-url",
+                    // Retired in step 4: the JWK Set cache belongs to micronaut-security-jwt and
+                    // is global, so a per-provider lifetime binds to nothing. A knob that is
+                    // silently ignored is worse than no knob, so the old spelling must stay
+                    // rejected rather than quietly accepted.
+                    RETIRED_JWKS_CACHE_TTL_KEY
+                })
         @DisplayName("rejects a settings key this service does not read")
         void rejectsUnrecognisedSettingKeys(String key) {
             Map<String, Object> properties = validTrustList();
@@ -687,7 +709,17 @@ class IdentityProviderConfigurationTest {
         }
 
         @ParameterizedTest(name = "unrecognised key \"{0}\" supplied as a variable aborts startup")
-        @ValueSource(strings = {"audiance", "jwks-url", "claims.email"})
+        @ValueSource(
+                strings = {
+                    "audiance",
+                    "jwks-url",
+                    "claims.email",
+                    // The environment-variable spelling of the retired per-provider cache
+                    // lifetime. It is checked against a separate list from the YAML spelling
+                    // above, so removing the knob from one list and not the other leaves it
+                    // accepted here, bound to nothing.
+                    RETIRED_JWKS_CACHE_TTL_KEY
+                })
         @DisplayName("rejects an unrecognised key that arrives only as an environment variable")
         void rejectsUnrecognisedKeyFromEnvironment(String key) {
             String variable = variableFor(key);

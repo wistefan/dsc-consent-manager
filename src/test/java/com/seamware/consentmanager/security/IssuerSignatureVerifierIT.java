@@ -8,8 +8,15 @@ import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.OidcDiscoveryStub;
 import io.micronaut.context.ApplicationContext;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -107,6 +114,17 @@ class IssuerSignatureVerifierIT {
 
     /** HTTP status the key endpoint answers with while it is modelled as down. */
     private static final int KEY_ENDPOINT_DOWN = 503;
+
+    /**
+     * Verifications fired simultaneously against a provider whose key set has never been loaded.
+     *
+     * <p>Large enough that several threads are genuinely inside the first load at once, small
+     * enough to stay well inside the stub's capacity.
+     */
+    private static final int CONCURRENT_VERIFICATIONS = 8;
+
+    /** Longest a test waits for one member of a concurrent burst to finish. */
+    private static final Duration BURST_TIMEOUT = Duration.ofSeconds(30);
 
     @Test
     @DisplayName("a token signed by a key the issuer publishes verifies")
@@ -271,6 +289,103 @@ class IssuerSignatureVerifierIT {
             assertThat(verify(verifier, provider.issuer(), beforeRotation))
                     .as("the retired key stops verifying once the new set is in hand")
                     .isFalse();
+        }
+    }
+
+    @Test
+    @DisplayName("a token is not checked against the keys of an issuer it does not claim")
+    void rejectsATokenRoutedToAnIssuerItDoesNotClaim() {
+        try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
+                ApplicationContext context = startContext(provider, Map.of())) {
+            IssuerSignatureVerifier verifier = awaitResolved(context, provider);
+            // Signed by a key this provider really publishes, but claiming somebody else's issuer.
+            SignedJWT token =
+                    provider.signToken(provider.initialKeyId(), claims(UNREGISTERED_ISSUER));
+
+            assertThat(verify(verifier, provider.issuer(), token))
+                    .as(
+                            "routing is the whole point of this class, so a caller that passes an"
+                                    + " issuer the token does not claim must not get a pass")
+                    .isFalse();
+        }
+    }
+
+    @Test
+    @DisplayName("a key rotated while the key endpoint was down is honoured once it recovers")
+    void honoursAKeyRotatedDuringAnOutage() {
+        try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
+                ApplicationContext context =
+                        startContext(
+                                provider, Map.of(JWKS_CACHE_TTL_PROPERTY, SHORT_JWKS_CACHE_TTL))) {
+            IssuerSignatureVerifier verifier = awaitResolved(context, provider);
+            SignedJWT beforeOutage =
+                    provider.signToken(provider.initialKeyId(), claims(provider.issuer()));
+            assertThat(verify(verifier, provider.issuer(), beforeOutage)).isTrue();
+
+            provider.failJwksRequests(KEY_ENDPOINT_DOWN);
+            provider.rotateKeysTo(ROTATED_KEY_ID);
+            SignedJWT afterRotation = provider.signToken(ROTATED_KEY_ID, claims(provider.issuer()));
+
+            assertThat(verify(verifier, provider.issuer(), afterRotation))
+                    .as(
+                            "a key published while the endpoint was unreachable cannot have been"
+                                    + " learned, so the token must not be accepted on trust")
+                    .isFalse();
+
+            provider.serveJwksNormally();
+
+            Await.until(
+                    "the key rotated during the outage to be honoured after recovery",
+                    ROTATION_TIMEOUT,
+                    () -> verify(verifier, provider.issuer(), afterRotation));
+        }
+    }
+
+    @Test
+    @DisplayName("concurrent first-time verifications converge on one cached key set")
+    void concurrentFirstTimeVerificationsConvergeOnTheCache() throws Exception {
+        try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
+                ApplicationContext context = startContext(provider, Map.of())) {
+            IssuerSignatureVerifier verifier = awaitResolved(context, provider);
+            SignedJWT token =
+                    provider.signToken(provider.initialKeyId(), claims(provider.issuer()));
+            ExecutorService executor = Executors.newFixedThreadPool(CONCURRENT_VERIFICATIONS);
+            CountDownLatch release = new CountDownLatch(1);
+            try {
+                List<Future<Boolean>> burst = new ArrayList<>();
+                for (int i = 0; i < CONCURRENT_VERIFICATIONS; i++) {
+                    burst.add(
+                            executor.submit(
+                                    () -> {
+                                        release.await();
+                                        return verify(verifier, provider.issuer(), token);
+                                    }));
+                }
+                release.countDown();
+                for (Future<Boolean> result : burst) {
+                    assertThat(result.get(BURST_TIMEOUT.toSeconds(), TimeUnit.SECONDS))
+                            .as("every token in the burst is signed by a published key")
+                            .isTrue();
+                }
+
+                int fetchesDuringBurst = provider.jwksRequestCount();
+                assertThat(fetchesDuringBurst)
+                        .as(
+                                "a cold-start burst is bounded by concurrency at that instant, not"
+                                        + " by traffic")
+                        .isBetween(1, CONCURRENT_VERIFICATIONS);
+
+                for (int i = 0; i < CONCURRENT_VERIFICATIONS; i++) {
+                    assertThat(verify(verifier, provider.issuer(), token)).isTrue();
+                }
+                assertThat(provider.jwksRequestCount())
+                        .as(
+                                "once the burst has settled the cache serves everything, which is"
+                                        + " the steady-state bound the documentation promises")
+                        .isEqualTo(fetchesDuringBurst);
+            } finally {
+                executor.shutdownNow();
+            }
         }
     }
 
