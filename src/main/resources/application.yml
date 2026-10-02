@@ -48,7 +48,7 @@ micronaut:
     # takes the last of two duplicate keys, so a second block would silently drop
     # whichever of these two lines it did not repeat.
     #
-    # TokenSignatureEnforcementIT pins both: `exposesNoOAuth2Routes` for the routes and
+    # TokenSignatureEnforcementTest pins both: `exposesNoOAuth2Routes` for the routes and
     # `challengeCarriesNoResourceMetadataParameter` for the challenge parameter.
     oauth2:
       protected-resource-metadata:
@@ -95,23 +95,27 @@ micronaut:
         http-method: GET
         access:
           - isAuthenticated()
-    # Micronaut's own JWT support stays ENABLED: the flag gates the whole
-    # `io.micronaut.security.token.jwt` package - the security filter, the bearer-token
-    # reader and the `TokenValidator` SPI that ConsentManagerTokenValidator plugs into
-    # in step 5. No signature configuration is registered yet, so until that validator
-    # lands EVERY bearer token is rejected and no request authenticates. That is the
-    # fail-closed direction, and it is what UnsignedTokenRejector keeps true for
-    # `alg: none` tokens, which the framework would otherwise accept precisely because
-    # no signature configuration exists.
+    # Micronaut's own JWT support stays ENABLED: the flag gates the `TokenValidator`
+    # SPI that `ConsentManagerTokenValidator` plugs into, along with the security filter
+    # and the bearer-token reader.
     #
-    # There are deliberately no `claims-validators.issuer` / `.audience` entries: both
-    # hold a single global value, and the trust list holds a configurable number of
-    # providers each with its own issuer and audience. Those checks are per provider and
-    # belong to ConsentManagerTokenValidator (step 5). See
-    # docs/adr/0002-own-identity-provider-registry-on-nimbus.md.
+    # There are deliberately no `claims-validators.issuer` / `.audience` entries: each
+    # holds a single global value, while every provider in the trust list has its own.
     token:
       jwt:
         enabled: true
+
+        # A security control, not a tidy-up: `TokenAuthenticationFetcher` takes the first
+        # `Authentication` ANY registered `TokenValidator` returns, so the module's own
+        # validator would be a laxer path beside `ConsentManagerTokenValidator`. No
+        # verifier is a bean here, so only `UnsignedTokenRejector` keeps that validator
+        # from treating `alg: none` as validly signed - a latent hole, not an open one.
+        # Both guards are kept so undoing either alone cannot open it, and
+        # `TokenSignatureEnforcementTest` pins both. Reasoning in
+        # docs/adr/0005-own-token-validator-on-micronaut-security-jwt.md.
+        nimbus:
+          validator: false
+          reactive-validator: false
 
   # ---------------------------------------------------------------------------
   # JWK Set cache
@@ -305,11 +309,15 @@ consent-manager:
       allow-insecure-transport: ${IDP_ALLOW_INSECURE_TRANSPORT:false}
       # Tolerance applied to the exp, iat and nbf claims.
       clock-skew: ${IDP_CLOCK_SKEW:30s}
-      # Claim names are per provider. Each may be a dot-separated nested path.
+      # Claim names are per provider and are configured as a list of segments, so how a
+      # name is read is fixed here and never inferred from the token: a nested path is
+      # [realm_access, roles], while a top-level name that merely contains dots is one
+      # segment. A scalar is one segment; a comma-separated scalar is its segments,
+      # which is how an environment variable supplies a nested path.
       claims:
         user-identifier: ${IDP_CLAIM_USER_IDENTIFIER:sub}
         participant-identifier: ${IDP_CLAIM_PARTICIPANT_IDENTIFIER:participant_id}
-        roles: ${IDP_CLAIM_ROLES:realm_access.roles}
+        roles: ${IDP_CLAIM_ROLES:realm_access,roles}
       # Maps this service's roles to the raw role strings the provider emits.
       # Keys are written in lower case so that an override replaces the configured
       # value instead of adding a second entry for the same role.

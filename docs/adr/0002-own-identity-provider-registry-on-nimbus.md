@@ -117,7 +117,7 @@ list. The name is carried on the bean so diagnostics can name the offending bloc
   provider outage after that, so the collection must be kept non-empty.
 - Until step 5 lands, **no token authenticates at all**: no signature configuration can
   verify anything, so every bearer token is rejected. That is the fail-closed direction
-  and it is pinned by `TokenSignatureEnforcementIT`.
+  and it is pinned by `TokenSignatureEnforcementTest`.
 - The interim global `claims-validators.issuer` / `.audience` entries that the rejected
   design needed are gone. They were a protocol-stripped suffix match, not the
   byte-for-byte comparison AC 4 requires, and nothing now depends on them.

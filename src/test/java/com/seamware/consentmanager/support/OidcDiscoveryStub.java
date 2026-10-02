@@ -10,10 +10,15 @@ import com.github.tomakehurst.wiremock.WireMockServer;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSSigner;
+import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.crypto.RSASSASigner;
+import com.nimbusds.jose.jwk.Curve;
+import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.KeyUse;
+import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
@@ -60,8 +65,17 @@ public final class OidcDiscoveryStub implements AutoCloseable {
     /** Sentinel for {@link #jwksFailureStatus} meaning "serve the key set normally". */
     private static final int JWKS_SERVED_NORMALLY = 0;
 
-    /** Algorithm the generated keys sign with, matching the RSA keys the stub publishes. */
-    private static final JWSAlgorithm SIGNING_ALGORITHM = JWSAlgorithm.RS256;
+    /** Key identifier of the elliptic-curve key published beside {@link #INITIAL_KEY_ID}. */
+    private static final String INITIAL_EC_KEY_ID = "initial-ec-key";
+
+    /** Curve of the published elliptic-curve key; the one {@code ES256} is defined over. */
+    private static final Curve EC_CURVE = Curve.P_256;
+
+    /** Algorithm an RSA key signs with. */
+    private static final JWSAlgorithm RSA_ALGORITHM = JWSAlgorithm.RS256;
+
+    /** Algorithm the elliptic-curve key signs with. */
+    private static final JWSAlgorithm EC_ALGORITHM = JWSAlgorithm.ES256;
 
     private final WireMockServer server;
 
@@ -78,17 +92,30 @@ public final class OidcDiscoveryStub implements AutoCloseable {
     public OidcDiscoveryStub() {
         this.server = new WireMockServer(options().dynamicPort());
         this.server.start();
-        this.jwkSet = generateKeySet(INITIAL_KEY_ID);
+        this.jwkSet = initialKeySet();
         serveMatchingMetadata();
     }
 
     /**
-     * Returns the key identifier the stub publishes until a test rotates it away.
+     * Returns the key identifier of the RSA key the stub publishes until a test rotates it away.
      *
      * @return the initial {@code kid}
      */
     public String initialKeyId() {
         return INITIAL_KEY_ID;
+    }
+
+    /**
+     * Returns the key identifier of the elliptic-curve key published beside the RSA one.
+     *
+     * <p>Real providers sign with one key type, but a relying party must cope with either, and an
+     * {@code ES256} token is the only way to exercise the key-selection layer's elliptic-curve path
+     * end to end. A rotation drops this key, as it drops every other.
+     *
+     * @return the {@code kid} of the published EC key
+     */
+    public String initialEcKeyId() {
+        return INITIAL_EC_KEY_ID;
     }
 
     /**
@@ -151,10 +178,9 @@ public final class OidcDiscoveryStub implements AutoCloseable {
                     "This stub publishes no key with kid '" + keyId + "'");
         }
         SignedJWT token =
-                new SignedJWT(
-                        new JWSHeader.Builder(SIGNING_ALGORITHM).keyID(keyId).build(), claims);
+                new SignedJWT(new JWSHeader.Builder(algorithmOf(key)).keyID(keyId).build(), claims);
         try {
-            token.sign(new RSASSASigner(key.toRSAKey()));
+            token.sign(signerFor(key));
         } catch (JOSEException failure) {
             throw new IllegalStateException("Could not sign a test token", failure);
         }
@@ -173,6 +199,50 @@ public final class OidcDiscoveryStub implements AutoCloseable {
     public int jwksRequestCount() {
         return server.countRequestsMatching(getRequestedFor(urlEqualTo(JWKS_PATH)).build())
                 .getCount();
+    }
+
+    /**
+     * Picks the algorithm a key signs with, as a provider's own metadata would.
+     *
+     * @param key the key doing the signing
+     * @return {@code ES256} for an elliptic-curve key, {@code RS256} otherwise
+     */
+    private static JWSAlgorithm algorithmOf(JWK key) {
+        return key instanceof ECKey ? EC_ALGORITHM : RSA_ALGORITHM;
+    }
+
+    /**
+     * Builds the signer matching a key's type.
+     *
+     * @param key the key doing the signing
+     * @return the signer
+     * @throws JOSEException if the key cannot be used for signing
+     */
+    private static JWSSigner signerFor(JWK key) throws JOSEException {
+        return key instanceof ECKey ecKey
+                ? new ECDSASigner(ecKey)
+                : new RSASSASigner(key.toRSAKey());
+    }
+
+    /**
+     * Builds the key set the stub starts with: the RSA key first, so a test reading "the published
+     * key" gets the type a provider's tokens are normally signed with, and the EC key beside it.
+     *
+     * @return the initial key set, private halves included
+     */
+    private static JWKSet initialKeySet() {
+        List<JWK> keys = new ArrayList<>(generateKeySet(INITIAL_KEY_ID).getKeys());
+        try {
+            keys.add(
+                    new ECKeyGenerator(EC_CURVE)
+                            .keyID(INITIAL_EC_KEY_ID)
+                            .keyUse(KeyUse.SIGNATURE)
+                            .algorithm(EC_ALGORITHM)
+                            .generate());
+        } catch (JOSEException failure) {
+            throw new IllegalStateException("Could not generate a test EC signing key", failure);
+        }
+        return new JWKSet(keys);
     }
 
     /**

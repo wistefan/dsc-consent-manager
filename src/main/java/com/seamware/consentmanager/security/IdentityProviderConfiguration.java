@@ -7,13 +7,17 @@ import io.micronaut.context.exceptions.ConfigurationException;
 import jakarta.annotation.PostConstruct;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The Consent Manager's settings for one trusted OpenID Connect provider.
@@ -29,10 +33,10 @@ import java.util.Map;
  *       discovery-url: https://keycloak.example.com/realms/dataspace/.well-known/openid-configuration
  *       audience: consent-manager
  *       clock-skew: 30s
- *       claims:
- *         user-identifier: sub
- *         participant-identifier: participant_id
- *         roles: realm_access.roles
+ *       claims:                     # each name is a list of segments
+ *         user-identifier: [sub]
+ *         participant-identifier: [participant_id]
+ *         roles: [realm_access, roles]
  *       role-mapping:
  *         user: consent-user
  *         participant: consent-participant
@@ -102,7 +106,16 @@ public class IdentityProviderConfiguration {
     public static final Duration DEFAULT_CLOCK_SKEW = Duration.ofSeconds(30);
 
     /** Default claim carrying the user identifier, per the published token contract. */
-    public static final String DEFAULT_USER_IDENTIFIER_CLAIM = "sub";
+    public static final List<String> DEFAULT_USER_IDENTIFIER_CLAIM = List.of("sub");
+
+    /** Separator a claim name was written with before claim names became segment lists. */
+    private static final String LEGACY_PATH_SEPARATOR = ".";
+
+    /** Marker of a URI-shaped claim name, which legitimately holds dots in one segment. */
+    private static final String URI_SCHEME_SEPARATOR = "://";
+
+    /** Separator Micronaut splits a scalar property into list elements on. */
+    private static final String SEGMENT_SEPARATOR = ",";
 
     /**
      * Whether a provider may be reached over cleartext {@code http} when it does not say otherwise.
@@ -116,6 +129,8 @@ public class IdentityProviderConfiguration {
      * in per provider and is warned at startup.
      */
     public static final boolean DEFAULT_ALLOW_INSECURE_TRANSPORT = false;
+
+    private static final Logger LOG = LoggerFactory.getLogger(IdentityProviderConfiguration.class);
 
     private final String name;
 
@@ -367,6 +382,7 @@ public class IdentityProviderConfiguration {
     @PostConstruct
     public void validate() {
         requireNonNegative("clock-skew", clockSkew);
+        claims.validateSegments(getPropertyPath());
         this.resolvedRoleMapping = resolveRoleMapping();
     }
 
@@ -464,76 +480,183 @@ public class IdentityProviderConfiguration {
     /**
      * The claim names this provider uses for identifiers and roles.
      *
-     * <p>Each value may be a dot-separated nested path, for example {@code realm_access.roles}.
-     * Micronaut's {@code micronaut.security.token.roles-name} is a single global key looked up with
-     * a plain map access, so it can express neither a nested path nor a per-provider difference.
+     * <p>Each name is a <strong>list of segments</strong> rather than a dotted string: {@code
+     * [realm_access, roles]} names the {@code roles} member of the nested {@code realm_access}
+     * object, while the single segment {@code [https://example.com/roles]} names a top-level claim
+     * that merely contains dots. Configuring the reading this way fixes it at startup, so no claim
+     * a token carries can change how the operator's configured name is interpreted. A scalar binds
+     * as a one-element list, and a comma-separated scalar binds as its segments, which is how an
+     * environment variable supplies a nested path ({@code IDP_CLAIM_ROLES=realm_access,roles}).
+     *
+     * <p>Micronaut's {@code micronaut.security.token.roles-name} is a single global key looked up
+     * with a plain map access, so it can express neither a nested path nor a per-provider
+     * difference.
      */
     @ConfigurationProperties("claims")
     public static class ClaimsConfiguration {
 
-        private String userIdentifier = DEFAULT_USER_IDENTIFIER_CLAIM;
-        private String participantIdentifier;
-        private String roles;
+        private List<String> userIdentifier = DEFAULT_USER_IDENTIFIER_CLAIM;
+        private List<String> participantIdentifier = List.of();
+        private List<String> roles = List.of();
 
         /**
-         * Returns the claim carrying the opaque user identifier.
+         * Returns the segments naming the claim that carries the opaque user identifier.
          *
          * <p>The value is treated as opaque: it may be an email address, a DID, a URI or a hash of
          * an EUDI Wallet PID.
          *
-         * @return the claim path, defaulting to {@value #DEFAULT_USER_IDENTIFIER_CLAIM}
+         * @return the claim-name segments, defaulting to {@code [sub]}
          */
-        @NotBlank(message = ENTRY_PATH + ".claims.user-identifier must not be blank")
-        public String getUserIdentifier() {
+        @NotEmpty(message = ENTRY_PATH + ".claims.user-identifier must name at least one segment")
+        public List<String> getUserIdentifier() {
             return userIdentifier;
         }
 
         /**
-         * Sets the claim carrying the opaque user identifier.
+         * Sets the segments naming the claim that carries the opaque user identifier.
          *
-         * @param userIdentifier the claim path; {@code null} restores the default
+         * <p>Only {@code null} restores the default, so that an explicitly empty value fails
+         * startup under {@link #getUserIdentifier()}'s constraint exactly as it does for the other
+         * two claim names, rather than being quietly read as {@code sub}.
+         *
+         * @param userIdentifier the claim-name segments; {@code null} restores the default
          */
-        public void setUserIdentifier(String userIdentifier) {
+        public void setUserIdentifier(List<String> userIdentifier) {
             this.userIdentifier =
-                    userIdentifier == null ? DEFAULT_USER_IDENTIFIER_CLAIM : userIdentifier;
+                    userIdentifier == null
+                            ? DEFAULT_USER_IDENTIFIER_CLAIM
+                            : List.copyOf(userIdentifier);
         }
 
         /**
-         * Returns the claim carrying the opaque participant identifier.
+         * Returns the segments naming the claim that carries the opaque participant identifier.
          *
-         * @return the claim path, for example {@code participant_id}
+         * @return the claim-name segments, for example {@code [participant_id]}
          */
-        @NotBlank(message = ENTRY_PATH + ".claims.participant-identifier must not be blank")
-        public String getParticipantIdentifier() {
+        @NotEmpty(
+                message =
+                        ENTRY_PATH
+                                + ".claims.participant-identifier must name at least one segment")
+        public List<String> getParticipantIdentifier() {
             return participantIdentifier;
         }
 
         /**
-         * Sets the claim carrying the opaque participant identifier.
+         * Sets the segments naming the claim that carries the opaque participant identifier.
          *
-         * @param participantIdentifier the claim path
+         * @param participantIdentifier the claim-name segments
          */
-        public void setParticipantIdentifier(String participantIdentifier) {
-            this.participantIdentifier = participantIdentifier;
+        public void setParticipantIdentifier(List<String> participantIdentifier) {
+            this.participantIdentifier =
+                    participantIdentifier == null ? List.of() : List.copyOf(participantIdentifier);
         }
 
         /**
-         * Returns the claim carrying the token's raw role strings.
+         * Returns the segments naming the claim that carries the token's raw role strings.
          *
-         * @return the claim path, for example {@code realm_access.roles}
+         * @return the claim-name segments, for example {@code [realm_access, roles]}
          */
-        @NotBlank(message = ENTRY_PATH + ".claims.roles must not be blank")
-        public String getRoles() {
+        @NotEmpty(message = ENTRY_PATH + ".claims.roles must name at least one segment")
+        public List<String> getRoles() {
             return roles;
         }
 
         /**
-         * Sets the claim carrying the token's raw role strings.
+         * Sets the segments naming the claim that carries the token's raw role strings.
          *
-         * @param roles the claim path
+         * @param roles the claim-name segments
          */
-        public void setRoles(String roles) {
-            this.roles = roles;
+        public void setRoles(List<String> roles) {
+            this.roles = roles == null ? List.of() : List.copyOf(roles);
+        }
+
+        /**
+         * Rejects a blank segment, which would otherwise name no claim and silently resolve to
+         * empty for every token - indistinguishable from a provider that stopped emitting the
+         * claim.
+         *
+         * @param propertyPath the configuration path of the owning entry, for the message
+         * @throws ConfigurationException if any configured name contains a blank segment
+         */
+        void validateSegments(String propertyPath) {
+            requireNoBlankSegment(propertyPath, "user-identifier", userIdentifier);
+            requireNoBlankSegment(propertyPath, "participant-identifier", participantIdentifier);
+            requireNoBlankSegment(propertyPath, "roles", roles);
+            warnIfUnsplitPath(propertyPath, "user-identifier", userIdentifier);
+            warnIfUnsplitPath(propertyPath, "participant-identifier", participantIdentifier);
+            warnIfUnsplitPath(propertyPath, "roles", roles);
+        }
+
+        /**
+         * Reports whether a configured claim name reads like a dotted path that was never split
+         * into segments.
+         *
+         * <p>Before claim names became segment lists, {@code realm_access.roles} named a nested
+         * claim. It now names one literal top-level claim, which no provider emits, so the claim
+         * resolves to empty for every token: a token with such a {@code roles} name authenticates
+         * with no authorities and every secured endpoint answers {@code 403}, with nothing in the
+         * response or the trust list to say why. That cannot be a startup failure, because a single
+         * segment holding dots is legitimate - but a URI-shaped name is the only common legitimate
+         * form, and it is recognisable, so warning on the rest costs no false alarm.
+         *
+         * @param segments the configured segments
+         * @return {@code true} if the name is one non-URI segment containing {@value
+         *     #LEGACY_PATH_SEPARATOR}
+         */
+        static boolean looksLikeUnsplitPath(List<String> segments) {
+            if (segments == null || segments.size() != 1) {
+                return false;
+            }
+            String only = segments.get(0);
+            return only != null
+                    && only.contains(LEGACY_PATH_SEPARATOR)
+                    && !only.contains(URI_SCHEME_SEPARATOR);
+        }
+
+        /**
+         * Logs the one line that turns a silent authorization outage into a diagnosable one.
+         *
+         * @param propertyPath the configuration path of the owning entry
+         * @param property the claim key being checked
+         * @param segments the configured segments
+         */
+        private static void warnIfUnsplitPath(
+                String propertyPath, String property, List<String> segments) {
+            if (!looksLikeUnsplitPath(segments)) {
+                return;
+            }
+            String only = segments.get(0);
+            LOG.warn(
+                    "{}.claims.{} is the single claim name '{}'. Dots carry no meaning in a claim"
+                            + " name: nested claims are named segment by segment, so this is read as"
+                            + " one top-level claim literally called '{}' and will resolve to empty"
+                            + " unless the provider really emits it. If a nested claim was meant,"
+                            + " configure the segments instead (for example '{}').",
+                    propertyPath,
+                    property,
+                    only,
+                    only,
+                    only.replace(LEGACY_PATH_SEPARATOR, SEGMENT_SEPARATOR));
+        }
+
+        /**
+         * Checks one configured claim name for blank segments.
+         *
+         * @param propertyPath the configuration path of the owning entry
+         * @param property the claim key being checked
+         * @param segments the configured segments
+         * @throws ConfigurationException if a segment is {@code null} or blank
+         */
+        private static void requireNoBlankSegment(
+                String propertyPath, String property, List<String> segments) {
+            if (segments.stream().anyMatch(segment -> segment == null || segment.isBlank())) {
+                throw new ConfigurationException(
+                        propertyPath
+                                + ".claims."
+                                + property
+                                + " must not contain a blank segment, but was "
+                                + segments);
+            }
         }
     }
 }

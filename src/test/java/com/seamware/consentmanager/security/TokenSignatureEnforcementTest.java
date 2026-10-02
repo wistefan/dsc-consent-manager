@@ -27,10 +27,12 @@ import io.micronaut.http.client.exceptions.HttpClientResponseException;
 import io.micronaut.runtime.server.EmbeddedServer;
 import io.micronaut.security.annotation.Secured;
 import io.micronaut.security.rules.SecurityRule;
+import io.micronaut.security.token.validator.TokenValidator;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -44,13 +46,14 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Pins the token behaviour this step leaves behind: <strong>no bearer token authenticates at
- * all</strong>, least of all an unsigned one.
+ * Pins the token behaviour around an issuer whose keys are <strong>not</strong> available:
+ * <strong>no bearer token authenticates at all</strong>, least of all an unsigned one.
  *
- * <p>Step 2 delivers the trust list; nothing yet turns a trusted issuer into a signing key — that
- * is step 4 (JWKS) and step 5 (the per-issuer validator). The fail-closed direction of that gap is
- * a property worth pinning rather than assuming, because Micronaut's built-in token validator fails
- * <em>open</em> when no key is registered: {@code AbstractJsonWebTokenValidator} latches
+ * <p>The trust list holds one entry and that entry is deliberately unreachable, so discovery never
+ * resolves it and no signing key is ever known for it. {@link ConsentManagerTokenValidator} treats
+ * an unresolved entry as no match at all, which is the fail-closed direction — but it is a property
+ * worth pinning rather than assuming, because Micronaut's own token validator fails <em>open</em>
+ * in exactly that situation: {@code AbstractJsonWebTokenValidator} latches
  *
  * <pre>{@code
  * this.noSignatures = imperativeSignatureConfigurations.isEmpty()
@@ -64,15 +67,19 @@ import org.junit.jupiter.params.provider.ValueSource;
  * assertion here from passing for the wrong reason: a token is rejected for many reasons, so a
  * suite of rejection assertions alone would stay green even if the bypass re-opened.
  *
- * <p>The configured provider is deliberately unreachable. Discovery arrives in step 3, so nothing
- * contacts it; the entry exists only to satisfy the trust-list check and to give the forged tokens
- * an issuer worth claiming.
+ * <p>{@link #serviceOwnValidatorIsTheOnlyTokenValidator()} closes the other half of the same hole.
+ * {@code TokenAuthenticationFetcher} takes the first {@code Authentication} that <em>any</em>
+ * registered {@code TokenValidator} returns, so a second, laxer validator beside {@link
+ * ConsentManagerTokenValidator} would decide the outcome whenever it is the more permissive of the
+ * two. The shipped {@code application.yml} switches Micronaut's own Nimbus validators off for that
+ * reason, and that test is what keeps the switch honest.
  *
+ * @see ConsentManagerTokenValidator
  * @see UnsignedTokenRejector
  * @see IdentityProviderRegistryValidator
  */
 @DisplayName("Token signature enforcement")
-class TokenSignatureEnforcementIT {
+class TokenSignatureEnforcementTest {
 
     /** Property that switches the probe route below on, so it exists only for this test. */
     private static final String PROBE_ROUTE_ENABLED = "test.token-signature-enforcement.enabled";
@@ -117,7 +124,7 @@ class TokenSignatureEnforcementIT {
     private static final String PARTICIPANT_IDENTIFIER_CLAIM = "participant_id";
 
     /** Claim path the configured provider carries its roles in. */
-    private static final String ROLES_CLAIM = "realm_access.roles";
+    private static final List<String> ROLES_CLAIM = List.of("realm_access", "roles");
 
     /** Provider role string the {@code USER} role is mapped from. */
     private static final String USER_ROLE_VALUE = "consent-user";
@@ -234,7 +241,8 @@ class TokenSignatureEnforcementIT {
         properties.put(settings + ".issuer", TRUSTED_ISSUER);
         properties.put(settings + ".discovery-url", DISCOVERY_URL);
         properties.put(settings + ".audience", AUDIENCE);
-        properties.put(settings + ".claims.participant-identifier", PARTICIPANT_IDENTIFIER_CLAIM);
+        properties.put(
+                settings + ".claims.participant-identifier", List.of(PARTICIPANT_IDENTIFIER_CLAIM));
         properties.put(settings + ".claims.roles", ROLES_CLAIM);
         properties.put(settings + ".role-mapping.user", USER_ROLE_VALUE);
         properties.put(settings + ALLOW_INSECURE_TRANSPORT_KEY, true);
@@ -421,10 +429,10 @@ class TokenSignatureEnforcementIT {
         return Stream.of(
                 Arguments.of(
                         "an unsigned alg:none token",
-                        (Supplier<String>) TokenSignatureEnforcementIT::unsignedToken),
+                        (Supplier<String>) TokenSignatureEnforcementTest::unsignedToken),
                 Arguments.of(
                         "a symmetrically signed HS256 token",
-                        (Supplier<String>) TokenSignatureEnforcementIT::symmetricToken),
+                        (Supplier<String>) TokenSignatureEnforcementTest::symmetricToken),
                 Arguments.of(
                         "a token naming an unregistered issuer",
                         (Supplier<String>)
@@ -514,6 +522,22 @@ class TokenSignatureEnforcementIT {
                     .as("header %s must not echo the submitted issuer", name)
                     .allSatisfy(value -> assertThat(value).doesNotContain(UNTRUSTED_ISSUER_HOST));
         }
+    }
+
+    @Test
+    @DisplayName("the service's own validator is the only TokenValidator a deployment registers")
+    void serviceOwnValidatorIsTheOnlyTokenValidator() {
+        assertThat(shippedContext.getBeansOfType(TokenValidator.class))
+                .as(
+                        "TokenAuthenticationFetcher takes the first Authentication ANY registered"
+                                + " TokenValidator returns, so a second one beside"
+                                + " ConsentManagerTokenValidator would be a parallel authentication"
+                                + " path validating against the declarative signature configuration"
+                                + " this service deliberately does not have. The"
+                                + " micronaut.security.token.jwt.nimbus.* switches in application.yml"
+                                + " are what keep this list a singleton")
+                .singleElement()
+                .isInstanceOf(ConsentManagerTokenValidator.class);
     }
 
     @Test
