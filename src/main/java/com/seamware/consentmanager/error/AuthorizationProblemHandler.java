@@ -61,9 +61,14 @@ public class AuthorizationProblemHandler extends DefaultAuthorizationExceptionHa
     private static final String UNAUTHORIZED_DETAIL =
             "The request did not carry a valid bearer token.";
 
-    /** Says that the caller is known and still not permitted, without naming the missing role. */
+    /**
+     * Says that the caller is known and still not permitted, without naming which check refused it:
+     * a role the operation does not permit, no mapped role at all, and a participant identifier
+     * this service does not know all land here, so wording that named any one of them would be
+     * wrong more often than right.
+     */
     private static final String FORBIDDEN_DETAIL =
-            "The authenticated principal lacks a role permitted to perform this operation.";
+            "The authenticated caller is not permitted to perform this operation.";
 
     /**
      * Creates the handler with the collaborators the superclass needs.

@@ -559,16 +559,13 @@ class TokenSignatureEnforcementTest {
                     .as(
                             "without UnsignedTokenRejector the empty signature-configuration"
                                     + " collection makes Micronaut treat a PlainJWT as validly"
-                                    + " signed, so the request authenticates - which is the bypass"
-                                    + " this bean exists to close. It stops at 403 rather than 200"
-                                    + " only because that authentication is built by the framework's"
-                                    + " own validator and so carries no %s attribute, leaving"
-                                    + " PrincipalResolutionFilter with no issuer to resolve claim"
-                                    + " names against. If this ever returns 401 the bypass is closed"
-                                    + " by something else and the rejector's own assertions have"
-                                    + " stopped proving anything",
-                            ConsentManagerTokenValidator.IDENTITY_PROVIDER_ISSUER_ATTRIBUTE)
-                    .isEqualTo(HttpStatus.FORBIDDEN.getCode());
+                                    + " signed, so the request authenticates and is served - which"
+                                    + " is the bypass this bean exists to close. The probe route"
+                                    + " declares no principal parameter, so PrincipalResolutionFilter"
+                                    + " never runs and cannot mask the bypass behind a 403. If this"
+                                    + " ever returns 401 the bypass is closed by something else and"
+                                    + " the rejector's own assertions have stopped proving anything")
+                    .isEqualTo(HttpStatus.OK.getCode());
         }
     }
 

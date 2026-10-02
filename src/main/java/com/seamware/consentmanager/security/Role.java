@@ -1,7 +1,9 @@
 package com.seamware.consentmanager.security;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The authorization roles understood by the Consent Manager.
@@ -31,6 +33,34 @@ public enum Role {
      * and therefore carries no participant identifier.
      */
     CATALOG;
+
+    /**
+     * Order in which the roles of a multi-role token are considered when deciding which single
+     * identity the caller acts as.
+     *
+     * <p>Machine roles outrank {@link #USER}, and {@link #CATALOG} outranks {@link #PARTICIPANT}
+     * because the catalog token is defined as a participant token that additionally bears the
+     * catalog role - the natural way to issue one is a service account holding both. Ordering them
+     * the other way round would mean no token could ever act as the catalog.
+     */
+    private static final List<Role> PRINCIPAL_PRECEDENCE = List.of(CATALOG, PARTICIPANT, USER);
+
+    /**
+     * Picks the one role a token acts as, from every role it was granted.
+     *
+     * <p>Authorization itself still reads the full set - {@code @Secured} matches any granted role.
+     * This only settles which typed principal a multi-role token resolves to, deterministically and
+     * in one place, so the published token contract has an answer instead of a refusal.
+     *
+     * @param granted every role the token's roles claim mapped to; may be empty
+     * @return the highest-precedence granted role, or empty if none was granted
+     */
+    public static Optional<Role> effective(Set<Role> granted) {
+        if (granted == null) {
+            return Optional.empty();
+        }
+        return PRINCIPAL_PRECEDENCE.stream().filter(granted::contains).findFirst();
+    }
 
     /**
      * Resolves a role from a configuration key, ignoring case.

@@ -7,10 +7,12 @@
 # until Step 6's AC 19 spec-vs-@Secured consistency test enforces it, which is
 # the place to add the check rather than leaving it to review.
 description: >
-  The bearer token authenticated successfully but does not grant a role that is
-  permitted to perform this operation. A token whose roles claim is absent, or
-  whose roles are all unmappable, authenticates with zero roles and therefore
-  also receives this response.
+  The bearer token authenticated successfully but does not name a caller
+  permitted to perform this operation. That covers a token that grants no role
+  permitted here, a token whose roles claim is absent or wholly unmappable (it
+  authenticates with zero roles), and a participant token whose identifier is
+  not registered with this service. The body deliberately does not say which of
+  these applies.
 content:
   application/problem+json:
     schema:
@@ -19,5 +21,5 @@ content:
       type: "https://consent-manager.example/problems/forbidden"
       title: "Forbidden"
       status: 403
-      detail: "The authenticated principal lacks a role permitted to perform this operation."
+      detail: "The authenticated caller is not permitted to perform this operation."
       instance: "/v1/consents"

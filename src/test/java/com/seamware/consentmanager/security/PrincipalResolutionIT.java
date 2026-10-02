@@ -70,6 +70,9 @@ class PrincipalResolutionIT extends PostgresTestResource {
     /** Probe declaring a {@link UserPrincipal} parameter, so only a user may reach its body. */
     private static final String USER_ROUTE = PROBE_PATH + "/user";
 
+    /** Probe rendering every optional profile claim a {@link UserPrincipal} carries. */
+    private static final String PROFILE_ROUTE = PROBE_PATH + "/profile";
+
     /** Probe carrying no {@code @Secured} annotation at all. */
     private static final String UNSECURED_ROUTE = PROBE_PATH + "/unsecured";
 
@@ -105,6 +108,25 @@ class PrincipalResolutionIT extends PostgresTestResource {
 
     /** A role the provider might emit that this service deliberately does not map. */
     private static final String UNMAPPED_ROLE = "offline_access";
+
+    /** Standard OpenID Connect profile claims a user token may carry, in the order probed. */
+    private static final List<String> PROFILE_CLAIMS =
+            List.of("email", "email_verified", "name", "given_name", "family_name");
+
+    /** Separator the profile probe joins its fields with. */
+    private static final String PROFILE_SEPARATOR = "|";
+
+    /** Value of the {@code email} claim on the profile token. */
+    private static final String PROFILE_EMAIL = "user@participant.example";
+
+    /** Value of the {@code name} claim on the profile token. */
+    private static final String PROFILE_NAME = "Ada Lovelace";
+
+    /** Value of the {@code given_name} claim on the profile token. */
+    private static final String PROFILE_GIVEN_NAME = "Ada";
+
+    /** Value of the {@code family_name} claim on the profile token. */
+    private static final String PROFILE_FAMILY_NAME = "Lovelace";
 
     /** Participant identifier registered in the database before each test. */
     private static final String REGISTERED_PARTICIPANT = "did:example:registered";
@@ -229,6 +251,80 @@ class PrincipalResolutionIT extends PostgresTestResource {
     }
 
     /**
+     * A token granting several roles acts as exactly one of them, by the published precedence.
+     *
+     * <p>Authorization still reads the whole set - every mapped role is granted as an authority -
+     * so this only pins which identity the caller then acts as. The catalog case is the one the
+     * dataspace actually issues: a catalog token is a participant token that additionally bears the
+     * catalog role, so a precedence that let {@code PARTICIPANT} win would mean no token could ever
+     * act as the catalog.
+     *
+     * @param rawRoles the role strings the provider emits together
+     * @param expectedDescription what the probe renders for the principal it was handed
+     */
+    @ParameterizedTest(name = "{0} resolves to {1}")
+    @MethodSource("multiRoleTokens")
+    @DisplayName("a token granting several roles acts as the highest-precedence one")
+    void multiRoleTokenActsAsItsHighestPrecedenceRole(
+            String[] rawRoles, String expectedDescription) {
+        HttpResponse<String> response =
+                get(ANY_ROUTE, token(claims(rawRoles, REGISTERED_PARTICIPANT)));
+
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(response.getBody(String.class)).hasValue(expectedDescription);
+    }
+
+    /**
+     * The role combinations a provider can grant, and the identity each settles on.
+     *
+     * @return one case per combination
+     */
+    static Stream<Arguments> multiRoleTokens() {
+        String catalog = "CatalogPrincipal CATALOG " + SUBJECT;
+        String participant =
+                "ParticipantPrincipal PARTICIPANT "
+                        + REGISTERED_PARTICIPANT
+                        + " "
+                        + REGISTERED_LEGAL_NAME;
+        return Stream.of(
+                Arguments.of(new String[] {PARTICIPANT_ROLE, CATALOG_ROLE}, catalog),
+                Arguments.of(new String[] {USER_ROLE, CATALOG_ROLE}, catalog),
+                Arguments.of(new String[] {USER_ROLE, PARTICIPANT_ROLE}, participant),
+                Arguments.of(new String[] {USER_ROLE, PARTICIPANT_ROLE, CATALOG_ROLE}, catalog),
+                Arguments.of(new String[] {UNMAPPED_ROLE, USER_ROLE, CATALOG_ROLE}, catalog));
+    }
+
+    /** Every optional profile claim the token carries reaches the handler on its principal. */
+    @Test
+    @DisplayName("a user token's profile claims land on its principal")
+    void profileClaimsLandOnThePrincipal() {
+        HttpResponse<String> response = get(PROFILE_ROUTE, token(profileClaims()));
+
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(response.getBody(String.class))
+                .hasValue(
+                        String.join(
+                                PROFILE_SEPARATOR,
+                                PROFILE_EMAIL,
+                                "true",
+                                PROFILE_NAME,
+                                PROFILE_GIVEN_NAME,
+                                PROFILE_FAMILY_NAME));
+    }
+
+    /**
+     * A user token carrying none of the optional profile claims still resolves, with nothing set.
+     */
+    @Test
+    @DisplayName("a user token without profile claims resolves with none of them set")
+    void absentProfileClaimsLeaveThePrincipalEmpty() {
+        HttpResponse<String> response = get(PROFILE_ROUTE, token(claims(USER_ROLE, null)));
+
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(response.getBody(String.class)).hasValue("null|false|null|null|null");
+    }
+
+    /**
      * A token that authenticates but names no caller this service will act for is a 403.
      *
      * <p>This is the heart of the authorization model: the signature was good and the issuer is
@@ -260,9 +356,6 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 Arguments.of(
                         "every role is unmappable",
                         claims(new String[] {UNMAPPED_ROLE, "uma_authorization"}, null)),
-                Arguments.of(
-                        "two roles are granted at once",
-                        claims(new String[] {USER_ROLE, CATALOG_ROLE}, REGISTERED_PARTICIPANT)),
                 Arguments.of(
                         "the participant identifier is not registered",
                         claims(PARTICIPANT_ROLE, UNREGISTERED_PARTICIPANT)));
@@ -347,6 +440,39 @@ class PrincipalResolutionIT extends PostgresTestResource {
     @DisplayName("an explicitly anonymous route is still reachable without a token")
     void anonymousRouteRemainsReachable() {
         assertThat(get(ANONYMOUS_ROUTE, null).code()).isEqualTo(HttpStatus.OK.getCode());
+    }
+
+    /**
+     * A reachability probe stays reachable even for a caller whose token names nobody.
+     *
+     * <p>A browser or a monitoring agent sends whatever token it is holding on every request, and a
+     * route the specification declares {@code security: []} must not start answering {@code 403}
+     * because of one. Principal resolution therefore runs only for a route that declares a
+     * principal parameter, which this one does not.
+     *
+     * @param description the case name
+     * @param claims a claim set that would be refused on a route taking a principal
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("tokensNamingNoCaller")
+    @DisplayName("an anonymous route is reachable with a token that names no usable caller")
+    void anonymousRouteIgnoresAnUnusableToken(String description, JWTClaimsSet claims) {
+        assertThat(get(ANONYMOUS_ROUTE, token(claims)).code())
+                .as("%s", description)
+                .isEqualTo(HttpStatus.OK.getCode());
+    }
+
+    /**
+     * Tokens that authenticate and then name no caller, every one of them a 403 on a secured route.
+     *
+     * @return one case per way
+     */
+    static Stream<Arguments> tokensNamingNoCaller() {
+        return Stream.of(
+                Arguments.of("no mapped role", claims(UNMAPPED_ROLE, null)),
+                Arguments.of(
+                        "an unregistered participant identifier",
+                        claims(PARTICIPANT_ROLE, UNREGISTERED_PARTICIPANT)));
     }
 
     /**
@@ -438,6 +564,21 @@ class PrincipalResolutionIT extends PostgresTestResource {
     }
 
     /**
+     * A user claim set carrying every optional profile claim.
+     *
+     * @return the claims
+     */
+    private static JWTClaimsSet profileClaims() {
+        return new JWTClaimsSet.Builder(claims(USER_ROLE, null))
+                .claim(PROFILE_CLAIMS.get(0), PROFILE_EMAIL)
+                .claim(PROFILE_CLAIMS.get(1), Boolean.TRUE)
+                .claim(PROFILE_CLAIMS.get(2), PROFILE_NAME)
+                .claim(PROFILE_CLAIMS.get(3), PROFILE_GIVEN_NAME)
+                .claim(PROFILE_CLAIMS.get(4), PROFILE_FAMILY_NAME)
+                .build();
+    }
+
+    /**
      * Builds a claim set valid in every respect except that it expired an hour ago.
      *
      * @return the claims
@@ -506,6 +647,24 @@ class PrincipalResolutionIT extends PostgresTestResource {
         @Secured(SecurityRule.IS_AUTHENTICATED)
         String user(UserPrincipal user) {
             return user.identifier();
+        }
+
+        /**
+         * Renders the optional profile claims the principal carried out of the token.
+         *
+         * @param user the resolved caller
+         * @return the profile fields, separated by {@link #PROFILE_SEPARATOR}
+         */
+        @Get("/profile")
+        @Secured(SecurityRule.IS_AUTHENTICATED)
+        String profile(UserPrincipal user) {
+            return String.join(
+                    PROFILE_SEPARATOR,
+                    String.valueOf(user.email()),
+                    String.valueOf(user.emailVerified()),
+                    String.valueOf(user.name()),
+                    String.valueOf(user.givenName()),
+                    String.valueOf(user.familyName()));
         }
 
         /**

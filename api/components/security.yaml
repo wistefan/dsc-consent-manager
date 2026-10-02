@@ -122,6 +122,24 @@ securitySchemes:
       | `PARTICIPANT` | A dataspace participant | May manage and read consent records relating to itself as a participant. |
       | `CATALOG` | The dataspace catalog service | May read consent state across the dataspace. |
 
+      ### Tokens granting more than one role
+
+      A token may grant several of these roles at once, and a catalog token
+      commonly does: the natural way to issue one is a service account that
+      holds both the participant role and the catalog role.
+
+      Authorization reads the **whole** set — an operation is permitted if any
+      granted role permits it. Which single identity the caller then acts as is
+      settled by a fixed precedence:
+
+      `CATALOG` > `PARTICIPANT` > `USER`
+
+      So a token granting both `PARTICIPANT` and `CATALOG` acts as the catalog,
+      and a token granting both `USER` and `PARTICIPANT` acts as the
+      participant. A token must still satisfy the claim requirements of every
+      role it grants — a `USER` + `PARTICIPANT` token must carry both
+      identifier claims — and is rejected during validation if it does not.
+
       ### Authentication versus authorization failures
 
       A request that fails **authentication** receives `401 Unauthorized`: the
@@ -133,4 +151,6 @@ securitySchemes:
       A request that authenticates successfully but lacks the role required by the
       operation receives `403 Forbidden`. A token whose roles claim is absent, or
       whose roles are all unmappable, authenticates with zero roles and therefore
-      also receives `403` on any secured operation.
+      also receives `403` on any secured operation, as does a participant token
+      whose identifier is not registered with this service. The `403` body does
+      not say which of these applies.
