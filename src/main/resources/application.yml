@@ -130,13 +130,22 @@ micronaut:
   #                        the same moment, so this window is a total authentication
   #                        outage, not a degraded mode. No restart is needed to recover,
   #                        it just takes up to one TTL (AC 13).
-  #   outbound request   - in steady state, at most one JWK Set request per provider per
-  #     rate               TTL whatever the inbound traffic is. A flood of tokens bearing
-  #                        `kid` values no provider ever published costs no extra request
-  #                        at all, because nothing invalidates this cache on a miss
-  #                        (AC 14). Only a burst of concurrent FIRST-EVER verifications
-  #                        for one provider can exceed one load, and that is bounded by
-  #                        concurrency at that instant, not by traffic.
+  #   outbound request   - in steady state, with a REACHABLE provider, at most one JWK Set
+  #     rate               request per provider per TTL whatever the inbound traffic is. A
+  #                        flood of tokens bearing `kid` values no provider ever published
+  #                        costs no extra request at all, because nothing invalidates this
+  #                        cache on a miss (AC 14). Only a burst of concurrent FIRST-EVER
+  #                        verifications for one provider can exceed one load, and that is
+  #                        bounded by concurrency at that instant, not by traffic.
+  #
+  # This cache does NOT bound the request rate while a provider's key endpoint is failing.
+  # A failed fetch is never cached: the module's JWKS client turns an HTTP failure into an
+  # empty result and Micronaut Cache invalidates the key instead of storing it. Once the
+  # entry has expired with the endpoint down, every verification would issue its own
+  # request. That case is handled one layer up, in `IssuerSignatureVerifier`, which stops
+  # consulting a provider whose key set could not be read for a fixed cooldown - see
+  # `IssuerSignatureVerifier.KEY_SET_UNAVAILABLE_COOLDOWN`. Tokens from that provider are
+  # rejected for as long as its keys are unreadable, whichever layer answers.
   #
   # The two pull in opposite directions, and the trade is lopsided: a short lifetime costs
   # one request per provider per minute, which no provider notices, while a long one buys

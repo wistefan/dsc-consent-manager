@@ -7,6 +7,9 @@ import com.nimbusds.jwt.SignedJWT;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.OidcDiscoveryStub;
 import io.micronaut.context.ApplicationContext;
+import io.micronaut.security.token.jwt.nimbus.ReactiveJwksSignature;
+import io.micronaut.security.token.jwt.signature.ReactiveSignatureConfiguration;
+import io.micronaut.security.token.jwt.signature.jwks.JwksSignatureConfiguration;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -32,9 +35,10 @@ import reactor.core.publisher.Mono;
  * docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md}) and are not retested
  * here. What is tested is everything that decision leaves to this service or makes observable from
  * outside it: that a token is only ever offered to the keys of the issuer it claims, that an issuer
- * which is not on the trust list costs no outbound request at all, and that the one cache lifetime
- * bounds both how fast a rotated key is honoured and how much traffic an attacker can aim at a
- * provider through this service.
+ * which is not on the trust list costs no outbound request at all, that the cache lifetime bounds
+ * both how fast a rotated key is honoured and how much traffic an attacker can aim at a reachable
+ * provider, and that the case the cache does <em>not</em> bound - a key endpoint that is failing -
+ * is bounded by the verifier's own cooldown instead.
  *
  * <p>Every assertion that matters is a <em>request count</em> against the stub rather than a return
  * value, because a cache that silently stopped caching would still return the right answers.
@@ -64,8 +68,11 @@ class IssuerSignatureVerifierIT {
      * Property that re-enables {@code micronaut-security}.
      *
      * <p>{@code src/test/resources/application-test.yml} sets this to {@code false} so that the
-     * tests written before this ticket are not asked for a token. Every bean this test needs is
-     * conditional on it, so each context started here sets it back to {@code true}.
+     * tests written before this ticket are not asked for a token. The beans under test do not
+     * themselves depend on it - neither {@code DefaultJwkValidator} nor {@code
+     * CacheableJwkSetFetcher} nor {@link IdentityProviderRegistry} carries that condition - but a
+     * deployment runs with security on, and the bean graph a verification resolves through should
+     * be the deployed one rather than a configuration no deployment uses.
      */
     private static final String SECURITY_ENABLED_PROPERTY = "micronaut.security.enabled";
 
@@ -80,6 +87,15 @@ class IssuerSignatureVerifierIT {
      * tests which assert "fetched exactly once" are not racing it.
      */
     private static final String SHORT_JWKS_CACHE_TTL = "2s";
+
+    /**
+     * Cache lifetime used by every test that counts requests.
+     *
+     * <p>Long enough that no entry can expire mid-test, so a fetch count means what the assertion
+     * says it means. Pinned rather than inherited from {@code application.yml}, so that retuning
+     * the production default cannot quietly turn one of these into a test of nothing.
+     */
+    private static final String LONG_JWKS_CACHE_TTL = "10m";
 
     /** Audience the stub entries declare; signature verification never looks at it. */
     private static final String STUB_AUDIENCE = "consent-manager";
@@ -115,6 +131,17 @@ class IssuerSignatureVerifierIT {
     /** HTTP status the key endpoint answers with while it is modelled as down. */
     private static final int KEY_ENDPOINT_DOWN = 503;
 
+    /** Longest a test waits for a key set cached before an outage to fall out of the cache. */
+    private static final Duration OUTAGE_TIMEOUT = Duration.ofSeconds(30);
+
+    /**
+     * Tokens presented to a provider whose key endpoint is down and whose cache entry has gone.
+     *
+     * <p>Fired well inside {@link IssuerSignatureVerifier#KEY_SET_UNAVAILABLE_COOLDOWN}, since what
+     * is being measured is how many of them the verifier relays onto the failing provider.
+     */
+    private static final int VERIFICATIONS_DURING_OUTAGE = 25;
+
     /**
      * Verifications fired simultaneously against a provider whose key set has never been loaded.
      *
@@ -147,7 +174,9 @@ class IssuerSignatureVerifierIT {
     @DisplayName("the key set is fetched once and served from cache within its lifetime")
     void fetchesTheKeySetOncePerCacheLifetime(int verifications) {
         try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
-                ApplicationContext context = startContext(provider, Map.of())) {
+                ApplicationContext context =
+                        startContext(
+                                provider, Map.of(JWKS_CACHE_TTL_PROPERTY, LONG_JWKS_CACHE_TTL))) {
             IssuerSignatureVerifier verifier = awaitResolved(context, provider);
             SignedJWT token =
                     provider.signToken(provider.initialKeyId(), claims(provider.issuer()));
@@ -224,7 +253,9 @@ class IssuerSignatureVerifierIT {
     void unknownKeyIdentifiersTriggerNoRefetch(int tokens) {
         try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
                 OidcDiscoveryStub forger = new OidcDiscoveryStub();
-                ApplicationContext context = startContext(provider, Map.of())) {
+                ApplicationContext context =
+                        startContext(
+                                provider, Map.of(JWKS_CACHE_TTL_PROPERTY, LONG_JWKS_CACHE_TTL))) {
             IssuerSignatureVerifier verifier = awaitResolved(context, provider);
             // Warm the cache with a legitimate verification, so what follows can only add fetches.
             verify(
@@ -248,10 +279,12 @@ class IssuerSignatureVerifierIT {
     }
 
     @Test
-    @DisplayName("a cached key keeps verifying while the key endpoint is down")
-    void keepsVerifyingWhileTheKeyEndpointIsDown() {
+    @DisplayName("a cached key verifies through an outage, and stops once the cache expires")
+    void verifiesFromCacheDuringAnOutageAndRejectsOnceItExpires() {
         try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
-                ApplicationContext context = startContext(provider, Map.of())) {
+                ApplicationContext context =
+                        startContext(
+                                provider, Map.of(JWKS_CACHE_TTL_PROPERTY, SHORT_JWKS_CACHE_TTL))) {
             IssuerSignatureVerifier verifier = awaitResolved(context, provider);
             SignedJWT token =
                     provider.signToken(provider.initialKeyId(), claims(provider.issuer()));
@@ -264,6 +297,72 @@ class IssuerSignatureVerifierIT {
                             "an identity provider outage must not take authentication down with"
                                     + " it for as long as the keys are still cached")
                     .isTrue();
+
+            // The other side of the same boundary, and the half an operator has to plan for: a
+            // failed fetch is never cached, so once the entry's lifetime is up there is nothing
+            // left to verify against and this provider's tokens are refused until it answers
+            // again. The cache lifetime is therefore also the length of the grace period an
+            // outage gets, which is why it is pinned here rather than inherited.
+            Await.until(
+                    "the cached key set to expire and the outage to start refusing tokens",
+                    OUTAGE_TIMEOUT,
+                    () -> !verify(verifier, provider.issuer(), token));
+        }
+    }
+
+    @Test
+    @DisplayName("an outage does not turn inbound traffic into requests at the provider")
+    void doesNotRelayTrafficOntoAProviderWhoseKeyEndpointIsDown() {
+        try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
+                ApplicationContext context =
+                        startContext(
+                                provider, Map.of(JWKS_CACHE_TTL_PROPERTY, SHORT_JWKS_CACHE_TTL))) {
+            IssuerSignatureVerifier verifier = awaitResolved(context, provider);
+            SignedJWT token =
+                    provider.signToken(provider.initialKeyId(), claims(provider.issuer()));
+            assertThat(verify(verifier, provider.issuer(), token)).isTrue();
+
+            provider.failJwksRequests(KEY_ENDPOINT_DOWN);
+            Await.until(
+                    "the cached key set to expire while the endpoint is down",
+                    OUTAGE_TIMEOUT,
+                    () -> !verify(verifier, provider.issuer(), token));
+            int requestsWhenTheOutageWasNoticed = provider.jwksRequestCount();
+
+            for (int i = 0; i < VERIFICATIONS_DURING_OUTAGE; i++) {
+                assertThat(verify(verifier, provider.issuer(), token)).isFalse();
+            }
+
+            assertThat(provider.jwksRequestCount())
+                    .as(
+                            "a failed fetch is never cached, so without the verifier's cooldown"
+                                    + " each of these would be its own request aimed at a provider"
+                                    + " that is already unhealthy")
+                    .isEqualTo(requestsWhenTheOutageWasNoticed);
+        }
+    }
+
+    @Test
+    @DisplayName("no JWKS-backed signature configuration is registered as a global verifier")
+    void registersNoIssuerBlindJwksVerifier() {
+        try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
+                ApplicationContext context = startContext(provider, Map.of())) {
+            awaitResolved(context, provider);
+
+            assertThat(context.getBeansOfType(JwksSignatureConfiguration.class))
+                    .as(
+                            "ReactiveJwksSignature is @EachBean(JwksSignatureConfiguration.class),"
+                                    + " so annotating JwksSignatureConfigurationAdapter as a bean"
+                                    + " would silently mint one issuer-blind global verifier per"
+                                    + " trust-list entry")
+                    .isEmpty();
+            assertThat(context.getBeansOfType(ReactiveSignatureConfiguration.class))
+                    .as(
+                            "a JWKS-backed verifier in this collection is tried against every"
+                                    + " token regardless of its issuer, which is exactly the"
+                                    + " cross-issuer key confusion IssuerSignatureVerifier exists"
+                                    + " to prevent")
+                    .noneMatch(ReactiveJwksSignature.class::isInstance);
         }
     }
 
@@ -345,7 +444,9 @@ class IssuerSignatureVerifierIT {
     @DisplayName("concurrent first-time verifications converge on one cached key set")
     void concurrentFirstTimeVerificationsConvergeOnTheCache() throws Exception {
         try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
-                ApplicationContext context = startContext(provider, Map.of())) {
+                ApplicationContext context =
+                        startContext(
+                                provider, Map.of(JWKS_CACHE_TTL_PROPERTY, LONG_JWKS_CACHE_TTL))) {
             IssuerSignatureVerifier verifier = awaitResolved(context, provider);
             SignedJWT token =
                     provider.signToken(provider.initialKeyId(), claims(provider.issuer()));

@@ -90,14 +90,36 @@ silently ignored. `JwksSignatureConfiguration#getCacheExpiration()` is
 Cache") and is not read on this path; the adapter returns the module's own default for it.
 
 That single TTL carries both halves of what step 4 owed, and it is the only lever over
-either. In steady state this service issues at most one JWK Set request per provider per
-TTL whatever arrives — because the cache is never invalidated on demand, **a flood of
-tokens bearing `kid` values no provider ever published costs no outbound request at all**
-(AC 14). (The bound is a steady-state one: a burst of concurrent *first-ever* verifications
-for one provider can each miss before the first load is cached, since Micronaut's
-`@Cacheable` over a reactive return type does not deduplicate in-flight loads. That is
-bounded by concurrency at that one instant, not by traffic, and it is the cold-start case
-only.)
+either. In steady state, **for as long as the provider answers**, this service issues at
+most one JWK Set request per provider per TTL whatever arrives — because the cache is never
+invalidated on a miss, **a flood of tokens bearing `kid` values no provider ever published
+costs no outbound request at all** (AC 14). (The bound is a steady-state one: a burst of
+concurrent *first-ever* verifications for one provider can each miss before the first load
+is cached, since Micronaut's `@Cacheable` over a reactive return type does not deduplicate
+in-flight loads. That is bounded by concurrency at that one instant, not by traffic, and it
+is the cold-start case only.)
+
+**The cache does not bound the request rate while a provider's key endpoint is failing, and
+that gap is closed in the routing.** An earlier revision of this ADR claimed the TTL bounded
+the request rate unconditionally. It does not. Verified against micronaut-security-jwt 5.4.0
+and micronaut-cache-core 6.1.1: `HttpClientJwksClient.load` does
+`.onErrorResume(HttpClientException.class, t -> Mono.empty())`, and `CacheInterceptor`'s
+reactive path ends in `.switchIfEmpty(... asyncCacheInvalidate(asyncCache, key, errorHandler) ...)`
+— an empty result is not stored, and the key is invalidated. So a failed fetch is never
+cached, and once the entry has expired with the endpoint unreachable or answering 5xx,
+*every* verification issues a fresh request with no rate limit and no backoff: 1:1
+amplification aimed at an already-unhealthy provider.
+
+The fix stays on this service's side of the line this ADR draws. `IssuerSignatureVerifier`
+already owns the routing decision — whether a provider's keys are consulted at all — so
+after a lookup fails to produce a key set it stops consulting that provider for
+`KEY_SET_UNAVAILABLE_COOLDOWN` (10s) and rejects its tokens outright, which bounds the
+outage case at one probe per provider per window. No key material is retained across the
+window: holding a last-known-good JWK Set would be a second cache alongside the module's and
+would keep honouring keys the provider may have just withdrawn. Tokens from a provider whose
+keys cannot be read are rejected either way; the cooldown only decides how much traffic this
+service relays onto a provider that cannot answer. An open window is never extended by
+further traffic, so a recovered provider is always probed again within one window.
 
 **The same TTL is the whole of the rotation latency, and that is the expensive half of the
 trade.** The module has no refresh-on-miss path — `clearCache` has no caller on the
