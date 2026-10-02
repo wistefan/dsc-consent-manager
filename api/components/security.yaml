@@ -47,7 +47,7 @@ securitySchemes:
       | `iss` | yes | Token issuer. Must exactly match a configured trusted issuer. |
       | `aud` | yes | Audience. Must contain the audience configured for that issuer. |
       | `exp` | yes | Expiry time. Expired tokens are rejected, subject to the configured clock skew. |
-      | `iat` | no | Issued-at time. Honoured when present: a token issued in the future beyond the clock skew is rejected. |
+      | `iat` | yes | Issued-at time. A conforming provider must emit it; a token issued in the future beyond the clock skew is rejected. Validation tolerates its absence, since RFC 7519 makes the claim optional. |
       | `sub` | yes | Subject identifier as issued by the provider. |
       | *user identifier* | yes | Opaque identifier of the acting user. Claim name is configured per provider; defaults to `sub`. |
       | *roles* | yes | Roles granted to the token. Claim name is configured per provider and may be a dot-separated nested path (for example `realm_access.roles`). Raw role strings are translated to the service's roles through a per-provider role mapping. |
@@ -69,7 +69,7 @@ securitySchemes:
       | `iss` | yes | Token issuer. Must exactly match a configured trusted issuer. |
       | `aud` | yes | Audience. Must contain the audience configured for that issuer. |
       | `exp` | yes | Expiry time. Expired tokens are rejected, subject to the configured clock skew. |
-      | `iat` | no | Issued-at time. Honoured when present: a token issued in the future beyond the clock skew is rejected. |
+      | `iat` | yes | Issued-at time. A conforming provider must emit it; a token issued in the future beyond the clock skew is rejected. Validation tolerates its absence, since RFC 7519 makes the claim optional. |
       | `sub` | yes | Subject identifier as issued by the provider. |
       | *participant identifier* | yes | Opaque identifier of the participant. Claim name is configured per provider. |
       | *roles* | yes | Roles granted to the token, resolved exactly as for a user access token. |
@@ -93,7 +93,7 @@ securitySchemes:
       | `iss` | yes | Token issuer. Must exactly match a configured trusted issuer. |
       | `aud` | yes | Audience. Must contain the audience configured for that issuer. |
       | `exp` | yes | Expiry time. Expired tokens are rejected, subject to the configured clock skew. |
-      | `iat` | no | Issued-at time. Honoured when present: a token issued in the future beyond the clock skew is rejected. |
+      | `iat` | yes | Issued-at time. A conforming provider must emit it; a token issued in the future beyond the clock skew is rejected. Validation tolerates its absence, since RFC 7519 makes the claim optional. |
       | `sub` | yes | Subject identifier as issued by the provider. The catalog is identified by its issuer and subject alone. |
       | *roles* | yes | Must resolve to the `CATALOG` role through the provider's role mapping. |
       | *participant identifier* | no | Not required and not used. A catalog token that carries one is accepted; the claim is ignored. |

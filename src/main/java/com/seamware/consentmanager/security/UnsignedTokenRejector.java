@@ -76,7 +76,7 @@ public class UnsignedTokenRejector implements SignatureConfiguration {
     /**
      * Property that disables this bean, re-opening the {@code alg: none} bypass.
      *
-     * <p>Present only so the control case in {@code TokenSignatureEnforcementIT} can demonstrate
+     * <p>Present only so the control case in {@code TokenSignatureEnforcementTest} can demonstrate
      * that the bypass is real and that this bean is what closes it. Setting it to {@code false}
      * outside a context with the {@code test} environment active is a startup failure, enforced by
      * {@link IdentityProviderRegistryValidator#validate()}.

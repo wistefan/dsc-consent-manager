@@ -41,7 +41,7 @@ import reactor.core.publisher.Mono;
  * another's request counts.
  */
 @DisplayName("OpenID Connect discovery and readiness")
-class IdentityProviderDiscoveryIT {
+class IdentityProviderDiscoveryTest {
 
     /** Longest a test waits for a state discovery is expected to reach. */
     private static final Duration RESOLUTION_TIMEOUT = Duration.ofSeconds(30);

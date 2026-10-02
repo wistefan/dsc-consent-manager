@@ -15,11 +15,11 @@ import org.junit.jupiter.params.provider.MethodSource;
  * Unit tests for the decisions {@link IdentityProviderRegistry} makes without talking to anything.
  *
  * <p>The registry's network behaviour - discovery, retries, readiness - is covered by {@code
- * IdentityProviderDiscoveryIT}, which needs a stub provider and real elapsed time. What is asserted
- * here are the two pure functions that decide <em>how long</em> to wait and <em>whether</em> a
- * discovered JWK Set URL may be trusted. Both are plain functions of their arguments, so they
- * belong in the fast phase: a regression in the backoff curve or in the transport rule should fail
- * {@code ./mvnw test}, not only the integration phase.
+ * IdentityProviderDiscoveryTest}, which needs a stub provider and real elapsed time. What is
+ * asserted here are the two pure functions that decide <em>how long</em> to wait and
+ * <em>whether</em> a discovered JWK Set URL may be trusted. Both are plain functions of their
+ * arguments, so they belong in the fast phase: a regression in the backoff curve or in the
+ * transport rule should fail {@code ./mvnw test}, not only the integration phase.
  *
  * <p>The cleartext rule in particular cannot be reached end-to-end at all: a WireMock stub is
  * served over {@code http}, so any context pointed at one has already set {@code

@@ -74,13 +74,16 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
                     JWSAlgorithm.ES512);
 
     /**
-     * Attribute under which the {@link Authentication} carries the name of the issuing provider, so
-     * principal resolution can reach its configured claim names without repeating the lookup.
+     * Attribute under which the {@link Authentication} carries the verified issuer, which is the
+     * key {@link IdentityProviderRegistry#findByIssuer(String)} takes: principal resolution reaches
+     * the provider's configured claim names through it without repeating the pipeline's work.
      *
-     * <p>Namespaced, and written after the raw claims, so a token carrying a claim of this name
-     * cannot supply the value.
+     * <p>The provider's configuration <em>name</em> is deliberately not what is carried here - the
+     * registry offers no lookup by it. Namespaced, and written after the raw claims, so a token
+     * carrying a claim of this name cannot supply the value.
      */
-    public static final String IDENTITY_PROVIDER_ATTRIBUTE = "consent-manager.identity-provider";
+    public static final String IDENTITY_PROVIDER_ISSUER_ATTRIBUTE =
+            "consent-manager.identity-provider-issuer";
 
     private static final Logger LOG = LoggerFactory.getLogger(ConsentManagerTokenValidator.class);
 
@@ -159,9 +162,8 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
             LOG.debug("A token from provider '{}' names another audience", provider.name());
             return Optional.empty();
         }
-        String subject = claims.getSubject();
-        if (subject == null || subject.isBlank()) {
-            LOG.debug("A token from provider '{}' carries no subject", provider.name());
+        String subject = subjectOf(claims, provider);
+        if (subject == null) {
             return Optional.empty();
         }
         Set<Role> roles = claimMapper.mapRoles(claims, configuration);
@@ -169,9 +171,33 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
             return Optional.empty();
         }
         Map<String, Object> attributes = new LinkedHashMap<>(claims.getClaims());
-        attributes.put(IDENTITY_PROVIDER_ATTRIBUTE, provider.name());
+        attributes.put(IDENTITY_PROVIDER_ISSUER_ATTRIBUTE, provider.issuer());
         List<String> authorities = roles.stream().map(Role::name).toList();
         return Optional.of(Authentication.build(subject, authorities, attributes));
+    }
+
+    /**
+     * Reads the {@code sub} the token contract requires, which becomes {@link
+     * Authentication#getName()}.
+     *
+     * <p><strong>{@code sub} is unique per issuer only</strong>, so with more than one provider in
+     * the trust list two callers can share a name. It is a display and log value; anything that
+     * keys on a caller - audit records, rate limiting, ownership - must use the globally unique
+     * identifier claim the typed principals carry, or pair the subject with {@link
+     * #IDENTITY_PROVIDER_ISSUER_ATTRIBUTE}.
+     *
+     * @param claims the claims to read
+     * @param provider the issuing provider, for the log line only
+     * @return the subject, or {@code null} if the token carries none
+     */
+    @Nullable
+    private static String subjectOf(JWTClaimsSet claims, ResolvedIdentityProvider provider) {
+        String subject = claims.getSubject();
+        if (subject == null || subject.isBlank()) {
+            LOG.debug("A token from provider '{}' carries no subject", provider.name());
+            return null;
+        }
+        return subject;
     }
 
     /**
@@ -179,7 +205,9 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
      * between this service's clock and that provider's.
      *
      * <p>{@code exp} is required: a bearer token without an expiry never stops being valid. {@code
-     * iat} and {@code nbf} are optional per RFC 7519 and are honoured when present.
+     * iat} and {@code nbf} are honoured when present and tolerated when absent, RFC 7519 making
+     * both optional - the published contract asks providers for {@code iat} all the same, being
+     * stricter than what is enforced costing nothing.
      *
      * @param claims the claims to check
      * @param clockSkew the provider's configured tolerance

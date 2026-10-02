@@ -63,11 +63,11 @@ import reactor.core.publisher.Mono;
  *
  * <p>What is <em>not</em> asserted here is the shape of the HTTP response, including the rule that
  * a rejection must not echo the submitted issuer (US-ID-008): a validator produces no response and
- * no message, so that assertion belongs to {@link TokenSignatureEnforcementIT}, which makes it
+ * no message, so that assertion belongs to {@link TokenSignatureEnforcementTest}, which makes it
  * against a real 401 body and its headers.
  */
 @DisplayName("Bearer token validation")
-class ConsentManagerTokenValidatorIT {
+class ConsentManagerTokenValidatorTest {
 
     /** Longest a test waits for the stub providers' discovery to resolve. */
     private static final Duration RESOLUTION_TIMEOUT = Duration.ofSeconds(30);
@@ -444,6 +444,25 @@ class ConsentManagerTokenValidatorIT {
         assertThat(authentication.get().getName()).isEqualTo(SUBJECT);
     }
 
+    @Test
+    @DisplayName("authenticates a token signed with the provider's elliptic-curve key")
+    void authenticatesEllipticCurveSignedToken() {
+        String token =
+                primary.signToken(
+                                primary.initialEcKeyId(),
+                                roles(builder(primary.issuer()), USER_ROLE_VALUE).build())
+                        .serialize();
+
+        Optional<Authentication> authentication = authenticate(token);
+
+        assertThat(authentication)
+                .as(
+                        "ES256 is in the allow-list, so a provider signing with an EC key must get"
+                                + " through the key-selection layer as well as past the header check")
+                .isPresent();
+        assertThat(authentication.get().getRoles()).containsExactly(Role.USER.name());
+    }
+
     /**
      * Roles claims that grant nothing, each of which must still authenticate.
      *
@@ -536,7 +555,9 @@ class ConsentManagerTokenValidatorIT {
         assertThat(authentication.get().getAttributes())
                 .containsEntry(USER_IDENTIFIER_CLAIM, USER_ID)
                 .containsEntry(PARTICIPANT_IDENTIFIER_CLAIM, PARTICIPANT_ID)
-                .containsEntry(ConsentManagerTokenValidator.IDENTITY_PROVIDER_ATTRIBUTE, PRIMARY);
+                .containsEntry(
+                        ConsentManagerTokenValidator.IDENTITY_PROVIDER_ISSUER_ATTRIBUTE,
+                        primary.issuer());
     }
 
     @Test
@@ -553,7 +574,9 @@ class ConsentManagerTokenValidatorIT {
 
         assertThat(authentication).isPresent();
         assertThat(authentication.get().getAttributes())
-                .containsEntry(ConsentManagerTokenValidator.IDENTITY_PROVIDER_ATTRIBUTE, SECONDARY);
+                .containsEntry(
+                        ConsentManagerTokenValidator.IDENTITY_PROVIDER_ISSUER_ATTRIBUTE,
+                        secondary.issuer());
     }
 
     /**
@@ -645,10 +668,11 @@ class ConsentManagerTokenValidatorIT {
                                     .GET()
                                     .build(),
                             HttpResponse.BodyHandlers.ofString());
-            return JWKSet.parse(response.body())
-                    .getKeys()
-                    .getFirst()
-                    .toRSAKey()
+            return JWKSet.parse(response.body()).getKeys().stream()
+                    .filter(RSAKey.class::isInstance)
+                    .map(RSAKey.class::cast)
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException("The stub publishes no RSA key"))
                     .getModulus()
                     .decode();
         } catch (InterruptedException interrupted) {

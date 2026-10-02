@@ -84,21 +84,26 @@ or composed from this repository's packages. The public contracts the module off
 are the interfaces `TokenValidator`, `JsonWebTokenValidator` and `ReactiveJsonWebTokenValidator` —
 and implementing a published interface is exactly what convention 6 prescribes.
 
-### 4. Left registered beside this one, it fails open on `alg: none`
+### 4. Left registered beside this one, it is one bean away from failing open on `alg: none`
 
 `AbstractJsonWebTokenValidator`'s constructor latches
 `noSignatures = imperativeSignatureConfigurations.isEmpty() && reactiveSignatureConfigurations.isEmpty()`,
 and `validateSignature(PlainJWT)` then reports an unsigned token as validly signed whenever that
-flag is set. Both collections **are** empty in this application: `IssuerSignatureVerifier` builds
-its per-issuer `ReactiveJwksSignature` instances programmatically rather than publishing them as
-beans, precisely so that no verifier is global (reason 1).
+flag is set. This application publishes **no global verifier**: `IssuerSignatureVerifier` builds its
+per-issuer `ReactiveJwksSignature` instances programmatically rather than as beans, precisely so
+that no verifier is global (reason 1). The only thing keeping `noSignatures` from latching is
+`UnsignedTokenRejector`, a `@Singleton implements SignatureConfiguration` that is enabled by
+default — so in the configuration as shipped the hazard is **latent, not actual**: remove that one
+bean and a module validator left enabled would accept unsigned tokens.
 
 Because `TokenAuthenticationFetcher` takes the first `Authentication` **any** registered
 `TokenValidator` returns, a module validator left enabled is not a redundant second opinion but a
-laxer parallel path — and here one that would admit `alg: none`. Being stricter than a validator
-running beside you buys nothing. `UnsignedTokenRejector` closes the same hole independently by
-keeping the imperative collection non-empty; the two guards are kept side by side so that undoing
-either alone cannot re-open it, and `TokenSignatureEnforcementIT` pins both.
+laxer parallel path. Being stricter than a validator running beside you buys nothing. The two
+guards — the disabled module validators and `UnsignedTokenRejector` — are therefore kept side by
+side so that undoing either alone cannot open the hole, and `TokenSignatureEnforcementTest` pins
+both. Its control case has to disable the default property sources (and so the `nimbus.*` switches
+below) as well as remove the rejector, which is the clearest demonstration that neither guard is
+redundant.
 
 ### 5. Rejections must be indistinguishable (US-ID-008)
 
@@ -131,7 +136,7 @@ something a set of independently-registered claims validators can be configured 
 - The module's validators stay off. The `nimbus.validator` / `nimbus.reactive-validator` lines in
   `application.yml` are a security control, not tidying, and the comment there says so.
 - Both guards against an unsigned token — the disabled validators and `UnsignedTokenRejector` — are
-  pinned by `TokenSignatureEnforcementIT`, including a control assertion that an unsigned token
+  pinned by `TokenSignatureEnforcementTest`, including a control assertion that an unsigned token
   *does* authenticate once all of them are undone together.
 - Upgrading `micronaut-security` requires re-reading `AbstractJsonWebTokenValidator` and
   `NimbusJsonWebTokenSignatureValidator` before this document may be relied on again.

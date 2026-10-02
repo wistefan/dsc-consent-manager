@@ -16,10 +16,11 @@ import java.util.regex.Pattern;
  *
  * <p>A configured name may be a dot-separated path into a nested object ({@code
  * realm_access.roles}) or a namespaced top-level claim that merely contains dots ({@code
- * https://example.com/roles}). Resolution is <strong>nested-first</strong>: the name is tried as a
- * path, and only if that does not resolve is it read as a literal claim name. Nested-first means a
- * flat claim cannot shadow the nested one a path names, which matters where a subject can influence
- * claim names; a namespaced name has no object to descend into and still resolves literally.
+ * https://example.com/roles}). <strong>The first segment alone decides which it is</strong>: if the
+ * token carries a top-level object under it, the name is read as a path and the literal name is
+ * never consulted, so a flat claim cannot shadow the nested one - not even when the path's leaf is
+ * missing, which is exactly the case an injected flat claim would exploit. Otherwise the name is
+ * read literally, which is how a namespaced name resolves.
  *
  * <p>Values are never coerced: a claim holding a number, object or array where a string is expected
  * resolves to empty rather than to its {@code toString()}. Role strings are compared exactly, case
@@ -123,7 +124,7 @@ public class ClaimMapper {
     }
 
     /**
-     * Resolves a configured claim name as a nested path, falling back to a literal claim name.
+     * Resolves a configured claim name, either as a nested path or as a literal claim name.
      *
      * @param claims the parsed claim set; may be {@code null}
      * @param claimPath the configured claim name; may be {@code null} or blank
@@ -134,12 +135,33 @@ public class ClaimMapper {
             return Optional.empty();
         }
         Map<String, Object> topLevel = claims.getClaims();
-        return descend(topLevel, claimPath).or(() -> Optional.ofNullable(topLevel.get(claimPath)));
+        if (namesNestedObject(topLevel, claimPath)) {
+            return descend(topLevel, claimPath);
+        }
+        return Optional.ofNullable(topLevel.get(claimPath));
     }
 
     /**
-     * Walks a dot-separated path from the top-level claims. Descent stops at the first segment that
-     * is missing or whose parent is not an object, so an attacker-shaped claim set never throws.
+     * Decides a dotted name's reading from its <em>first</em> segment, never from whether the whole
+     * path resolves: committing to the nested reading as soon as that segment names an object is
+     * what stops a flat claim named like the path from being read when the path's leaf is absent.
+     *
+     * @param topLevel the token's top-level claims
+     * @param claimPath the configured claim name
+     * @return {@code true} if the name is to be read as a path into a nested object
+     */
+    private static boolean namesNestedObject(Map<String, Object> topLevel, String claimPath) {
+        int separator = claimPath.indexOf(NESTED_CLAIM_SEPARATOR);
+        if (separator <= 0) {
+            return false;
+        }
+        return topLevel.get(claimPath.substring(0, separator)) instanceof Map<?, ?>;
+    }
+
+    /**
+     * Walks a dot-separated path from the top-level claims, with no fallback: a path whose leaf is
+     * missing resolves to empty. Descent stops at the first segment that is missing or whose parent
+     * is not an object, so an attacker-shaped claim set never throws.
      *
      * @param topLevel the token's top-level claims
      * @param claimPath the configured claim name, read as a path

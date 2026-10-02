@@ -47,7 +47,7 @@ import reactor.core.publisher.Mono;
  * another's fetch-count assertion.
  */
 @DisplayName("Signature verification against a trusted issuer's keys")
-class IssuerSignatureVerifierIT {
+class IssuerSignatureVerifierTest {
 
     /** Longest a test waits for discovery to resolve the stub provider. */
     private static final Duration RESOLUTION_TIMEOUT = Duration.ofSeconds(30);

@@ -78,7 +78,7 @@ import org.junit.jupiter.params.provider.ValueSource;
  * @see IdentityProviderRegistryValidator
  */
 @DisplayName("Token signature enforcement")
-class TokenSignatureEnforcementIT {
+class TokenSignatureEnforcementTest {
 
     /** Property that switches the probe route below on, so it exists only for this test. */
     private static final String PROBE_ROUTE_ENABLED = "test.token-signature-enforcement.enabled";
@@ -427,10 +427,10 @@ class TokenSignatureEnforcementIT {
         return Stream.of(
                 Arguments.of(
                         "an unsigned alg:none token",
-                        (Supplier<String>) TokenSignatureEnforcementIT::unsignedToken),
+                        (Supplier<String>) TokenSignatureEnforcementTest::unsignedToken),
                 Arguments.of(
                         "a symmetrically signed HS256 token",
-                        (Supplier<String>) TokenSignatureEnforcementIT::symmetricToken),
+                        (Supplier<String>) TokenSignatureEnforcementTest::symmetricToken),
                 Arguments.of(
                         "a token naming an unregistered issuer",
                         (Supplier<String>)

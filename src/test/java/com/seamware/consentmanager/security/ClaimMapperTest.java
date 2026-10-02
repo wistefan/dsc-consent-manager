@@ -24,10 +24,12 @@ import org.junit.jupiter.params.provider.MethodSource;
  * identifier claim holding an object, a roles claim holding a number, a path descending through
  * something that is not an object. None of those may throw, and none may be coerced into a value.
  *
- * <p>The nested-first rule for dotted names gets its own cases because the two conventions it
+ * <p>The first-segment rule for dotted names gets its own cases because the two conventions it
  * reconciles - Keycloak's nested {@code realm_access.roles} and Auth0's namespaced {@code
  * https://example.com/roles} - are indistinguishable from the configured string alone, and because
- * a flat claim named like a path must not shadow the nested claim that path names.
+ * a flat claim named like a path must not shadow the nested claim that path names. The case that
+ * decides the rule is the one where the nested object is present but its leaf is absent: a caller
+ * with no realm roles is precisely the one who would benefit from injecting the flat claim.
  */
 @DisplayName("Claim lookup by configured name")
 class ClaimMapperTest {
@@ -113,6 +115,16 @@ class ClaimMapperTest {
                         claims(Map.of(NESTED_ROLES_PATH, PARTICIPANT_ID)),
                         NESTED_ROLES_PATH,
                         PARTICIPANT_ID),
+                Arguments.of(
+                        "a flat claim injected where the nested object exists but its leaf does not",
+                        claims(
+                                Map.of(
+                                        REALM_ACCESS_CLAIM,
+                                        Map.of(),
+                                        NESTED_ROLES_PATH,
+                                        SHADOWING_VALUE)),
+                        NESTED_ROLES_PATH,
+                        null),
                 Arguments.of("a claim that is absent", claims(Map.of()), PARTICIPANT_CLAIM, null),
                 Arguments.of(
                         "a claim holding a blank string",
@@ -199,6 +211,16 @@ class ClaimMapperTest {
                                         List.of(CATALOG_ROLE_VALUE))),
                         NESTED_ROLES_PATH,
                         List.of(USER_ROLE_VALUE)),
+                Arguments.of(
+                        "a flat role list injected where the nested object carries no roles",
+                        claims(
+                                Map.of(
+                                        REALM_ACCESS_CLAIM,
+                                        Map.of(),
+                                        NESTED_ROLES_PATH,
+                                        List.of(CATALOG_ROLE_VALUE))),
+                        NESTED_ROLES_PATH,
+                        List.of()),
                 Arguments.of(
                         "a bare string, which counts as exactly one value",
                         claims(Map.of(NAMESPACED_ROLES_CLAIM, USER_ROLE_VALUE)),
