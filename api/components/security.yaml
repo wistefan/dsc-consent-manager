@@ -50,7 +50,7 @@ securitySchemes:
       | `iat` | yes | Issued-at time. A conforming provider must emit it; a token issued in the future beyond the clock skew is rejected. Validation tolerates its absence, since RFC 7519 makes the claim optional. |
       | `sub` | yes | Subject identifier as issued by the provider. |
       | *user identifier* | yes | Opaque identifier of the acting user. Claim name is configured per provider; defaults to `sub`. |
-      | *roles* | yes | Roles granted to the token. Claim name is configured per provider and may be a dot-separated nested path (for example `realm_access.roles`). Raw role strings are translated to the service's roles through a per-provider role mapping. |
+      | *roles* | yes | Roles granted to the token. Claim name is configured per provider as a list of segments, so a nested claim is named explicitly (for example `[realm_access, roles]`). Raw role strings are translated to the service's roles through a per-provider role mapping. |
       | `nbf` | no | Not-before time. Honoured when present, subject to the configured clock skew. |
       | `jti` | no | Unique token identifier. |
       | `email` | no | Email address of the user. |

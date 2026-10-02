@@ -24,8 +24,12 @@ The relevant module types in 5.4.0 are:
 
 - `TokenValidator` — the public SPI. `TokenAuthenticationFetcher` collects **every**
   `TokenValidator` bean and takes the first `Authentication` any of them emits.
-- `NimbusReactiveJsonWebTokenValidator` / `NimbusJsonWebTokenValidator` — the module's JWT
-  validators, which `JwtTokenValidator` adapts to that SPI.
+- `ReactiveJsonWebTokenValidator` — the JWT-shaped sub-interface of that SPI (it `extends
+  TokenValidator`), implemented by `NimbusReactiveJsonWebTokenValidator`, which is therefore itself
+  the `TokenValidator` bean with no adapter in between. Its blocking sibling
+  `NimbusJsonWebTokenValidator` implements `JsonWebTokenValidator`, which is *not* a
+  `TokenValidator`, so it never reaches `TokenAuthenticationFetcher`. Both live in
+  `io.micronaut.security.token.jwt.nimbus`.
 - `NimbusJsonWebTokenSignatureValidator` — what those delegate the signature check to.
 - The `GenericJwtClaimsValidator` beans: `ExpirationJwtClaimsValidator`,
   `NotBeforeJwtClaimsValidator`, `SubjectNotNullJwtClaimsValidator`, `IssuerJwtClaimsValidator`,

@@ -100,14 +100,14 @@ class ConsentManagerTokenValidatorTest {
     /** Audience belonging to a different service in the same dataspace. */
     private static final String FOREIGN_AUDIENCE = "another-service";
 
-    /** Nested path the entries carry their roles under, as Keycloak publishes them. */
-    private static final String ROLES_CLAIM = "realm_access.roles";
-
     /** First segment of {@link #ROLES_CLAIM}. */
     private static final String REALM_ACCESS_CLAIM = "realm_access";
 
     /** Second segment of {@link #ROLES_CLAIM}. */
     private static final String ROLES_SEGMENT = "roles";
+
+    /** Nested path the entries carry their roles under, as Keycloak publishes them. */
+    private static final List<String> ROLES_CLAIM = List.of(REALM_ACCESS_CLAIM, ROLES_SEGMENT);
 
     /**
      * Claim the entries carry the user identifier under.
@@ -786,8 +786,9 @@ class ConsentManagerTokenValidatorTest {
         properties.put(prefix + "audience", AUDIENCE);
         // WireMock and the unreachable entry both serve plain http.
         properties.put(prefix + "allow-insecure-transport", true);
-        properties.put(prefix + "claims.user-identifier", USER_IDENTIFIER_CLAIM);
-        properties.put(prefix + "claims.participant-identifier", PARTICIPANT_IDENTIFIER_CLAIM);
+        properties.put(prefix + "claims.user-identifier", List.of(USER_IDENTIFIER_CLAIM));
+        properties.put(
+                prefix + "claims.participant-identifier", List.of(PARTICIPANT_IDENTIFIER_CLAIM));
         properties.put(prefix + "claims.roles", ROLES_CLAIM);
         properties.put(prefix + "role-mapping.user", USER_ROLE_VALUE);
         properties.put(prefix + "role-mapping.participant", PARTICIPANT_ROLE_VALUE);

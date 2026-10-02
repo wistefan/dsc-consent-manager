@@ -24,24 +24,26 @@ import org.junit.jupiter.params.provider.MethodSource;
  * identifier claim holding an object, a roles claim holding a number, a path descending through
  * something that is not an object. None of those may throw, and none may be coerced into a value.
  *
- * <p>The first-segment rule for dotted names gets its own cases because the two conventions it
- * reconciles - Keycloak's nested {@code realm_access.roles} and Auth0's namespaced {@code
- * https://example.com/roles} - are indistinguishable from the configured string alone, and because
- * a flat claim named like a path must not shadow the nested claim that path names. The case that
- * decides the rule is the one where the nested object is present but its leaf is absent: a caller
- * with no realm roles is precisely the one who would benefit from injecting the flat claim.
+ * <p>Because a claim name is configured as segments, a flat claim named {@code realm_access.roles}
+ * is never read for the configured path {@code [realm_access, roles]} - whether the nested object
+ * is present, present but missing its leaf, or absent entirely. Those three cases get their own
+ * assertions: the third is the one Keycloak actually emits for a caller holding no realm role, and
+ * is therefore the one an injected flat claim would exploit.
  */
 @DisplayName("Claim lookup by configured name")
 class ClaimMapperTest {
-
-    /** Nested path a Keycloak-shaped token carries its realm roles under. */
-    private static final String NESTED_ROLES_PATH = "realm_access.roles";
 
     /** First segment of {@link #NESTED_ROLES_PATH}. */
     private static final String REALM_ACCESS_CLAIM = "realm_access";
 
     /** Second segment of {@link #NESTED_ROLES_PATH}. */
     private static final String ROLES_CLAIM = "roles";
+
+    /** Segments a Keycloak-shaped token carries its realm roles under. */
+    private static final List<String> NESTED_ROLES_PATH = List.of(REALM_ACCESS_CLAIM, ROLES_CLAIM);
+
+    /** Name of a flat claim spelled like {@link #NESTED_ROLES_PATH}, which never resolves it. */
+    private static final String FLAT_SHADOW_CLAIM = REALM_ACCESS_CLAIM + "." + ROLES_CLAIM;
 
     /** A namespaced claim name that contains dots but names one top-level claim. */
     private static final String NAMESPACED_ROLES_CLAIM = "https://example.com/roles";
@@ -79,16 +81,17 @@ class ClaimMapperTest {
     private final ClaimMapper mapper = new ClaimMapper();
 
     /**
-     * Cases for {@link ClaimMapper#findString(JWTClaimsSet, String)}.
+     * Cases for {@link ClaimMapper#findString(JWTClaimsSet, List)}.
      *
-     * @return description, claim set, configured claim name, expected value or {@code null}
+     * @return description, claim set, configured claim-name segments, expected value or {@code
+     *     null}
      */
     private static Stream<Arguments> stringClaims() {
         return Stream.of(
                 Arguments.of(
                         "a top-level string claim",
                         claims(Map.of(PARTICIPANT_CLAIM, PARTICIPANT_ID)),
-                        PARTICIPANT_CLAIM,
+                        List.of(PARTICIPANT_CLAIM),
                         PARTICIPANT_ID),
                 Arguments.of(
                         "a nested string claim",
@@ -98,53 +101,57 @@ class ClaimMapperTest {
                 Arguments.of(
                         "a namespaced claim whose name contains dots",
                         claims(Map.of(NAMESPACED_ROLES_CLAIM, PARTICIPANT_ID)),
-                        NAMESPACED_ROLES_CLAIM,
+                        List.of(NAMESPACED_ROLES_CLAIM),
                         PARTICIPANT_ID),
                 Arguments.of(
-                        "a nested claim shadowed by a flat claim named like the path",
+                        "a flat claim named like the path, beside the nested one",
                         claims(
                                 Map.of(
                                         REALM_ACCESS_CLAIM,
                                         Map.of(ROLES_CLAIM, PARTICIPANT_ID),
-                                        NESTED_ROLES_PATH,
+                                        FLAT_SHADOW_CLAIM,
                                         SHADOWING_VALUE)),
                         NESTED_ROLES_PATH,
                         PARTICIPANT_ID),
                 Arguments.of(
-                        "a flat claim named like a path whose nested form is absent",
-                        claims(Map.of(NESTED_ROLES_PATH, PARTICIPANT_ID)),
-                        NESTED_ROLES_PATH,
-                        PARTICIPANT_ID),
-                Arguments.of(
-                        "a flat claim injected where the nested object exists but its leaf does not",
+                        "a flat claim injected where the nested object carries no leaf",
                         claims(
                                 Map.of(
                                         REALM_ACCESS_CLAIM,
                                         Map.of(),
-                                        NESTED_ROLES_PATH,
+                                        FLAT_SHADOW_CLAIM,
                                         SHADOWING_VALUE)),
                         NESTED_ROLES_PATH,
                         null),
-                Arguments.of("a claim that is absent", claims(Map.of()), PARTICIPANT_CLAIM, null),
+                Arguments.of(
+                        "a flat claim injected where the nested object is absent entirely",
+                        claims(Map.of(FLAT_SHADOW_CLAIM, SHADOWING_VALUE)),
+                        NESTED_ROLES_PATH,
+                        null),
+                Arguments.of(
+                        "a claim that is absent",
+                        claims(Map.of()),
+                        List.of(PARTICIPANT_CLAIM),
+                        null),
                 Arguments.of(
                         "a claim holding a blank string",
                         claims(Map.of(PARTICIPANT_CLAIM, "   ")),
-                        PARTICIPANT_CLAIM,
+                        List.of(PARTICIPANT_CLAIM),
                         null),
                 Arguments.of(
                         "a claim holding a number, which is never stringified",
                         claims(Map.of(PARTICIPANT_CLAIM, 42)),
-                        PARTICIPANT_CLAIM,
+                        List.of(PARTICIPANT_CLAIM),
                         null),
                 Arguments.of(
                         "a claim holding an object, which is never stringified",
                         claims(Map.of(PARTICIPANT_CLAIM, Map.of(ROLES_CLAIM, PARTICIPANT_ID))),
-                        PARTICIPANT_CLAIM,
+                        List.of(PARTICIPANT_CLAIM),
                         null),
                 Arguments.of(
                         "a claim holding an explicit null",
                         claimsWithNull(PARTICIPANT_CLAIM),
-                        PARTICIPANT_CLAIM,
+                        List.of(PARTICIPANT_CLAIM),
                         null),
                 Arguments.of(
                         "a path descending into a value that is not an object",
@@ -157,37 +164,37 @@ class ClaimMapperTest {
                         NESTED_ROLES_PATH,
                         null),
                 Arguments.of(
-                        "a path with a trailing separator, which names no claim",
+                        "a path with a blank segment, which names no claim",
                         claims(Map.of(REALM_ACCESS_CLAIM, Map.of(ROLES_CLAIM, PARTICIPANT_ID))),
-                        REALM_ACCESS_CLAIM + ClaimMapper.NESTED_CLAIM_SEPARATOR,
+                        Arrays.asList(REALM_ACCESS_CLAIM, "  "),
                         null),
                 Arguments.of(
-                        "a configured name that is blank",
+                        "a configured name with no segments",
                         claims(Map.of(PARTICIPANT_CLAIM, PARTICIPANT_ID)),
-                        "  ",
+                        List.of(),
                         null),
                 Arguments.of(
                         "a configured name that is null",
                         claims(Map.of(PARTICIPANT_CLAIM, PARTICIPANT_ID)),
                         null,
                         null),
-                Arguments.of("a null claim set", null, PARTICIPANT_CLAIM, null));
+                Arguments.of("a null claim set", null, List.of(PARTICIPANT_CLAIM), null));
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("stringClaims")
     @DisplayName("reads a string claim only when it really holds a non-blank string")
     void readsStringClaims(
-            String description, JWTClaimsSet claims, String claimPath, String expected) {
+            String description, JWTClaimsSet claims, List<String> claimPath, String expected) {
         assertThat(mapper.findString(claims, claimPath))
                 .as("%s", description)
                 .isEqualTo(Optional.ofNullable(expected));
     }
 
     /**
-     * Cases for {@link ClaimMapper#findStrings(JWTClaimsSet, String)}.
+     * Cases for {@link ClaimMapper#findStrings(JWTClaimsSet, List)}.
      *
-     * @return description, claim set, configured claim name, expected values
+     * @return description, claim set, configured claim-name segments, expected values
      */
     private static Stream<Arguments> stringListClaims() {
         return Stream.of(
@@ -202,12 +209,12 @@ class ClaimMapperTest {
                         NESTED_ROLES_PATH,
                         List.of(USER_ROLE_VALUE, FOREIGN_ROLE_VALUE)),
                 Arguments.of(
-                        "a nested role list shadowed by a flat claim named like the path",
+                        "a flat role list beside the nested one",
                         claims(
                                 Map.of(
                                         REALM_ACCESS_CLAIM,
                                         Map.of(ROLES_CLAIM, List.of(USER_ROLE_VALUE)),
-                                        NESTED_ROLES_PATH,
+                                        FLAT_SHADOW_CLAIM,
                                         List.of(CATALOG_ROLE_VALUE))),
                         NESTED_ROLES_PATH,
                         List.of(USER_ROLE_VALUE)),
@@ -217,14 +224,19 @@ class ClaimMapperTest {
                                 Map.of(
                                         REALM_ACCESS_CLAIM,
                                         Map.of(),
-                                        NESTED_ROLES_PATH,
+                                        FLAT_SHADOW_CLAIM,
                                         List.of(CATALOG_ROLE_VALUE))),
+                        NESTED_ROLES_PATH,
+                        List.of()),
+                Arguments.of(
+                        "a flat role list injected where the nested object is absent entirely",
+                        claims(Map.of(FLAT_SHADOW_CLAIM, List.of(CATALOG_ROLE_VALUE))),
                         NESTED_ROLES_PATH,
                         List.of()),
                 Arguments.of(
                         "a bare string, which counts as exactly one value",
                         claims(Map.of(NAMESPACED_ROLES_CLAIM, USER_ROLE_VALUE)),
-                        NAMESPACED_ROLES_CLAIM,
+                        List.of(NAMESPACED_ROLES_CLAIM),
                         List.of(USER_ROLE_VALUE)),
                 Arguments.of(
                         "a space-separated string, which is never split",
@@ -232,7 +244,7 @@ class ClaimMapperTest {
                                 Map.of(
                                         NAMESPACED_ROLES_CLAIM,
                                         USER_ROLE_VALUE + " " + PARTICIPANT_ROLE_VALUE)),
-                        NAMESPACED_ROLES_CLAIM,
+                        List.of(NAMESPACED_ROLES_CLAIM),
                         List.of(USER_ROLE_VALUE + " " + PARTICIPANT_ROLE_VALUE)),
                 Arguments.of(
                         "a mixed list, whose unusable entries are skipped",
@@ -240,18 +252,18 @@ class ClaimMapperTest {
                                 Map.of(
                                         NAMESPACED_ROLES_CLAIM,
                                         Arrays.asList(USER_ROLE_VALUE, 7, "  ", null))),
-                        NAMESPACED_ROLES_CLAIM,
+                        List.of(NAMESPACED_ROLES_CLAIM),
                         List.of(USER_ROLE_VALUE)),
                 Arguments.of(
                         "an empty list",
                         claims(Map.of(NAMESPACED_ROLES_CLAIM, List.of())),
-                        NAMESPACED_ROLES_CLAIM,
+                        List.of(NAMESPACED_ROLES_CLAIM),
                         List.of()),
                 Arguments.of("an absent claim", claims(Map.of()), NESTED_ROLES_PATH, List.of()),
                 Arguments.of(
                         "a claim holding an object",
                         claims(Map.of(NAMESPACED_ROLES_CLAIM, Map.of(ROLES_CLAIM, "x"))),
-                        NAMESPACED_ROLES_CLAIM,
+                        List.of(NAMESPACED_ROLES_CLAIM),
                         List.of()),
                 Arguments.of("a null claim set", null, NESTED_ROLES_PATH, List.of()));
     }
@@ -260,7 +272,10 @@ class ClaimMapperTest {
     @MethodSource("stringListClaims")
     @DisplayName("reads a multi-valued claim written either as a list or as a single string")
     void readsStringListClaims(
-            String description, JWTClaimsSet claims, String claimPath, List<String> expected) {
+            String description,
+            JWTClaimsSet claims,
+            List<String> claimPath,
+            List<String> expected) {
         assertThat(mapper.findStrings(claims, claimPath))
                 .as("%s", description)
                 .containsExactlyElementsOf(expected);
@@ -322,6 +337,16 @@ class ClaimMapperTest {
                 .isEmpty();
     }
 
+    @Test
+    @DisplayName("grants no role from a flat claim spelled like the configured roles path")
+    void mapsNoRoleFromAFlatClaimNamedLikeThePath() {
+        JWTClaimsSet injected = claims(Map.of(FLAT_SHADOW_CLAIM, List.of(PARTICIPANT_ROLE_VALUE)));
+
+        assertThat(mapper.mapRoles(injected, provider()))
+                .as("a caller holding no realm role cannot grant itself one by claim name")
+                .isEmpty();
+    }
+
     /**
      * Builds a valid trust-list entry whose roles claim is {@link #NESTED_ROLES_PATH}.
      *
@@ -339,7 +364,7 @@ class ClaimMapperTest {
         IdentityProviderConfiguration.ClaimsConfiguration claims =
                 new IdentityProviderConfiguration.ClaimsConfiguration();
         claims.setRoles(NESTED_ROLES_PATH);
-        claims.setParticipantIdentifier(PARTICIPANT_CLAIM);
+        claims.setParticipantIdentifier(List.of(PARTICIPANT_CLAIM));
         configuration.setClaims(claims);
         configuration.setRoleMapping(
                 Map.of(

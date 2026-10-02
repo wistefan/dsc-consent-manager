@@ -9,18 +9,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 /**
  * Reads claims by the names a provider was configured with; makes no trust decision.
  *
- * <p>A configured name may be a dot-separated path into a nested object ({@code
- * realm_access.roles}) or a namespaced top-level claim that merely contains dots ({@code
- * https://example.com/roles}). <strong>The first segment alone decides which it is</strong>: if the
- * token carries a top-level object under it, the name is read as a path and the literal name is
- * never consulted, so a flat claim cannot shadow the nested one - not even when the path's leaf is
- * missing, which is exactly the case an injected flat claim would exploit. Otherwise the name is
- * read literally, which is how a namespaced name resolves.
+ * <p>A claim name is configured as a <em>list of segments</em>, so how it is read is fixed by
+ * configuration at startup and never inferred from the shape of the token: {@code [realm_access,
+ * roles]} walks into a nested object, while the single segment {@code [https://example.com/roles]}
+ * names a top-level claim whatever characters it contains. There is no fallback between the two
+ * readings, so a flat claim named like a path cannot shadow - or stand in for - the nested one the
+ * operator configured.
  *
  * <p>Values are never coerced: a claim holding a number, object or array where a string is expected
  * resolves to empty rather than to its {@code toString()}. Role strings are compared exactly, case
@@ -32,26 +30,14 @@ import java.util.regex.Pattern;
 @Singleton
 public class ClaimMapper {
 
-    /** Separator between the segments of a nested claim path. */
-    public static final String NESTED_CLAIM_SEPARATOR = ".";
-
-    /** {@link #NESTED_CLAIM_SEPARATOR} escaped for use as a regular expression. */
-    private static final String SEPARATOR_PATTERN = Pattern.quote(NESTED_CLAIM_SEPARATOR);
-
-    /**
-     * {@code limit} for {@link String#split(String, int)} that keeps trailing empty segments, so a
-     * malformed path such as {@code realm_access.} fails to resolve instead of naming its parent.
-     */
-    private static final int KEEP_TRAILING_EMPTY_SEGMENTS = -1;
-
     /**
      * Reads a claim required to hold a single non-blank string.
      *
      * @param claims the parsed claim set; may be {@code null}
-     * @param claimPath the configured claim name or nested path; may be {@code null} or blank
+     * @param claimPath the configured claim-name segments; may be {@code null} or empty
      * @return the value, or empty if the claim is absent or is not a non-blank string
      */
-    public Optional<String> findString(JWTClaimsSet claims, String claimPath) {
+    public Optional<String> findString(JWTClaimsSet claims, List<String> claimPath) {
         return resolve(claims, claimPath)
                 .filter(String.class::isInstance)
                 .map(String.class::cast)
@@ -65,10 +51,10 @@ public class ClaimMapper {
      * whitespace or commas; non-string and blank list elements are skipped.
      *
      * @param claims the parsed claim set; may be {@code null}
-     * @param claimPath the configured claim name or nested path; may be {@code null} or blank
+     * @param claimPath the configured claim-name segments; may be {@code null} or empty
      * @return the non-blank string values in encounter order; empty if nothing usable is there
      */
-    public List<String> findStrings(JWTClaimsSet claims, String claimPath) {
+    public List<String> findStrings(JWTClaimsSet claims, List<String> claimPath) {
         Optional<Object> value = resolve(claims, claimPath);
         if (value.isEmpty()) {
             return List.of();
@@ -124,53 +110,22 @@ public class ClaimMapper {
     }
 
     /**
-     * Resolves a configured claim name, either as a nested path or as a literal claim name.
+     * Walks the configured segments from the top-level claims. Descent stops at the first segment
+     * that is absent or whose parent is not an object, so an attacker-shaped claim set never throws
+     * and never resolves a path the operator did not configure.
      *
      * @param claims the parsed claim set; may be {@code null}
-     * @param claimPath the configured claim name; may be {@code null} or blank
+     * @param claimPath the configured claim-name segments; may be {@code null} or empty
      * @return the resolved value, or empty if it does not resolve or resolves to {@code null}
      */
-    private static Optional<Object> resolve(JWTClaimsSet claims, String claimPath) {
-        if (claims == null || claimPath == null || claimPath.isBlank()) {
+    private static Optional<Object> resolve(JWTClaimsSet claims, List<String> claimPath) {
+        if (claims == null || claimPath == null || claimPath.isEmpty()) {
             return Optional.empty();
         }
-        Map<String, Object> topLevel = claims.getClaims();
-        if (namesNestedObject(topLevel, claimPath)) {
-            return descend(topLevel, claimPath);
-        }
-        return Optional.ofNullable(topLevel.get(claimPath));
-    }
-
-    /**
-     * Decides a dotted name's reading from its <em>first</em> segment, never from whether the whole
-     * path resolves: committing to the nested reading as soon as that segment names an object is
-     * what stops a flat claim named like the path from being read when the path's leaf is absent.
-     *
-     * @param topLevel the token's top-level claims
-     * @param claimPath the configured claim name
-     * @return {@code true} if the name is to be read as a path into a nested object
-     */
-    private static boolean namesNestedObject(Map<String, Object> topLevel, String claimPath) {
-        int separator = claimPath.indexOf(NESTED_CLAIM_SEPARATOR);
-        if (separator <= 0) {
-            return false;
-        }
-        return topLevel.get(claimPath.substring(0, separator)) instanceof Map<?, ?>;
-    }
-
-    /**
-     * Walks a dot-separated path from the top-level claims, with no fallback: a path whose leaf is
-     * missing resolves to empty. Descent stops at the first segment that is missing or whose parent
-     * is not an object, so an attacker-shaped claim set never throws.
-     *
-     * @param topLevel the token's top-level claims
-     * @param claimPath the configured claim name, read as a path
-     * @return the value the path names, or empty if it does not resolve
-     */
-    private static Optional<Object> descend(Map<String, Object> topLevel, String claimPath) {
-        Object current = topLevel;
-        for (String segment : claimPath.split(SEPARATOR_PATTERN, KEEP_TRAILING_EMPTY_SEGMENTS)) {
-            if (segment.isEmpty()
+        Object current = claims.getClaims();
+        for (String segment : claimPath) {
+            if (segment == null
+                    || segment.isBlank()
                     || !(current instanceof Map<?, ?> enclosing)
                     || !enclosing.containsKey(segment)) {
                 return Optional.empty();

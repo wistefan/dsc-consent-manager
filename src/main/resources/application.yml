@@ -309,11 +309,15 @@ consent-manager:
       allow-insecure-transport: ${IDP_ALLOW_INSECURE_TRANSPORT:false}
       # Tolerance applied to the exp, iat and nbf claims.
       clock-skew: ${IDP_CLOCK_SKEW:30s}
-      # Claim names are per provider. Each may be a dot-separated nested path.
+      # Claim names are per provider and are configured as a list of segments, so how a
+      # name is read is fixed here and never inferred from the token: a nested path is
+      # [realm_access, roles], while a top-level name that merely contains dots is one
+      # segment. A scalar is one segment; a comma-separated scalar is its segments,
+      # which is how an environment variable supplies a nested path.
       claims:
         user-identifier: ${IDP_CLAIM_USER_IDENTIFIER:sub}
         participant-identifier: ${IDP_CLAIM_PARTICIPANT_IDENTIFIER:participant_id}
-        roles: ${IDP_CLAIM_ROLES:realm_access.roles}
+        roles: ${IDP_CLAIM_ROLES:realm_access,roles}
       # Maps this service's roles to the raw role strings the provider emits.
       # Keys are written in lower case so that an override replaces the configured
       # value instead of adding a second entry for the same role.

@@ -96,8 +96,12 @@ class IdentityProviderConfigurationTest {
     private static final String USER_ROLE_STRING = "consent-user";
     private static final String PARTICIPANT_ROLE_STRING = "consent-participant";
     private static final String CATALOG_ROLE_STRING = "consent-catalog";
-    private static final String NESTED_ROLES_CLAIM = "realm_access.roles";
+    private static final List<String> NESTED_ROLES_CLAIM = List.of("realm_access", "roles");
     private static final String PARTICIPANT_ID_CLAIM = "participant_id";
+
+    /** A flat roles claim name, used where a second provider must differ from the first. */
+    private static final String OTHER_ROLES_CLAIM = "groups";
+
     private static final String CONFIGURED_CLOCK_SKEW = "45s";
 
     /**
@@ -124,8 +128,8 @@ class IdentityProviderConfigurationTest {
         properties.put(prefix + ".discovery-url", issuer + DISCOVERY_SUFFIX);
         properties.put(prefix + ".audience", AUDIENCE);
         properties.put(prefix + ".clock-skew", CONFIGURED_CLOCK_SKEW);
-        properties.put(prefix + ".claims.user-identifier", "sub");
-        properties.put(prefix + ".claims.participant-identifier", PARTICIPANT_ID_CLAIM);
+        properties.put(prefix + ".claims.user-identifier", List.of("sub"));
+        properties.put(prefix + ".claims.participant-identifier", List.of(PARTICIPANT_ID_CLAIM));
         properties.put(prefix + ".claims.roles", NESTED_ROLES_CLAIM);
         properties.put(prefix + ".role-mapping.user", USER_ROLE_STRING);
         properties.put(prefix + ".role-mapping.participant", PARTICIPANT_ROLE_STRING);
@@ -266,7 +270,7 @@ class IdentityProviderConfigurationTest {
         }
 
         @Test
-        @DisplayName("binds nested, dot-separated claim paths verbatim")
+        @DisplayName("binds a claim path as the segments it was configured with")
         void bindsNestedClaimPaths() {
             try (ApplicationContext context = startContext(validTrustList())) {
                 IdentityProviderConfiguration.ClaimsConfiguration claims =
@@ -274,9 +278,9 @@ class IdentityProviderConfigurationTest {
 
                 assertThat(claims.getRoles())
                         .as("a nested roles path must survive binding unchanged")
-                        .isEqualTo(NESTED_ROLES_CLAIM);
-                assertThat(claims.getUserIdentifier()).isEqualTo("sub");
-                assertThat(claims.getParticipantIdentifier()).isEqualTo(PARTICIPANT_ID_CLAIM);
+                        .containsExactlyElementsOf(NESTED_ROLES_CLAIM);
+                assertThat(claims.getUserIdentifier()).containsExactly("sub");
+                assertThat(claims.getParticipantIdentifier()).containsExactly(PARTICIPANT_ID_CLAIM);
             }
         }
 
@@ -318,7 +322,8 @@ class IdentityProviderConfigurationTest {
         void bindsSeveralProviders() {
             Map<String, Object> properties = validTrustList();
             putValidProvider(properties, OTHER_PROVIDER, OTHER_ISSUER);
-            properties.put(settingsKey(OTHER_PROVIDER) + ".claims.roles", "groups");
+            properties.put(
+                    settingsKey(OTHER_PROVIDER) + ".claims.roles", List.of(OTHER_ROLES_CLAIM));
 
             try (ApplicationContext context = startContext(properties)) {
                 assertThat(providersOf(context))
@@ -329,7 +334,8 @@ class IdentityProviderConfigurationTest {
                                 provider -> provider.getClaims().getRoles())
                         .containsExactly(
                                 Tuple.tuple(PROVIDER, ISSUER, NESTED_ROLES_CLAIM),
-                                Tuple.tuple(OTHER_PROVIDER, OTHER_ISSUER, "groups"));
+                                Tuple.tuple(
+                                        OTHER_PROVIDER, OTHER_ISSUER, List.of(OTHER_ROLES_CLAIM)));
             }
         }
 
@@ -375,15 +381,20 @@ class IdentityProviderConfigurationTest {
                             List.of(),
                             "audience must not be blank"),
                     Arguments.of(
-                            "blank user-identifier claim",
-                            Map.of(prefix + ".claims.user-identifier", "  "),
+                            "blank user-identifier claim segment",
+                            Map.of(prefix + ".claims.user-identifier", List.of("  ")),
                             List.of(),
-                            "claims.user-identifier must not be blank"),
+                            "claims.user-identifier must not contain a blank segment"),
+                    Arguments.of(
+                            "blank segment inside a nested roles path",
+                            Map.of(prefix + ".claims.roles", List.of("realm_access", " ")),
+                            List.of(),
+                            "claims.roles must not contain a blank segment"),
                     Arguments.of(
                             "missing roles claim",
                             Map.of(),
                             List.of(prefix + ".claims.roles"),
-                            "claims.roles must not be blank"),
+                            "claims.roles must name at least one segment"),
                     Arguments.of(
                             "empty role mapping",
                             Map.of(),
@@ -762,12 +773,21 @@ class IdentityProviderConfigurationTest {
                             (Function<IdentityProviderConfiguration, Object>)
                                     IdentityProviderConfiguration::getClockSkew,
                             (Object) Duration.ofSeconds(90)),
+                    // A nested path is supplied comma-separated, which is the form .env.sample
+                    // documents; a name that merely contains dots carries no comma and binds as
+                    // the single segment it is.
                     Arguments.of(
                             "claims.roles",
-                            "groups",
+                            "resource_access,consent-manager,roles",
                             (Function<IdentityProviderConfiguration, Object>)
                                     provider -> provider.getClaims().getRoles(),
-                            (Object) "groups"),
+                            (Object) List.of("resource_access", "consent-manager", "roles")),
+                    Arguments.of(
+                            "claims.participant-identifier",
+                            "https://example.com/participant_id",
+                            (Function<IdentityProviderConfiguration, Object>)
+                                    provider -> provider.getClaims().getParticipantIdentifier(),
+                            (Object) List.of("https://example.com/participant_id")),
                     Arguments.of(
                             "role-mapping.user",
                             "role-from-the-environment",

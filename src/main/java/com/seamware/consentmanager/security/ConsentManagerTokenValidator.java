@@ -3,6 +3,9 @@ package com.seamware.consentmanager.security;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.core.async.annotation.SingleResult;
 import io.micronaut.http.HttpRequest;
@@ -85,11 +88,41 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
     public static final String IDENTITY_PROVIDER_ISSUER_ATTRIBUTE =
             "consent-manager.identity-provider-issuer";
 
+    /**
+     * Counter of tokens refused for their claims after their signature verified, tagged by provider
+     * and by {@link #REASON_TAG}.
+     *
+     * <p>Every such refusal renders as the same bare {@code 401}, so without this an operator
+     * cannot tell the commonest integration mistake - an {@code audience} that does not match what
+     * the provider mints - from a forged-token flood. The counterpart for signature failures is
+     * {@link IssuerSignatureVerifier#SIGNATURE_VERIFICATION_METRIC}, and the tag naming is shared
+     * with it. Server-side telemetry only: the response stays generic (US-ID-008).
+     */
+    public static final String CLAIM_REJECTION_METRIC = "consentmanager.token.claim.rejections";
+
+    /** Tag carrying the coarse reason a token's claims were refused. */
+    public static final String REASON_TAG = "reason";
+
+    /** Value of {@link #REASON_TAG} for a token whose {@code aud} omits the configured audience. */
+    public static final String REASON_AUDIENCE = "audience";
+
+    /**
+     * Value of {@link #REASON_TAG} for a token outside its validity window under the clock skew.
+     */
+    public static final String REASON_TIME = "time";
+
+    /** Value of {@link #REASON_TAG} for a token carrying no non-blank {@code sub}. */
+    public static final String REASON_SUBJECT = "subject";
+
+    /** Value of {@link #REASON_TAG} for a token missing the identifier claim its roles imply. */
+    public static final String REASON_IDENTIFIER = "identifier";
+
     private static final Logger LOG = LoggerFactory.getLogger(ConsentManagerTokenValidator.class);
 
     private final IdentityProviderRegistry registry;
     private final IssuerSignatureVerifier signatureVerifier;
     private final ClaimMapper claimMapper;
+    private final MeterRegistry meterRegistry;
 
     /**
      * Creates the validator.
@@ -97,14 +130,18 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
      * @param registry the trust list, consulted to resolve a token's issuer
      * @param signatureVerifier the per-issuer signature check
      * @param claimMapper reads claims by the names the issuing provider was configured with
+     * @param meterRegistry where {@link #CLAIM_REJECTION_METRIC} is counted; a throwaway registry
+     *     is used when metrics are switched off, so the counting code has no second path
      */
     public ConsentManagerTokenValidator(
             IdentityProviderRegistry registry,
             IssuerSignatureVerifier signatureVerifier,
-            ClaimMapper claimMapper) {
+            ClaimMapper claimMapper,
+            @Nullable MeterRegistry meterRegistry) {
         this.registry = registry;
         this.signatureVerifier = signatureVerifier;
         this.claimMapper = claimMapper;
+        this.meterRegistry = meterRegistry == null ? new SimpleMeterRegistry() : meterRegistry;
     }
 
     /**
@@ -156,24 +193,41 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
             ResolvedIdentityProvider provider, JWTClaimsSet claims) {
         IdentityProviderConfiguration configuration = provider.configuration();
         if (!hasValidTimeClaims(claims, configuration.getClockSkew())) {
-            return Optional.empty();
+            return reject(provider, REASON_TIME);
         }
         if (!claims.getAudience().contains(configuration.getAudience())) {
             LOG.debug("A token from provider '{}' names another audience", provider.name());
-            return Optional.empty();
+            return reject(provider, REASON_AUDIENCE);
         }
         String subject = subjectOf(claims, provider);
         if (subject == null) {
-            return Optional.empty();
+            return reject(provider, REASON_SUBJECT);
         }
         Set<Role> roles = claimMapper.mapRoles(claims, configuration);
         if (!hasRequiredIdentifier(claims, configuration, roles)) {
-            return Optional.empty();
+            return reject(provider, REASON_IDENTIFIER);
         }
         Map<String, Object> attributes = new LinkedHashMap<>(claims.getClaims());
         attributes.put(IDENTITY_PROVIDER_ISSUER_ATTRIBUTE, provider.issuer());
         List<String> authorities = roles.stream().map(Role::name).toList();
         return Optional.of(Authentication.build(subject, authorities, attributes));
+    }
+
+    /**
+     * Counts a claim-level refusal and yields the empty result that renders as {@code 401}.
+     *
+     * @param provider the trust-list entry whose keys signed the token
+     * @param reason one of {@link #REASON_TIME}, {@link #REASON_AUDIENCE}, {@link #REASON_SUBJECT}
+     *     or {@link #REASON_IDENTIFIER}
+     * @return always empty
+     */
+    private Optional<Authentication> reject(ResolvedIdentityProvider provider, String reason) {
+        Counter.builder(CLAIM_REJECTION_METRIC)
+                .tag(IssuerSignatureVerifier.PROVIDER_TAG, provider.name())
+                .tag(REASON_TAG, reason)
+                .register(meterRegistry)
+                .increment();
+        return Optional.empty();
     }
 
     /**

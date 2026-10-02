@@ -90,7 +90,7 @@ class IdentityProviderDiscoveryTest {
     private static final String STUB_AUDIENCE = "consent-manager";
 
     /** Roles claim path the stub entries declare; discovery never looks at it either. */
-    private static final String STUB_ROLES_CLAIM = "realm_access.roles";
+    private static final List<String> STUB_ROLES_CLAIM = List.of("realm_access", "roles");
 
     /** Participant identifier claim path the stub entries declare. */
     private static final String STUB_PARTICIPANT_CLAIM = "participant_id";
@@ -369,7 +369,7 @@ class IdentityProviderDiscoveryTest {
         properties.put(prefix + "audience", STUB_AUDIENCE);
         // WireMock serves plain http, so every entry here has to opt out of the https requirement.
         properties.put(prefix + "allow-insecure-transport", true);
-        properties.put(prefix + "claims.participant-identifier", STUB_PARTICIPANT_CLAIM);
+        properties.put(prefix + "claims.participant-identifier", List.of(STUB_PARTICIPANT_CLAIM));
         properties.put(prefix + "claims.roles", STUB_ROLES_CLAIM);
         properties.put(prefix + "role-mapping.user", STUB_USER_ROLE);
         return properties;

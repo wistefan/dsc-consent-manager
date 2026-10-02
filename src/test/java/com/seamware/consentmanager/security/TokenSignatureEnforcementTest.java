@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -123,7 +124,7 @@ class TokenSignatureEnforcementTest {
     private static final String PARTICIPANT_IDENTIFIER_CLAIM = "participant_id";
 
     /** Claim path the configured provider carries its roles in. */
-    private static final String ROLES_CLAIM = "realm_access.roles";
+    private static final List<String> ROLES_CLAIM = List.of("realm_access", "roles");
 
     /** Provider role string the {@code USER} role is mapped from. */
     private static final String USER_ROLE_VALUE = "consent-user";
@@ -240,7 +241,8 @@ class TokenSignatureEnforcementTest {
         properties.put(settings + ".issuer", TRUSTED_ISSUER);
         properties.put(settings + ".discovery-url", DISCOVERY_URL);
         properties.put(settings + ".audience", AUDIENCE);
-        properties.put(settings + ".claims.participant-identifier", PARTICIPANT_IDENTIFIER_CLAIM);
+        properties.put(
+                settings + ".claims.participant-identifier", List.of(PARTICIPANT_IDENTIFIER_CLAIM));
         properties.put(settings + ".claims.roles", ROLES_CLAIM);
         properties.put(settings + ".role-mapping.user", USER_ROLE_VALUE);
         properties.put(settings + ALLOW_INSECURE_TRANSPORT_KEY, true);
