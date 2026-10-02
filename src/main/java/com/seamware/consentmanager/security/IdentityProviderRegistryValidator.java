@@ -63,7 +63,6 @@ public class IdentityProviderRegistryValidator {
                     "discovery-url",
                     "audience",
                     "clock-skew",
-                    "jwks-cache-ttl",
                     "claims",
                     "role-mapping",
                     "allow-insecure-transport");
@@ -88,7 +87,6 @@ public class IdentityProviderRegistryValidator {
                     "discovery.url",
                     "audience",
                     "clock.skew",
-                    "jwks.cache.ttl",
                     "claims.user.identifier",
                     "claims.participant.identifier",
                     "claims.roles",
@@ -109,9 +107,9 @@ public class IdentityProviderRegistryValidator {
     /**
      * Every run of characters that separates segments in some spelling of a configuration key.
      *
-     * <p>YAML writes {@code jwks-cache-ttl}, an environment variable writes {@code JWKS_CACHE_TTL},
-     * and a nested block adds a {@code .}. Collapsing all three to one separator makes the
-     * spellings comparable.
+     * <p>YAML writes {@code allow-insecure-transport}, an environment variable writes {@code
+     * ALLOW_INSECURE_TRANSPORT}, and a nested block adds a {@code .}. Collapsing all three to one
+     * separator makes the spellings comparable.
      */
     private static final Pattern KEY_SEPARATORS = Pattern.compile("[-_.]+");
 
@@ -505,9 +503,9 @@ public class IdentityProviderRegistryValidator {
      * Reduces a configuration key to a spelling-independent form.
      *
      * <p>Every run of {@code -}, {@code _} and {@code .} collapses to a single {@code .} and the
-     * result is lower-cased, so {@code JWKS_CACHE_TTL}, {@code jwks-cache-ttl} and {@code
-     * jwks.cache.ttl} all become {@code jwks.cache.ttl}. Segment boundaries are preserved, so one
-     * provider's keys can never be mistaken for a longer-named provider's.
+     * result is lower-cased, so {@code CLOCK_SKEW}, {@code clock-skew} and {@code clock.skew} all
+     * become {@code clock.skew}. Segment boundaries are preserved, so one provider's keys can never
+     * be mistaken for a longer-named provider's.
      *
      * @param key a configuration key or environment variable name
      * @return the normalised form

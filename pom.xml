@@ -135,9 +135,13 @@
             Micronaut Security JWT.
 
             Brings the security filter, the `@Secured` rules and the token-validation
-            SPI this service plugs into, and transitively `com.nimbusds:nimbus-jose-jwt`
-            - the library that supplies JWS verification, `JWKSource` with caching,
-            rate-limited refetch and outage tolerance.
+            SPI this service plugs into. It also owns JWK Set retrieval end to end:
+            `JwkSetFetcher` performs the request, `CacheableJwkSetFetcher` caches the
+            result in the Micronaut Cache named `jwks`, and `ReactiveJwksSignature`
+            matches the token's `kid` and verifies the signature. This service
+            configures those components per trusted provider and writes none of them;
+            the reasoning is recorded in
+            docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md.
         -->
         <dependency>
             <groupId>io.micronaut.security</groupId>
@@ -161,10 +165,47 @@
             <scope>compile</scope>
         </dependency>
 
-        <!-- Micronaut Cache (Caffeine) -->
+        <!--
+            Micronaut Cache (Caffeine).
+
+            Also the cache behind JWK Set retrieval: declaring `micronaut.caches.jwks`
+            is what switches `micronaut-security-jwt` to its cacheable fetcher, so this
+            is a functional dependency of token validation, not only of application
+            caching.
+        -->
         <dependency>
             <groupId>io.micronaut.cache</groupId>
             <artifactId>micronaut-cache-caffeine</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!--
+            Micronaut Reactor.
+
+            The reactive SPIs this service implements and consumes - `TokenValidator`,
+            `ReactiveSignatureConfiguration`, `HealthIndicator` - are declared in terms
+            of `Publisher`, and composing one without a reactive library means
+            hand-writing subscribers. Reactor is already on the runtime classpath as a
+            transitive dependency of the HTTP client; declaring it explicitly makes it
+            available at compile time and stops an unrelated upgrade from removing it.
+        -->
+        <dependency>
+            <groupId>io.micronaut.reactor</groupId>
+            <artifactId>micronaut-reactor</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!--
+            Nimbus JOSE + JWT.
+
+            Declared explicitly because this service names `SignedJWT`, `JWKSet` and
+            `JWK` in its own sources. It arrives transitively through
+            `micronaut-security-jwt` as well; relying on that would let a change in
+            that module's dependencies break this build with no change here.
+        -->
+        <dependency>
+            <groupId>com.nimbusds</groupId>
+            <artifactId>nimbus-jose-jwt</artifactId>
             <scope>compile</scope>
         </dependency>
 

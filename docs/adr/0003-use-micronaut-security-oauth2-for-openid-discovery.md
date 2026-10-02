@@ -1,13 +1,15 @@
 # ADR 0003 — Perform OpenID discovery with `micronaut-security-oauth2`
 
-- **Status:** Accepted.
+- **Status:** Accepted. Its reasoning is extended to JWK Set retrieval by
+  [ADR 0004](0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md).
 - **Date:** 2025-10-01
 - **Ticket:** TICKET-003 (Taiga #67), step 3
 - **Supersedes:** [ADR 0002](0002-own-identity-provider-registry-on-nimbus.md), in the
   part that decides *who issues the discovery request*. Everything else ADR 0002
   decided — the `consent-manager.identity-providers` schema, the trust list being fixed
-  at startup, per-provider claim paths and role mapping, and Nimbus for JWS verification
-  and JWKS caching in step 4 — still stands.
+  at startup, and per-provider claim paths and role mapping — still stands, except for its
+  choice of Nimbus for JWS verification and JWKS caching in step 4, which ADR 0004
+  supersedes.
 - **Supersedes:** [ADR 0001](0001-delegate-oidc-discovery-and-jwks-to-micronaut-security.md)'s
   rejected status only insofar as the discovery half is concerned; its record of framework
   behaviour remains accurate and is the evidence used below.

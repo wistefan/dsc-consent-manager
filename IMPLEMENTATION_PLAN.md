@@ -45,13 +45,32 @@ These decisions apply to every step below and were settled during planning:
    discovered `jwks_uri` and the cached signing keys — which is what makes key rotation (AC 13)
    work without a restart. No type in this plan may expose a method that adds, removes or replaces
    a registry entry; the collection is published as an unmodifiable view.
-6. **Custom validation, not declarative JWKS.** The `micronaut.security.token.jwt.signatures.jwks.keycloak`
-   block in `application.yml` is a TICKET-001 placeholder for a *single* static issuer. The registry
-   holds a configurable *number* of providers — variable in size across deployments, fixed at
-   startup within one (convention 5) — so the per-issuer validators are constructed
-   programmatically and that placeholder block is removed.
-7. **No magic constants.** Every default (`sub`, `1h` JWKS TTL, `30s` clock skew, refetch cooldown,
-   backoff bounds) is a named `static final` constant with a JavaDoc comment.
+6. **Delegate to `micronaut-security`; adapt its interfaces, never reimplement its machinery.**
+   This service is a resource server built on a security framework that already performs OpenID
+   discovery, JWK Set retrieval, JWK Set caching, `kid` matching and JWS signature verification.
+   Where the framework ships a component, this plan uses that component. The *declarative*
+   configuration blocks in front of those components do not fit this service —
+   `micronaut.security.oauth2.clients.<name>.openid.*` models a login client with a client id and
+   login routes, and `micronaut.security.token.jwt.signatures.jwks.<name>` binds a *fixed* set of
+   URLs at startup and registers each as a *global* verifier — while the registry holds a
+   configurable *number* of providers (convention 5) whose `jwks_uri` is only known once
+   asynchronous discovery resolves it, and each token must be checked against its own issuer's keys
+   only. **That mismatch is a reason to implement the framework's public interfaces and construct
+   its components programmatically — never a reason to write a replacement for machinery the
+   framework already ships.** Concretely: `OpenIdClientConfiguration` +
+   `DefaultOpenIdProviderMetadataFetcher` for discovery (ADR 0003), and `JwksSignatureConfiguration`
+   + `JwkSetFetcher` + `ReactiveJwksSignature` for key retrieval, caching and signature verification
+   (ADR 0004). Hand-writing an HTTP discovery call, a key-set cache, a refetch rate limiter, a `kid`
+   matcher or a signature check is **out of scope for this ticket**. The only thing this service
+   writes itself is the part no framework component offers: the *routing* decision — which issuer's
+   keys a given token is allowed to be checked against — and the trust list that decision reads.
+   If some requirement genuinely cannot be expressed through a framework component, record the
+   evidence in an ADR under `docs/adr/` and have it reviewed **before** writing any replacement;
+   two PRs have already been rejected for getting this backwards.
+7. **No magic constants.** Every default (`sub`, the JWK Set cache lifetime, `30s` clock skew,
+   discovery backoff bounds) is a named `static final` constant with a JavaDoc comment, or — where
+   the value configures a framework component rather than this service's own code — a documented
+   key in `application.yml` with an environment-variable override.
 8. **Documentation.** Every public type and method gets JavaDoc. Tests are parameterized
    (`@ParameterizedTest` + `@MethodSource`/`@CsvSource`) wherever a matrix of inputs applies.
 9. **Ignore the pre-revision user stories.** The linked `reimplementation/08-user-stories.md` is a
@@ -129,8 +148,8 @@ Create in `com.seamware.consentmanager.security`:
 - `IdentityProviderConfiguration.java` — bound with
   `@EachProperty(value = "consent-manager.identity-providers", list = true)` so each YAML list entry
   becomes its own bean. Fields: `issuer` (`@NotBlank`, valid absolute URL), `discoveryUrl`
-  (`@NotBlank`, valid absolute URL), `audience` (`@NotBlank`), `jwksCacheTtl` (`Duration`, default
-  `DEFAULT_JWKS_CACHE_TTL = 1h`), `clockSkew` (`Duration`, default `DEFAULT_CLOCK_SKEW = 30s`), plus
+  (`@NotBlank`, valid absolute URL), `audience` (`@NotBlank`), `clockSkew` (`Duration`, default
+  `DEFAULT_CLOCK_SKEW = 30s`), plus
   nested `@ConfigurationProperties` classes for `claims` (`userIdentifier` defaulting to
   `DEFAULT_USER_IDENTIFIER_CLAIM = "sub"`, `participantIdentifier`, `roles` — all `@NotBlank`) and
   `roleMapping`. **Bind `roleMapping` as `Map<String, String>`, not `Map<Role, String>`:** Micronaut
@@ -139,6 +158,10 @@ Create in `com.seamware.consentmanager.security`:
   `@PostConstruct` using a case-insensitive lookup that fails startup naming the unrecognised role
   string — which also yields a far better message than a converter failure — and require the
   resulting map to be non-empty.
+  (This schema also carried a per-provider `jwks-cache-ttl` as first shipped. Step 4 removes it:
+  the JWK Set cache belongs to `micronaut-security-jwt` and is a single, global Micronaut Cache, so
+  a per-provider lifetime is not expressible without reimplementing the cache — which convention 6
+  forbids. A knob that is silently ignored is worse than no knob.)
 - A `@Context`-scoped `IdentityProviderRegistryValidator` (or an `ApplicationStartupEvent` listener)
   that fails startup with a clear message when zero providers are configured — Bean Validation on
   `@EachProperty` beans cannot itself catch an *absent* list. This check is **unconditional**: it
@@ -221,39 +244,70 @@ permanently failed and is never retried; a discovery outage leaves the applicati
 recovers and a retry succeeds; and `findByIssuer` returns empty for a configured-but-unresolved
 issuer (its 401 is asserted in Step 5). Covers AC 2 and AC 3.
 
-### Step 4: JWKS caching, key selection, and rate-limited refetch
+### Step 4: JWK Set retrieval, caching, and per-issuer signature verification
 
-Add signing-key resolution on top of the resolved registry, sized for rotation without restarts.
+Add signature verification on top of the resolved registry, sized for key rotation without restarts.
 
-**Build on Nimbus; do not hand-roll the cache.** Dropping the *declarative* single-issuer YAML block
-(convention 6) does not mean writing a cache from scratch. `micronaut-security-jwt` already brings
-`nimbus-jose-jwt`, whose `JWKSourceBuilder` supplies almost all of this step, battle-tested:
-`.cache(ttl, refreshTimeout)` for the per-issuer TTL, `.rateLimited(cooldown)` for the AC 14
-unknown-`kid` refetch limit, `.retrying(...)`/`.outageTolerant(...)` for IDP flakiness, and
-single-flight refresh under concurrency. This is the one place in the plan where a subtle
-concurrency bug is a security bug, so a bespoke cache may only be written if Nimbus provably cannot
-express a requirement — and then the reason belongs in the commit message.
+**Write no key cache, no fetcher, no `kid` matcher and no signature check.** Per convention 6, every
+mechanical part of this step already exists in `micronaut-security-jwt`: `JwkSetFetcher` performs the
+request, `CacheableJwkSetFetcher` caches the result in the Micronaut Cache named `jwks`,
+`JwkValidator` selects the verifier matching the key and the token's algorithm, and
+`ReactiveJwksSignature` matches the token's `kid` against the fetched set — including the cases a
+hand-written matcher gets wrong, such as a provider that publishes no `kid` at all, or two keys under
+one `kid`, where it falls back to offering every published key and accepts the token if the signature
+verifies against any of them. None of that is reimplemented here. The framework behaviour this
+relies on, verified against the pinned `micronaut-security` version, is recorded in
+`docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md`; a version bump
+invalidates that document until it is re-checked.
 
-Create `JwksKeySource.java` in `com.seamware.consentmanager.security`:
+Create in `com.seamware.consentmanager.security`:
 
-- Builds **one `JWKSource` per resolved issuer**, memoized in a `ConcurrentHashMap` keyed by issuer.
-  They are built lazily rather than as startup beans because the `jwks_uri` only becomes known when
-  Step 3's asynchronous discovery resolves. The map is populated solely for issuers already present
-  in the fixed registry — it is a memoization cache, not a second trust list (convention 5).
-- Configure each source with that provider's `jwks-cache-ttl` and a named `JWKS_REFETCH_COOLDOWN`
-  constant for the rate limiter, so a flood of forged tokens bearing random `kid` values cannot
-  trigger a refetch storm against the IDP (AC 14).
-- `Optional<JWK> selectKey(String issuer, String kid)` resolves through the source with a
-  `JWKSelector`/`JWKMatcher` on `kid`, returning empty when the key is still unknown after at most
-  one rate-limited refetch — never loop.
-- Register a Micrometer counter for JWKS fetches so the rate limit is observable in production and
-  assertable in tests.
+- `JwksSignatureConfigurationAdapter.java` — presents one resolved trust-list entry in the shape the
+  module's `JwksSignatureConfiguration` interface describes, exactly as step 3's
+  `OpenIdClientConfigurationAdapter` does for discovery. This adapter is what makes the module's
+  JWKS components usable for a provider set that is variable in size across deployments and whose
+  `jwks_uri` only becomes known once asynchronous discovery resolves it.
+- `IssuerSignatureVerifier.java` — resolves the token's `iss` through
+  `IdentityProviderRegistry.findByIssuer` **first**, and only then checks the signature against that
+  one provider's keys, through a `ReactiveJwksSignature` built from the adapter. The routing is the
+  whole point and is the only code here that is this service's own: the module's own wiring registers
+  every configured endpoint as a *global* verifier and tries each in turn without ever reading `iss`,
+  which with two providers configured would let provider B mint tokens that authenticate as provider
+  A. An issuer that is unregistered, or configured but not `RESOLVED`, yields `false` with no
+  outbound request and is indistinguishable from a bad signature (US-ID-008). The method is reactive
+  and parks no thread, matching the `TokenValidator` signature step 5 plugs it into.
+- A Micrometer counter tagged by provider and outcome, plus a WARN on rejection carrying the `kid`,
+  so that a key rotation the cache has not caught up with can be told from a flood of forged tokens.
 
-**Acceptance:** WireMock tests assert: a key is resolved and served from cache without a second
-fetch within the TTL; rotating the stubbed JWKS to a new `kid` causes exactly one refetch and the
-new key resolves without restart; N consecutive requests for an unknown `kid` within the cooldown
-window trigger at most one refetch (parameterized over N); and concurrent first-time resolutions
-issue a single fetch. Covers AC 14 and the caching half of AC 13.
+Configure `micronaut.caches.jwks.expire-after-write` in `application.yml` (environment variable
+`IDP_JWKS_CACHE_TTL`, default `60s`). Declaring a cache under that name is what switches the module
+from its built-in fetcher to `CacheableJwkSetFetcher`, so the block selects an implementation rather
+than tuning one. That single lifetime bounds both halves of the key-handling budget: **rotation
+latency** — a key minted after startup is honoured once the cached set expires, at most one TTL
+later, with no restart (AC 13) — and **outbound request rate** — at most one JWK Set request per
+provider per TTL whatever the inbound traffic, so a flood of tokens bearing `kid` values no provider
+ever published costs no extra request at all, because nothing invalidates this cache on a miss
+(AC 14). Those pull in opposite directions, and the trade is lopsided rather than balanced: the
+module has **no refresh-on-miss path**, so the full TTL elapses between a provider starting to sign
+with a newly published key and this service accepting any token bearing it — a blanket 401 window,
+not a degraded mode. A short lifetime costs one request per provider per minute, which no provider
+notices; a long one buys that back in authentication downtime. Hence a default in seconds. Remove
+`jwks-cache-ttl` from the `consent-manager.identity-providers` schema, `application.yml`,
+`application-dev.yml`, `application-test.yml` and `.env.sample` rather than leave a knob that is
+silently ignored.
+
+Promote `com.nimbusds:nimbus-jose-jwt` and `io.micronaut.reactor:micronaut-reactor` to explicit
+`<dependency>` entries in `pom.xml`: both are named in main sources from this step on, and relying
+on them arriving transitively through `micronaut-security-jwt` lets an unrelated upgrade break this
+build with no change here.
+
+**Acceptance:** WireMock-backed tests assert: a token signed by a key the provider publishes
+verifies; the key set is fetched once and served from cache for later verifications within the TTL;
+a token signed by *another* provider's key while claiming this issuer is rejected (cross-issuer key
+confusion); a token claiming an unregistered or unresolved issuer is rejected with no outbound
+request at all; repeated tokens bearing an unknown `kid` trigger no additional fetch; an already
+cached key keeps verifying while the JWK Set endpoint is down; and a key rotated at the provider
+verifies once the cache expires, without a restart. Covers AC 14 and the caching half of AC 13.
 
 ### Step 5: Claim mapping and the token validation pipeline
 
@@ -275,7 +329,9 @@ pipeline exactly in the ticket's order:
    counts as no match and is indistinguishable from an unknown issuer (Step 3). The rejection
    message must **not** echo the received issuer back (US-ID-008) — use a fixed, generic message and
    log the issuer at DEBUG only.
-3. Resolve the key by `kid` through `JwksKeySource` (Step 4).
+3. Hand the token to `IssuerSignatureVerifier` (Step 4), which resolves the key by `kid` and
+   verifies the signature against that issuer's published key set. No key fetching, caching or
+   selection is written here (convention 6).
 4. Verify the signature. **Reject `alg: none` and every symmetric algorithm** (`HS*`) before key
    lookup, via an explicit allow-list of asymmetric algorithms (`RS*`, `PS*`, `ES*`) — a named
    constant set — so this holds regardless of the key material present.

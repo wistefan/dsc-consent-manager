@@ -29,7 +29,6 @@ import java.util.Map;
  *       discovery-url: https://keycloak.example.com/realms/dataspace/.well-known/openid-configuration
  *       audience: consent-manager
  *       clock-skew: 30s
- *       jwks-cache-ttl: 1h
  *       claims:
  *         user-identifier: sub
  *         participant-identifier: participant_id
@@ -102,16 +101,6 @@ public class IdentityProviderConfiguration {
      */
     public static final Duration DEFAULT_CLOCK_SKEW = Duration.ofSeconds(30);
 
-    /**
-     * Default lifetime of a provider's cached JWK set when {@code jwks-cache-ttl} is not
-     * configured.
-     *
-     * <p>An hour is long enough that steady-state traffic never re-fetches, and short enough that a
-     * planned key rotation is picked up without a restart even if the unknown-{@code kid} refetch
-     * path (step 4) is somehow not exercised.
-     */
-    public static final Duration DEFAULT_JWKS_CACHE_TTL = Duration.ofHours(1);
-
     /** Default claim carrying the user identifier, per the published token contract. */
     public static final String DEFAULT_USER_IDENTIFIER_CLAIM = "sub";
 
@@ -134,7 +123,6 @@ public class IdentityProviderConfiguration {
     private String discoveryUrl;
     private String audience;
     private Duration clockSkew = DEFAULT_CLOCK_SKEW;
-    private Duration jwksCacheTtl = DEFAULT_JWKS_CACHE_TTL;
     private ClaimsConfiguration claims = new ClaimsConfiguration();
     private Map<String, String> roleMapping = Map.of();
     private boolean allowInsecureTransport = DEFAULT_ALLOW_INSECURE_TRANSPORT;
@@ -266,28 +254,6 @@ public class IdentityProviderConfiguration {
     }
 
     /**
-     * Returns how long this provider's fetched JWK set stays usable before it is refreshed.
-     *
-     * <p>Per-provider rather than global: a provider that rotates keys hourly and one that rotates
-     * them yearly should not share a refresh cadence. Carries no {@code @NotNull} for the reason
-     * given on {@link #getClockSkew()}.
-     *
-     * @return the JWKS cache lifetime, never {@code null}
-     */
-    public Duration getJwksCacheTtl() {
-        return jwksCacheTtl;
-    }
-
-    /**
-     * Sets the JWKS cache lifetime.
-     *
-     * @param jwksCacheTtl the lifetime; {@code null} restores {@link #DEFAULT_JWKS_CACHE_TTL}
-     */
-    public void setJwksCacheTtl(Duration jwksCacheTtl) {
-        this.jwksCacheTtl = jwksCacheTtl == null ? DEFAULT_JWKS_CACHE_TTL : jwksCacheTtl;
-    }
-
-    /**
      * Reports whether this provider may be addressed over cleartext {@code http}.
      *
      * <p>See {@link #DEFAULT_ALLOW_INSECURE_TRANSPORT} for why this is off by default. {@code
@@ -401,7 +367,6 @@ public class IdentityProviderConfiguration {
     @PostConstruct
     public void validate() {
         requireNonNegative("clock-skew", clockSkew);
-        requireNonNegative("jwks-cache-ttl", jwksCacheTtl);
         this.resolvedRoleMapping = resolveRoleMapping();
     }
 

@@ -112,6 +112,50 @@ micronaut:
     token:
       jwt:
         enabled: true
+
+  # ---------------------------------------------------------------------------
+  # JWK Set cache
+  # ---------------------------------------------------------------------------
+  # Declaring a cache named `jwks` is what switches `micronaut-security-jwt` from its
+  # built-in in-memory fetcher to `CacheableJwkSetFetcher`, so this block is not tuning -
+  # it selects the implementation. Keys are cached per (provider name, jwks_uri).
+  #
+  # `expire-after-write` is the only knob that matters here, and it sets both halves of
+  # the key-handling budget:
+  #
+  #   rotation latency   - the module has no refresh-on-miss path, so from the moment a
+  #                        provider starts signing with a newly published key until this
+  #                        cache expires, EVERY token signed by that key is rejected.
+  #                        Keycloak publishes the new key and starts signing with it at
+  #                        the same moment, so this window is a total authentication
+  #                        outage, not a degraded mode. No restart is needed to recover,
+  #                        it just takes up to one TTL (AC 13).
+  #   outbound request   - in steady state, with a REACHABLE provider, at most one JWK Set
+  #     rate               request per provider per TTL whatever the inbound traffic is. A
+  #                        flood of tokens bearing `kid` values no provider ever published
+  #                        costs no extra request at all, because nothing invalidates this
+  #                        cache on a miss (AC 14). Only a burst of concurrent FIRST-EVER
+  #                        verifications for one provider can exceed one load, and that is
+  #                        bounded by concurrency at that instant, not by traffic.
+  #
+  # This cache does NOT bound the request rate while a provider's key endpoint is failing.
+  # A failed fetch is never cached: the module's JWKS client turns an HTTP failure into an
+  # empty result and Micronaut Cache invalidates the key instead of storing it. Once the
+  # entry has expired with the endpoint down, every verification would issue its own
+  # request. That case is handled one layer up, in `IssuerSignatureVerifier`, which stops
+  # consulting a provider whose key set could not be read for a fixed cooldown - see
+  # `IssuerSignatureVerifier.KEY_SET_UNAVAILABLE_COOLDOWN`. Tokens from that provider are
+  # rejected for as long as its keys are unreadable, whichever layer answers.
+  #
+  # The two pull in opposite directions, and the trade is lopsided: a short lifetime costs
+  # one request per provider per minute, which no provider notices, while a long one buys
+  # that back with minutes of blanket 401s after every rotation. Hence 60s rather than the
+  # 5m first proposed. RAISING THIS VALUE BUYS ROTATION DOWNTIME - see
+  # docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md.
+  caches:
+    jwks:
+      expire-after-write: ${IDP_JWKS_CACHE_TTL:60s}
+
   metrics:
     enabled: true
     export:
@@ -212,9 +256,16 @@ consent-manager:
   # ---------------------------------------------------------------------------
   # One entry per trusted OpenID Connect provider, keyed by name. Each entry is
   # self-contained: the issuer, the discovery document URL, the audience this service
-  # expects, the clock skew, the JWKS cache lifetime, the claim paths and the role
-  # mapping. No `client-id` and no `client-secret` appear anywhere - this service is a
-  # resource server, runs no OAuth2 flow and stores no credential.
+  # expects, the clock skew, the claim paths and the role mapping. No `client-id` and no
+  # `client-secret` appear anywhere - this service is a resource server, runs no OAuth2
+  # flow and stores no credential.
+  #
+  # The JWK Set cache is deliberately NOT per provider. Fetching and caching the keys is
+  # done by `micronaut-security-jwt`, whose cache is a single Micronaut Cache named
+  # `jwks` shared by every provider (see `micronaut.caches.jwks` above and
+  # docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md). A
+  # per-provider lifetime is not expressible without reimplementing the cache, which is
+  # not worth a knob nobody has asked to turn.
   #
   # The trust list is read ONCE at startup and is immutable for the lifetime of the
   # process: no runtime reload, no admin endpoint, no auto-registration. Adding,
@@ -254,10 +305,6 @@ consent-manager:
       allow-insecure-transport: ${IDP_ALLOW_INSECURE_TRANSPORT:false}
       # Tolerance applied to the exp, iat and nbf claims.
       clock-skew: ${IDP_CLOCK_SKEW:30s}
-      # How long this provider's fetched JWK set stays usable before it is refreshed.
-      # Per provider: one that rotates keys hourly and one that rotates them yearly
-      # should not share a refresh cadence.
-      jwks-cache-ttl: ${IDP_JWKS_CACHE_TTL:1h}
       # Claim names are per provider. Each may be a dot-separated nested path.
       claims:
         user-identifier: ${IDP_CLAIM_USER_IDENTIFIER:sub}
