@@ -292,33 +292,40 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
     }
 
     /**
-     * Requires the identifier claim the token's mapped roles imply: a {@link Role#USER} token must
-     * name its user and a {@link Role#PARTICIPANT} token its participant, because downstream
-     * authorization is made against that identifier. {@link Role#CATALOG} acts for the dataspace
-     * and is identified by issuer and subject alone; a token with no mapped role has no
-     * role-specific identifier to demand and is refused later by {@code @Secured} with {@code 403}.
+     * Requires the token to name a caller it could act as: at least one mapped role whose
+     * identifier claim is present. {@link Role#USER} is identified by its user identifier, {@link
+     * Role#PARTICIPANT} by its participant identifier, and {@link Role#CATALOG} by issuer and
+     * subject alone, so a catalog token needs no identifier claim at all.
      *
-     * @param claims the claims to read
-     * @param configuration the issuing provider's configuration, naming the identifier claims
-     * @param roles the roles already mapped from the token
-     * @return {@code true} if every identifier the roles require is present
+     * <p>Deliberately <em>any</em> rather than <em>every</em> role: the published contract defines
+     * a catalog token as a participant token that also bears the catalog role, and such a service
+     * account carries no participant identifier. Whether the identifier a <em>particular</em>
+     * operation needs is present is settled where the acting role is known - {@code
+     * PrincipalResolutionFilter}, as a {@code 403}. A token with no mapped role has no
+     * role-specific identifier to demand and is refused there too.
      */
     private boolean hasRequiredIdentifier(
             JWTClaimsSet claims, IdentityProviderConfiguration configuration, Set<Role> roles) {
+        if (roles.isEmpty()
+                || roles.stream().anyMatch(role -> identifies(role, claims, configuration))) {
+            return true;
+        }
+        LOG.debug("A token carries the identifier claim of none of the roles it grants");
+        return false;
+    }
+
+    /** Whether the token carries the identifier claim that one role is identified by. */
+    private boolean identifies(
+            Role role, JWTClaimsSet claims, IdentityProviderConfiguration configuration) {
         IdentityProviderConfiguration.ClaimsConfiguration claimNames = configuration.getClaims();
-        if (roles.contains(Role.USER)
-                && claimMapper.findString(claims, claimNames.getUserIdentifier()).isEmpty()) {
-            LOG.debug("A USER token carries no user identifier claim");
-            return false;
-        }
-        if (roles.contains(Role.PARTICIPANT)
-                && claimMapper
-                        .findString(claims, claimNames.getParticipantIdentifier())
-                        .isEmpty()) {
-            LOG.debug("A PARTICIPANT token carries no participant identifier claim");
-            return false;
-        }
-        return true;
+        return switch (role) {
+            case USER -> claimMapper.findString(claims, claimNames.getUserIdentifier()).isPresent();
+            case PARTICIPANT ->
+                    claimMapper
+                            .findString(claims, claimNames.getParticipantIdentifier())
+                            .isPresent();
+            case CATALOG -> true;
+        };
     }
 
     /**

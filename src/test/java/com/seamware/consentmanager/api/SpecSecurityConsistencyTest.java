@@ -42,15 +42,10 @@ import org.yaml.snakeyaml.Yaml;
  * Asserts that every operation in the OpenAPI specification is served by a route whose
  * {@code @Secured} rule says the same thing the specification's {@code security} requirement says.
  *
- * <p>This is the durable mechanism behind AC 19, not a check of the one endpoint that exists today:
- * the cases are generated from the specification, so an endpoint added by a later ticket is covered
- * the moment it is specified. An operation with no implementing controller method <em>fails</em>
- * rather than being skipped - a vacuous pass is exactly how this kind of test stops covering
- * anything.
- *
- * <p>The specification is read from the classpath copy the build places under {@code static/}, the
- * same bytes Swagger UI is served, so the test cannot pass against a specification the application
- * does not ship.
+ * <p>Cases are generated from the specification, so a later endpoint is covered the moment it is
+ * specified; an operation with no implementing controller method fails rather than being skipped.
+ * The specification is read from the classpath copy under {@code static/} - the same bytes Swagger
+ * UI is served.
  */
 @DisplayName("Specification security requirements versus @Secured")
 class SpecSecurityConsistencyTest {
@@ -97,16 +92,7 @@ class SpecSecurityConsistencyTest {
     /** The only authentication scheme name this service implements. */
     private static final String EXPECTED_SCHEME_NAME = "bearer";
 
-    /**
-     * One operation of the specification together with the access it declares.
-     *
-     * @param operationId the specification's {@code operationId}, which is also what the generator
-     *     records in the {@code @Operation} annotation on the routed method
-     * @param httpMethod the HTTP method in lower case, as the specification spells it
-     * @param path the templated path, as the specification spells it
-     * @param anonymous whether the operation declares an empty {@code security} requirement
-     * @param schemes the security scheme names the operation requires, empty when anonymous
-     */
+    /** One operation of the specification together with the access it declares. */
     record SpecOperation(
             String operationId,
             String httpMethod,
@@ -120,11 +106,7 @@ class SpecSecurityConsistencyTest {
         }
     }
 
-    /**
-     * Every operation in the specification, with its effective security requirement resolved.
-     *
-     * @return the operations, never empty
-     */
+    /** Every operation in the specification, with its effective security requirement resolved. */
     static Stream<SpecOperation> specOperations() {
         Map<String, Object> spec = loadYaml(SPEC_RESOURCE);
         List<?> globalSecurity = asList(spec.get("security"));
@@ -150,8 +132,6 @@ class SpecSecurityConsistencyTest {
 
     /**
      * Asserts that the route implementing an operation enforces what the specification promises.
-     *
-     * @param operation the specified operation under test
      */
     @ParameterizedTest(name = "{0}")
     @MethodSource("specOperations")
@@ -224,15 +204,7 @@ class SpecSecurityConsistencyTest {
         }
     }
 
-    /**
-     * Builds the operation record for one path item entry.
-     *
-     * @param path the templated path
-     * @param httpMethod the operation key of the path item
-     * @param operation the operation object
-     * @param globalSecurity the document-level requirement an operation inherits when silent
-     * @return the operation with its effective security resolved
-     */
+    /** Builds the operation record for one path item entry. */
     private static SpecOperation operationOf(
             String path, String httpMethod, Map<String, Object> operation, List<?> globalSecurity) {
         Object operationId = operation.get("operationId");
@@ -253,12 +225,7 @@ class SpecSecurityConsistencyTest {
                 (String) operationId, httpMethod, path, effective.isEmpty(), List.copyOf(schemes));
     }
 
-    /**
-     * Finds the routed method implementing an operation, failing when nothing implements it.
-     *
-     * @param operation the specified operation
-     * @return the method carrying the routing annotations, and therefore the access rule
-     */
+    /** Finds the routed method implementing an operation, failing when nothing implements it. */
     private static Method routedMethodFor(SpecOperation operation) {
         for (Class<?> controller : controllerClasses()) {
             for (Method method : controller.getMethods()) {
@@ -282,13 +249,7 @@ class SpecSecurityConsistencyTest {
                 operation, CONTROLLER_PACKAGE, operation.operationId());
     }
 
-    /**
-     * Renders the route a method is actually mapped to, as {@code "<method> <path>"}.
-     *
-     * @param controller the declaring controller, supplying the path prefix
-     * @param method the candidate method
-     * @return the mapped route, or a message saying the method carries no routing annotation
-     */
+    /** Renders the route a method is actually mapped to, as {@code "<method> <path>"}. */
     private static String routeOf(Class<?> controller, Method method) {
         for (Map.Entry<String, Class<? extends Annotation>> entry :
                 ROUTING_ANNOTATIONS.entrySet()) {
@@ -300,23 +261,13 @@ class SpecSecurityConsistencyTest {
         return "no routing annotation on " + method;
     }
 
-    /**
-     * Reads the path prefix a controller declares.
-     *
-     * @param controller the controller class, or a supertype of one
-     * @return the prefix, or {@code "/"} when the controller declares none
-     */
+    /** Reads the path prefix a controller declares. */
     private static String prefixOf(Class<?> controller) {
         Controller annotation = controller.getAnnotation(Controller.class);
         return annotation == null ? DEFAULT_URI : annotation.value();
     }
 
-    /**
-     * Reads the URI out of a routing annotation, whichever member carries it.
-     *
-     * @param annotation the routing annotation
-     * @return the declared URI, or {@code "/"} when every member is left at its default
-     */
+    /** Reads the URI out of a routing annotation, whichever member carries it. */
     private static String uriOf(Annotation annotation) {
         for (String member : URI_MEMBERS) {
             try {
@@ -332,13 +283,7 @@ class SpecSecurityConsistencyTest {
         return DEFAULT_URI;
     }
 
-    /**
-     * Joins a controller prefix and a method URI into one path.
-     *
-     * @param prefix the controller prefix
-     * @param uri the method URI
-     * @return the joined path, with no doubled or trailing separator
-     */
+    /** Joins a controller prefix and a method URI into one path. */
     private static String join(String prefix, String uri) {
         String joined =
                 (DEFAULT_URI.equals(prefix) ? "" : prefix) + (DEFAULT_URI.equals(uri) ? "" : uri);
@@ -352,8 +297,6 @@ class SpecSecurityConsistencyTest {
      *
      * <p>Scanning the classpath rather than starting an application context keeps this a fast unit
      * test, and keeps it honest: it sees the annotations as they were compiled.
-     *
-     * @return the classes annotated with {@link Controller}, never empty
      */
     private static List<Class<?>> controllerClasses() {
         List<Class<?>> controllers = new ArrayList<>();
@@ -375,11 +318,7 @@ class SpecSecurityConsistencyTest {
         return controllers;
     }
 
-    /**
-     * Resolves the compiled-output directories holding the controller package.
-     *
-     * @return one directory per classpath root that contains the package
-     */
+    /** Resolves the compiled-output directories holding the controller package. */
     private static List<Path> packageRoots() {
         String resource = CONTROLLER_PACKAGE.replace('.', '/');
         List<Path> roots = new ArrayList<>();
@@ -394,25 +333,14 @@ class SpecSecurityConsistencyTest {
         return roots;
     }
 
-    /**
-     * Derives a binary class name from a compiled class file.
-     *
-     * @param root the directory holding the controller package itself
-     * @param file the class file below it
-     * @return the fully qualified class name
-     */
+    /** Derives a binary class name from a compiled class file. */
     private static String className(Path root, Path file) {
         String relative = root.relativize(file).toString();
         String withoutSuffix = relative.substring(0, relative.length() - CLASS_SUFFIX.length());
         return CONTROLLER_PACKAGE + "." + withoutSuffix.replace(java.io.File.separatorChar, '.');
     }
 
-    /**
-     * Loads a class by name.
-     *
-     * @param name the fully qualified class name
-     * @return the loaded class
-     */
+    /** Loads a class by name. */
     private static Class<?> load(String name) {
         try {
             return Class.forName(name, false, classLoader());
@@ -421,13 +349,7 @@ class SpecSecurityConsistencyTest {
         }
     }
 
-    /**
-     * Resolves a possibly {@code $ref}ed node against the file that referenced it.
-     *
-     * @param node the node, either inline or a {@code $ref} wrapper
-     * @param fromResource the classpath resource the node was read from
-     * @return the resolved mapping, or {@code null} when the node is absent
-     */
+    /** Resolves a possibly {@code $ref}ed node against the file that referenced it. */
     private static Map<String, Object> resolve(Object node, String fromResource) {
         Map<String, Object> mapping = asMap(node);
         Object reference = mapping.get("$ref");
@@ -450,12 +372,7 @@ class SpecSecurityConsistencyTest {
         return resolve(current, target);
     }
 
-    /**
-     * Parses a YAML document from the classpath.
-     *
-     * @param resource the classpath-relative resource name
-     * @return the document as a mapping
-     */
+    /** Parses a YAML document from the classpath. */
     private static Map<String, Object> loadYaml(String resource) {
         try (InputStream stream = classLoader().getResourceAsStream(resource)) {
             assertThat(stream).as("`%s` is on the classpath", resource).isNotNull();
@@ -465,32 +382,18 @@ class SpecSecurityConsistencyTest {
         }
     }
 
-    /**
-     * The class loader holding both the compiled application and its resources.
-     *
-     * @return the context class loader
-     */
+    /** The class loader holding both the compiled application and its resources. */
     private static ClassLoader classLoader() {
         return Thread.currentThread().getContextClassLoader();
     }
 
-    /**
-     * Narrows an untyped YAML node to a mapping.
-     *
-     * @param node the node; may be {@code null}
-     * @return the mapping, or an empty one when the node is absent or not a mapping
-     */
+    /** Narrows an untyped YAML node to a mapping. */
     @SuppressWarnings("unchecked")
     private static Map<String, Object> asMap(Object node) {
         return node instanceof Map ? (Map<String, Object>) node : new LinkedHashMap<>();
     }
 
-    /**
-     * Narrows an untyped YAML node to a sequence.
-     *
-     * @param node the node; may be {@code null}
-     * @return the sequence, or an empty one when the node is absent or not a sequence
-     */
+    /** Narrows an untyped YAML node to a sequence. */
     private static List<?> asList(Object node) {
         return node instanceof List<?> list ? list : List.of();
     }

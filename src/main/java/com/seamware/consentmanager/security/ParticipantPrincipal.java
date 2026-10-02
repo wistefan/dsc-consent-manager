@@ -20,11 +20,7 @@ public record ParticipantPrincipal(
         String issuer, String subject, String identifier, Participant participant)
         implements ConsentManagerPrincipal {
 
-    /**
-     * Returns {@link Role#PARTICIPANT}.
-     *
-     * @return always {@link Role#PARTICIPANT}
-     */
+    /** Returns {@link Role#PARTICIPANT}. */
     @Override
     public Role role() {
         return Role.PARTICIPANT;

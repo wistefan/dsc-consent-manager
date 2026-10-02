@@ -73,6 +73,12 @@ class PrincipalResolutionIT extends PostgresTestResource {
     /** Probe rendering every optional profile claim a {@link UserPrincipal} carries. */
     private static final String PROFILE_ROUTE = PROBE_PATH + "/profile";
 
+    /** Probe that only a {@link Role#USER} may reach. */
+    private static final String USER_SCOPED_ROUTE = PROBE_PATH + "/user-scoped";
+
+    /** Probe that only a {@link Role#PARTICIPANT} may reach. */
+    private static final String PARTICIPANT_SCOPED_ROUTE = PROBE_PATH + "/participant-scoped";
+
     /** Probe carrying no {@code @Secured} annotation at all. */
     private static final String UNSECURED_ROUTE = PROBE_PATH + "/unsecured";
 
@@ -262,13 +268,13 @@ class PrincipalResolutionIT extends PostgresTestResource {
      * @param rawRoles the role strings the provider emits together
      * @param expectedDescription what the probe renders for the principal it was handed
      */
-    @ParameterizedTest(name = "{0} resolves to {1}")
+    @ParameterizedTest(name = "{0} resolves to {2}")
     @MethodSource("multiRoleTokens")
     @DisplayName("a token granting several roles acts as the highest-precedence one")
     void multiRoleTokenActsAsItsHighestPrecedenceRole(
-            String[] rawRoles, String expectedDescription) {
+            String[] rawRoles, String participantIdentifier, String expectedDescription) {
         HttpResponse<String> response =
-                get(ANY_ROUTE, token(claims(rawRoles, REGISTERED_PARTICIPANT)));
+                get(ANY_ROUTE, token(claims(rawRoles, participantIdentifier)));
 
         assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
         assertThat(response.getBody(String.class)).hasValue(expectedDescription);
@@ -276,6 +282,10 @@ class PrincipalResolutionIT extends PostgresTestResource {
 
     /**
      * The role combinations a provider can grant, and the identity each settles on.
+     *
+     * <p>The last case is the catalog service account the token contract describes: participant
+     * plus catalog, with no participant identifier at all. It must authenticate, because the
+     * identifier of one granted role - here the catalog's issuer and subject - suffices.
      *
      * @return one case per combination
      */
@@ -287,11 +297,68 @@ class PrincipalResolutionIT extends PostgresTestResource {
                         + " "
                         + REGISTERED_LEGAL_NAME;
         return Stream.of(
-                Arguments.of(new String[] {PARTICIPANT_ROLE, CATALOG_ROLE}, catalog),
-                Arguments.of(new String[] {USER_ROLE, CATALOG_ROLE}, catalog),
-                Arguments.of(new String[] {USER_ROLE, PARTICIPANT_ROLE}, participant),
-                Arguments.of(new String[] {USER_ROLE, PARTICIPANT_ROLE, CATALOG_ROLE}, catalog),
-                Arguments.of(new String[] {UNMAPPED_ROLE, USER_ROLE, CATALOG_ROLE}, catalog));
+                Arguments.of(
+                        new String[] {PARTICIPANT_ROLE, CATALOG_ROLE},
+                        REGISTERED_PARTICIPANT,
+                        catalog),
+                Arguments.of(
+                        new String[] {USER_ROLE, CATALOG_ROLE}, REGISTERED_PARTICIPANT, catalog),
+                Arguments.of(
+                        new String[] {USER_ROLE, PARTICIPANT_ROLE},
+                        REGISTERED_PARTICIPANT,
+                        participant),
+                Arguments.of(
+                        new String[] {USER_ROLE, PARTICIPANT_ROLE, CATALOG_ROLE},
+                        REGISTERED_PARTICIPANT,
+                        catalog),
+                Arguments.of(
+                        new String[] {UNMAPPED_ROLE, USER_ROLE, CATALOG_ROLE},
+                        REGISTERED_PARTICIPANT,
+                        catalog),
+                Arguments.of(new String[] {PARTICIPANT_ROLE, CATALOG_ROLE}, null, catalog));
+    }
+
+    /**
+     * An operation scoped to one role hands a multi-role caller that role, not whichever role a
+     * route-blind precedence would pick.
+     *
+     * <p>Otherwise identity and authorization diverge: a person who is also a registered
+     * participant satisfies a user-scoped {@code @Secured} and would then act as their organisation
+     * on it.
+     *
+     * @param route the role-scoped probe
+     * @param expectedDescription what the probe renders for the principal it was handed
+     */
+    @ParameterizedTest(name = "{0} hands a USER+PARTICIPANT token {1}")
+    @MethodSource("roleScopedRoutes")
+    @DisplayName("a role-scoped operation hands the caller the role it accepts")
+    void roleScopedRouteResolvesTheRoleItAccepts(String route, String expectedDescription) {
+        HttpResponse<String> response =
+                get(
+                        route,
+                        token(
+                                claims(
+                                        new String[] {USER_ROLE, PARTICIPANT_ROLE},
+                                        REGISTERED_PARTICIPANT)));
+
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(response.getBody(String.class)).hasValue(expectedDescription);
+    }
+
+    /**
+     * The role-scoped probes and the identity each gives the same multi-role token.
+     *
+     * @return one case per scope
+     */
+    static Stream<Arguments> roleScopedRoutes() {
+        return Stream.of(
+                Arguments.of(USER_SCOPED_ROUTE, "UserPrincipal USER " + SUBJECT),
+                Arguments.of(
+                        PARTICIPANT_SCOPED_ROUTE,
+                        "ParticipantPrincipal PARTICIPANT "
+                                + REGISTERED_PARTICIPANT
+                                + " "
+                                + REGISTERED_LEGAL_NAME));
     }
 
     /** Every optional profile claim the token carries reaches the handler on its principal. */
@@ -497,6 +564,11 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 .hasValueSatisfying(type -> assertThat(type.toString()).startsWith(PROBLEM_JSON));
         String body = response.getBody(String.class).orElse("");
         assertThat(body).contains("\"status\":" + expected.getCode());
+        if (expected == HttpStatus.FORBIDDEN) {
+            assertThat(response.getHeaders().getAll(WWW_AUTHENTICATE))
+                    .as("no credential fixes a 403, so it must not invite the client to retry")
+                    .isEmpty();
+        }
         assertThat(body)
                 .as("a refusal says nothing about the trust list")
                 .doesNotContain(ISSUER_HOST);
@@ -623,6 +695,40 @@ class PrincipalResolutionIT extends PostgresTestResource {
         @Get("/any")
         @Secured(SecurityRule.IS_AUTHENTICATED)
         String any(ConsentManagerPrincipal principal) {
+            return describe(principal);
+        }
+
+        /**
+         * Serves users only, naming the role rather than the principal type.
+         *
+         * @param principal the resolved caller
+         * @return a rendering of the principal the route was handed
+         */
+        @Get("/user-scoped")
+        @Secured("USER")
+        String userScoped(ConsentManagerPrincipal principal) {
+            return describe(principal);
+        }
+
+        /**
+         * Serves participants only, naming the role rather than the principal type.
+         *
+         * @param principal the resolved caller
+         * @return a rendering of the principal the route was handed
+         */
+        @Get("/participant-scoped")
+        @Secured("PARTICIPANT")
+        String participantScoped(ConsentManagerPrincipal principal) {
+            return describe(principal);
+        }
+
+        /**
+         * Renders a principal's type, role and identity.
+         *
+         * @param principal the resolved caller
+         * @return the rendering the assertions match on
+         */
+        private static String describe(ConsentManagerPrincipal principal) {
             return switch (principal) {
                 case UserPrincipal user -> "UserPrincipal " + user.role() + " " + user.identifier();
                 case ParticipantPrincipal participant ->

@@ -10,17 +10,11 @@ import io.micronaut.security.filters.SecurityFilter;
 import java.util.Optional;
 
 /**
- * Binds a controller parameter declared as a {@link ConsentManagerPrincipal} - or as one of its
- * three concrete shapes - to the principal {@link PrincipalResolutionFilter} resolved.
+ * Binds a controller parameter declared as a {@link ConsentManagerPrincipal}, or as one of its
+ * three concrete shapes, to the principal {@link PrincipalResolutionFilter} resolved.
  *
- * <p>This is what makes taking the caller from the verified token the path of least resistance (AC
- * 15): a handler that needs to know who is calling declares the type it is willing to serve and
- * gets it, with no reason to read an identifier out of a path variable or request body.
- *
- * <p>A declared type the resolved principal does not match is a {@code 403}, not a binding failure:
- * reaching a {@code UserPrincipal} handler with a participant token means the route's
- * {@code @Secured} and its signature disagree, and the safe reading of that disagreement is
- * refusal.
+ * <p>A principal of another shape is a {@code 403}, not a binding failure: the route's
+ * {@code @Secured} rule and its signature disagree, and refusal is the safe reading of that.
  *
  * @param <T> the principal type the bound parameter declares
  */
@@ -29,20 +23,12 @@ public final class PrincipalArgumentBinder<T extends ConsentManagerPrincipal>
 
     private final Argument<T> argumentType;
 
-    /**
-     * Creates a binder for one principal type.
-     *
-     * @param principalType the declared parameter type this binder serves
-     */
+    /** Creates a binder for one principal type. */
     public PrincipalArgumentBinder(Class<T> principalType) {
         this.argumentType = Argument.of(principalType);
     }
 
-    /**
-     * The parameter type this binder is registered for.
-     *
-     * @return the argument type
-     */
+    /** The parameter type this binder is registered for. */
     @Override
     public Argument<T> argumentType() {
         return argumentType;
@@ -51,9 +37,6 @@ public final class PrincipalArgumentBinder<T extends ConsentManagerPrincipal>
     /**
      * Supplies the resolved principal.
      *
-     * @param context the conversion context for the declared parameter
-     * @param source the request the filter attached the principal to
-     * @return the bound principal
      * @throws AuthorizationException {@code 401} if no principal was resolved, {@code 403} if the
      *     resolved one is not of the declared type
      */
@@ -71,13 +54,7 @@ public final class PrincipalArgumentBinder<T extends ConsentManagerPrincipal>
         return () -> Optional.of(principal);
     }
 
-    /**
-     * Reads the authentication back off the request, which is what tells a {@code 403} from a
-     * {@code 401}.
-     *
-     * @param source the request
-     * @return the authentication, or {@code null} if the request carries none
-     */
+    /** Reads the authentication back off the request, which is what tells a 403 from a 401. */
     private static Authentication authenticationOf(HttpRequest<?> source) {
         return source.getAttribute(SecurityFilter.AUTHENTICATION, Authentication.class)
                 .orElse(null);

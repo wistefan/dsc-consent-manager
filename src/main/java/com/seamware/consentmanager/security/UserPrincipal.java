@@ -35,11 +35,7 @@ public record UserPrincipal(
         @Nullable User user)
         implements ConsentManagerPrincipal {
 
-    /**
-     * Returns {@link Role#USER}.
-     *
-     * @return always {@link Role#USER}
-     */
+    /** Returns {@link Role#USER}. */
     @Override
     public Role role() {
         return Role.USER;
@@ -49,7 +45,6 @@ public record UserPrincipal(
      * Returns a copy carrying the provisioned user row.
      *
      * @param provisioned the row this principal's identifier resolved to
-     * @return a principal identical but for {@link #user()}
      */
     public UserPrincipal withUser(User provisioned) {
         return new UserPrincipal(

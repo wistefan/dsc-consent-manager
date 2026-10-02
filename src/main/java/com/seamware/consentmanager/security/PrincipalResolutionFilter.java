@@ -10,40 +10,44 @@ import io.micronaut.http.annotation.RequestFilter;
 import io.micronaut.http.annotation.ServerFilter;
 import io.micronaut.http.filter.ServerFilterPhase;
 import io.micronaut.scheduling.TaskExecutors;
-import io.micronaut.scheduling.annotation.ExecuteOn;
+import io.micronaut.security.annotation.Secured;
 import io.micronaut.security.authentication.Authentication;
 import io.micronaut.security.authentication.AuthorizationException;
 import io.micronaut.security.filters.SecurityFilter;
 import io.micronaut.web.router.MethodBasedRouteMatch;
-import io.micronaut.web.router.RouteMatchUtils;
+import io.micronaut.web.router.RouteAttributes;
+import io.micronaut.web.router.RouteMatch;
+import jakarta.inject.Named;
 import jakarta.inject.Singleton;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * Turns the validated {@link Authentication} into a typed {@link ConsentManagerPrincipal} and
  * attaches it to the request, so handlers read the caller from the token and nothing else.
  *
- * <p>Runs immediately after {@link SecurityFilter}, which is what makes the authentication
- * available, and only for a route that declares a {@link ConsentManagerPrincipal} parameter. Both
- * conditions matter: an authenticated request may well arrive at a route the specification declares
- * {@code security: []} - {@code /api-status}, {@code /health}, the Swagger assets - and resolving
- * there would let a token that names no usable caller turn a public reachability probe into a
- * {@code 403}. Gating on the route's signature instead also keeps the participant lookup below off
- * every request that would never read its result, so only a handler that actually takes a principal
- * pays for one, and only it can fail when the database is unreachable.
+ * <p>Runs immediately after {@link SecurityFilter}, which publishes the authentication, and only
+ * for a route that declares a {@link ConsentManagerPrincipal} parameter. The second condition
+ * matters: an authenticated request may arrive at a route the specification declares {@code
+ * security: []} - {@code /api-status}, {@code /health}, the Swagger assets - and resolving there
+ * would let a token naming no usable caller turn a public reachability probe into a {@code 403}. It
+ * also keeps the participant lookup off every request that would never read its result.
  *
  * <p>Everything this filter refuses is a {@code 403}, never a {@code 401}: the token authenticated,
  * it simply does not name a caller this service will act for. That covers a token granting no role
- * at all (an absent or wholly unmappable roles claim), one missing the identifier claim its role
- * requires, and a {@code PARTICIPANT} whose identifier is not registered - participants are created
- * explicitly (TICKET-005), never on the strength of a token. A token granting several roles is not
- * refused: {@link Role#effective(Set)} settles which one it acts as, by the precedence the
- * published token contract documents.
+ * the route accepts, one missing the identifier claim its acting role requires, and a {@code
+ * PARTICIPANT} whose identifier is not registered - participants are created explicitly
+ * (TICKET-005), never on the strength of a token.
  */
 @Singleton
 @ServerFilter(ServerFilter.MATCH_ALL_PATTERN)
@@ -52,8 +56,8 @@ public class PrincipalResolutionFilter implements Ordered {
     /**
      * Request attribute holding the resolved {@link ConsentManagerPrincipal}.
      *
-     * <p>Namespaced to keep it clear of framework attributes. Read it through a typed controller
-     * parameter (see {@code PrincipalArgumentBinder}) rather than by name.
+     * <p>Read it through a typed controller parameter (see {@link PrincipalArgumentBinder}) rather
+     * than by name.
      */
     public static final String PRINCIPAL_ATTRIBUTE = "consent-manager.principal";
 
@@ -80,49 +84,54 @@ public class PrincipalResolutionFilter implements Ordered {
 
     private final ParticipantRepository participants;
 
+    private final Scheduler blocking;
+
     /**
      * Creates the filter.
      *
      * @param registry resolves the verified issuer back to the provider whose claim names apply
      * @param claimMapper reads claims by those configured names
      * @param participants resolves a participant identifier to its registered row
+     * @param blockingExecutor carries the one step that blocks - the participant lookup over JDBC -
+     *     off the event loop, so the requests that take no principal pay no thread hop
      */
     public PrincipalResolutionFilter(
             IdentityProviderRegistry registry,
             ClaimMapper claimMapper,
-            ParticipantRepository participants) {
+            ParticipantRepository participants,
+            @Named(TaskExecutors.BLOCKING) ExecutorService blockingExecutor) {
         this.registry = registry;
         this.claimMapper = claimMapper;
         this.participants = participants;
+        this.blocking = Schedulers.fromExecutorService(blockingExecutor);
     }
 
     /**
      * Resolves the principal before the route runs, failing the request if it cannot be resolved.
      *
-     * <p>Declared blocking because resolving a participant reads the {@code participants} table
-     * over JDBC; the alternative, a reactive filter method, would park the lookup on another
-     * scheduler and buy nothing, since every route that can reach this point is itself blocking.
+     * <p>Emits the request itself rather than completing empty: {@code MethodFilter} reads a {@code
+     * Publisher<Void>} as logically void and never subscribes to it, so the attribute below would
+     * silently never be set.
      *
-     * @param request the request the security filter has already authenticated, or not
      * @throws AuthorizationException {@code 403} when the token names no caller to act for
      */
     @RequestFilter
-    @ExecuteOn(TaskExecutors.BLOCKING)
-    public void resolvePrincipal(HttpRequest<?> request) {
+    public Publisher<HttpRequest<?>> resolvePrincipal(HttpRequest<?> request) {
+        RouteMatch<?> route = RouteAttributes.getRouteMatch(request).orElse(null);
         Optional<Authentication> authentication =
                 request.getAttribute(SecurityFilter.AUTHENTICATION, Authentication.class);
-        if (authentication.isEmpty() || !declaresPrincipal(request)) {
-            return;
+        if (authentication.isEmpty() || !declaresPrincipal(route)) {
+            return Mono.just(request);
         }
-        request.setAttribute(PRINCIPAL_ATTRIBUTE, resolve(authentication.get()));
+        return resolve(authentication.get(), route)
+                .map(
+                        principal -> {
+                            request.setAttribute(PRINCIPAL_ATTRIBUTE, principal);
+                            return request;
+                        });
     }
 
-    /**
-     * Places this filter directly after the security filter, which publishes the authentication it
-     * reads.
-     *
-     * @return the order of {@link ServerFilterPhase#SECURITY}, one step later
-     */
+    /** Places this filter directly after the security filter, which publishes what it reads. */
     @Override
     public int getOrder() {
         return ServerFilterPhase.SECURITY.after();
@@ -131,15 +140,10 @@ public class PrincipalResolutionFilter implements Ordered {
     /**
      * Reports whether the matched route takes a principal, which is the only way one is ever read.
      *
-     * <p>{@code PrincipalArgumentBinder} is the sole consumer of {@link #PRINCIPAL_ATTRIBUTE}, so a
+     * <p>{@link PrincipalArgumentBinder} is the sole consumer of {@link #PRINCIPAL_ATTRIBUTE}, so a
      * route with no such parameter cannot observe the result and must not be able to fail on it.
-     *
-     * @param request the request, carrying the route the router matched before the security filter
-     * @return {@code true} when a handler argument declares {@link ConsentManagerPrincipal} or one
-     *     of its shapes
      */
-    private static boolean declaresPrincipal(HttpRequest<?> request) {
-        Object route = RouteMatchUtils.findRouteMatch(request).orElse(null);
+    private static boolean declaresPrincipal(@Nullable RouteMatch<?> route) {
         if (!(route instanceof MethodBasedRouteMatch<?, ?> method)) {
             return false;
         }
@@ -152,13 +156,12 @@ public class PrincipalResolutionFilter implements Ordered {
     }
 
     /**
-     * Builds the principal the token's effective role calls for.
+     * Builds the principal the token acts as on this route.
      *
-     * @param authentication the validated caller
-     * @return the typed principal
      * @throws AuthorizationException {@code 403} when the token names no caller to act for
      */
-    private ConsentManagerPrincipal resolve(Authentication authentication) {
+    private Mono<ConsentManagerPrincipal> resolve(
+            Authentication authentication, RouteMatch<?> route) {
         Map<String, Object> claims = authentication.getAttributes();
         String issuer =
                 (String)
@@ -171,29 +174,47 @@ public class PrincipalResolutionFilter implements Ordered {
             throw forbidden(authentication, "no trusted provider claims to have issued it");
         }
         IdentityProviderConfiguration configuration = provider.get().configuration();
-        Set<Role> roles = claimMapper.mapRoles(claims, configuration);
-        Optional<Role> effective = Role.effective(roles);
+        Set<Role> granted = claimMapper.mapRoles(claims, configuration);
+        Optional<Role> effective = Role.effective(granted, acceptedRoles(route));
         if (effective.isEmpty()) {
-            throw forbidden(authentication, "it grants no role this service recognises");
+            throw forbidden(authentication, "it grants no role this operation acts for");
         }
         String subject = authentication.getName();
         return switch (effective.get()) {
-            case USER -> user(authentication, configuration, issuer, subject, claims);
-            case PARTICIPANT -> participant(authentication, configuration, issuer, subject, claims);
-            case CATALOG -> new CatalogPrincipal(issuer, subject);
+            case USER -> Mono.just(user(authentication, configuration, issuer, subject, claims));
+            case CATALOG -> Mono.just(new CatalogPrincipal(issuer, subject));
+            case PARTICIPANT ->
+                    Mono.<ConsentManagerPrincipal>fromCallable(
+                                    () ->
+                                            participant(
+                                                    authentication,
+                                                    configuration,
+                                                    issuer,
+                                                    subject,
+                                                    claims))
+                            .subscribeOn(blocking);
         };
+    }
+
+    /**
+     * The roles the matched route names in its {@code @Secured} rule, empty when it names none.
+     *
+     * <p>This is what keeps identity and authorization from diverging on a multi-role token: the
+     * caller acts as a role the operation itself accepts, rather than as whichever role a
+     * route-blind precedence happened to pick.
+     */
+    private static Set<Role> acceptedRoles(RouteMatch<?> route) {
+        EnumSet<Role> accepted = EnumSet.noneOf(Role.class);
+        for (String value : route.getAnnotationMetadata().stringValues(Secured.class)) {
+            Role.fromConfiguredName(value).ifPresent(accepted::add);
+        }
+        return accepted;
     }
 
     /**
      * Builds a {@link UserPrincipal}. The {@link UserPrincipal#user()} row stays {@code null} here;
      * just-in-time provisioning fills it.
      *
-     * @param authentication the validated caller
-     * @param configuration the issuing provider's configuration, naming the identifier claim
-     * @param issuer the verified issuer
-     * @param subject the verified subject
-     * @param claims the claims the signature covers
-     * @return the principal
      * @throws AuthorizationException {@code 403} when the token carries no user identifier
      */
     private ConsentManagerPrincipal user(
@@ -221,14 +242,8 @@ public class PrincipalResolutionFilter implements Ordered {
 
     /**
      * Builds a {@link ParticipantPrincipal} from the registered participant the token's identifier
-     * resolves to.
+     * resolves to. Reads the database, so it runs on {@link #blocking}.
      *
-     * @param authentication the validated caller
-     * @param configuration the issuing provider's configuration, naming the identifier claim
-     * @param issuer the verified issuer
-     * @param subject the verified subject
-     * @param claims the claims the signature covers
-     * @return the principal
      * @throws AuthorizationException {@code 403} when the identifier is absent or unregistered
      */
     private ConsentManagerPrincipal participant(
@@ -254,13 +269,7 @@ public class PrincipalResolutionFilter implements Ordered {
         return new ParticipantPrincipal(issuer, subject, row.getIdentifier(), row);
     }
 
-    /**
-     * Builds the {@code 403} refusal and records why at debug level only.
-     *
-     * @param authentication the validated caller, which is what makes the failure a {@code 403}
-     * @param reason why the token names no caller this service will act for
-     * @return the exception to throw
-     */
+    /** Builds the {@code 403} refusal and records why at debug level only. */
     private static AuthorizationException forbidden(
             @Nullable Authentication authentication, String reason) {
         LOG.debug("Refusing an authenticated request because {}", reason);

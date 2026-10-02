@@ -15,41 +15,25 @@ import jakarta.inject.Singleton;
 @Factory
 public class PrincipalArgumentBinders {
 
-    /**
-     * Binder for a parameter declared as the sealed supertype, for handlers serving every role.
-     *
-     * @return the binder
-     */
+    /** Binder for a parameter declared as the sealed supertype, for handlers serving every role. */
     @Singleton
     public TypedRequestArgumentBinder<ConsentManagerPrincipal> anyPrincipalBinder() {
         return new PrincipalArgumentBinder<>(ConsentManagerPrincipal.class);
     }
 
-    /**
-     * Binder for a parameter declared as {@link UserPrincipal}.
-     *
-     * @return the binder
-     */
+    /** Binder for a parameter declared as {@link UserPrincipal}. */
     @Singleton
     public TypedRequestArgumentBinder<UserPrincipal> userPrincipalBinder() {
         return new PrincipalArgumentBinder<>(UserPrincipal.class);
     }
 
-    /**
-     * Binder for a parameter declared as {@link ParticipantPrincipal}.
-     *
-     * @return the binder
-     */
+    /** Binder for a parameter declared as {@link ParticipantPrincipal}. */
     @Singleton
     public TypedRequestArgumentBinder<ParticipantPrincipal> participantPrincipalBinder() {
         return new PrincipalArgumentBinder<>(ParticipantPrincipal.class);
     }
 
-    /**
-     * Binder for a parameter declared as {@link CatalogPrincipal}.
-     *
-     * @return the binder
-     */
+    /** Binder for a parameter declared as {@link CatalogPrincipal}. */
     @Singleton
     public TypedRequestArgumentBinder<CatalogPrincipal> catalogPrincipalBinder() {
         return new PrincipalArgumentBinder<>(CatalogPrincipal.class);

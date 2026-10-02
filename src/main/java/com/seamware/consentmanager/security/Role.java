@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.security;
 
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -38,28 +39,39 @@ public enum Role {
      * Order in which the roles of a multi-role token are considered when deciding which single
      * identity the caller acts as.
      *
-     * <p>Machine roles outrank {@link #USER}, and {@link #CATALOG} outranks {@link #PARTICIPANT}
-     * because the catalog token is defined as a participant token that additionally bears the
-     * catalog role - the natural way to issue one is a service account holding both. Ordering them
-     * the other way round would mean no token could ever act as the catalog.
+     * <p>{@link #CATALOG} outranks {@link #PARTICIPANT} because a catalog token is a participant
+     * token that additionally bears the catalog role, so the other order would leave no token able
+     * to act as the catalog.
      */
     private static final List<Role> PRINCIPAL_PRECEDENCE = List.of(CATALOG, PARTICIPANT, USER);
 
     /**
-     * Picks the one role a token acts as, from every role it was granted.
+     * Picks the one role a token acts as on an operation that accepts {@code accepted}.
      *
-     * <p>Authorization itself still reads the full set - {@code @Secured} matches any granted role.
-     * This only settles which typed principal a multi-role token resolves to, deterministically and
-     * in one place, so the published token contract has an answer instead of a refusal.
+     * <p>Authorization still reads the whole granted set; this only settles which typed principal
+     * the caller is handed. The operation's own requirement decides first, so a {@code USER} who is
+     * also a {@code PARTICIPANT} acts as a user on a user-scoped operation; {@link
+     * #PRINCIPAL_PRECEDENCE} only breaks a tie, which is what an operation accepting any
+     * authenticated caller ({@code accepted} empty) always is.
      *
-     * @param granted every role the token's roles claim mapped to; may be empty
-     * @return the highest-precedence granted role, or empty if none was granted
+     * @param granted the roles the token mapped to; {@code null} or empty yields empty
+     * @param accepted the roles the operation names, empty when it names none; empty is also the
+     *     result when the token grants none of them
      */
-    public static Optional<Role> effective(Set<Role> granted) {
-        if (granted == null) {
+    public static Optional<Role> effective(Set<Role> granted, Set<Role> accepted) {
+        if (granted == null || granted.isEmpty()) {
             return Optional.empty();
         }
-        return PRINCIPAL_PRECEDENCE.stream().filter(granted::contains).findFirst();
+        Set<Role> candidates =
+                accepted == null || accepted.isEmpty() ? granted : intersect(granted, accepted);
+        return PRINCIPAL_PRECEDENCE.stream().filter(candidates::contains).findFirst();
+    }
+
+    /** Roles present in both sets. */
+    private static Set<Role> intersect(Set<Role> granted, Set<Role> accepted) {
+        EnumSet<Role> both = EnumSet.copyOf(granted);
+        both.retainAll(accepted);
+        return both;
     }
 
     /**
@@ -71,8 +83,6 @@ public enum Role {
      * Enum#valueOf(Class, String)}.
      *
      * @param configuredName the role name as written in configuration; may be {@code null} or blank
-     * @return the matching role, or {@link Optional#empty()} if the name is {@code null}, blank or
-     *     not a known role
      */
     public static Optional<Role> fromConfiguredName(String configuredName) {
         if (configuredName == null || configuredName.isBlank()) {

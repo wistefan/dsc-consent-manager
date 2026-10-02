@@ -5,17 +5,17 @@ import io.micronaut.security.authentication.WwwAuthenticateChallengeProvider;
 import jakarta.inject.Singleton;
 
 /**
- * Supplies the {@code WWW-Authenticate} challenge every {@code 401} must carry, naming the only
- * scheme this service accepts.
+ * Supplies the {@code WWW-Authenticate: Bearer} challenge RFC 6750 &sect;3 requires of a refused
+ * bearer request.
  *
- * <p>Without a provider bean the framework sends a {@code 401} with no challenge at all: the
- * challenge providers it ships are for HTTP Basic and for OAuth2 protected-resource metadata, and
- * this service enables neither. RFC 6750 §3 requires a bearer resource server to answer a failed
- * authentication with {@code WWW-Authenticate: Bearer}, so the bean is supplied here.
- *
- * <p>The challenge is the bare scheme. A {@code realm}, a {@code resource_metadata} URI or an
- * {@code error} code would each tell an unauthenticated caller something about the trust list or
- * about which check its token failed, and a refusal says neither (US-ID-008).
+ * <p>This is the module's own extension point, and it is used because neither provider
+ * micronaut-security 5.4.0 ships emits that challenge here: {@code
+ * BasicAuthWwwAuthenticateChallengeProvider} challenges with {@code Basic}, and {@code
+ * ResourceMetadataWwwAuthenticateChallengeProvider} is switched off with the rest of the RFC 9728
+ * beans (see {@code micronaut.security.oauth2.protected-resource-metadata} in {@code
+ * application.yml}). The challenge is the bare scheme: a {@code realm}, a {@code resource_metadata}
+ * URI or an {@code error} code would each tell an unauthenticated caller something about the trust
+ * list or about which check its token failed (US-ID-008).
  */
 @Singleton
 public class BearerChallengeProvider implements WwwAuthenticateChallengeProvider<HttpRequest<?>> {
@@ -23,12 +23,7 @@ public class BearerChallengeProvider implements WwwAuthenticateChallengeProvider
     /** The sole authentication scheme this resource server accepts (RFC 6750). */
     public static final String CHALLENGE = "Bearer";
 
-    /**
-     * Returns the challenge, which is the same for every request.
-     *
-     * @param request the refused request, which deliberately does not influence the challenge
-     * @return {@value #CHALLENGE}
-     */
+    /** Returns {@value #CHALLENGE}, the same for every request. */
     @Override
     public String getWwwAuthenticateChallenge(HttpRequest<?> request) {
         return CHALLENGE;

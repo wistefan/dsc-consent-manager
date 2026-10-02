@@ -12,11 +12,7 @@ package com.seamware.consentmanager.security;
  */
 public record CatalogPrincipal(String issuer, String subject) implements ConsentManagerPrincipal {
 
-    /**
-     * Returns {@link Role#CATALOG}.
-     *
-     * @return always {@link Role#CATALOG}
-     */
+    /** Returns {@link Role#CATALOG}. */
     @Override
     public Role role() {
         return Role.CATALOG;
