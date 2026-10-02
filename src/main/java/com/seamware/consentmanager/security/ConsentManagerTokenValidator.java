@@ -26,82 +26,28 @@ import reactor.core.publisher.Mono;
 /**
  * Turns a bearer token into an {@link Authentication}, or into nothing at all.
  *
- * <p>This is the single entry point through which a request becomes authenticated. It is a
- * Micronaut Security {@link TokenValidator}, so {@code TokenAuthenticationFetcher} hands it every
- * bearer token the {@code Authorization} header carries. An empty publisher means "this token
- * authenticates nobody", which the security filter renders as {@code 401}.
+ * <p>A Micronaut Security {@link TokenValidator}: {@code TokenAuthenticationFetcher} hands it every
+ * bearer token, and an empty publisher - the one and only failure signal - renders as {@code 401}.
+ * No rejection says why and none echoes the submitted issuer back, so the trust list cannot be
+ * enumerated through the response (US-ID-008); the issuer is logged at {@code DEBUG} only.
  *
- * <h2>The pipeline</h2>
+ * <p>The pipeline, in order: parse without trusting anything; refuse any algorithm outside {@link
+ * #PERMITTED_SIGNATURE_ALGORITHMS}; resolve {@code iss} through {@link
+ * IdentityProviderRegistry#findByIssuer(String)}, which answers for resolved trust-list entries
+ * only; verify the signature through {@link IssuerSignatureVerifier} against that issuer's keys
+ * alone; then, on claims that signature now covers, check {@code exp}/{@code iat}/{@code nbf} under
+ * the provider's clock skew, check {@code aud}, require the non-blank {@code sub} the token
+ * contract mandates and which becomes the authentication's name, map roles, and require the
+ * identifier those roles imply.
  *
- * <p>The order below is the whole security argument of this class, and each step exists because the
- * one before it has not yet established anything:
+ * <p>The algorithm check precedes key lookup deliberately: a token signed {@code HS256} with a
+ * provider's published RSA modulus as the HMAC secret is refused for its {@code alg}, whatever the
+ * key-selection layer would have done with it.
  *
- * <ol>
- *   <li><strong>Parse, trusting nothing.</strong> The token is decoded only so its header and
- *       claims can be <em>read</em>. Nothing read here is believed; it is all attacker-supplied
- *       until step 4 says otherwise.
- *   <li><strong>Check the algorithm against an allow-list.</strong> {@link
- *       #PERMITTED_SIGNATURE_ALGORITHMS} names the asymmetric algorithms this service accepts, and
- *       the check happens <em>before</em> any key is looked up. That ordering is the point: a
- *       symmetric algorithm must be refused because of what it is, not because no HMAC secret
- *       happened to be configured. See the discussion below.
- *   <li><strong>Resolve the issuer against the trust list.</strong> {@link
- *       IdentityProviderRegistry#findByIssuer(String)} returns a provider only if it is configured
- *       <em>and</em> its discovery has succeeded, so an unconfigured issuer, a provider still
- *       starting up and a permanently failed one are one answer, not three.
- *   <li><strong>Verify the signature against that issuer's keys.</strong> Delegated whole to {@link
- *       IssuerSignatureVerifier}: which key set, which {@code kid}, which cache. Crucially the
- *       token is only ever offered to the keys of the issuer it claims, so a key valid at one
- *       provider cannot satisfy a token claiming another.
- *   <li><strong>Validate the time claims</strong> against the provider's configured clock skew.
- *   <li><strong>Validate the audience</strong> against that provider's configured audience.
- *   <li><strong>Map the roles</strong> through that provider's role mapping.
- *   <li><strong>Require the identifier the mapped roles imply.</strong>
- * </ol>
- *
- * <p>Steps 5 to 8 run only on a token whose signature has already verified, so from there on the
- * claims are the provider's statements rather than the caller's.
- *
- * <h2>Why the algorithm allow-list is not redundant</h2>
- *
- * <p>It would be tempting to argue that only asymmetric keys are ever configured, so a symmetric
- * algorithm could never verify anyway. That argument is exactly the one that fails in practice. The
- * classic attack takes an RSA public key the provider publishes - which is public, by design - and
- * uses its modulus as an HMAC secret to sign a token with {@code HS256}. A verifier that selects a
- * key by {@code kid} and then trusts the header's {@code alg} to decide what to do with it will
- * happily verify that token. Naming the acceptable algorithms up front removes the header's say in
- * the matter: a token is refused for its {@code alg} before any key material is in scope, so the
- * guarantee holds no matter what the issuer publishes or how the key-selection layer behaves.
- *
- * <p>{@code alg: none} is refused by the same list, and twice over: an unsigned token has no
- * signature, so it fails to parse as a {@link SignedJWT} in the first place.
- *
- * <p>The list deliberately holds only {@code RS*}, {@code PS*} and {@code ES*} - the exact set the
- * token contract in {@code api/components/security.yaml} publishes. {@code EdDSA} is absent not
- * because it is weak but because it is not in the contract; adding it is a change to the contract
- * and to this constant together, which is the point of keeping them in step.
- *
- * <h2>What a rejection says</h2>
- *
- * <p>Every rejection is the same rejection. There is one failure signal - an empty publisher - and
- * no exception type, message or header distinguishes a bad signature from an unknown issuer from an
- * expired token. US-ID-008 requires that a caller cannot learn which issuers this deployment
- * trusts, and a 401 that said "unknown issuer" for one value and "bad signature" for another would
- * be a perfectly serviceable oracle for enumerating the trust list. The submitted issuer is
- * therefore never echoed back and is logged at {@code DEBUG} only.
- *
- * <h2>Relationship to the framework's own JWT validator</h2>
- *
- * <p>{@code micronaut-security-jwt} ships its own {@link TokenValidator} beans, {@code
- * NimbusJsonWebTokenValidator} and {@code NimbusReactiveJsonWebTokenValidator}. They are switched
- * off in {@code application.yml} through the module's own {@code
- * micronaut.security.token.jwt.nimbus.validator} and {@code ...nimbus.reactive-validator}
- * properties. {@code TokenAuthenticationFetcher} consults every registered validator in turn and
- * takes the first {@link Authentication} any of them produces, so leaving them registered would
- * mean a token this class refuses could still be admitted by one of them against a declarative
- * signature configuration this service does not have. Being stricter than a validator running
- * beside you buys nothing. {@code TokenSignatureEnforcementIT} pins that this class is the only
- * {@code TokenValidator} in a started context.
+ * <p>Why this class exists instead of the module's own JWT validator, and which module components
+ * it delegates to, are recorded in {@code
+ * docs/adr/0005-own-token-validator-on-micronaut-security-jwt.md}. The module's validators are
+ * switched off in {@code application.yml} for the reasons given there.
  *
  * @see ClaimMapper
  * @see IssuerSignatureVerifier
@@ -111,13 +57,9 @@ import reactor.core.publisher.Mono;
 public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<?>> {
 
     /**
-     * The signature algorithms a token may be signed with.
-     *
-     * <p>Asymmetric only, and exactly the set published in the token contract at {@code
-     * api/components/security.yaml}. Every symmetric algorithm ({@code HS256}, {@code HS384},
-     * {@code HS512}) is absent on purpose: a shared secret would make this resource server capable
-     * of minting the very tokens it validates, and it is what an attacker reaches for when turning
-     * a published RSA modulus into an HMAC key.
+     * The signature algorithms a token may be signed with: asymmetric only, and exactly the set the
+     * token contract in {@code api/components/security.yaml} publishes. Symmetric algorithms are
+     * absent because a shared secret would let this resource server mint the tokens it validates.
      */
     public static final Set<JWSAlgorithm> PERMITTED_SIGNATURE_ALGORITHMS =
             Set.of(
@@ -132,15 +74,11 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
                     JWSAlgorithm.ES512);
 
     /**
-     * Attribute under which the validated {@link Authentication} carries the name of the identity
-     * provider that issued the token.
+     * Attribute under which the {@link Authentication} carries the name of the issuing provider, so
+     * principal resolution can reach its configured claim names without repeating the lookup.
      *
-     * <p>Principal resolution needs the provider's configuration - its claim names above all - to
-     * read anything further out of the token, and re-deriving it from the {@code iss} claim would
-     * re-do a lookup that has already happened. The key is namespaced so it cannot be confused with
-     * a claim, and it is written <em>after</em> the raw claims, so a token that carries a claim
-     * under this exact name overwrites nothing: the value here is always this service's, never the
-     * caller's.
+     * <p>Namespaced, and written after the raw claims, so a token carrying a claim of this name
+     * cannot supply the value.
      */
     public static final String IDENTITY_PROVIDER_ATTRIBUTE = "consent-manager.identity-provider";
 
@@ -167,16 +105,13 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
     }
 
     /**
-     * Validates a bearer token and, if it holds up, describes who presented it.
-     *
-     * <p>Non-blocking throughout: the signature check may have to fetch an issuer's key set, so the
-     * result is composed rather than awaited.
+     * Validates a bearer token and, if it holds up, describes who presented it. Non-blocking: the
+     * signature check may have to fetch a key set.
      *
      * @param token the raw token taken from the {@code Authorization} header
-     * @param request the request it arrived on; unused, and may be {@code null} when a token is
-     *     validated outside a request
-     * @return a publisher emitting one {@link Authentication}, or emitting nothing if the token is
-     *     not valid for any reason whatsoever
+     * @param request the request it arrived on; unused, and {@code null} outside a request
+     * @return a publisher emitting one {@link Authentication}, or nothing if the token is invalid
+     *     for any reason whatsoever
      */
     @Override
     @SingleResult
@@ -207,12 +142,12 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
     }
 
     /**
-     * Applies every check that only makes sense once the signature has verified.
+     * Applies the checks that only make sense once the signature has verified, and builds the
+     * {@link Authentication} if they all pass.
      *
      * @param provider the trust-list entry whose keys signed the token
      * @param claims the claims that signature covers
-     * @return the authenticated caller, or {@link Optional#empty()} if the token fails any
-     *     remaining check
+     * @return the authenticated caller, or empty if the token fails any remaining check
      */
     private Optional<Authentication> authenticate(
             ResolvedIdentityProvider provider, JWTClaimsSet claims) {
@@ -240,16 +175,11 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
     }
 
     /**
-     * Checks {@code exp}, {@code iat} and {@code nbf} against the provider's tolerance.
+     * Checks the time claims against the provider's own {@code clock-skew}, which is the tolerance
+     * between this service's clock and that provider's.
      *
-     * <p>{@code exp} and {@code iat} are <strong>required</strong>, matching the token contract in
-     * {@code api/components/security.yaml}, which marks both mandatory for all three token types. A
-     * bearer token without an expiry never stops being valid, so treating a missing {@code exp} as
-     * "nothing to check" would accept exactly the token that most needs refusing. {@code nbf} is
-     * optional and honoured when present.
-     *
-     * <p>The tolerance is applied symmetrically and is the provider's own {@code clock-skew}
-     * setting, because the clocks that may disagree are this service's and that provider's.
+     * <p>{@code exp} is required: a bearer token without an expiry never stops being valid. {@code
+     * iat} and {@code nbf} are optional per RFC 7519 and are honoured when present.
      *
      * @param claims the claims to check
      * @param clockSkew the provider's configured tolerance
@@ -267,11 +197,7 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
             return false;
         }
         Instant issuedAt = toInstant(claims.getIssueTime());
-        if (issuedAt == null) {
-            LOG.debug("A token carries no iat claim");
-            return false;
-        }
-        if (issuedAt.minus(clockSkew).isAfter(now)) {
+        if (issuedAt != null && issuedAt.minus(clockSkew).isAfter(now)) {
             LOG.debug("A token claims to have been issued in the future");
             return false;
         }
@@ -284,18 +210,11 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
     }
 
     /**
-     * Requires the identifier claim that the token's mapped roles imply.
-     *
-     * <p>A {@link Role#USER} token has to say which user it acts for and a {@link Role#PARTICIPANT}
-     * token which participant, because every authorization decision downstream is made against that
-     * identifier; a token that carries the role but not the identifier would authenticate as
-     * somebody this service cannot name. {@link Role#CATALOG} is exempt by contract - the catalog
-     * acts for the dataspace rather than for one organisation and is identified by its issuer and
-     * subject alone.
-     *
-     * <p>A token that maps to <em>no</em> role is also exempt: there is no role-specific identifier
-     * to demand of it. Such a token authenticates with no authority at all and is refused by the
-     * {@code @Secured} check on whatever it tries to reach, with {@code 403}.
+     * Requires the identifier claim the token's mapped roles imply: a {@link Role#USER} token must
+     * name its user and a {@link Role#PARTICIPANT} token its participant, because downstream
+     * authorization is made against that identifier. {@link Role#CATALOG} acts for the dataspace
+     * and is identified by issuer and subject alone; a token with no mapped role has no
+     * role-specific identifier to demand and is refused later by {@code @Secured} with {@code 403}.
      *
      * @param claims the claims to read
      * @param configuration the issuing provider's configuration, naming the identifier claims
@@ -321,11 +240,8 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
     }
 
     /**
-     * Decodes a token far enough to read it, without believing any of it.
-     *
-     * <p>An unsigned {@code alg: none} token has an empty signature and does not parse as a {@link
-     * SignedJWT} at all, so it is refused here before the algorithm allow-list ever sees it. Both
-     * refusals are intended; neither is relied upon alone.
+     * Decodes a token far enough to read it, without believing any of it. An {@code alg: none}
+     * token does not parse as a {@link SignedJWT} and is refused here, before the allow-list.
      *
      * @param token the raw compact serialisation; may be {@code null} or malformed
      * @return the parsed token, or {@code null} if it is not a well-formed signed JWT

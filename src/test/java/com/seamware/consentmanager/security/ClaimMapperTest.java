@@ -24,9 +24,10 @@ import org.junit.jupiter.params.provider.MethodSource;
  * identifier claim holding an object, a roles claim holding a number, a path descending through
  * something that is not an object. None of those may throw, and none may be coerced into a value.
  *
- * <p>The literal-first rule for dotted names gets its own cases because the two conventions it
+ * <p>The nested-first rule for dotted names gets its own cases because the two conventions it
  * reconciles - Keycloak's nested {@code realm_access.roles} and Auth0's namespaced {@code
- * https://example.com/roles} - are indistinguishable from the configured string alone.
+ * https://example.com/roles} - are indistinguishable from the configured string alone, and because
+ * a flat claim named like a path must not shadow the nested claim that path names.
  */
 @DisplayName("Claim lookup by configured name")
 class ClaimMapperTest {
@@ -42,6 +43,9 @@ class ClaimMapperTest {
 
     /** A namespaced claim name that contains dots but names one top-level claim. */
     private static final String NAMESPACED_ROLES_CLAIM = "https://example.com/roles";
+
+    /** Value a flat claim named like a nested path would inject if it were allowed to win. */
+    private static final String SHADOWING_VALUE = "did:web:attacker.example";
 
     /** Claim name a provider carries its participant identifier under. */
     private static final String PARTICIPANT_CLAIM = "participant_id";
@@ -93,6 +97,21 @@ class ClaimMapperTest {
                         "a namespaced claim whose name contains dots",
                         claims(Map.of(NAMESPACED_ROLES_CLAIM, PARTICIPANT_ID)),
                         NAMESPACED_ROLES_CLAIM,
+                        PARTICIPANT_ID),
+                Arguments.of(
+                        "a nested claim shadowed by a flat claim named like the path",
+                        claims(
+                                Map.of(
+                                        REALM_ACCESS_CLAIM,
+                                        Map.of(ROLES_CLAIM, PARTICIPANT_ID),
+                                        NESTED_ROLES_PATH,
+                                        SHADOWING_VALUE)),
+                        NESTED_ROLES_PATH,
+                        PARTICIPANT_ID),
+                Arguments.of(
+                        "a flat claim named like a path whose nested form is absent",
+                        claims(Map.of(NESTED_ROLES_PATH, PARTICIPANT_ID)),
+                        NESTED_ROLES_PATH,
                         PARTICIPANT_ID),
                 Arguments.of("a claim that is absent", claims(Map.of()), PARTICIPANT_CLAIM, null),
                 Arguments.of(
@@ -170,6 +189,16 @@ class ClaimMapperTest {
                                                 List.of(USER_ROLE_VALUE, FOREIGN_ROLE_VALUE)))),
                         NESTED_ROLES_PATH,
                         List.of(USER_ROLE_VALUE, FOREIGN_ROLE_VALUE)),
+                Arguments.of(
+                        "a nested role list shadowed by a flat claim named like the path",
+                        claims(
+                                Map.of(
+                                        REALM_ACCESS_CLAIM,
+                                        Map.of(ROLES_CLAIM, List.of(USER_ROLE_VALUE)),
+                                        NESTED_ROLES_PATH,
+                                        List.of(CATALOG_ROLE_VALUE))),
+                        NESTED_ROLES_PATH,
+                        List.of(USER_ROLE_VALUE)),
                 Arguments.of(
                         "a bare string, which counts as exactly one value",
                         claims(Map.of(NAMESPACED_ROLES_CLAIM, USER_ROLE_VALUE)),

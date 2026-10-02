@@ -12,41 +12,18 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Reads the claims a token carries using the claim names a provider was configured with.
+ * Reads claims by the names a provider was configured with; makes no trust decision.
  *
- * <p>Claim vocabularies differ between identity providers, so nothing in this service reads a claim
- * by a hard-coded name. {@link IdentityProviderConfiguration.ClaimsConfiguration} states, per
- * provider, which claim carries the user identifier, which carries the participant identifier and
- * which carries the roles; this type turns one of those configured names plus a parsed claim set
- * into a value. It performs no validation and makes no trust decision - it is purely the lookup
- * half of {@link ConsentManagerTokenValidator}.
+ * <p>A configured name may be a dot-separated path into a nested object ({@code
+ * realm_access.roles}) or a namespaced top-level claim that merely contains dots ({@code
+ * https://example.com/roles}). Resolution is <strong>nested-first</strong>: the name is tried as a
+ * path, and only if that does not resolve is it read as a literal claim name. Nested-first means a
+ * flat claim cannot shadow the nested one a path names, which matters where a subject can influence
+ * claim names; a namespaced name has no object to descend into and still resolves literally.
  *
- * <h2>Nested paths</h2>
- *
- * <p>Providers do not all publish roles at the top level. Keycloak nests them as {@code
- * {"realm_access": {"roles": ["..."]}}}, which a configured claim name has to be able to reach. A
- * configured name may therefore be a <strong>dot-separated path</strong>: {@code
- * realm_access.roles} descends into the {@code realm_access} object and reads its {@code roles}
- * member.
- *
- * <p>That convention collides with a second, equally common one: namespaced claim names such as
- * Auth0's {@code https://example.com/roles}, which contain dots but name a single top-level claim.
- * Splitting those on {@code .} would resolve nothing. The rule is therefore
- * <strong>literal-first</strong>: if a claim exists under the configured name <em>exactly</em>, its
- * value is returned and no splitting happens; only when no such claim exists is the name treated as
- * a path. The outcome is deterministic for every token - the literal claim wins whenever it is
- * present - and both conventions work without the operator having to escape anything.
- *
- * <h2>What is deliberately not done</h2>
- *
- * <p>Values are never coerced. A claim configured as an identifier that holds a number, an object
- * or an array resolves to {@link Optional#empty()} rather than to that value's {@code toString()},
- * because an identifier is stored verbatim and compared for equality elsewhere in this service, and
- * a silently stringified value would be a different identifier depending on which library parsed
- * the token. Role strings are compared <strong>exactly</strong>, case included: a role mapping is a
- * statement about the strings one named provider emits, and case-folding it would let {@code
- * Consent-User} satisfy a mapping written for {@code consent-user} at a provider that treats the
- * two as different roles.
+ * <p>Values are never coerced: a claim holding a number, object or array where a string is expected
+ * resolves to empty rather than to its {@code toString()}. Role strings are compared exactly, case
+ * included.
  *
  * @see IdentityProviderConfiguration.ClaimsConfiguration
  * @see ConsentManagerTokenValidator
@@ -54,40 +31,24 @@ import java.util.regex.Pattern;
 @Singleton
 public class ClaimMapper {
 
-    /**
-     * Separator between the segments of a nested claim path.
-     *
-     * <p>Only consulted when no claim exists under the configured name verbatim; see the
-     * literal-first rule in this class's documentation.
-     */
+    /** Separator between the segments of a nested claim path. */
     public static final String NESTED_CLAIM_SEPARATOR = ".";
 
     /** {@link #NESTED_CLAIM_SEPARATOR} escaped for use as a regular expression. */
     private static final String SEPARATOR_PATTERN = Pattern.quote(NESTED_CLAIM_SEPARATOR);
 
     /**
-     * {@code limit} argument to {@link String#split(String, int)} that keeps trailing empty
-     * segments.
-     *
-     * <p>Without it {@code "realm_access."} would split to a single usable segment and resolve to
-     * the enclosing object, quietly accepting a path that names no claim. Keeping the trailing
-     * empty segment makes it fail to resolve, which is what a malformed path should do.
+     * {@code limit} for {@link String#split(String, int)} that keeps trailing empty segments, so a
+     * malformed path such as {@code realm_access.} fails to resolve instead of naming its parent.
      */
     private static final int KEEP_TRAILING_EMPTY_SEGMENTS = -1;
 
     /**
-     * Reads a claim that is required to hold a single non-blank string.
-     *
-     * <p>This is how identifier claims are read. A missing claim, a claim holding {@code null}, a
-     * claim holding a blank string and a claim holding a non-string value are all reported the same
-     * way, because every one of them means "this token carries no identifier here" and the caller
-     * has no use for the distinction.
+     * Reads a claim required to hold a single non-blank string.
      *
      * @param claims the parsed claim set; may be {@code null}
-     * @param claimPath the configured claim name, possibly a dot-separated nested path; may be
-     *     {@code null} or blank
-     * @return the claim's value, or {@link Optional#empty()} if it is absent or is not a non-blank
-     *     string
+     * @param claimPath the configured claim name or nested path; may be {@code null} or blank
+     * @return the value, or empty if the claim is absent or is not a non-blank string
      */
     public Optional<String> findString(JWTClaimsSet claims, String claimPath) {
         return resolve(claims, claimPath)
@@ -97,23 +58,14 @@ public class ClaimMapper {
     }
 
     /**
-     * Reads a claim that may hold either a list of strings or a single string.
+     * Reads a claim holding either a list of strings or a single string.
      *
-     * <p>Role claims are published both ways: Keycloak emits {@code ["consent-user"]} while other
-     * providers emit a bare {@code "consent-user"}. Both are accepted. A single string is taken as
-     * <strong>one</strong> value and is never split on whitespace or commas - splitting would
-     * invent a delimiter convention that no provider on the trust list has declared, and would turn
-     * one unrecognised role string into several.
-     *
-     * <p>Non-string and blank elements of a list are skipped rather than failing the read: a
-     * provider that publishes a mixed array still has its usable entries honoured, and the unusable
-     * ones simply map to no role.
+     * <p>Providers publish roles both ways. A single string is one value and is never split on
+     * whitespace or commas; non-string and blank list elements are skipped.
      *
      * @param claims the parsed claim set; may be {@code null}
-     * @param claimPath the configured claim name, possibly a dot-separated nested path; may be
-     *     {@code null} or blank
-     * @return the non-blank string values, in encounter order; empty if the claim is absent or
-     *     holds nothing usable
+     * @param claimPath the configured claim name or nested path; may be {@code null} or blank
+     * @return the non-blank string values in encounter order; empty if nothing usable is there
      */
     public List<String> findStrings(JWTClaimsSet claims, String claimPath) {
         Optional<Object> value = resolve(claims, claimPath);
@@ -137,22 +89,13 @@ public class ClaimMapper {
     /**
      * Translates the raw role strings a token carries into this service's roles.
      *
-     * <p>The provider's {@code role-mapping} is the whole vocabulary: a raw role string it does not
-     * cover maps to nothing and is dropped. That is not an error. Identity providers routinely put
-     * roles unrelated to this service into the same claim - {@code offline_access}, {@code
-     * uma_authorization}, roles belonging to other applications in the same realm - and a token is
-     * not malformed for carrying them.
-     *
-     * <p>A token that ends up with <strong>no</strong> role still authenticates; it simply carries
-     * no authority and is refused by the {@code @Secured} check on whatever operation it reaches,
-     * with {@code 403} rather than {@code 401}. "The roles claim was absent" and "the roles claim
-     * held only strings this provider does not map" are deliberately indistinguishable here: both
-     * mean the caller holds a valid token and lacks the role, which is one answer, not two.
+     * <p>A raw string the provider's {@code role-mapping} does not cover is dropped, not an error:
+     * providers routinely emit roles belonging to other applications. A token mapping to no role
+     * still authenticates and is refused by {@code @Secured} with {@code 403}.
      *
      * @param claims the parsed claim set; may be {@code null}
-     * @param provider the configuration of the provider that issued the token, supplying both the
-     *     roles claim name and the mapping
-     * @return the roles the token grants, possibly empty, never {@code null}
+     * @param provider the issuing provider's configuration, supplying the roles claim and mapping
+     * @return the granted roles, possibly empty, never {@code null}
      */
     public Set<Role> mapRoles(JWTClaimsSet claims, IdentityProviderConfiguration provider) {
         Map<String, Role> rolesByRawValue = invert(provider.getResolvedRoleMapping());
@@ -167,11 +110,8 @@ public class ClaimMapper {
     }
 
     /**
-     * Turns the configured role-to-string mapping into the string-to-role lookup this class needs.
-     *
-     * <p>The inversion is lossless because {@link IdentityProviderConfiguration#validate()} already
-     * refuses a configuration that maps two roles to the same raw string, so no entry can be
-     * overwritten here.
+     * Inverts the configured role-to-string mapping into a string-to-role lookup. Lossless, because
+     * {@link IdentityProviderConfiguration#validate()} rejects two roles sharing a raw string.
      *
      * @param roleMapping the provider's resolved mapping, keyed by role
      * @return the same mapping keyed by raw role string
@@ -183,31 +123,34 @@ public class ClaimMapper {
     }
 
     /**
-     * Resolves a configured claim name, literal first and then as a nested path.
-     *
-     * <p>Descent stops at the first segment that is missing or whose parent is not an object, so a
-     * path never throws on a token whose shape differs from the configured one - an attacker-chosen
-     * claim set is exactly what this walks over.
+     * Resolves a configured claim name as a nested path, falling back to a literal claim name.
      *
      * @param claims the parsed claim set; may be {@code null}
      * @param claimPath the configured claim name; may be {@code null} or blank
-     * @return the resolved value, or {@link Optional#empty()} if the path does not resolve or
-     *     resolves to {@code null}
+     * @return the resolved value, or empty if it does not resolve or resolves to {@code null}
      */
     private static Optional<Object> resolve(JWTClaimsSet claims, String claimPath) {
         if (claims == null || claimPath == null || claimPath.isBlank()) {
             return Optional.empty();
         }
         Map<String, Object> topLevel = claims.getClaims();
-        if (topLevel.containsKey(claimPath)) {
-            return Optional.ofNullable(topLevel.get(claimPath));
-        }
+        return descend(topLevel, claimPath).or(() -> Optional.ofNullable(topLevel.get(claimPath)));
+    }
+
+    /**
+     * Walks a dot-separated path from the top-level claims. Descent stops at the first segment that
+     * is missing or whose parent is not an object, so an attacker-shaped claim set never throws.
+     *
+     * @param topLevel the token's top-level claims
+     * @param claimPath the configured claim name, read as a path
+     * @return the value the path names, or empty if it does not resolve
+     */
+    private static Optional<Object> descend(Map<String, Object> topLevel, String claimPath) {
         Object current = topLevel;
         for (String segment : claimPath.split(SEPARATOR_PATTERN, KEEP_TRAILING_EMPTY_SEGMENTS)) {
-            if (segment.isEmpty() || !(current instanceof Map<?, ?> enclosing)) {
-                return Optional.empty();
-            }
-            if (!enclosing.containsKey(segment)) {
+            if (segment.isEmpty()
+                    || !(current instanceof Map<?, ?> enclosing)
+                    || !enclosing.containsKey(segment)) {
                 return Optional.empty();
             }
             current = enclosing.get(segment);

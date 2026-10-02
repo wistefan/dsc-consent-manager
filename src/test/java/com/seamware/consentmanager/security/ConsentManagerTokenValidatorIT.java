@@ -312,17 +312,6 @@ class ConsentManagerTokenValidatorIT {
                                                         Instant.now(),
                                                         null)))),
                 Arguments.of(
-                        "a token with no iat",
-                        token(
-                                () ->
-                                        sign(
-                                                primary,
-                                                timed(
-                                                        primary.issuer(),
-                                                        Instant.now().plus(TOKEN_LIFETIME),
-                                                        null,
-                                                        null)))),
-                Arguments.of(
                         "an audience belonging to another service",
                         token(
                                 () ->
@@ -510,6 +499,29 @@ class ConsentManagerTokenValidatorIT {
                         "the clocks that may disagree are this service's and the provider's, so the"
                                 + " entry's %s tolerance applies to exp and nbf alike",
                         IdentityProviderConfiguration.DEFAULT_CLOCK_SKEW)
+                .isPresent();
+    }
+
+    @Test
+    @DisplayName("accepts a token that carries no iat, which RFC 7519 makes optional")
+    void acceptsTokenWithoutIssuedAt() {
+        String withoutIssuedAt =
+                sign(
+                        primary,
+                        roles(
+                                        new JWTClaimsSet.Builder(
+                                                timed(
+                                                        primary.issuer(),
+                                                        Instant.now().plus(TOKEN_LIFETIME),
+                                                        null,
+                                                        null)),
+                                        USER_ROLE_VALUE)
+                                .build());
+
+        assertThat(authenticate(withoutIssuedAt))
+                .as(
+                        "exp bounds the validity window on its own, so a conforming provider that"
+                                + " omits the optional iat claim is not refused")
                 .isPresent();
     }
 
