@@ -38,10 +38,41 @@ public class ClaimMapper {
      * @return the value, or empty if the claim is absent or is not a non-blank string
      */
     public Optional<String> findString(JWTClaimsSet claims, List<String> claimPath) {
+        return findString(claimsOf(claims), claimPath);
+    }
+
+    /**
+     * Reads a claim required to hold a single non-blank string from an already-extracted claim map.
+     *
+     * <p>The overload exists because an {@code Authentication} carries the token's claims as a map:
+     * principal resolution reads them by the same configured names without re-parsing the token.
+     *
+     * @param claims the claims by name; may be {@code null}
+     * @param claimPath the configured claim-name segments; may be {@code null} or empty
+     * @return the value, or empty if the claim is absent or is not a non-blank string
+     */
+    public Optional<String> findString(Map<String, Object> claims, List<String> claimPath) {
         return resolve(claims, claimPath)
                 .filter(String.class::isInstance)
                 .map(String.class::cast)
                 .filter(value -> !value.isBlank());
+    }
+
+    /**
+     * Reads a claim that is only true when it is present and holds the boolean {@code true}.
+     *
+     * <p>A missing claim, and the strings {@code "true"} and {@code "1"}, all read as {@code
+     * false}: values are never coerced here either, and an unstated assertion is not an assertion.
+     *
+     * @param claims the claims by name; may be {@code null}
+     * @param claimPath the configured claim-name segments; may be {@code null} or empty
+     * @return {@code true} only if the claim is present and is the boolean {@code true}
+     */
+    public boolean isTrue(Map<String, Object> claims, List<String> claimPath) {
+        return resolve(claims, claimPath)
+                .filter(Boolean.class::isInstance)
+                .map(Boolean.class::cast)
+                .orElse(Boolean.FALSE);
     }
 
     /**
@@ -55,6 +86,17 @@ public class ClaimMapper {
      * @return the non-blank string values in encounter order; empty if nothing usable is there
      */
     public List<String> findStrings(JWTClaimsSet claims, List<String> claimPath) {
+        return findStrings(claimsOf(claims), claimPath);
+    }
+
+    /**
+     * Reads a list-or-single-string claim from an already-extracted claim map.
+     *
+     * @param claims the claims by name; may be {@code null}
+     * @param claimPath the configured claim-name segments; may be {@code null} or empty
+     * @return the non-blank string values in encounter order; empty if nothing usable is there
+     */
+    public List<String> findStrings(Map<String, Object> claims, List<String> claimPath) {
         Optional<Object> value = resolve(claims, claimPath);
         if (value.isEmpty()) {
             return List.of();
@@ -85,6 +127,17 @@ public class ClaimMapper {
      * @return the granted roles, possibly empty, never {@code null}
      */
     public Set<Role> mapRoles(JWTClaimsSet claims, IdentityProviderConfiguration provider) {
+        return mapRoles(claimsOf(claims), provider);
+    }
+
+    /**
+     * Translates the raw role strings in an already-extracted claim map into this service's roles.
+     *
+     * @param claims the claims by name; may be {@code null}
+     * @param provider the issuing provider's configuration, supplying the roles claim and mapping
+     * @return the granted roles, possibly empty, never {@code null}
+     */
+    public Set<Role> mapRoles(Map<String, Object> claims, IdentityProviderConfiguration provider) {
         Map<String, Role> rolesByRawValue = invert(provider.getResolvedRoleMapping());
         Set<Role> granted = EnumSet.noneOf(Role.class);
         for (String rawRole : findStrings(claims, provider.getClaims().getRoles())) {
@@ -114,15 +167,15 @@ public class ClaimMapper {
      * that is absent or whose parent is not an object, so an attacker-shaped claim set never throws
      * and never resolves a path the operator did not configure.
      *
-     * @param claims the parsed claim set; may be {@code null}
+     * @param claims the claims by name; may be {@code null}
      * @param claimPath the configured claim-name segments; may be {@code null} or empty
      * @return the resolved value, or empty if it does not resolve or resolves to {@code null}
      */
-    private static Optional<Object> resolve(JWTClaimsSet claims, List<String> claimPath) {
+    private static Optional<Object> resolve(Map<String, Object> claims, List<String> claimPath) {
         if (claims == null || claimPath == null || claimPath.isEmpty()) {
             return Optional.empty();
         }
-        Object current = claims.getClaims();
+        Object current = claims;
         for (String segment : claimPath) {
             if (segment == null
                     || segment.isBlank()
@@ -133,5 +186,15 @@ public class ClaimMapper {
             current = enclosing.get(segment);
         }
         return Optional.ofNullable(current);
+    }
+
+    /**
+     * Unwraps a parsed claim set into the map every reader here works against.
+     *
+     * @param claims the parsed claim set; may be {@code null}
+     * @return the claims by name, or {@code null} if there is no claim set
+     */
+    private static Map<String, Object> claimsOf(JWTClaimsSet claims) {
+        return claims == null ? null : claims.getClaims();
     }
 }

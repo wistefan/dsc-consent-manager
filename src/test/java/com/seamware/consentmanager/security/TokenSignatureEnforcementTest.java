@@ -308,6 +308,10 @@ class TokenSignatureEnforcementTest {
     /**
      * Builds a claim set, leaving every field not named by a parameter valid.
      *
+     * <p>The roles claim grants {@link Role#USER}, so what these cases exercise is a token the
+     * published contract would call complete: a refusal is then attributable to the one field the
+     * case varies, and not to a claim the fixture happened to leave out.
+     *
      * @param issuer value of the {@code iss} claim
      * @param audience value of the {@code aud} claim
      * @param expiresAt value of the {@code exp} claim
@@ -321,6 +325,9 @@ class TokenSignatureEnforcementTest {
                         .issuer(issuer)
                         .audience(audience)
                         .subject(SUBJECT)
+                        .claim(
+                                ROLES_CLAIM.getFirst(),
+                                Map.of(ROLES_CLAIM.get(1), List.of(USER_ROLE_VALUE)))
                         .issueTime(Date.from(Instant.now()))
                         .expirationTime(Date.from(expiresAt));
         if (notBefore != null) {
@@ -551,11 +558,17 @@ class TokenSignatureEnforcementTest {
             assertThat(statusFor(bypassedClient, unsignedToken()))
                     .as(
                             "without UnsignedTokenRejector the empty signature-configuration"
-                                    + " collection makes Micronaut treat a PlainJWT as validly signed."
-                                    + " If this ever returns 401, the bypass is closed by something"
-                                    + " else and the rejector's own assertions have stopped proving"
-                                    + " anything")
-                    .isEqualTo(HttpStatus.OK.getCode());
+                                    + " collection makes Micronaut treat a PlainJWT as validly"
+                                    + " signed, so the request authenticates - which is the bypass"
+                                    + " this bean exists to close. It stops at 403 rather than 200"
+                                    + " only because that authentication is built by the framework's"
+                                    + " own validator and so carries no %s attribute, leaving"
+                                    + " PrincipalResolutionFilter with no issuer to resolve claim"
+                                    + " names against. If this ever returns 401 the bypass is closed"
+                                    + " by something else and the rejector's own assertions have"
+                                    + " stopped proving anything",
+                            ConsentManagerTokenValidator.IDENTITY_PROVIDER_ISSUER_ATTRIBUTE)
+                    .isEqualTo(HttpStatus.FORBIDDEN.getCode());
         }
     }
 

@@ -20,6 +20,22 @@ micronaut:
   security:
     enabled: true
 
+    # A resource server answers a refused request; it never sends the caller somewhere
+    # to log in. Left at its default this is ENABLED, and the module's authorization
+    # handler then turns any refusal whose `Accept` includes `text/html` into a 303 to
+    # `/` - a browser or a curl with a wildcard Accept would see a redirect instead of
+    # the 401 or 403 the specification promises, and the WWW-Authenticate challenge
+    # would be dropped with it. Switched off so the status is the same for every client.
+    redirect:
+      enabled: false
+
+    # Left at its default, stated here because it is a deliberate choice rather than
+    # an oversight: a request that matches no route is refused like any other
+    # unauthorised request instead of being answered 404. Answering 404 would let an
+    # anonymous caller map the URL space by watching which paths come back as missing,
+    # and `DenyUnlessExplicitlyAllowedRule` deliberately leaves the decision here.
+    reject-not-found: true
+
     # Keep every route-publishing bean of micronaut-security-oauth2 switched off.
     #
     # That module is a compile dependency for its OpenID discovery components alone
