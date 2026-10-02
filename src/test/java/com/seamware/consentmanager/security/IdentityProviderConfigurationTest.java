@@ -816,4 +816,50 @@ class IdentityProviderConfigurationTest {
             }
         }
     }
+
+    @Nested
+    @DisplayName("Claim names configured as segments")
+    class ClaimNameSegments {
+
+        /**
+         * Supplies one configured claim name per case, with whether it reads as a dotted path that
+         * was never split into segments.
+         *
+         * @return the case name, the configured segments and the expected verdict
+         */
+        static Stream<Arguments> claimNames() {
+            return Stream.of(
+                    Arguments.of("a dotted name left unsplit", List.of("realm_access.roles"), true),
+                    Arguments.of("a URI-shaped name", List.of("https://example.com/roles"), false),
+                    Arguments.of(
+                            "the same name split into segments",
+                            List.of("realm_access", "roles"),
+                            false),
+                    Arguments.of("a plain top-level name", List.of("sub"), false),
+                    Arguments.of("no name at all", List.of(), false));
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @MethodSource("claimNames")
+        @DisplayName(
+                "are reported as an unsplit path only when a dot can no longer have been meant")
+        void detectsUnsplitPaths(String description, List<String> segments, boolean expected) {
+            assertThat(
+                            IdentityProviderConfiguration.ClaimsConfiguration.looksLikeUnsplitPath(
+                                    segments))
+                    .as("%s", description)
+                    .isEqualTo(expected);
+        }
+
+        @ParameterizedTest(name = "an explicitly empty {0} aborts startup")
+        @ValueSource(strings = {"user-identifier", "participant-identifier", "roles"})
+        @DisplayName("abort startup when configured empty, rather than falling back to a default")
+        void rejectsAnExplicitlyEmptyClaimName(String property) {
+            Map<String, Object> properties = validTrustList();
+            properties.put(settingsKey(PROVIDER) + ".claims." + property, List.of());
+
+            assertStartupFails(
+                    properties, "claims." + property + " must name at least one segment");
+        }
+    }
 }

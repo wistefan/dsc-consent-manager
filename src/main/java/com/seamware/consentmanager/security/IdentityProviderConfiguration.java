@@ -16,6 +16,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The Consent Manager's settings for one trusted OpenID Connect provider.
@@ -106,6 +108,15 @@ public class IdentityProviderConfiguration {
     /** Default claim carrying the user identifier, per the published token contract. */
     public static final List<String> DEFAULT_USER_IDENTIFIER_CLAIM = List.of("sub");
 
+    /** Separator a claim name was written with before claim names became segment lists. */
+    private static final String LEGACY_PATH_SEPARATOR = ".";
+
+    /** Marker of a URI-shaped claim name, which legitimately holds dots in one segment. */
+    private static final String URI_SCHEME_SEPARATOR = "://";
+
+    /** Separator Micronaut splits a scalar property into list elements on. */
+    private static final String SEGMENT_SEPARATOR = ",";
+
     /**
      * Whether a provider may be reached over cleartext {@code http} when it does not say otherwise.
      *
@@ -118,6 +129,8 @@ public class IdentityProviderConfiguration {
      * in per provider and is warned at startup.
      */
     public static final boolean DEFAULT_ALLOW_INSECURE_TRANSPORT = false;
+
+    private static final Logger LOG = LoggerFactory.getLogger(IdentityProviderConfiguration.class);
 
     private final String name;
 
@@ -502,11 +515,15 @@ public class IdentityProviderConfiguration {
         /**
          * Sets the segments naming the claim that carries the opaque user identifier.
          *
-         * @param userIdentifier the claim-name segments; {@code null} or empty restores the default
+         * <p>Only {@code null} restores the default, so that an explicitly empty value fails
+         * startup under {@link #getUserIdentifier()}'s constraint exactly as it does for the other
+         * two claim names, rather than being quietly read as {@code sub}.
+         *
+         * @param userIdentifier the claim-name segments; {@code null} restores the default
          */
         public void setUserIdentifier(List<String> userIdentifier) {
             this.userIdentifier =
-                    userIdentifier == null || userIdentifier.isEmpty()
+                    userIdentifier == null
                             ? DEFAULT_USER_IDENTIFIER_CLAIM
                             : List.copyOf(userIdentifier);
         }
@@ -565,6 +582,61 @@ public class IdentityProviderConfiguration {
             requireNoBlankSegment(propertyPath, "user-identifier", userIdentifier);
             requireNoBlankSegment(propertyPath, "participant-identifier", participantIdentifier);
             requireNoBlankSegment(propertyPath, "roles", roles);
+            warnIfUnsplitPath(propertyPath, "user-identifier", userIdentifier);
+            warnIfUnsplitPath(propertyPath, "participant-identifier", participantIdentifier);
+            warnIfUnsplitPath(propertyPath, "roles", roles);
+        }
+
+        /**
+         * Reports whether a configured claim name reads like a dotted path that was never split
+         * into segments.
+         *
+         * <p>Before claim names became segment lists, {@code realm_access.roles} named a nested
+         * claim. It now names one literal top-level claim, which no provider emits, so the claim
+         * resolves to empty for every token: a token with such a {@code roles} name authenticates
+         * with no authorities and every secured endpoint answers {@code 403}, with nothing in the
+         * response or the trust list to say why. That cannot be a startup failure, because a single
+         * segment holding dots is legitimate - but a URI-shaped name is the only common legitimate
+         * form, and it is recognisable, so warning on the rest costs no false alarm.
+         *
+         * @param segments the configured segments
+         * @return {@code true} if the name is one non-URI segment containing {@value
+         *     #LEGACY_PATH_SEPARATOR}
+         */
+        static boolean looksLikeUnsplitPath(List<String> segments) {
+            if (segments == null || segments.size() != 1) {
+                return false;
+            }
+            String only = segments.get(0);
+            return only != null
+                    && only.contains(LEGACY_PATH_SEPARATOR)
+                    && !only.contains(URI_SCHEME_SEPARATOR);
+        }
+
+        /**
+         * Logs the one line that turns a silent authorization outage into a diagnosable one.
+         *
+         * @param propertyPath the configuration path of the owning entry
+         * @param property the claim key being checked
+         * @param segments the configured segments
+         */
+        private static void warnIfUnsplitPath(
+                String propertyPath, String property, List<String> segments) {
+            if (!looksLikeUnsplitPath(segments)) {
+                return;
+            }
+            String only = segments.get(0);
+            LOG.warn(
+                    "{}.claims.{} is the single claim name '{}'. Dots carry no meaning in a claim"
+                            + " name: nested claims are named segment by segment, so this is read as"
+                            + " one top-level claim literally called '{}' and will resolve to empty"
+                            + " unless the provider really emits it. If a nested claim was meant,"
+                            + " configure the segments instead (for example '{}').",
+                    propertyPath,
+                    property,
+                    only,
+                    only,
+                    only.replace(LEGACY_PATH_SEPARATOR, SEGMENT_SEPARATOR));
         }
 
         /**

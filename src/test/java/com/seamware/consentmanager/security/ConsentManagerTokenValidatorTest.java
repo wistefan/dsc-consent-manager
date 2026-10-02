@@ -15,6 +15,8 @@ import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.OidcDiscoveryStub;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.env.Environment;
 import io.micronaut.security.authentication.Authentication;
@@ -177,6 +179,22 @@ class ConsentManagerTokenValidatorTest {
     private static ApplicationContext context;
     private static ConsentManagerTokenValidator validator;
 
+    /**
+     * Registry the {@link #meteredValidator} publishes its refusals to.
+     *
+     * <p>Separate from the context's own registry so a counter carries only what this suite
+     * produced, and so the assertions hold whether or not a metrics backend is configured.
+     */
+    private static SimpleMeterRegistry claimMetrics;
+
+    /**
+     * The same validator wired to {@link #claimMetrics}.
+     *
+     * <p>Built from the context's beans rather than stubs, so the counted refusal is the one the
+     * real pipeline reaches.
+     */
+    private static ConsentManagerTokenValidator meteredValidator;
+
     /** A locally generated key no provider publishes, used for the forgery cases. */
     private static RSAKey foreignKey;
 
@@ -203,6 +221,13 @@ class ConsentManagerTokenValidatorTest {
                         registry.findByIssuer(primary.issuer()).isPresent()
                                 && registry.findByIssuer(secondary.issuer()).isPresent());
         validator = context.getBean(ConsentManagerTokenValidator.class);
+        claimMetrics = new SimpleMeterRegistry();
+        meteredValidator =
+                new ConsentManagerTokenValidator(
+                        registry,
+                        context.getBean(IssuerSignatureVerifier.class),
+                        context.getBean(ClaimMapper.class),
+                        claimMetrics);
     }
 
     /** Shuts the context and both stubs down. */
@@ -211,6 +236,9 @@ class ConsentManagerTokenValidatorTest {
         closeQuietly(context);
         closeQuietly(primary);
         closeQuietly(secondary);
+        if (claimMetrics != null) {
+            claimMetrics.close();
+        }
     }
 
     /**
@@ -577,6 +605,132 @@ class ConsentManagerTokenValidatorTest {
                 .containsEntry(
                         ConsentManagerTokenValidator.IDENTITY_PROVIDER_ISSUER_ATTRIBUTE,
                         secondary.issuer());
+    }
+
+    /**
+     * One refused token per value of {@link ConsentManagerTokenValidator#REASON_TAG}.
+     *
+     * <p>Every refusal renders as the same bare {@code 401}, so this counter is the only signal an
+     * operator has for telling a misconfigured audience from a clock-skew problem. A tag that was
+     * wrong, or a count that was silently dropped, would be invisible in production.
+     *
+     * @return description, expected {@code reason} tag and token supplier per case
+     */
+    private static Stream<Arguments> countedClaimRejections() {
+        return Stream.of(
+                Arguments.of(
+                        "an expired token",
+                        ConsentManagerTokenValidator.REASON_TIME,
+                        token(
+                                () ->
+                                        sign(
+                                                primary,
+                                                timed(
+                                                        primary.issuer(),
+                                                        Instant.now().minus(OUTSIDE_WINDOW),
+                                                        Instant.now().minus(OUTSIDE_WINDOW),
+                                                        null)))),
+                Arguments.of(
+                        "an audience belonging to another service",
+                        ConsentManagerTokenValidator.REASON_AUDIENCE,
+                        token(
+                                () ->
+                                        sign(
+                                                primary,
+                                                builder(primary.issuer())
+                                                        .audience(FOREIGN_AUDIENCE)
+                                                        .build()))),
+                Arguments.of(
+                        "no subject",
+                        ConsentManagerTokenValidator.REASON_SUBJECT,
+                        token(
+                                () ->
+                                        sign(
+                                                primary,
+                                                builder(primary.issuer()).subject(null).build()))),
+                Arguments.of(
+                        "a USER token with no user identifier claim",
+                        ConsentManagerTokenValidator.REASON_IDENTIFIER,
+                        token(
+                                () ->
+                                        sign(
+                                                primary,
+                                                roles(builder(primary.issuer()), USER_ROLE_VALUE)
+                                                        .claim(USER_IDENTIFIER_CLAIM, null)
+                                                        .build()))));
+    }
+
+    @ParameterizedTest(name = "{0} counts as reason={1}")
+    @MethodSource("countedClaimRejections")
+    @DisplayName("counts a claim-level refusal under its own reason and under no other")
+    void countsClaimRejectionsByReason(String description, String reason, Supplier<String> token) {
+        double taggedBefore = claimRejections(reason);
+        double totalBefore = allClaimRejections();
+
+        assertThat(meteredAuthenticate(token.get()))
+                .as("%s must authenticate nobody", description)
+                .isEmpty();
+
+        assertThat(claimRejections(reason))
+                .as("%s must be counted under reason=%s", description, reason)
+                .isEqualTo(taggedBefore + 1);
+        assertThat(allClaimRejections())
+                .as("%s must be counted exactly once, under no other reason", description)
+                .isEqualTo(totalBefore + 1);
+    }
+
+    @Test
+    @DisplayName("counts no claim refusal for a token that authenticates")
+    void countsNothingForAValidToken() {
+        double totalBefore = allClaimRejections();
+        String valid = sign(primary, roles(builder(primary.issuer()), USER_ROLE_VALUE).build());
+
+        assertThat(meteredAuthenticate(valid)).isPresent();
+
+        assertThat(allClaimRejections())
+                .as("a counter that also moved on success would be unreadable as an alert")
+                .isEqualTo(totalBefore);
+    }
+
+    /**
+     * Runs a token through the validator wired to {@link #claimMetrics}.
+     *
+     * @param token the raw compact serialisation
+     * @return the authentication it produced, or empty if it produced none
+     */
+    private static Optional<Authentication> meteredAuthenticate(String token) {
+        return Mono.from(meteredValidator.validateToken(token, null))
+                .blockOptional(VALIDATION_TIMEOUT);
+    }
+
+    /**
+     * Reads the refusal count carried by one {@code reason} tag for the primary provider.
+     *
+     * @param reason the {@link ConsentManagerTokenValidator#REASON_TAG} value
+     * @return the count, or zero if nothing has registered that counter yet
+     */
+    private static double claimRejections(String reason) {
+        Counter counter =
+                claimMetrics
+                        .find(ConsentManagerTokenValidator.CLAIM_REJECTION_METRIC)
+                        .tag(IssuerSignatureVerifier.PROVIDER_TAG, PRIMARY)
+                        .tag(ConsentManagerTokenValidator.REASON_TAG, reason)
+                        .counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    /**
+     * Sums the refusal counts across every tag combination.
+     *
+     * @return the total, which pins that a refusal is counted once and under one reason only
+     */
+    private static double allClaimRejections() {
+        return claimMetrics
+                .find(ConsentManagerTokenValidator.CLAIM_REJECTION_METRIC)
+                .counters()
+                .stream()
+                .mapToDouble(Counter::count)
+                .sum();
     }
 
     /**

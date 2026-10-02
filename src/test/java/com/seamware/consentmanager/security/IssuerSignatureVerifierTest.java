@@ -2,13 +2,19 @@ package com.seamware.consentmanager.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.OidcDiscoveryStub;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micronaut.context.ApplicationContext;
+import io.micronaut.core.type.Argument;
 import io.micronaut.security.token.jwt.nimbus.ReactiveJwksSignature;
 import io.micronaut.security.token.jwt.signature.ReactiveSignatureConfiguration;
+import io.micronaut.security.token.jwt.signature.jwks.JwkSetFetcher;
+import io.micronaut.security.token.jwt.signature.jwks.JwkValidator;
 import io.micronaut.security.token.jwt.signature.jwks.JwksSignatureConfiguration;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -488,6 +494,135 @@ class IssuerSignatureVerifierTest {
                 executor.shutdownNow();
             }
         }
+    }
+
+    @Test
+    @DisplayName("counts a verified and a rejected signature under their own outcomes")
+    void countsVerifiedAndRejectedOutcomes() {
+        SimpleMeterRegistry metrics = new SimpleMeterRegistry();
+        try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
+                OidcDiscoveryStub other = new OidcDiscoveryStub();
+                ApplicationContext context = startContext(provider, Map.of())) {
+            awaitResolved(context, provider);
+            IssuerSignatureVerifier verifier = meteredVerifier(context, metrics);
+
+            assertThat(
+                            verify(
+                                    verifier,
+                                    provider.issuer(),
+                                    provider.signToken(
+                                            provider.initialKeyId(), claims(provider.issuer()))))
+                    .isTrue();
+            assertThat(outcomes(metrics, IssuerSignatureVerifier.OUTCOME_VERIFIED))
+                    .as("a signature that held must count as verified")
+                    .isEqualTo(1);
+
+            assertThat(
+                            verify(
+                                    verifier,
+                                    provider.issuer(),
+                                    other.signToken(
+                                            other.initialKeyId(), claims(provider.issuer()))))
+                    .isFalse();
+            assertThat(outcomes(metrics, IssuerSignatureVerifier.OUTCOME_REJECTED))
+                    .as("a forged signature must count as rejected, not as unavailable")
+                    .isEqualTo(1);
+
+            assertThat(
+                            verify(
+                                    verifier,
+                                    UNREGISTERED_ISSUER,
+                                    provider.signToken(
+                                            provider.initialKeyId(), claims(UNREGISTERED_ISSUER))))
+                    .isFalse();
+            assertThat(totalOutcomes(metrics))
+                    .as(
+                            "an issuer off the trust list reaches no provider, so it must leave the"
+                                    + " per-provider counter alone")
+                    .isEqualTo(2);
+        } finally {
+            metrics.close();
+        }
+    }
+
+    @Test
+    @DisplayName("counts an unreadable key set apart from a rejected signature")
+    void countsAnUnreadableKeySetAsUnavailable() {
+        SimpleMeterRegistry metrics = new SimpleMeterRegistry();
+        try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
+                ApplicationContext context = startContext(provider, Map.of())) {
+            awaitResolved(context, provider);
+            IssuerSignatureVerifier verifier = meteredVerifier(context, metrics);
+            provider.failJwksRequests(KEY_ENDPOINT_DOWN);
+
+            assertThat(
+                            verify(
+                                    verifier,
+                                    provider.issuer(),
+                                    provider.signToken(
+                                            provider.initialKeyId(), claims(provider.issuer()))))
+                    .isFalse();
+
+            assertThat(outcomes(metrics, IssuerSignatureVerifier.OUTCOME_UNAVAILABLE))
+                    .as(
+                            "a provider outage and a flood of forged tokens look identical in the"
+                                    + " response, so only this tag tells them apart")
+                    .isEqualTo(1);
+            assertThat(outcomes(metrics, IssuerSignatureVerifier.OUTCOME_REJECTED)).isZero();
+        } finally {
+            metrics.close();
+        }
+    }
+
+    /**
+     * Builds a verifier on the context's own collaborators but publishing to a private registry.
+     *
+     * <p>A registry of this suite's own keeps the assertions independent of whether a metrics
+     * backend is configured, while the collaborators stay the real ones so the counted outcome is
+     * the one the real signature path reached.
+     *
+     * @param context the started application context
+     * @param metrics the registry to publish to
+     * @return the verifier under test
+     */
+    private static IssuerSignatureVerifier meteredVerifier(
+            ApplicationContext context, SimpleMeterRegistry metrics) {
+        return new IssuerSignatureVerifier(
+                context.getBean(IdentityProviderRegistry.class),
+                context.getBean(JwkValidator.class),
+                context.getBean(Argument.of(JwkSetFetcher.class, JWKSet.class)),
+                metrics);
+    }
+
+    /**
+     * Reads the count carried by one {@code outcome} tag for the primary provider.
+     *
+     * @param metrics the registry the verifier published to
+     * @param outcome the {@link IssuerSignatureVerifier#OUTCOME_TAG} value
+     * @return the count, or zero if nothing has registered that counter yet
+     */
+    private static double outcomes(SimpleMeterRegistry metrics, String outcome) {
+        Counter counter =
+                metrics.find(IssuerSignatureVerifier.SIGNATURE_VERIFICATION_METRIC)
+                        .tag(IssuerSignatureVerifier.PROVIDER_TAG, PRIMARY)
+                        .tag(IssuerSignatureVerifier.OUTCOME_TAG, outcome)
+                        .counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    /**
+     * Sums the counts across every outcome tag.
+     *
+     * @param metrics the registry the verifier published to
+     * @return the total, which pins that a check is counted once and under one outcome only
+     */
+    private static double totalOutcomes(SimpleMeterRegistry metrics) {
+        return metrics
+                .find(IssuerSignatureVerifier.SIGNATURE_VERIFICATION_METRIC)
+                .counters()
+                .stream()
+                .mapToDouble(Counter::count)
+                .sum();
     }
 
     /**

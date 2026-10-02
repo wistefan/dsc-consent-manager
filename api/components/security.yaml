@@ -36,6 +36,13 @@ securitySchemes:
       may be an email address, a DID, an arbitrary URI or a hash of an EUDI Wallet
       PID. The service compares them for equality and stores them verbatim.
 
+      **What "Required" means below.** The column states what a conforming
+      identity provider must emit, which is what its operator configures against.
+      It is not a statement of what the service refuses a token for. The one place
+      the two differ is `iat`: RFC 7519 makes it optional, so a token without it is
+      not rejected on that ground alone, while this contract still requires
+      providers to emit it. Every other claim marked required is enforced.
+
       ---
 
       ### User Access Token
@@ -47,7 +54,7 @@ securitySchemes:
       | `iss` | yes | Token issuer. Must exactly match a configured trusted issuer. |
       | `aud` | yes | Audience. Must contain the audience configured for that issuer. |
       | `exp` | yes | Expiry time. Expired tokens are rejected, subject to the configured clock skew. |
-      | `iat` | yes | Issued-at time. A conforming provider must emit it; a token issued in the future beyond the clock skew is rejected. Validation tolerates its absence, since RFC 7519 makes the claim optional. |
+      | `iat` | yes | Issued-at time. A token issued in the future beyond the clock skew is rejected. |
       | `sub` | yes | Subject identifier as issued by the provider. |
       | *user identifier* | yes | Opaque identifier of the acting user. Claim name is configured per provider; defaults to `sub`. |
       | *roles* | yes | Roles granted to the token. Claim name is configured per provider as a list of segments, so a nested claim is named explicitly (for example `[realm_access, roles]`). Raw role strings are translated to the service's roles through a per-provider role mapping. |
@@ -69,7 +76,7 @@ securitySchemes:
       | `iss` | yes | Token issuer. Must exactly match a configured trusted issuer. |
       | `aud` | yes | Audience. Must contain the audience configured for that issuer. |
       | `exp` | yes | Expiry time. Expired tokens are rejected, subject to the configured clock skew. |
-      | `iat` | yes | Issued-at time. A conforming provider must emit it; a token issued in the future beyond the clock skew is rejected. Validation tolerates its absence, since RFC 7519 makes the claim optional. |
+      | `iat` | yes | Issued-at time. A token issued in the future beyond the clock skew is rejected. |
       | `sub` | yes | Subject identifier as issued by the provider. |
       | *participant identifier* | yes | Opaque identifier of the participant. Claim name is configured per provider. |
       | *roles* | yes | Roles granted to the token, resolved exactly as for a user access token. |
@@ -93,7 +100,7 @@ securitySchemes:
       | `iss` | yes | Token issuer. Must exactly match a configured trusted issuer. |
       | `aud` | yes | Audience. Must contain the audience configured for that issuer. |
       | `exp` | yes | Expiry time. Expired tokens are rejected, subject to the configured clock skew. |
-      | `iat` | yes | Issued-at time. A conforming provider must emit it; a token issued in the future beyond the clock skew is rejected. Validation tolerates its absence, since RFC 7519 makes the claim optional. |
+      | `iat` | yes | Issued-at time. A token issued in the future beyond the clock skew is rejected. |
       | `sub` | yes | Subject identifier as issued by the provider. The catalog is identified by its issuer and subject alone. |
       | *roles* | yes | Must resolve to the `CATALOG` role through the provider's role mapping. |
       | *participant identifier* | no | Not required and not used. A catalog token that carries one is accepted; the claim is ignored. |
