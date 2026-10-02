@@ -97,21 +97,55 @@ micronaut:
           - isAuthenticated()
     # Micronaut's own JWT support stays ENABLED: the flag gates the whole
     # `io.micronaut.security.token.jwt` package - the security filter, the bearer-token
-    # reader and the `TokenValidator` SPI that ConsentManagerTokenValidator plugs into
-    # in step 5. No signature configuration is registered yet, so until that validator
-    # lands EVERY bearer token is rejected and no request authenticates. That is the
-    # fail-closed direction, and it is what UnsignedTokenRejector keeps true for
-    # `alg: none` tokens, which the framework would otherwise accept precisely because
-    # no signature configuration exists.
+    # reader and the `TokenValidator` SPI that `ConsentManagerTokenValidator` plugs
+    # into. Switching it off would take the SPI away and leave nothing able to
+    # authenticate a bearer token at all.
     #
     # There are deliberately no `claims-validators.issuer` / `.audience` entries: both
     # hold a single global value, and the trust list holds a configurable number of
     # providers each with its own issuer and audience. Those checks are per provider and
-    # belong to ConsentManagerTokenValidator (step 5). See
+    # belong to `ConsentManagerTokenValidator`. See
     # docs/adr/0002-own-identity-provider-registry-on-nimbus.md.
     token:
       jwt:
         enabled: true
+
+        # The module's OWN token validators are switched off, and this is a security
+        # control rather than a tidy-up.
+        #
+        # `NimbusReactiveJsonWebTokenValidator` is itself a `TokenValidator`.
+        # `TokenAuthenticationFetcher` consults EVERY registered `TokenValidator` in turn
+        # and takes the first `Authentication` any of them returns, so leaving it
+        # registered would put a second, laxer authentication path beside
+        # `ConsentManagerTokenValidator`: it validates against the DECLARATIVE signature
+        # configuration (`micronaut.security.token.jwt.signatures.*`), which this service
+        # deliberately does not have, since each token must be checked against its own
+        # issuer's keys only. Being stricter than a validator running next to you buys
+        # nothing.
+        #
+        # Worse, that path fails OPEN on an unsigned token: `AbstractJsonWebTokenValidator`
+        # latches `noSignatures = imperative.isEmpty() && reactive.isEmpty()` in its
+        # constructor and then reports a `PlainJWT` as validly signed whenever the flag is
+        # set. Both collections ARE empty here - `IssuerSignatureVerifier` builds its
+        # per-issuer `ReactiveJwksSignature` instances programmatically rather than
+        # publishing them as beans - so `alg: none` would authenticate.
+        # `UnsignedTokenRejector` keeps the imperative collection non-empty and closes that
+        # same hole independently; the two guards are deliberately kept side by side, so
+        # that removing either one alone cannot re-open it.
+        #
+        # `validator` (the imperative `NimbusJsonWebTokenValidator`) is not a
+        # `TokenValidator` and cannot authenticate anything on its own, but it is built on
+        # the same `AbstractJsonWebTokenValidator` and is switched off with its reactive
+        # twin so that no bean in this application reports an unsigned token as validly
+        # signed.
+        #
+        # `TokenSignatureEnforcementIT` pins both halves: that
+        # `ConsentManagerTokenValidator` is the only `TokenValidator` in a started context,
+        # and - as a control - that an unsigned token DOES authenticate once these two
+        # lines and the rejector are all undone together.
+        nimbus:
+          validator: false
+          reactive-validator: false
 
   # ---------------------------------------------------------------------------
   # JWK Set cache
