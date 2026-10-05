@@ -13,26 +13,21 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Global exception handler that catches all unhandled exceptions and returns an RFC 7807 Problem
- * Details response using the generated {@link ProblemDetail} model.
+ * Last-resort handler: renders anything no narrower handler claimed as a generic 500 problem
+ * detail.
  *
- * <p>This is a stub implementation that maps all exceptions to a generic HTTP 500 Internal Server
- * Error. Per-exception-type handling (e.g., {@link BadRequestException} to 400, {@link
- * NotFoundException} to 404, constraint violation mapping, production detail suppression) is
- * deferred to TICKET-015.
+ * <p>Deliberate refusals carry their own status through {@link ApiException}, which {@link
+ * ApiExceptionHandler} serves; reaching this handler therefore means a genuine defect, which is why
+ * it logs at ERROR and publishes nothing about the cause.
  *
- * @see ProblemDetail
  * @see <a href="https://www.rfc-editor.org/rfc/rfc7807">RFC 7807</a>
  */
 @Singleton
-@Produces("application/problem+json")
+@Produces(ProblemType.MEDIA_TYPE)
 public class GlobalExceptionHandler
         implements ExceptionHandler<Exception, HttpResponse<ProblemDetail>> {
 
     private static final Logger LOG = LoggerFactory.getLogger(GlobalExceptionHandler.class);
-
-    /** RFC 7807 media type for Problem Details responses. */
-    private static final String PROBLEM_JSON = "application/problem+json";
 
     /** Default problem type URI used when no specific type is applicable. */
     private static final URI DEFAULT_PROBLEM_TYPE = URI.create("about:blank");
@@ -47,14 +42,7 @@ public class GlobalExceptionHandler
     /** HTTP status code for Internal Server Error. */
     private static final int STATUS_INTERNAL_SERVER_ERROR = 500;
 
-    /**
-     * Handles an exception by logging it and returning a generic 500 response with a {@link
-     * ProblemDetail} body.
-     *
-     * @param request the HTTP request that triggered the exception
-     * @param exception the unhandled exception
-     * @return an HTTP 500 response containing a {@link ProblemDetail} body
-     */
+    /** Logs the failure in full and answers with a 500 that reveals none of it. */
     @Override
     public HttpResponse<ProblemDetail> handle(HttpRequest request, Exception exception) {
         LOG.error(
@@ -73,6 +61,6 @@ public class GlobalExceptionHandler
 
         return HttpResponse.<ProblemDetail>status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(error)
-                .contentType(MediaType.of(PROBLEM_JSON));
+                .contentType(MediaType.of(ProblemType.MEDIA_TYPE));
     }
 }

@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.fail;
 
 import com.seamware.consentmanager.security.ConsentManagerPrincipal;
@@ -34,8 +35,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.yaml.snakeyaml.Yaml;
 
@@ -71,6 +74,9 @@ class SpecSecurityConsistencyTest {
 
     /** Keys of a path item that are operations rather than metadata such as {@code parameters}. */
     private static final Set<String> OPERATION_KEYS = ROUTING_ANNOTATIONS.keySet();
+
+    /** Path item key that would hide every operation beneath it from this test. */
+    private static final String REF_KEY = "$ref";
 
     /** The URI an unparameterised Micronaut routing annotation carries. */
     private static final String DEFAULT_URI = "/";
@@ -147,6 +153,80 @@ class SpecSecurityConsistencyTest {
                                         }));
         assertThat(operations).as("the specification declares at least one operation").isNotEmpty();
         return operations.stream();
+    }
+
+    /**
+     * Asserts that no path item hides its operations behind an external {@code $ref}.
+     *
+     * <p>The specification is read with plain SnakeYAML and nothing here resolves a reference, so a
+     * path item written as {@code /users: {$ref: "./paths/users.yaml#/~1users"}} has exactly one
+     * key and contributes zero cases: every operation beneath it would go unchecked while this
+     * suite stayed green. The guard is therefore a refusal rather than a resolution - operations
+     * stay inline in {@code api/openapi.yaml}, and only schemas and responses are externalised.
+     */
+    @Test
+    @DisplayName("every path item declares its operations inline, where this test can see them")
+    void everyPathItemDeclaresItsOperationsInline() {
+        assertPathItemsDeclareVisibleOperations(asMap(loadYaml(SPEC_RESOURCE).get("paths")));
+    }
+
+    /** Fails when any path item declares no operation key this test recognises. */
+    static void assertPathItemsDeclareVisibleOperations(Map<String, Object> paths) {
+        paths.forEach(
+                (path, item) ->
+                        assertThat(asMap(item).keySet())
+                                .as(
+                                        "path item `%s` must spell its operations out inline;"
+                                                + " this test cannot resolve an external $ref, so an"
+                                                + " operation behind one is never checked against its"
+                                                + " @Secured rule",
+                                        path)
+                                .doesNotContain(REF_KEY)
+                                .containsAnyElementsOf(OPERATION_KEYS));
+    }
+
+    /**
+     * Exercises the guard above against hand-built path items, so that it is known to reject what
+     * it claims to rather than merely being present and never triggered.
+     */
+    @Nested
+    @DisplayName("the inline-operations guard itself")
+    class InlineOperationsGuard {
+
+        /** A path item per shape the guard has to judge, with the verdict expected of it. */
+        static Stream<Arguments> pathItems() {
+            return Stream.of(
+                    Arguments.of("an inline operation", Map.of("get", Map.of()), true),
+                    Arguments.of(
+                            "an operation beside path-level metadata",
+                            Map.of("parameters", List.of(), "post", Map.of()),
+                            true),
+                    Arguments.of(
+                            "an externalised path item",
+                            Map.of(REF_KEY, "./paths/users.yaml#/~1users"),
+                            false),
+                    Arguments.of(
+                            "an externalised path item carrying metadata too",
+                            Map.of(REF_KEY, "./paths/users.yaml#/~1users", "parameters", List.of()),
+                            false),
+                    Arguments.of(
+                            "path-level metadata only", Map.of("parameters", List.of()), false),
+                    Arguments.of("an empty path item", Map.of(), false));
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @MethodSource("pathItems")
+        void judgesPathItem(String description, Map<String, Object> pathItem, boolean accepted) {
+            Map<String, Object> paths = Map.of("/users", pathItem);
+            if (accepted) {
+                assertThatCode(() -> assertPathItemsDeclareVisibleOperations(paths))
+                        .doesNotThrowAnyException();
+            } else {
+                assertThatCode(() -> assertPathItemsDeclareVisibleOperations(paths))
+                        .isInstanceOf(AssertionError.class)
+                        .hasMessageContaining("/users");
+            }
+        }
     }
 
     /**

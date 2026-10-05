@@ -16,7 +16,6 @@ import io.micronaut.security.config.RedirectConfiguration;
 import io.micronaut.security.config.RedirectService;
 import io.micronaut.security.errors.PriorToLoginPersistence;
 import jakarta.inject.Singleton;
-import java.net.URI;
 import java.util.List;
 
 /**
@@ -36,29 +35,9 @@ import java.util.List;
  * (US-ID-008); the distinction a caller does get is 401 versus 403, and that one is exact.
  */
 @Singleton
-@Produces(AuthorizationProblemHandler.PROBLEM_JSON)
+@Produces(ProblemType.MEDIA_TYPE)
 @Replaces(DefaultAuthorizationExceptionHandler.class)
 public class AuthorizationProblemHandler extends DefaultAuthorizationExceptionHandler {
-
-    /** RFC 7807 media type, matching the {@code application/problem+json} declared in the spec. */
-    public static final String PROBLEM_JSON = "application/problem+json";
-
-    /** Namespace every problem type URI in this service is minted under (TICKET-015). */
-    private static final String PROBLEM_TYPE_PREFIX = "https://consent-manager.example/problems/";
-
-    /** Problem type for a request that carried no usable bearer token. */
-    private static final URI UNAUTHORIZED_TYPE = URI.create(PROBLEM_TYPE_PREFIX + "unauthorized");
-
-    /** Problem type for a request that authenticated but may not perform the operation. */
-    private static final URI FORBIDDEN_TYPE = URI.create(PROBLEM_TYPE_PREFIX + "forbidden");
-
-    private static final String UNAUTHORIZED_TITLE = "Unauthorized";
-
-    private static final String FORBIDDEN_TITLE = "Forbidden";
-
-    private static final int STATUS_UNAUTHORIZED = 401;
-
-    private static final int STATUS_FORBIDDEN = 403;
 
     /** Says that the token was unusable without saying which check it failed. */
     private static final String UNAUTHORIZED_DETAIL =
@@ -101,18 +80,14 @@ public class AuthorizationProblemHandler extends DefaultAuthorizationExceptionHa
         if (forbidden) {
             response.getHeaders().remove(HttpHeaders.WWW_AUTHENTICATE);
         }
-        return response.body(problemOf(request, forbidden)).contentType(MediaType.of(PROBLEM_JSON));
+        return response.body(problemOf(request, forbidden))
+                .contentType(MediaType.of(ProblemType.MEDIA_TYPE));
     }
 
     /** Builds the body for one of the two outcomes. */
     private static ProblemDetail problemOf(HttpRequest<?> request, boolean forbidden) {
-        ProblemDetail problem =
-                forbidden
-                        ? new ProblemDetail(FORBIDDEN_TYPE, FORBIDDEN_TITLE, STATUS_FORBIDDEN)
-                                .detail(FORBIDDEN_DETAIL)
-                        : new ProblemDetail(
-                                        UNAUTHORIZED_TYPE, UNAUTHORIZED_TITLE, STATUS_UNAUTHORIZED)
-                                .detail(UNAUTHORIZED_DETAIL);
-        return problem.instance(URI.create(request.getPath()));
+        return forbidden
+                ? ProblemType.FORBIDDEN.toProblemDetail(FORBIDDEN_DETAIL, request.getPath())
+                : ProblemType.UNAUTHORIZED.toProblemDetail(UNAUTHORIZED_DETAIL, request.getPath());
     }
 }

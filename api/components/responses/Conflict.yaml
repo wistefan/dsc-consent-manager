@@ -1,0 +1,21 @@
+# Response: 409 Conflict — referenced from api/openapi.yaml as
+# components.responses.Conflict.
+#
+# No operation references it yet; the user-management operations added by the
+# later steps of this ticket do.
+description: >
+  The request is well-formed but conflicts with the state the resource is
+  already in — for instance linking a user to a participant it is already linked
+  to. Registration itself is idempotent and does not produce this: registering an
+  identifier that already exists adopts the existing user rather than conflicting
+  with it.
+content:
+  application/problem+json:
+    schema:
+      $ref: "../schemas/ProblemDetail.yaml"
+    example:
+      type: "https://consent-manager.example/problems/conflict"
+      title: "Conflict"
+      status: 409
+      detail: "The user is already linked to this participant."
+      instance: "/v1/participants/me/users"

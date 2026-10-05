@@ -1,31 +1,20 @@
 package com.seamware.consentmanager.error;
 
 /**
- * Exception indicating that an upstream service returned an error (HTTP 502).
+ * A service this request depends on failed or was unreachable (HTTP 502).
  *
- * <p>Thrown when an external service dependency (e.g., Contract Service, Identity Provider) is
- * unreachable or returns an unexpected error. The {@link GlobalExceptionHandler} maps this
- * exception to an HTTP 502 Bad Gateway response with a {@link
- * com.seamware.consentmanager.api.generated.model.ProblemDetail} body.
+ * <p>Unlike the 4xx exceptions, the message is logged rather than published: it names an upstream
+ * the caller has no business learning about.
  */
-public class UpstreamServiceException extends RuntimeException {
+public class UpstreamServiceException extends ApiException {
 
-    /**
-     * Creates an {@code UpstreamServiceException} with the specified detail message.
-     *
-     * @param message a human-readable description of the upstream failure
-     */
+    /** Creates an upstream failure; the message is logged, not returned to the caller. */
     public UpstreamServiceException(String message) {
-        super(message);
+        super(ProblemType.UPSTREAM_SERVICE, message);
     }
 
-    /**
-     * Creates an {@code UpstreamServiceException} with the specified detail message and cause.
-     *
-     * @param message a human-readable description of the upstream failure
-     * @param cause the underlying cause of this exception
-     */
+    /** Creates an upstream failure from the underlying transport or protocol error. */
     public UpstreamServiceException(String message, Throwable cause) {
-        super(message, cause);
+        super(ProblemType.UPSTREAM_SERVICE, message, cause);
     }
 }
