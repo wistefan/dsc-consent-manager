@@ -69,6 +69,15 @@ Facts established by the merged groundwork that every step below depends on:
    DID-shaped identifier) is not addressable this way even when percent-encoded, because the
    container decodes before routing. `POST /users/search` with `identifier` set is the documented
    escape hatch for those, and Step 4 must say so in the spec description of both operations.
+   **The collision between `/users/me` and `/users/{identifier}` is deliberate and benign.** They
+   are different (method, path) pairs in the spec, so `SpecSecurityConsistencyTest` — which keys on
+   the literal path string — sees two independent operations with their own `@Secured` rules, and
+   Micronaut prefers the literal segment over the variable one at routing time. The consequence to
+   accept: a user whose global identifier is literally `me` is not addressable through the lookup
+   route and must be fetched through `POST /users/search`, the same escape hatch the slash case
+   uses. Step 4 asserts the precedence rather than assuming it — a `PARTICIPANT` token hitting
+   `GET /users/me` must get `403` from the `USER`-only self route, never a lookup for a user named
+   "me" — so that a later routing or spec change cannot silently invert it.
 2. **The registration rule never writes attributes onto an existing user.** `email`, `firstName`
    and `lastName` supplied by a participant are stored only on the insert that creates the user.
    IDP claims (via `provisionFromToken`) are the only source allowed to refresh them afterwards.
@@ -89,6 +98,22 @@ Facts established by the merged groundwork that every step below depends on:
    No `api/paths/` directory is created by this ticket. Step 1 additionally hardens the test to
    fail outright on a path item whose only key is `$ref`, so that a later change cannot
    reintroduce the blind spot by accident.
+6. **The filter provisions the user, so `POST /users/register` reads the outcome rather than
+   producing it.** `PrincipalResolutionFilter.user(...)` ends with
+   `principal.withUser(provisioning.provision(principal))`, and it runs before the route for every
+   request whose matched route declares a principal parameter. `POST /users/register` must declare
+   a `UserPrincipal` parameter (`SpecSecurityConsistencyTest` fails any secured operation that does
+   not), so the `users` row is already inserted by the time the handler body runs. A handler that
+   calls the provisioning method a second time therefore always takes the existing-row path and
+   `201` becomes unreachable. The fix is to propagate the create/existing signal out of
+   provisioning instead of re-deriving it: `provisionFromToken` returns a
+   `ProvisionedUser(User user, boolean created)` record, `UserPrincipal` carries that flag
+   alongside `user()`, and the handler picks `201` vs `200` from it without touching the database.
+   `created` means "this request's filter inserted the row", which is exactly what acceptance
+   criterion 1 asks, and it keeps criterion 2 true by construction because just-in-time
+   provisioning and `/users/register` still share the one code path. Under a race the inserting
+   request reports `created = true` and the loser adopts the row with `created = false`, which is
+   the correct answer for both.
 
 ## Steps
 
@@ -129,9 +154,18 @@ endpoint depends on it.
   be skipped. Do this here, in the step that also establishes the shared response components later
   steps reference, so that no window exists in which an unchecked operation can be merged.
 
+- **Restore the generated-package names to `AGENTS.md` here, in the first step, not in Step 9's doc
+  sweep.** Every controller added by Steps 1 and 3–8 imports from
+  `com.seamware.consentmanager.api.generated.model`, the ticket text actively misnames the package
+  root as `eu.prometheusx.consentmanager`, and `AGENTS.md` — unlike this plan — is appended to
+  every agent's prompt. Extend the API-first bullet's last sentence to read: generated code lands
+  in `target/generated-sources/openapi/` under `com.seamware.consentmanager.api.generated[.model]`
+  and is never committed. Add `.env.sample` back to **Important Files** in the same edit, since
+  Step 6 has to extend it.
+
 **Files:** `error/ConflictException.java`, a new handler in `error/`, `api/openapi.yaml`,
 `api/components/responses/{BadRequest,NotFound,Conflict}.yaml`,
-`api/SpecSecurityConsistencyTest.java`, tests under `src/test/java/.../error/`.
+`api/SpecSecurityConsistencyTest.java`, tests under `src/test/java/.../error/`, `AGENTS.md`.
 
 **Acceptance:** parameterized unit test asserting (exception → status, `type`, `title`) for all four
 domain exceptions plus the constraint-violation case; a test controller-backed IT confirming the
@@ -144,13 +178,19 @@ guard is itself tested rather than merely present.
 Introduce the service all later steps call, with no endpoint attached, so the rule and its
 concurrency behaviour are settled and tested on their own.
 
-- Create `service/UserService.java` and fold `UserProvisioningService` into it: `provisionFromToken(UserPrincipal)`
-  is the existing `provision` method, unchanged in behaviour (find-or-insert, catch the unique
-  violation, re-read, refresh only asserted claims). Update `PrincipalResolutionFilter`'s
-  constructor and `UserProvisioningServiceTest` / `UserProvisioningIT` accordingly — renaming them
-  to `UserServiceTest` / `UserServiceIT` keeps the test names honest. Making
-  `provisionFromToken` the single path shared by just-in-time provisioning and `POST /users/register`
-  is what makes acceptance criterion 2 true by construction rather than by assertion.
+- Create `service/UserService.java` and fold `UserProvisioningService` into it:
+  `provisionFromToken(UserPrincipal)` keeps the existing `provision` algorithm (find-or-insert,
+  catch the unique violation, re-read, refresh only asserted claims) but **changes its return type
+  to `ProvisionedUser(User user, boolean created)`** — a record in `service/` — per decision 6.
+  `created` is `true` only on the branch where this call's own `save` succeeded; the leading-read
+  branch and the lost-race catch branch both report `false`. Update `PrincipalResolutionFilter` to
+  pass that through (`UserPrincipal` gains a `created` component, set by `withUser(ProvisionedUser)`
+  beside the existing `user()`), and update `UserProvisioningServiceTest` / `UserProvisioningIT`
+  accordingly — renaming them to `UserServiceTest` / `UserServiceIT` keeps the test names honest.
+  Making `provisionFromToken` the single path shared by just-in-time provisioning and
+  `POST /users/register` is what makes acceptance criterion 2 true by construction rather than by
+  assertion. This is the one deliberate behaviour-visible change to the merged provisioning code;
+  the row it produces is identical, only the signal is new.
 - Add `findByIdentifier(String)` and the link-aware read used by later steps
   (`participantIdentifiersFor(User)` or equivalent, built on `UserParticipantRepository.findByIdUserId`).
 - Add `registerForParticipant(Participant, UserRegistration)` implementing the rule and returning a
@@ -184,8 +224,9 @@ concurrency behaviour are settled and tested on their own.
   count, because an aborted-transaction failure still leaves exactly one user row.
 
 **Files:** `service/UserService.java`, `service/UserRegistration.java`,
-`service/RegistrationOutcome.java`, delete `service/UserProvisioningService.java`,
-`security/PrincipalResolutionFilter.java`, renamed tests, `AGENTS.md`.
+`service/RegistrationOutcome.java`, `service/ProvisionedUser.java`, delete
+`service/UserProvisioningService.java`, `security/PrincipalResolutionFilter.java`,
+`security/UserPrincipal.java`, renamed tests, `AGENTS.md`.
 
 Deleting `UserProvisioningService` makes the `AGENTS.md` project-structure line that names it
 wrong, so correct that line in this step rather than waiting for Step 9's documentation sweep — a
@@ -195,11 +236,15 @@ stale path in the file that is appended to every agent's system prompt misleads 
 identifier, known identifier unlinked to this participant, already linked, already linked with a
 changed `localIdentifier` — asserting outcome, user count and that attributes on a pre-existing user
 are untouched. A Testcontainers IT firing N concurrent `registerForParticipant` calls for the same
-identifier and asserting exactly one `users` row and one link.
+identifier and asserting exactly one `users` row and one link. For `provisionFromToken`, assert the
+`created` flag directly: `true` on first sight of an identifier, `false` on every later call, and —
+in the concurrency IT — `true` from exactly one of N racing callers (decision 6; this is the
+assertion `POST /users/register`'s `201` rests on).
 
 ### Step 3: `POST /users/register` and `GET /users/me`
 
-The two `USER`-role self-service reads/writes, both backed by `provisionFromToken`.
+The two `USER`-role self-service reads, both served from the principal the filter already
+provisioned (decision 6) rather than from a second call into `provisionFromToken`.
 
 - Author `api/components/schemas/User.yaml`: `identifier` (required), `email`, `firstName`,
   `lastName`, `participants` (array of participant identifiers the user is linked to), timestamps.
@@ -211,7 +256,12 @@ The two `USER`-role self-service reads/writes, both backed by `provisionFromToke
   the shared `Unauthorized`/`Forbidden` responses. Only the request and response schemas are
   externalised, under `api/components/schemas/`.
 - Implement `api/UserController.java` extending the generated abstract controller, taking
-  `UserPrincipal`. Returning `HttpResponse<User>` is required to vary the status between 200 and
+  `UserPrincipal`. **Neither handler calls the provisioning method.** The filter has already run it
+  (decision 6), so `register` answers `201` when `principal.created()` and `200` otherwise, and
+  both handlers read the row from `principal.user()`. Calling `provisionFromToken` again here is
+  the bug decision 6 exists to prevent: it is a wasted round trip that always reports the
+  existing-row path, making `201` unreachable and the acceptance IT below fail.
+  Returning `HttpResponse<User>` is required to vary the status between 200 and
   201 — check that the generated signature permits it and, if the generator returns the bare model,
   declare the return type the generator produces and set the status via the response wrapper the
   generator supports. Settle this in this step; later steps (207 in Step 6) reuse the answer.
@@ -254,7 +304,10 @@ The `PARTICIPANT`-or-`CATALOG` read surface, where caller scoping is the whole p
 user gets 404 and a body indistinguishable from the genuinely-absent case; exact-identifier search
 hits; a case-varied email search returns every matching user; an empty body yields 400; a
 participant passing another participant's `participantIdentifier` still gets only its own linked
-users; a catalog token sees across participants.
+users; a catalog token sees across participants. Plus the route-precedence assertion from decision
+1: a `PARTICIPANT` token on `GET /users/me` gets `403` from the `USER`-only self route rather than
+a lookup for a user whose identifier is `"me"`, and a user actually registered under the identifier
+`me` is reachable through `POST /users/search` but not through `GET /users/{identifier}`.
 
 ### Step 5: `POST /participants/me/users` — single registration
 
@@ -291,21 +344,28 @@ identifier smuggled into the body changes nothing.
   and `BulkRegistrationResult.yaml` (`results[]` of `{identifier, outcome, reason?}` with
   `outcome ∈ {CREATED, LINKED, ALREADY_LINKED, REJECTED}`, plus a `summary` object counting each).
   Add the operation inline to `paths:` in `api/openapi.yaml`, returning `207`.
-- Add `registerBulkForParticipant(Participant, List<UserRegistration>)` to `UserService`: each entry
-  is applied in **its own transaction** so one failure cannot roll back the batch, and a failed
-  entry is reported as `REJECTED` with a reason rather than aborting.
-- **Say how that isolation is obtained, or partial success will not work.** Micronaut's
-  transactional AOP is compile-time and bypassed on self-invocation: a loop calling
-  `this.registerForParticipant(...)` gets no new transaction, every entry runs in whatever
-  transaction the caller is in, and under PostgreSQL one entry's constraint violation aborts that
-  transaction and poisons every entry after it — the same failure mode as the insert-and-catch rule
-  in Step 2. Use one of exactly two mechanisms: an injected collaborator bean whose method carries
-  `@Transactional(propagation = REQUIRES_NEW)`, because crossing a bean boundary is what makes the
-  interceptor fire, or programmatic `TransactionOperations.executeWrite` per entry. Catch per entry
-  *outside* the per-entry transaction, so a rolled-back entry's exception is translated to
-  `REJECTED` on a connection that is still usable. Validation of individual entries
-  happens inside the loop, not through bean validation on the collection, because a batch-level
-  constraint violation would reject the whole request and defeat partial success.
+- Add `registerBulkForParticipant(Participant, List<UserRegistration>)` to `UserService`: entries
+  are applied **independently** so one failure cannot roll back or poison the rest, and a failed
+  entry is reported as `REJECTED` with a reason rather than aborting the batch.
+- **The isolation comes from the absence of a transaction, not from adding one.** The rule Step 2
+  pins — `registerForParticipant` must not run inside an enclosing transaction, because PostgreSQL
+  aborts that transaction on the `uq_users_identifier` violation and the re-read in the catch block
+  then fails — applies with equal force here, and it rules out the two mechanisms one would
+  otherwise reach for. A collaborator bean annotated `@Transactional(propagation = REQUIRES_NEW)`
+  and a programmatic `TransactionOperations.executeWrite` per entry both put
+  `registerForParticipant` inside exactly such a transaction: an entry that loses the race on an
+  identifier would be reported `REJECTED` (or surface as a 500) where it should be `LINKED`, and a
+  mixed-batch IT rarely races, so the bug would ship. The rule for this step, therefore:
+  **`registerBulkForParticipant` must not be `@Transactional` and must not wrap entries in a
+  transaction of its own.** With no ambient transaction, every repository call inside each entry
+  autocommits exactly as it does on the single-registration path, so one entry's constraint
+  violation cannot reach the next one. The self-invocation hazard that argues for a collaborator
+  bean is only a hazard when there is an ambient transaction to inherit; here there is none, and a
+  plain `this.registerForParticipant(...)` loop is correct.
+- Wrap each entry in its own `try`/`catch` inside the loop and translate the failure to `REJECTED`
+  with a reason. Validation of individual entries happens inside the loop, not through bean
+  validation on the collection, because a batch-level constraint violation would reject the whole
+  request and defeat partial success.
 - Add a configurable maximum batch size to `ConsentManagerConfiguration` (a nested
   `@ConfigurationProperties` for users, e.g. `consent-manager.users.bulk-max-size`, with a named
   default constant — no magic number), wire it in `application.yml` as
@@ -320,8 +380,8 @@ identifier smuggled into the body changes nothing.
 already-linked, blank identifier) asserting 207, one result per entry in request order, correct
 outcomes and a summary consistent with the results. The rejected entry must sit in the **middle**
 of the batch, and the test must assert that the entries after it still succeeded and are visible in
-the database — that is the assertion that catches the self-invocation and aborted-transaction
-failures above, which a batch with the bad entry last would pass by accident. A batch of `max + 1`
+the database — that is the assertion that catches an entry wrapped in a transaction that a failure
+aborts, which a batch with the bad entry last would pass by accident. A batch of `max + 1`
 entries yields 400 and writes nothing.
 
 ### Step 7: `PATCH` and `DELETE /participants/me/users/{identifier}` — link update and unlink
@@ -358,7 +418,10 @@ not hold returns 404; and that the `PATCH` response carries the new `localIdenti
   `user_participants` row for the user; null out `email`, `first_name`, `last_name`; replace
   `identifier` with a non-reversible pseudonym. Consents and consent events are **retained** —
   `consents.user_id` is `ON DELETE RESTRICT` precisely so that the audit trail cannot be destroyed
-  by this path.
+  by this path. `@Transactional` is right *here* and does not contradict the rule in Steps 2 and 6:
+  erasure must be all-or-nothing, and it contains no insert-and-catch — the pseudonym is a fresh
+  UUIDv7 that cannot realistically collide, so no constraint violation is expected on the happy
+  path and none has to be recovered from inside the transaction.
 - The pseudonym must be unrelated to the original identifier, not derived from it: a hash is
   reversible by dictionary attack over a space of email addresses and subject IDs. Use a freshly
   generated opaque value under a reserved prefix (e.g. `urn:consent-manager:erased:<UUIDv7>`) built
@@ -393,11 +456,9 @@ A closing pass that no earlier step can do, because it needs every route to exis
   between component files must resolve from both the source layout and the copied layout.
 - Update `docs/security.md` (the `@Secured` convention section lists `/api-status` as the only
   implemented operation) and `AGENTS.md`: the `service/` and `api/` package contents, the new
-  `consent-manager.users.bulk-max-size` property, the erasure ADR, decision 5 (operations stay
-  inline in the root spec, and why), and one line naming the package root and the generated
-  packages — `com.seamware.consentmanager.api.generated[.model]` under
-  `target/generated-sources/openapi/` — since the ticket text misnames the package root as
-  `eu.prometheusx.consentmanager` and every controller here imports the generated models.
+  `consent-manager.users.bulk-max-size` property, the erasure ADR, and decision 5 (operations stay
+  inline in the root spec, and why). The generated-package names and the `.env.sample` entry are
+  Step 1's deliverable, not this one's — verify they are still there rather than adding them again.
 - Final `./mvnw spotless:apply && ./mvnw verify`.
 
 **Acceptance:** `./mvnw verify` green; every operation in the spec appears in the role matrix with an
