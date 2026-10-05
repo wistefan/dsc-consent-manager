@@ -1,30 +1,20 @@
 package com.seamware.consentmanager.error;
 
 /**
- * Exception indicating that access to the requested resource is forbidden (HTTP 403).
+ * The caller authenticated but may not perform the operation (HTTP 403).
  *
- * <p>Thrown when the authenticated principal lacks the required permissions or roles to access a
- * resource. The {@link GlobalExceptionHandler} maps this exception to an HTTP 403 Forbidden
- * response with a {@link com.seamware.consentmanager.api.generated.model.ProblemDetail} body.
+ * <p>For a refusal that would confirm the existence of a resource the caller may not see, throw
+ * {@link NotFoundException} instead.
  */
-public class ForbiddenException extends RuntimeException {
+public class ForbiddenException extends ApiException {
 
-    /**
-     * Creates a {@code ForbiddenException} with the specified detail message.
-     *
-     * @param message a human-readable description of the access denial
-     */
+    /** Creates a refusal whose message is published to the caller. */
     public ForbiddenException(String message) {
-        super(message);
+        super(ProblemType.FORBIDDEN, message);
     }
 
-    /**
-     * Creates a {@code ForbiddenException} with the specified detail message and cause.
-     *
-     * @param message a human-readable description of the access denial
-     * @param cause the underlying cause of this exception
-     */
+    /** Creates a refusal from an underlying authorization failure. */
     public ForbiddenException(String message, Throwable cause) {
-        super(message, cause);
+        super(ProblemType.FORBIDDEN, message, cause);
     }
 }

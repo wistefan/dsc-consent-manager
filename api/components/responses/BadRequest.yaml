@@ -1,0 +1,24 @@
+# Response: 400 Bad Request — referenced from api/openapi.yaml as
+# components.responses.BadRequest.
+#
+# No operation references it yet; the user-management operations added by the
+# later steps of this ticket do. Unlike Unauthorized and Forbidden, this response
+# is not enforced by SpecSecurityConsistencyTest: an operation advertises it when
+# it can actually reject a request body or parameter, which is a per-operation
+# fact rather than a consequence of being secured.
+description: >
+  The request was rejected before it reached the consent model. Either a body or
+  parameter failed validation — a required field was absent or blank, a value
+  exceeded its length or did not match its format — or the request was otherwise
+  unusable. The `detail` member names the rejected fields and why, so the caller
+  can correct the request without guessing.
+content:
+  application/problem+json:
+    schema:
+      $ref: "../schemas/ProblemDetail.yaml"
+    example:
+      type: "https://consent-manager.example/problems/bad-request"
+      title: "Bad Request"
+      status: 400
+      detail: "identifier: must not be blank"
+      instance: "/v1/users/register"

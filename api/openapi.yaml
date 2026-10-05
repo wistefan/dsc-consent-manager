@@ -88,3 +88,16 @@ components:
 
     Forbidden:
       $ref: "./components/responses/Forbidden.yaml"
+
+    # Client-error responses an operation references when it can actually produce
+    # them. Unlike the two above these are not enforced for every secured
+    # operation: whether a request body can fail validation, address a missing
+    # resource or conflict with existing state is a fact about the operation.
+    BadRequest:
+      $ref: "./components/responses/BadRequest.yaml"
+
+    NotFound:
+      $ref: "./components/responses/NotFound.yaml"
+
+    Conflict:
+      $ref: "./components/responses/Conflict.yaml"
