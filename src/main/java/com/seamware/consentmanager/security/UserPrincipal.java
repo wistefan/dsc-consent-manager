@@ -21,7 +21,7 @@ import io.micronaut.core.annotation.Nullable;
  * @param name the {@code name} claim, or {@code null}
  * @param givenName the {@code given_name} claim, or {@code null}
  * @param familyName the {@code family_name} claim, or {@code null}
- * @param user the provisioned user row, or {@code null} until just-in-time provisioning fills it
+ * @param user the provisioned {@code users} row; {@code null} only before {@link #withUser}
  */
 public record UserPrincipal(
         String issuer,
