@@ -381,6 +381,15 @@
                             <output>${project.build.directory}/generated-sources/openapi</output>
                             <apiPackage>com.seamware.consentmanager.api.generated</apiPackage>
                             <modelPackage>com.seamware.consentmanager.api.generated.model</modelPackage>
+                            <!--
+                                Overrides only server/controller.mustache; every other template,
+                                and every partial it references, still resolves against the
+                                generator's embedded java-micronaut templates. The override exists
+                                so a routed method can declare the typed principal parameter that
+                                PrincipalResolutionFilter and PrincipalArgumentBinder both require
+                                — see the comment at the head of the template.
+                            -->
+                            <templateDirectory>${project.basedir}/api/templates</templateDirectory>
                             <configOptions>
                                 <useBeanValidation>true</useBeanValidation>
                                 <useJakartaEe>true</useJakartaEe>
@@ -388,6 +397,13 @@
                                 <generateControllerFromExamples>false</generateControllerFromExamples>
                                 <generateControllerAsAbstract>true</generateControllerAsAbstract>
                                 <reactive>false</reactive>
+                                <!--
+                                    Every handler returns HttpResponse<T> so an operation that
+                                    varies its success status (201 vs 200 on registration, 204,
+                                    207) can set it. Applied generator-wide rather than per
+                                    operation because the generator has no per-operation switch.
+                                -->
+                                <wrapInHttpResponse>true</wrapInHttpResponse>
                             </configOptions>
                             <!-- Suppress generated Application.java and other scaffolding — we manage them ourselves -->
                             <generateSupportingFiles>false</generateSupportingFiles>

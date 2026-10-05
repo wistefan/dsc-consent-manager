@@ -68,6 +68,92 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /users/register:
+    post:
+      operationId: registerUser
+      summary: Register the calling user
+      description: >
+        Registers the natural person the bearer token names and returns their
+        record. The identity is taken entirely from the token — there is no
+        request body, and a caller cannot register anybody but themselves.
+
+
+        The record is keyed on the global user identifier the token asserts, so
+        the operation is idempotent: `201 Created` the first time this service
+        sees the identifier, `200 OK` on every later call, with the same body.
+        Registration is the same code path as the just-in-time provisioning
+        every other authenticated route performs, so a user first seen through
+        another endpoint is already registered and receives `200` here.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [USER]
+      # `security` is the published contract; `x-roles` and `x-principal` are what
+      # the generator reads. `x-roles` becomes the routed method's @Secured rule -
+      # without it the generator emits @Secured(IS_AUTHENTICATED), which would let
+      # any authenticated token through - and `x-principal` adds the typed caller
+      # parameter PrincipalResolutionFilter keys on. Both must agree with
+      # `security`, and SpecSecurityConsistencyTest fails the build when they do
+      # not. Every secured operation below repeats all three.
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      responses:
+        "200":
+          description: The user was already registered; the existing record is returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "201":
+          description: The user was registered by this request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /users/me:
+    get:
+      operationId: getCurrentUser
+      summary: Read the calling user's own record
+      description: >
+        Returns the record of the natural person the bearer token names,
+        including the identifiers of the participants they are linked to. The
+        record is created on first sight, so this operation does not report
+        `404` for an otherwise valid user token.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      responses:
+        "200":
+          description: The caller's own user record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -79,6 +165,9 @@ components:
 
     ProblemDetail:
       $ref: "./components/schemas/ProblemDetail.yaml"
+
+    User:
+      $ref: "./components/schemas/User.yaml"
 
   responses:
     # Shared error responses referenced by every secured operation. `/api-status`

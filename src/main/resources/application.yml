@@ -17,6 +17,16 @@ micronaut:
         paths: classpath:static
         mapping: /static/**
 
+  serde:
+    serialization:
+      # Default is `non-empty`, which drops an empty collection from a response body
+      # entirely. Arrays the specification marks required - `User.participants`, say -
+      # must still be published as `[]` for a user linked to no participant, or the
+      # response contradicts its own schema. `non-absent` publishes them while still
+      # leaving out an attribute whose value is null, which is how every optional field
+      # under api/components/schemas is documented: unknown means absent, not null.
+      inclusion: non-absent
+
   security:
     enabled: true
 

@@ -114,6 +114,8 @@ class SpecSecurityConsistencyTest {
     /**
      * One operation of the specification together with the access it declares.
      *
+     * @param roles the scopes the operation's security requirements name, which are the role names
+     *     its route must enforce; empty when it is anonymous or names none
      * @param responseRefs {@code $ref} target per documented status code, for codes that are a bare
      *     reference; a response written out inline contributes no entry
      */
@@ -123,6 +125,7 @@ class SpecSecurityConsistencyTest {
             String path,
             boolean anonymous,
             List<String> schemes,
+            List<String> roles,
             Map<String, String> responseRefs) {
 
         @Override
@@ -253,18 +256,28 @@ class SpecSecurityConsistencyTest {
                 .as("%s requires %s, so it must not be anonymous", operation, operation.schemes())
                 .isNotEmpty()
                 .doesNotContain(SecurityRule.IS_ANONYMOUS);
+        if (operation.roles().isEmpty()) {
+            assertThat(rules)
+                    .as("%s names no scope, so it may only require authentication", operation)
+                    .containsExactly(SecurityRule.IS_AUTHENTICATED);
+            return;
+        }
         assertThat(rules)
-                .as("%s must be restricted to authentication or to named roles", operation)
+                .as(
+                        "%s is restricted to %s, so its route must enforce exactly those roles."
+                                + " The generator reads the operation's `x-roles` extension and not its"
+                                + " `security` scopes, so a mismatch here means the two have drifted"
+                                + " apart - most likely `x-roles` is missing, which silently yields"
+                                + " isAuthenticated() and admits every authenticated caller.",
+                        operation, operation.roles())
+                .containsExactlyInAnyOrderElementsOf(operation.roles());
+        assertThat(rules)
+                .as("%s must be restricted to roles this service knows", operation)
                 .allSatisfy(
                         rule ->
-                                assertThat(
-                                                SecurityRule.IS_AUTHENTICATED.equals(rule)
-                                                        || Role.fromConfiguredName(rule)
-                                                                .isPresent())
-                                        .as(
-                                                "`%s` is neither isAuthenticated() nor a known role",
-                                                rule)
-                                        .isTrue());
+                                assertThat(Role.fromConfiguredName(rule))
+                                        .as("`%s` is not a known role", rule)
+                                        .isPresent());
     }
 
     /**
@@ -365,8 +378,14 @@ class SpecSecurityConsistencyTest {
                         ? asList(operation.get("security"))
                         : globalSecurity;
         List<String> schemes = new ArrayList<>();
+        List<String> roles = new ArrayList<>();
         for (Object requirement : effective) {
-            schemes.addAll(asMap(requirement).keySet());
+            asMap(requirement)
+                    .forEach(
+                            (scheme, scopes) -> {
+                                schemes.add(scheme);
+                                asList(scopes).forEach(scope -> roles.add(String.valueOf(scope)));
+                            });
         }
         return new SpecOperation(
                 (String) operationId,
@@ -374,6 +393,7 @@ class SpecSecurityConsistencyTest {
                 path,
                 effective.isEmpty(),
                 List.copyOf(schemes),
+                List.copyOf(roles),
                 responseRefsOf(operation));
     }
 
