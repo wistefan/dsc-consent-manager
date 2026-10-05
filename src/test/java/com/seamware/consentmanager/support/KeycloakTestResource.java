@@ -4,7 +4,6 @@ import com.nimbusds.jose.util.JSONObjectUtils;
 import com.nimbusds.jwt.SignedJWT;
 import com.seamware.consentmanager.security.IdentityProviderConfiguration;
 import dasniko.testcontainers.keycloak.KeycloakContainer;
-import io.micronaut.test.support.TestPropertyProvider;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -16,7 +15,6 @@ import java.text.ParseException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import org.junit.jupiter.api.TestInstance;
 
 /**
  * Testcontainers Keycloak fixture issuing real tokens from the realm imported by {@value
@@ -24,17 +22,20 @@ import org.junit.jupiter.api.TestInstance;
  *
  * <p>The container is a JVM-wide singleton, as in {@link PostgresTestResource}: Keycloak takes
  * several seconds to boot, and the realm is read-only apart from the signing-key rotation in {@link
- * #rotateRealmSigningKey(String)}, which only ever <em>adds</em> a key and so cannot invalidate
- * tokens another test class already holds.
+ * #rotateRealmSigningKey(String)}, which only ever <em>adds</em> a key - and so cannot invalidate
+ * tokens another test class already holds - and is undone through {@link
+ * #deleteRealmComponent(String)}.
+ *
+ * <p>This is a static fixture, not a base class. Tests reach it through {@link
+ * KeycloakAndPostgresTestResource}, which merges {@link #keycloakProperties()} into the
+ * Testcontainers datasource properties and puts back the {@code micronaut.security.enabled} that
+ * {@code src/test/resources/application-test.yml} switches off.
  *
  * <p>Transport is plain http, which the trust list refuses unless {@code allow-insecure-transport}
- * is set; {@code src/test/resources/application-test.yml} already sets it for the {@code primary}
- * entry this fixture overrides, so subclasses need not repeat it. That file also disables security
- * globally, so a security-aware test must put {@code micronaut.security.enabled=true} back in its
- * own property source.
+ * is set; {@code application-test.yml} already sets it for the {@code primary} entry this fixture
+ * overrides.
  */
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public abstract class KeycloakTestResource implements TestPropertyProvider {
+public final class KeycloakTestResource {
 
     /** Pinned Keycloak image, so a library upgrade cannot silently change the IDP under test. */
     private static final String KEYCLOAK_IMAGE = "quay.io/keycloak/keycloak:26.1";
@@ -44,6 +45,14 @@ public abstract class KeycloakTestResource implements TestPropertyProvider {
 
     /** Realm name declared in the import file. */
     public static final String REALM = "consent-manager-test";
+
+    /**
+     * Audience this realm's tokens carry, which the trust list entry must demand.
+     *
+     * <p>Must equal the {@code included.custom.audience} of the audience mapper in {@value
+     * #REALM_IMPORT_FILE}; a mismatch refuses every Keycloak-issued token with a bare 401.
+     */
+    public static final String AUDIENCE = "consent-manager";
 
     /**
      * Participant identifier hard-coded into {@link RealmPrincipal#PARTICIPANT}'s {@code
@@ -82,6 +91,9 @@ public abstract class KeycloakTestResource implements TestPropertyProvider {
 
     /** Lowest HTTP status counting as a failure. */
     private static final int HTTP_BAD_REQUEST = 400;
+
+    /** HTTP status Keycloak returns for a component that no longer exists. */
+    private static final int HTTP_NOT_FOUND = 404;
 
     /**
      * Priority of the signing key added by {@link #rotateRealmSigningKey(String)}. Keycloak signs
@@ -165,14 +177,16 @@ public abstract class KeycloakTestResource implements TestPropertyProvider {
      * Trust-list properties pointing the {@code primary} provider at this realm.
      *
      * <p>The role mapping is overridden because the realm names its roles {@code dataspace-*} while
-     * {@code application.yml} defaults to {@code consent-*}; audience, claim paths and clock skew
-     * are inherited.
+     * {@code application.yml} defaults to {@code consent-*}, and the audience is pinned here
+     * because this fixture owns the realm that mints it. Claim paths and clock skew are inherited:
+     * their defaults were chosen for Keycloak's own token shape, which is worth exercising.
      */
     public static Map<String, String> keycloakProperties() {
         String prefix = IdentityProviderConfiguration.PREFIX + "." + PROVIDER_NAME + ".";
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put(prefix + "issuer", issuer());
         properties.put(prefix + "discovery-url", discoveryUrl());
+        properties.put(prefix + "audience", AUDIENCE);
         properties.put(prefix + "role-mapping.user", RAW_USER_ROLE);
         properties.put(prefix + "role-mapping.participant", RAW_PARTICIPANT_ROLE);
         properties.put(prefix + "role-mapping.catalog", RAW_CATALOG_ROLE);
@@ -188,7 +202,7 @@ public abstract class KeycloakTestResource implements TestPropertyProvider {
                         "client_secret", TEST_CLIENT_SECRET,
                         "username", principal.username,
                         "password", TEST_PASSWORD);
-        Map<String, Object> response = postForm(URI.create(issuer() + TOKEN_PATH), form, null);
+        Map<String, Object> response = postForm(URI.create(issuer() + TOKEN_PATH), form);
         Object token = response.get("access_token");
         if (!(token instanceof String accessToken)) {
             throw new IllegalStateException(
@@ -222,9 +236,14 @@ public abstract class KeycloakTestResource implements TestPropertyProvider {
      * issued from now on are signed by it. The previous key stays published in the JWK Set, which
      * is what keeps already-issued tokens verifiable.
      *
-     * @param componentName name for the new key provider; must be unique within the realm
+     * <p>Keycloak does not enforce unique component names, and a second provider at the same
+     * priority leaves which key signs undecided, so the caller must pass a name unique to the run
+     * and hand the returned id to {@link #deleteRealmComponent(String)} when done.
+     *
+     * @param componentName name for the new key provider
+     * @return the id Keycloak assigned to the created key provider
      */
-    public static void rotateRealmSigningKey(String componentName) {
+    public static String rotateRealmSigningKey(String componentName) {
         String body =
                 """
                 {"name":"%s","providerId":"rsa-generated",\
@@ -250,6 +269,53 @@ public abstract class KeycloakTestResource implements TestPropertyProvider {
                             + ": "
                             + response.body());
         }
+        return createdComponentId(response);
+    }
+
+    /**
+     * Removes a realm component, restoring the realm to its imported state.
+     *
+     * <p>Tolerates a component that is already gone, so cleanup never masks the failure that left
+     * it behind.
+     *
+     * @param componentId id returned by {@link #rotateRealmSigningKey(String)}
+     */
+    public static void deleteRealmComponent(String componentId) {
+        URI component =
+                URI.create(
+                        adminBaseUrl() + "/admin/realms/" + REALM + "/components/" + componentId);
+        HttpRequest request =
+                HttpRequest.newBuilder(component)
+                        .timeout(HTTP_TIMEOUT)
+                        .header("Authorization", "Bearer " + adminToken())
+                        .DELETE()
+                        .build();
+        HttpResponse<String> response = send(request);
+        if (response.statusCode() >= HTTP_BAD_REQUEST && response.statusCode() != HTTP_NOT_FOUND) {
+            throw new IllegalStateException(
+                    "Deleting component "
+                            + componentId
+                            + " failed with "
+                            + response.statusCode()
+                            + ": "
+                            + response.body());
+        }
+    }
+
+    /**
+     * The component id from a creation response, which Keycloak returns only as the last segment of
+     * the {@code Location} header.
+     */
+    private static String createdComponentId(HttpResponse<String> response) {
+        String location =
+                response.headers()
+                        .firstValue("Location")
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "Keycloak created a component without a Location"
+                                                        + " header"));
+        return location.substring(location.lastIndexOf('/') + 1);
     }
 
     /**
@@ -301,7 +367,7 @@ public abstract class KeycloakTestResource implements TestPropertyProvider {
                         "password",
                         KEYCLOAK.getAdminPassword());
         URI tokenEndpoint = URI.create(adminBaseUrl() + REALMS_PATH + "master" + TOKEN_PATH);
-        Object token = postForm(tokenEndpoint, form, null).get("access_token");
+        Object token = postForm(tokenEndpoint, form).get("access_token");
         if (!(token instanceof String adminToken)) {
             throw new IllegalStateException("Keycloak returned no admin access_token");
         }
@@ -309,8 +375,7 @@ public abstract class KeycloakTestResource implements TestPropertyProvider {
     }
 
     /** POSTs {@code form} as {@code application/x-www-form-urlencoded} and parses the JSON body. */
-    private static Map<String, Object> postForm(
-            URI endpoint, Map<String, String> form, String bearerToken) {
+    private static Map<String, Object> postForm(URI endpoint, Map<String, String> form) {
         StringBuilder encoded = new StringBuilder();
         form.forEach(
                 (key, value) -> {
@@ -328,9 +393,6 @@ public abstract class KeycloakTestResource implements TestPropertyProvider {
                         .POST(
                                 HttpRequest.BodyPublishers.ofString(
                                         encoded.toString(), StandardCharsets.UTF_8));
-        if (bearerToken != null) {
-            builder.header("Authorization", "Bearer " + bearerToken);
-        }
         HttpResponse<String> response = send(builder.build());
         if (response.statusCode() >= HTTP_BAD_REQUEST) {
             throw new IllegalStateException(
@@ -360,8 +422,5 @@ public abstract class KeycloakTestResource implements TestPropertyProvider {
         }
     }
 
-    @Override
-    public Map<String, String> getProperties() {
-        return keycloakProperties();
-    }
+    private KeycloakTestResource() {}
 }

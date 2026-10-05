@@ -20,7 +20,7 @@ Each entry is keyed by a provider name (`primary` by default):
 | Key | Env var | Default | Meaning |
 | --- | --- | --- | --- |
 | `issuer` | `IDP_ISSUER` | — | Expected `iss`; must match the token exactly. |
-| `discovery-url` | `IDP_DISCOVERY_URL` | derived from `issuer` | OpenID configuration document URL. |
+| `discovery-url` | `IDP_DISCOVERY_URL` | — (required) | OpenID configuration document URL. |
 | `audience` | `IDP_AUDIENCE` | — | Required `aud` value. |
 | `allow-insecure-transport` | `IDP_ALLOW_INSECURE_TRANSPORT` | `false` | Permits `http://` endpoints (tests only). |
 | `clock-skew` | `IDP_CLOCK_SKEW` | `30s` | Leeway applied to `exp`/`nbf`/`iat`. |
@@ -76,8 +76,8 @@ relative `$ref`s resolve for Swagger UI.
 - `support/PostgresTestResource` — suite-wide PostgreSQL container.
 - `support/KeycloakTestResource` — suite-wide Keycloak container importing
   `src/test/resources/keycloak/consent-manager-realm.json` (roles, `participant_id` mapper, one
-  client per role); injects issuer, discovery URL, audience, claim paths and role mapping as test
-  properties.
+  client per role); injects issuer, discovery URL, audience and role mapping as test properties.
+  Claim paths and clock skew are inherited from `application.yml`.
 - `support/KeycloakAndPostgresTestResource` — base class composing both. `application-test.yml` sets
   `micronaut.security.enabled: false`, so security-aware tests re-enable it from their own property
   source.
