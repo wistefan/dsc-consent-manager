@@ -7,6 +7,7 @@ import io.micronaut.data.annotation.Embeddable;
 import io.micronaut.data.annotation.EmbeddedId;
 import io.micronaut.data.annotation.MappedEntity;
 import io.micronaut.data.annotation.MappedProperty;
+import io.micronaut.data.annotation.Transient;
 import io.micronaut.serde.annotation.Serdeable;
 import java.time.Instant;
 import java.util.Objects;
@@ -85,8 +86,12 @@ public class UserParticipant {
      *
      * <p>Convenience accessor that delegates to {@link UserParticipantId#getUserId()}.
      *
+     * <p>{@code @Transient} because the embedded id already maps {@code user_id}; without it
+     * Micronaut Data would list the column twice in the generated INSERT.
+     *
      * @return the UUID of the associated user
      */
+    @Transient
     @NonNull
     public UUID getUserId() {
         return id.getUserId();
@@ -97,8 +102,12 @@ public class UserParticipant {
      *
      * <p>Convenience accessor that delegates to {@link UserParticipantId#getParticipantId()}.
      *
+     * <p>{@code @Transient} because the embedded id already maps {@code participant_id}; without it
+     * Micronaut Data would list the column twice in the generated INSERT.
+     *
      * @return the UUID of the associated participant
      */
+    @Transient
     @NonNull
     public UUID getParticipantId() {
         return id.getParticipantId();
