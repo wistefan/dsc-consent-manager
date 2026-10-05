@@ -463,6 +463,31 @@ class UserServiceIT extends PostgresTestResource {
         assertThat(countLinksFor(identifier)).isOne();
     }
 
+    /**
+     * The instant an entity carries in memory after an insert is the instant the stored row
+     * returns.
+     *
+     * <p>{@code timestamptz} keeps microseconds, so a nanosecond-precision stamp would survive only
+     * in memory and every response rendered from the saved entity would differ from the next one
+     * rendered after a read. {@link com.seamware.consentmanager.domain.MicrosecondDateTimeProvider}
+     * exists for this assertion.
+     */
+    @Test
+    @DisplayName("an entity's timestamps are the ones PostgreSQL returns on re-read")
+    void timestampsRoundTripUnchanged() {
+        Participant participant = participant();
+        String identifier = unknownIdentifier();
+
+        User saved =
+                service.registerForParticipant(
+                                participant, registration(identifier, LOCAL_IDENTIFIER))
+                        .user();
+
+        User reread = row(identifier);
+        assertThat(reread.getCreatedAt()).isEqualTo(saved.getCreatedAt());
+        assertThat(reread.getUpdatedAt()).isEqualTo(saved.getUpdatedAt());
+    }
+
     /** An identifier no row exists for, remembered so the row it provisions is cleaned up. */
     private String unknownIdentifier() {
         String identifier = "urn:test:user:" + UUID.randomUUID();

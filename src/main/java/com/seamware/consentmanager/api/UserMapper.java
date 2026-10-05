@@ -14,10 +14,6 @@ import java.util.List;
  * <p>Shared by every operation that returns a user, so the participant links and the attribute set
  * a caller sees do not drift between them. {@code User} here is the generated API model; the stored
  * row is named in full to keep the two apart.
- *
- * <p>The representation carries profile attributes and participant links only. Nothing that could
- * authenticate the user - no credential, token or secret - is stored by this service, so none can
- * leak through here.
  */
 @Singleton
 public class UserMapper {

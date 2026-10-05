@@ -4,8 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.fail;
 
+import com.seamware.consentmanager.security.CatalogPrincipal;
 import com.seamware.consentmanager.security.ConsentManagerPrincipal;
+import com.seamware.consentmanager.security.ParticipantPrincipal;
 import com.seamware.consentmanager.security.Role;
+import com.seamware.consentmanager.security.UserPrincipal;
 import io.micronaut.http.annotation.Controller;
 import io.micronaut.http.annotation.Delete;
 import io.micronaut.http.annotation.Get;
@@ -28,6 +31,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -110,6 +114,26 @@ class SpecSecurityConsistencyTest {
 
     /** Shared response component a secured operation's {@code 403} must reference. */
     private static final String FORBIDDEN_REF = "#/components/responses/Forbidden";
+
+    /**
+     * Suffix the generator appends to the routed wrapper's name; the delegate keeps the bare {@code
+     * operationId}.
+     */
+    private static final String ROUTED_METHOD_SUFFIX = "Api";
+
+    /**
+     * Roles a parameter of each principal type can actually hold.
+     *
+     * <p>{@code PrincipalArgumentBinder} refuses with a {@code 403} when the resolved principal is
+     * not an instance of the declared type, so an operation whose {@code x-principal} cannot hold
+     * one of its {@code x-roles} is unservable for every caller holding that role.
+     */
+    private static final Map<Class<?>, Set<Role>> ROLES_PER_PRINCIPAL_TYPE =
+            Map.of(
+                    UserPrincipal.class, Set.of(Role.USER),
+                    ParticipantPrincipal.class, Set.of(Role.PARTICIPANT),
+                    CatalogPrincipal.class, Set.of(Role.CATALOG),
+                    ConsentManagerPrincipal.class, EnumSet.allOf(Role.class));
 
     /**
      * One operation of the specification together with the access it declares.
@@ -239,7 +263,7 @@ class SpecSecurityConsistencyTest {
     @MethodSource("specOperations")
     @DisplayName("every specified operation is implemented with a matching @Secured rule")
     void securedRuleMatchesSpecification(SpecOperation operation) {
-        Method routed = routedMethodFor(operation);
+        Method routed = routedMethodFor(operation).method();
         Secured secured = routed.getAnnotation(Secured.class);
         assertThat(secured)
                 .as("%s is routed by %s, which carries no @Secured", operation, routed)
@@ -296,13 +320,81 @@ class SpecSecurityConsistencyTest {
         if (operation.anonymous()) {
             return;
         }
-        Method routed = routedMethodFor(operation);
+        Method routed = routedMethodFor(operation).method();
         assertThat(routed.getParameterTypes())
                 .as(
                         "%s is secured, so %s must declare a %s parameter - that is what makes the"
                                 + " principal resolution filter run its refusals for this route",
                         operation, routed, ConsentManagerPrincipal.class.getSimpleName())
                 .anyMatch(ConsentManagerPrincipal.class::isAssignableFrom);
+    }
+
+    /**
+     * Asserts that the concrete controller declares the handler rather than inheriting the
+     * generator's stub.
+     *
+     * <p>{@code generateOperationsToReturnNotImplemented} leaves the delegate with a {@code 501}
+     * body instead of declaring it abstract, so an operation specified without a handler compiles,
+     * routes, and answers {@code 501} in production. The routed wrapper is always inherited, which
+     * is why it cannot be the thing checked.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("specOperations")
+    @DisplayName("every specified operation is handled by its controller, not the generated stub")
+    void concreteControllerDeclaresTheHandler(SpecOperation operation) {
+        RoutedMethod routed = routedMethodFor(operation);
+        assertThat(delegateOf(routed).getDeclaringClass())
+                .as(
+                        "%s is routed through %s, which only inherits the generated delegate -"
+                                + " override it, because the inherited body answers 501",
+                        operation, routed.controller().getName())
+                .isEqualTo(routed.controller());
+    }
+
+    /**
+     * Asserts that an operation's principal type can hold every role it admits.
+     *
+     * <p>Nothing in the specification ties {@code x-principal} to {@code x-roles}, and a mismatched
+     * pair only shows at runtime: {@code PrincipalArgumentBinder} refuses with a {@code 403} when
+     * the resolved principal is of another shape, so the operation looks correctly specified and
+     * serves nobody holding the unholdable role.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("specOperations")
+    @DisplayName("every secured operation's principal type can hold the roles it admits")
+    void principalTypeHoldsEveryAdmittedRole(SpecOperation operation) {
+        if (operation.anonymous() || operation.roles().isEmpty()) {
+            return;
+        }
+        Class<?> principalType = principalParameterOf(routedMethodFor(operation).method());
+        Set<Role> holdable = ROLES_PER_PRINCIPAL_TYPE.get(principalType);
+        assertThat(holdable)
+                .as("`%s` is not a principal type this suite knows", principalType.getSimpleName())
+                .isNotNull();
+        assertThat(operation.roles())
+                .as(
+                        "%s admits %s, so its `x-principal: %s` must be able to hold each of them;"
+                                + " a caller holding one it cannot hold is refused by the argument"
+                                + " binder with a 403",
+                        operation, operation.roles(), principalType.getSimpleName())
+                .allSatisfy(
+                        role ->
+                                assertThat(Role.fromConfiguredName(role))
+                                        .hasValueSatisfying(
+                                                held -> assertThat(holdable).contains(held)));
+    }
+
+    /**
+     * Asserts the principal-to-roles table covers the sealed hierarchy, so a newly permitted
+     * principal type cannot silently skip the check above.
+     */
+    @Test
+    @DisplayName("every permitted principal type declares the roles it can hold")
+    void principalTypeTableCoversTheSealedHierarchy() {
+        assertThat(ROLES_PER_PRINCIPAL_TYPE)
+                .as("one entry per permitted principal type, plus the sealed supertype itself")
+                .containsKey(ConsentManagerPrincipal.class)
+                .containsKeys(ConsentManagerPrincipal.class.getPermittedSubclasses());
     }
 
     /**
@@ -411,8 +503,16 @@ class SpecSecurityConsistencyTest {
         return Map.copyOf(refs);
     }
 
+    /**
+     * The concrete controller serving an operation and the generated wrapper routed to it.
+     *
+     * <p>Both halves matter: the wrapper carries {@code @Secured} and the typed principal
+     * parameter, while the controller is where the handler must actually be declared.
+     */
+    record RoutedMethod(Class<?> controller, Method method) {}
+
     /** Finds the routed method implementing an operation, failing when nothing implements it. */
-    private static Method routedMethodFor(SpecOperation operation) {
+    private static RoutedMethod routedMethodFor(SpecOperation operation) {
         for (Class<?> controller : controllerClasses()) {
             for (Method method : controller.getMethods()) {
                 Operation annotation = method.getAnnotation(Operation.class);
@@ -425,7 +525,7 @@ class SpecSecurityConsistencyTest {
                                 "the route implementing `%s` is mapped where the specification says",
                                 operation.operationId())
                         .isEqualTo(operation.httpMethod() + " " + operation.path());
-                return method;
+                return new RoutedMethod(controller, method);
             }
         }
         return fail(
@@ -433,6 +533,31 @@ class SpecSecurityConsistencyTest {
                         + " implemented by a @Controller in %s whose routed method carries"
                         + " @Operation(operationId = \"%s\").",
                 operation, CONTROLLER_PACKAGE, operation.operationId());
+    }
+
+    /** The delegate the routed wrapper calls, which is the method a controller has to override. */
+    private static Method delegateOf(RoutedMethod routed) {
+        String wrapper = routed.method().getName();
+        assertThat(wrapper)
+                .as(
+                        "the generator names the routed wrapper `<operationId>%s`",
+                        ROUTED_METHOD_SUFFIX)
+                .endsWith(ROUTED_METHOD_SUFFIX);
+        String delegate = wrapper.substring(0, wrapper.length() - ROUTED_METHOD_SUFFIX.length());
+        try {
+            return routed.controller().getMethod(delegate, routed.method().getParameterTypes());
+        } catch (NoSuchMethodException e) {
+            throw new AssertionError(
+                    routed.controller().getName() + " declares no `" + delegate + "` delegate", e);
+        }
+    }
+
+    /** The principal-typed parameter of a routed method. */
+    private static Class<?> principalParameterOf(Method routed) {
+        return Stream.of(routed.getParameterTypes())
+                .filter(ConsentManagerPrincipal.class::isAssignableFrom)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(routed + " declares no principal parameter"));
     }
 
     /** Renders the route a method is actually mapped to, as {@code "<method> <path>"}. */

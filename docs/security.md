@@ -57,12 +57,30 @@ under `https://consent-manager.example/problems/<slug>` and a `correlationId` fi
 
 ## `@Secured` convention
 
-Every operation's `security` requirement in the OpenAPI spec must match the `@Secured` annotation on
-its implementing controller method; `SpecSecurityConsistencyTest` enforces this and fails when an
-operation has no implementation. Public operations declare `security: []` and carry
-`@Secured(SecurityRule.IS_ANONYMOUS)` — currently only `/api-status`, implemented by
-`com.seamware.consentmanager.api.ApiStatusController`. Role-protected operations use
-`@Secured("USER" | "PARTICIPANT" | "CATALOG")`, matching `Role` constant names.
+Access is declared in the specification, not in Java, and a secured operation states it **twice**:
+
+- `security: [{bearerAuth: [ROLE, ...]}]` — the published contract a client reads.
+- `x-roles: [ROLE, ...]` — what the `java-micronaut-server` generator turns into
+  `@Secured("ROLE", ...)` on the routed method. The templates never read an operation's `security`
+  scopes, so `security:` alone emits `@Secured(SecurityRule.IS_AUTHENTICATED)`: a route open to
+  every authenticated caller, whatever roles the contract names.
+
+Role names match `Role` constants (`USER`, `PARTICIPANT`, `CATALOG`). Public operations declare
+`security: []` and no `x-roles`, and carry `@Secured(SecurityRule.IS_ANONYMOUS)`. A secured
+operation also declares `x-principal: <UserPrincipal | ParticipantPrincipal | CatalogPrincipal |
+ConsentManagerPrincipal>`, which `api/templates/server/controller.mustache` turns into the routed
+method's typed caller parameter; without it `PrincipalResolutionFilter` never runs its refusals for
+that route.
+
+Never annotate the concrete controller: the routed method lives on the generated abstract supertype
+and its rule is the one that governs. `SpecSecurityConsistencyTest` fails the build when `@Secured`
+and `x-roles` disagree, when `x-roles` and `security` disagree, when an operation has no
+implementation, when the concrete controller only inherits the generated delegate (whose body
+answers 501), when a secured operation declares no principal parameter or one whose type cannot
+hold a role it admits, and when a path item hides its operations behind a `$ref`.
+
+Implemented operations: `/api-status` (anonymous, `ApiStatusController`), `POST /users/register`
+and `GET /users/me` (`USER`, `UserController`).
 
 ## Spec layout
 

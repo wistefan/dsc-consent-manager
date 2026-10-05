@@ -4,12 +4,6 @@
 # simply absent from the representation. Declaring one nullable makes the
 # generator wrap it in JsonNullable, which is a request-side distinction between
 # "omitted" and "explicitly null" that no operation here needs.
-#
-# The service's representation of a natural person. It is deliberately a profile
-# and nothing more: no credential, bearer token, refresh token, client secret or
-# any other authentication material is ever part of it. Credentials live with the
-# identity provider that issued the caller's token, and this service stores none
-# (see docs/security.md).
 type: object
 description: >
   A registered natural person, identified across the dataspace by `identifier`.

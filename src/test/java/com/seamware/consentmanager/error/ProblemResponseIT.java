@@ -162,6 +162,25 @@ class ProblemResponseIT extends PostgresTestResource {
                 .doesNotContainKey("_links");
     }
 
+    /**
+     * A refusal carrying no message publishes no {@code detail} at all.
+     *
+     * <p>Serialization is configured {@code non-absent} rather than the default {@code non-empty},
+     * so empty strings and empty collections are published everywhere. This pins the half of that
+     * which problem details depend on: a null stays absent, so an unexplained refusal does not grow
+     * a {@code "detail": ""} field that reads as an explanation the service failed to produce.
+     */
+    @Test
+    @DisplayName("a refusal with nothing to explain omits detail rather than publishing it empty")
+    void omitsAnAbsentDetailRatherThanPublishingItEmpty() throws IOException {
+        HttpResponse<String> response = get(PROBE_PATH + "/refuse/silent");
+
+        assertThat(response.status().getCode()).isEqualTo(404);
+        assertThat(bodyOf(response))
+                .containsEntry("type", TYPE_PREFIX + "not-found")
+                .doesNotContainKey("detail");
+    }
+
     @Test
     @DisplayName("an unhandled defect is a 500 that discloses nothing about itself")
     void withholdsEverythingAboutAnUnexpectedFailure() throws IOException {
@@ -222,6 +241,7 @@ class ProblemResponseIT extends PostgresTestResource {
                 case "forbidden" -> new ForbiddenException("Only the data subject may do this.");
                 case "not-found" -> new NotFoundException("No user is registered under it.");
                 case "conflict" -> new ConflictException("Already linked to this participant.");
+                case "silent" -> new NotFoundException(null);
                 default -> new IllegalArgumentException(kind);
             };
         }
