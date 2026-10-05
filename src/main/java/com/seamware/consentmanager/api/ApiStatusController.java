@@ -2,6 +2,7 @@ package com.seamware.consentmanager.api;
 
 import com.seamware.consentmanager.api.generated.AbstractStatusController;
 import com.seamware.consentmanager.api.generated.model.ApiStatus;
+import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
 
 /**
@@ -40,12 +41,14 @@ public class ApiStatusController extends AbstractStatusController {
     private static final String STATUS_OK = "ok";
 
     /**
-     * Returns the API reachability indicator.
+     * Returns the API reachability indicator, always {@value #STATUS_OK} with a {@code 200}.
      *
-     * @return an {@link ApiStatus} whose {@code status} field is {@value #STATUS_OK}
+     * <p>The response is wrapped because the generator is configured {@code
+     * wrapInHttpResponse=true} for every operation, so that the ones which vary their success
+     * status can set it. This one does not vary.
      */
     @Override
-    public ApiStatus getApiStatus() {
-        return new ApiStatus(STATUS_OK);
+    public HttpResponse<ApiStatus> getApiStatus() {
+        return HttpResponse.ok(new ApiStatus(STATUS_OK));
     }
 }

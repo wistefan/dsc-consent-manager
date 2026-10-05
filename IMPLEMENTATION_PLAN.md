@@ -114,6 +114,22 @@ Facts established by the merged groundwork that every step below depends on:
    provisioning and `/users/register` still share the one code path. Under a race the inserting
    request reports `created = true` and the loser adopts the row with `created = false`, which is
    the correct answer for both.
+7. **How the generator is told about roles, principals and response status — settled in Step 3,
+   reused by every later step.** The stock `java-micronaut-server` templates read neither an
+   operation's `security` scopes nor anything about typed principals, so three build-level
+   decisions were made once and must not be relitigated per endpoint:
+   - `x-roles: [ROLE, ...]` on the operation is what becomes the routed method's `@Secured` rule;
+     `security:` alone yields `@Secured(IS_AUTHENTICATED)`, which admits every authenticated
+     caller. `SpecSecurityConsistencyTest` now fails the build when the two disagree, so every
+     secured operation repeats its roles in both places.
+   - `x-principal: <simple class name>` adds the typed caller parameter to the routed method. It is
+     served by `api/templates/server/controller.mustache`, an override of the one stock template
+     that could not express it; every other template and partial still resolves against the
+     generator's embedded set.
+   - `wrapInHttpResponse=true` is set generator-wide, so every handler returns `HttpResponse<T>`
+     and an operation that varies its success status (`201` vs `200` here, `204`, `207` later) can
+     set it. The generator has no per-operation switch, which is why this is global and why
+     `ApiStatusController` wraps a response it never varies.
 
 ## Steps
 

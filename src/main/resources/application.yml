@@ -17,6 +17,26 @@ micronaut:
         paths: classpath:static
         mapping: /static/**
 
+  serde:
+    serialization:
+      # Default is `non-empty`, which drops an empty collection from a response body
+      # entirely. Arrays the specification marks required - `User.participants`, say -
+      # must still be published as `[]` for a user linked to no participant, or the
+      # response contradicts its own schema. `non-absent` publishes them while still
+      # leaving out an attribute whose value is null, which is how every optional field
+      # under api/components/schemas is documented: unknown means absent, not null.
+      #
+      # Deliberately global, not narrowed per schema, and not to be narrowed back. The
+      # generator emits @Serdeable from the specification and offers no per-schema
+      # inclusion hook, so the alternatives were to make every required array
+      # non-empty by construction - which `User.participants` cannot be - or to keep a
+      # setting that silently contradicts the published schema. The side effect is
+      # accepted: an empty string or empty collection is now published everywhere
+      # rather than hidden, ProblemDetail included, where it is also the more honest
+      # answer. Nulls stay absent, which is what the problem details actually rely on
+      # (see ProblemResponseIT.omitsAnAbsentDetailRatherThanPublishingItEmpty).
+      inclusion: non-absent
+
   security:
     enabled: true
 
