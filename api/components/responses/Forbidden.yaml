@@ -3,9 +3,9 @@
 #
 # No operation references it yet: /api-status is declared `security: []` and must
 # therefore not advertise 401 or 403. Every secured operation added by a later
-# endpoint ticket must reference this response. That obligation is convention
-# until Step 6's AC 19 spec-vs-@Secured consistency test enforces it, which is
-# the place to add the check rather than leaving it to review.
+# endpoint ticket must reference this response, and SpecSecurityConsistencyTest
+# enforces that in both directions - a secured operation that omits the
+# reference fails the build, as does an anonymous one that advertises it.
 description: >
   The bearer token authenticated successfully but does not name a caller
   permitted to perform this operation. That covers a token that grants no role

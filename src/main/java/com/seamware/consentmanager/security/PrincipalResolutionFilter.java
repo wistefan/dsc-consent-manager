@@ -174,8 +174,8 @@ public class PrincipalResolutionFilter implements Ordered {
             throw forbidden(authentication, "no trusted provider claims to have issued it");
         }
         IdentityProviderConfiguration configuration = provider.get().configuration();
-        Set<Role> granted = claimMapper.mapRoles(claims, configuration);
-        Optional<Role> effective = Role.effective(granted, acceptedRoles(route));
+        Optional<Role> effective =
+                Role.effective(grantedRoles(authentication), acceptedRoles(route));
         if (effective.isEmpty()) {
             throw forbidden(authentication, "it grants no role this operation acts for");
         }
@@ -194,6 +194,22 @@ public class PrincipalResolutionFilter implements Ordered {
                                                     claims))
                             .subscribeOn(blocking);
         };
+    }
+
+    /**
+     * The roles the token granted, read back from the authorities {@link
+     * ConsentManagerTokenValidator} minted rather than re-derived from the raw claims.
+     *
+     * <p>Those authorities are {@link Role#name()} values and are also what {@code @Secured}
+     * matches on, so round-tripping them is what keeps authorization and identity from deriving the
+     * same fact twice and disagreeing.
+     */
+    private static Set<Role> grantedRoles(Authentication authentication) {
+        EnumSet<Role> granted = EnumSet.noneOf(Role.class);
+        for (String authority : authentication.getRoles()) {
+            Role.fromConfiguredName(authority).ifPresent(granted::add);
+        }
+        return granted;
     }
 
     /**

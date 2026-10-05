@@ -42,6 +42,13 @@ public enum Role {
      * <p>{@link #CATALOG} outranks {@link #PARTICIPANT} because a catalog token is a participant
      * token that additionally bears the catalog role, so the other order would leave no token able
      * to act as the catalog.
+     *
+     * <p>This order only ever decides a tie, and a tie means the operation did not say. An
+     * operation that accepts more than one role - including every
+     * {@code @Secured(IS_AUTHENTICATED)} route - therefore <strong>must not scope its response by
+     * principal type</strong>: a caller holding both {@code USER} and {@code PARTICIPANT} is handed
+     * the organisation here, and an operation whose data scope differs between the two has to name
+     * the single role it serves so the intersection decides instead of this list.
      */
     private static final List<Role> PRINCIPAL_PRECEDENCE = List.of(CATALOG, PARTICIPANT, USER);
 

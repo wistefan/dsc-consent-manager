@@ -303,6 +303,10 @@ public class ConsentManagerTokenValidator implements TokenValidator<HttpRequest<
      * operation needs is present is settled where the acting role is known - {@code
      * PrincipalResolutionFilter}, as a {@code 403}. A token with no mapped role has no
      * role-specific identifier to demand and is refused there too.
+     *
+     * <p>That moves the refusal of a multi-role token from the {@code 401} the ticket's pipeline
+     * describes to a {@code 403}; single-role tokens are unaffected. The deviation and its reasons
+     * are recorded in {@code docs/adr/0006-identifier-claim-is-required-of-the-acting-role.md}.
      */
     private boolean hasRequiredIdentifier(
             JWTClaimsSet claims, IdentityProviderConfiguration configuration, Set<Role> roles) {

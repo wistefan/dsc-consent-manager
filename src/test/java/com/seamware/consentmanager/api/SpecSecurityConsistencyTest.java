@@ -3,6 +3,7 @@ package com.seamware.consentmanager.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
 
+import com.seamware.consentmanager.security.ConsentManagerPrincipal;
 import com.seamware.consentmanager.security.Role;
 import io.micronaut.http.annotation.Controller;
 import io.micronaut.http.annotation.Delete;
@@ -92,13 +93,31 @@ class SpecSecurityConsistencyTest {
     /** The only authentication scheme name this service implements. */
     private static final String EXPECTED_SCHEME_NAME = "bearer";
 
-    /** One operation of the specification together with the access it declares. */
+    /** Status code every secured operation must document as a failed authentication. */
+    private static final String UNAUTHORIZED_STATUS = "401";
+
+    /** Status code every secured operation must document as a refused authorization. */
+    private static final String FORBIDDEN_STATUS = "403";
+
+    /** Shared response component a secured operation's {@code 401} must reference. */
+    private static final String UNAUTHORIZED_REF = "#/components/responses/Unauthorized";
+
+    /** Shared response component a secured operation's {@code 403} must reference. */
+    private static final String FORBIDDEN_REF = "#/components/responses/Forbidden";
+
+    /**
+     * One operation of the specification together with the access it declares.
+     *
+     * @param responseRefs {@code $ref} target per documented status code, for codes that are a bare
+     *     reference; a response written out inline contributes no entry
+     */
     record SpecOperation(
             String operationId,
             String httpMethod,
             String path,
             boolean anonymous,
-            List<String> schemes) {
+            List<String> schemes,
+            Map<String, String> responseRefs) {
 
         @Override
         public String toString() {
@@ -169,6 +188,54 @@ class SpecSecurityConsistencyTest {
     }
 
     /**
+     * Asserts that a secured operation takes its caller as a typed principal.
+     *
+     * <p>{@link com.seamware.consentmanager.security.PrincipalResolutionFilter} resolves - and so
+     * runs its "identifier claim present" and "participant is registered" refusals - only for a
+     * route that declares such a parameter. Without this assertion a secured route that injects
+     * {@code Authentication}, or only path variables, would skip both checks silently and be served
+     * on the strength of its {@code @Secured} authority alone.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("specOperations")
+    @DisplayName("every secured operation takes its caller as a typed principal")
+    void securedOperationBindsATypedPrincipal(SpecOperation operation) {
+        if (operation.anonymous()) {
+            return;
+        }
+        Method routed = routedMethodFor(operation);
+        assertThat(routed.getParameterTypes())
+                .as(
+                        "%s is secured, so %s must declare a %s parameter - that is what makes the"
+                                + " principal resolution filter run its refusals for this route",
+                        operation, routed, ConsentManagerPrincipal.class.getSimpleName())
+                .anyMatch(ConsentManagerPrincipal.class::isAssignableFrom);
+    }
+
+    /**
+     * Asserts that an operation documents exactly the failure responses its access implies: the
+     * shared {@code 401} and {@code 403} when it is secured, and neither when it is anonymous.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("specOperations")
+    @DisplayName("every secured operation references the shared 401 and 403 responses")
+    void securedOperationDocumentsTheSharedFailureResponses(SpecOperation operation) {
+        Map<String, String> refs = operation.responseRefs();
+        if (operation.anonymous()) {
+            assertThat(refs)
+                    .as(
+                            "%s declares `security: []`, so it must advertise neither failure",
+                            operation)
+                    .doesNotContainKeys(UNAUTHORIZED_STATUS, FORBIDDEN_STATUS);
+            return;
+        }
+        assertThat(refs)
+                .as("%s is secured, so it must reference the shared failure responses", operation)
+                .containsEntry(UNAUTHORIZED_STATUS, UNAUTHORIZED_REF)
+                .containsEntry(FORBIDDEN_STATUS, FORBIDDEN_REF);
+    }
+
+    /**
      * Asserts that every scheme the specification can require resolves - across {@code $ref}ed
      * component files - to the bearer-token scheme this service actually implements.
      *
@@ -222,7 +289,26 @@ class SpecSecurityConsistencyTest {
             schemes.addAll(asMap(requirement).keySet());
         }
         return new SpecOperation(
-                (String) operationId, httpMethod, path, effective.isEmpty(), List.copyOf(schemes));
+                (String) operationId,
+                httpMethod,
+                path,
+                effective.isEmpty(),
+                List.copyOf(schemes),
+                responseRefsOf(operation));
+    }
+
+    /** The {@code $ref} each documented status code resolves to, skipping inline responses. */
+    private static Map<String, String> responseRefsOf(Map<String, Object> operation) {
+        Map<String, String> refs = new LinkedHashMap<>();
+        asMap(operation.get("responses"))
+                .forEach(
+                        (status, response) -> {
+                            Object ref = asMap(response).get("$ref");
+                            if (ref instanceof String target) {
+                                refs.put(status, target);
+                            }
+                        });
+        return Map.copyOf(refs);
     }
 
     /** Finds the routed method implementing an operation, failing when nothing implements it. */
