@@ -5,6 +5,8 @@
 #   1. (Optional) Copy .env.sample to .env and adjust values if needed
 #   2. docker compose up -d
 #   3. Health check: curl http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health
+#      (management port, but still behind the server context path - see
+#       endpoints.all.port in application.yml and ManagementEndpointSecurityIT)
 #   4. API base:     http://localhost:8080/v1
 # =============================================================================
 
@@ -23,16 +25,47 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      keycloak:
+        # service_healthy, NOT service_started. Keycloak needs ~30-60s with --import-realm
+        # before /realms/consent-manager/.well-known/... answers, while the app container
+        # is up in a fraction of that. From step 3 on, losing that race is recoverable -
+        # discovery is retried with bounded backoff and readiness stays DOWN meanwhile -
+        # but waiting here means `docker compose up` reaches a usable stack directly
+        # instead of spending the first backoff windows rejecting every token.
+        condition: service_healthy
     env_file:
       - path: .env
         required: false
     environment:
       # Override DB_URL to point to the 'db' service within the Docker network
       DB_URL: jdbc:postgresql://db:5432/consent_manager
-      # Use dev environment for local development (relaxed security)
+      # Use dev environment for local development. Security is ENABLED here: dev points
+      # the trust list at the local Keycloak below and rejects every token it cannot
+      # verify. Only the `test` environment disables security.
       MICRONAUT_ENVIRONMENTS: dev
+      # Override the trust-list entry to reach Keycloak inside the Docker network.
+      #
+      # IDP_ISSUER is the value a token's `iss` claim is matched against, byte for byte,
+      # and is also compared against the `issuer` field of the discovery document.
+      # KC_HOSTNAME on the keycloak service below pins that claim to this exact URL,
+      # so a token obtained from the host (http://localhost:8180/...) still carries
+      # `iss: http://keycloak:8180/...` and is accepted here.
+      IDP_ISSUER: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager
+      IDP_DISCOVERY_URL: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager/.well-known/openid-configuration
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health || exit 1"]
+      # `endpoints.all.port` moves management endpoints onto their own port but
+      # does NOT take them out of `micronaut.server.context-path`, so the probe
+      # must carry ${API_PREFIX}. Without it the probe 404s and the container
+      # never reports healthy. Pinned by ManagementEndpointSecurityIT.
+      #
+      # `/health/readiness` rather than the aggregate `/health`, so this reports
+      # "can serve traffic" — it covers the datasource and the identity-provider
+      # registry, which is DOWN until OIDC discovery against keycloak succeeds.
+      # A restart policy must never act on this signal: restarting cannot fix an
+      # identity provider's outage. `restart: unless-stopped` below does not
+      # restart on unhealthy, so the container goes unhealthy, drains, and
+      # recovers on its own once discovery retries succeed.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health/readiness || exit 1"]
       interval: 15s
       timeout: 5s
       start_period: 45s
@@ -59,6 +92,70 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    networks:
+      - consent-manager-net
+
+  # ---------------------------------------------------------------------------
+  # Keycloak — local OpenID Connect provider
+  # ---------------------------------------------------------------------------
+  # Supplies the single trust-list entry configured in application-dev.yml so
+  # `docker compose up` has a real issuer to discover. `application-dev.yml` enables
+  # security, so this container is genuinely exercised: the app fetches the realm's
+  # discovery document, reads its jwks_uri and verifies bearer tokens against it.
+  # Development mode only: in-memory storage, plain HTTP, no production hardening.
+  #
+  # The `consent-manager` realm is imported at startup from
+  # docker/keycloak/consent-manager-realm.json: it defines the consent-user,
+  # consent-participant and consent-catalog roles, a `participant_id` claim mapper
+  # and an audience mapper for `consent-manager`, matching the trust-list entry in
+  # application-dev.yml. Test users (test-user / test-participant / test-catalog,
+  # password `test-password`) are included for manual probing.
+  #
+  # KC_HOSTNAME pins the issuer to the in-network URL so the `iss` claim is the same
+  # whichever side asks. Without it Keycloak derives the issuer from the request host
+  # and a token fetched from the host would carry `iss: http://localhost:8180/...`,
+  # which will not match the configured issuer once tokens are validated per provider.
+  # A developer fetching tokens from the host therefore uses
+  # http://localhost:${KEYCLOAK_PORT:-8180}/realms/consent-manager/protocol/openid-connect/token
+  # and receives a token whose `iss` is the keycloak:${KEYCLOAK_PORT:-8180} URL. To make
+  # the URLs inside the discovery document resolve from the host as well, add
+  # `127.0.0.1 keycloak` to /etc/hosts.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command:
+      - start-dev
+      - --http-port=${KEYCLOAK_PORT:-8180}
+      - --import-realm
+    ports:
+      - "${KEYCLOAK_PORT:-8180}:${KEYCLOAK_PORT:-8180}"
+    volumes:
+      - ./docker/keycloak/consent-manager-realm.json:/opt/keycloak/data/import/consent-manager-realm.json:ro
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Fixed issuer/frontend URL - see the note above.
+      KC_HOSTNAME: http://keycloak:${KEYCLOAK_PORT:-8180}
+      KC_HOSTNAME_STRICT: "false"
+      # Exposes /health/ready on the management port for the healthcheck below.
+      KC_HEALTH_ENABLED: "true"
+      # Pins the management port rather than relying on its default, so the port the
+      # healthcheck dials cannot drift from the one Keycloak listens on.
+      KC_HTTP_MANAGEMENT_PORT: ${KEYCLOAK_MANAGEMENT_PORT:-9000}
+    # The app depends on this being *healthy*, so the check has to mean "serving", not
+    # "process started". The image ships neither curl nor wget, so the readiness endpoint
+    # is polled over bash's /dev/tcp; `start-dev --import-realm` reaches ready well inside
+    # start_period + interval * retries.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/${KEYCLOAK_MANAGEMENT_PORT:-9000}; echo -e "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; grep -q ''"status": "UP"'' <&3'
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 20
     restart: unless-stopped
     networks:
       - consent-manager-net

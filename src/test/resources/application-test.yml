@@ -13,6 +13,14 @@ micronaut:
     # share the same root, simplifying test HTTP client usage.
     context-path: /
 
+    # Bind a random free port instead of application.yml's fixed 8080. Test classes run
+    # sequentially, but a fixed port makes every @MicronautTest fail with "Address already
+    # in use" whenever anything else on the machine holds 8080 - an orphaned JVM from an
+    # interrupted build, a locally running instance, a parallel CI job. Tests address the
+    # server through @Client("/"), which resolves the port at runtime, so nothing depends
+    # on its value.
+    port: -1
+
 # Datasource properties are injected at runtime by PostgresTestResource
 # (Testcontainers), so no static values are needed here.
 
@@ -42,3 +50,39 @@ logger:
     org.testcontainers: WARN
     com.github.dockerjava: WARN
     io.micronaut: WARN
+    # The dummy trust-list entry below points at a dead port on purpose, so discovery for it
+    # fails for the lifetime of every context that does not override it. Each failure is a
+    # connection refusal logged at ERROR with a stack trace, repeating on the backoff schedule,
+    # which would bury a real failure in a green build. Discovery behaviour itself is asserted in
+    # IdentityProviderDiscoveryTest, which configures reachable stubs and turns this logger back on
+    # in its own property source, so the one suite that needs the output has it.
+    com.seamware.consentmanager.security.IdentityProviderRegistry: 'OFF'
+
+# Dummy identity provider trust list.
+#
+# Required: the trust-list check runs unconditionally during context startup, so
+# without an entry here every @MicronautTest that starts a full context (such as
+# ApplicationSmokeIT) would fail regardless of `micronaut.security.enabled` above.
+#
+# The issuer and discovery URL point at a port nothing listens on. From step 3 on,
+# discovery for it fails in the background and the provider simply never becomes
+# usable; startup is unaffected. Tests that need a working provider supply their own
+# property source pointing at WireMock or Testcontainers Keycloak.
+#
+# This overrides the `primary` entry declared in application.yml rather than adding a
+# second provider: application.yml leaves `IDP_ISSUER`, `IDP_DISCOVERY_URL` and
+# `IDP_AUDIENCE` blank on purpose so a misconfigured deployment aborts at startup, so
+# every test context must fill those blanks in place. A differently-named entry here
+# would leave `primary` blank and fail validation for every full-context test.
+consent-manager:
+  identity-providers:
+    primary:
+      issuer: http://localhost:1/realms/test
+      discovery-url: http://localhost:1/realms/test/.well-known/openid-configuration
+      # Clock skew, claim paths and role mapping are inherited per leaf key from
+      # application.yml.
+      audience: consent-manager
+      # The dead port, the WireMock stubs in IdentityProviderDiscoveryTest and the
+      # Testcontainers Keycloak step 8 adds are all plain http, so every test context
+      # opts in here; production configuration leaves this false.
+      allow-insecure-transport: true

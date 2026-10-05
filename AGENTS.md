@@ -29,7 +29,8 @@ src/main/java/com/seamware/consentmanager/
   api/
     dto/                          # Hand-written DTOs if needed (future tickets)
   error/
-    ApiError.java                 # RFC 7807 Problem Details representation
+    # NOTE: errors use the generated api.generated.model.ProblemDetail (RFC 7807);
+    #       there is no hand-written ApiError class.
     BadRequestException.java      # 400
     NotFoundException.java        # 404
     ForbiddenException.java       # 403

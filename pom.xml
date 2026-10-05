@@ -131,17 +131,81 @@
             <scope>compile</scope>
         </dependency>
 
-        <!-- Micronaut Security JWT -->
+        <!--
+            Micronaut Security JWT.
+
+            Brings the security filter, the `@Secured` rules and the token-validation
+            SPI this service plugs into. It also owns JWK Set retrieval end to end:
+            `JwkSetFetcher` performs the request, `CacheableJwkSetFetcher` caches the
+            result in the Micronaut Cache named `jwks`, and `ReactiveJwksSignature`
+            matches the token's `kid` and verifies the signature. This service
+            configures those components per trusted provider and writes none of them;
+            the reasoning is recorded in
+            docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md.
+        -->
         <dependency>
             <groupId>io.micronaut.security</groupId>
             <artifactId>micronaut-security-jwt</artifactId>
             <scope>compile</scope>
         </dependency>
 
-        <!-- Micronaut Cache (Caffeine) -->
+        <!--
+            Micronaut Security OAuth2.
+
+            Supplies the OpenID Connect part: `OpenIdProviderMetadataFetcher` performs
+            the discovery request and `DefaultOpenIdProviderMetadata` models the
+            provider metadata document, so this service composes no discovery URL,
+            issues no discovery request and parses no discovery document of its own.
+            `IdentityProviderRegistry` drives that fetcher; the reasoning is recorded in
+            docs/adr/0003-use-micronaut-security-oauth2-for-openid-discovery.md.
+        -->
+        <dependency>
+            <groupId>io.micronaut.security</groupId>
+            <artifactId>micronaut-security-oauth2</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!--
+            Micronaut Cache (Caffeine).
+
+            Also the cache behind JWK Set retrieval: declaring `micronaut.caches.jwks`
+            is what switches `micronaut-security-jwt` to its cacheable fetcher, so this
+            is a functional dependency of token validation, not only of application
+            caching.
+        -->
         <dependency>
             <groupId>io.micronaut.cache</groupId>
             <artifactId>micronaut-cache-caffeine</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!--
+            Micronaut Reactor.
+
+            The reactive SPIs this service implements and consumes - `TokenValidator`,
+            `ReactiveSignatureConfiguration`, `HealthIndicator` - are declared in terms
+            of `Publisher`, and composing one without a reactive library means
+            hand-writing subscribers. Reactor is already on the runtime classpath as a
+            transitive dependency of the HTTP client; declaring it explicitly makes it
+            available at compile time and stops an unrelated upgrade from removing it.
+        -->
+        <dependency>
+            <groupId>io.micronaut.reactor</groupId>
+            <artifactId>micronaut-reactor</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!--
+            Nimbus JOSE + JWT.
+
+            Declared explicitly because this service names `SignedJWT`, `JWKSet` and
+            `JWK` in its own sources. It arrives transitively through
+            `micronaut-security-jwt` as well; relying on that would let a change in
+            that module's dependencies break this build with no change here.
+        -->
+        <dependency>
+            <groupId>com.nimbusds</groupId>
+            <artifactId>nimbus-jose-jwt</artifactId>
             <scope>compile</scope>
         </dependency>
 
@@ -173,7 +237,10 @@
             <scope>compile</scope>
         </dependency>
 
-        <!-- SnakeYAML: required for Micronaut to load application.yml config files -->
+        <!-- SnakeYAML: required for Micronaut to load application.yml config files, and
+             used by the specification tests to parse the served OpenAPI documents. A single
+             runtime-scoped declaration covers both: runtime scope is on the test classpath,
+             and it is the scope that packages the parser into the runnable jar. -->
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
@@ -381,10 +448,16 @@
                         <configuration>
                             <outputDirectory>${project.build.outputDirectory}/static</outputDirectory>
                             <resources>
+                                <!--
+                                    Copy the whole api/ tree (root spec plus the
+                                    components/ subdirectory) so the relative $refs in
+                                    openapi.yaml still resolve when Swagger UI loads the
+                                    spec from /static/openapi.yaml.
+                                -->
                                 <resource>
                                     <directory>${project.basedir}/api</directory>
                                     <includes>
-                                        <include>openapi.yaml</include>
+                                        <include>**/*.yaml</include>
                                     </includes>
                                 </resource>
                             </resources>

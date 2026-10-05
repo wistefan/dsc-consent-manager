@@ -1,0 +1,25 @@
+# Response: 403 Forbidden — referenced from api/openapi.yaml as
+# components.responses.Forbidden.
+#
+# No operation references it yet: /api-status is declared `security: []` and must
+# therefore not advertise 401 or 403. Every secured operation added by a later
+# endpoint ticket must reference this response, and SpecSecurityConsistencyTest
+# enforces that in both directions - a secured operation that omits the
+# reference fails the build, as does an anonymous one that advertises it.
+description: >
+  The bearer token authenticated successfully but does not name a caller
+  permitted to perform this operation. That covers a token that grants no role
+  permitted here, a token whose roles claim is absent or wholly unmappable (it
+  authenticates with zero roles), and a participant token whose identifier is
+  not registered with this service. The body deliberately does not say which of
+  these applies.
+content:
+  application/problem+json:
+    schema:
+      $ref: "../schemas/ProblemDetail.yaml"
+    example:
+      type: "https://consent-manager.example/problems/forbidden"
+      title: "Forbidden"
+      status: 403
+      detail: "The authenticated caller is not permitted to perform this operation."
+      instance: "/v1/consents"

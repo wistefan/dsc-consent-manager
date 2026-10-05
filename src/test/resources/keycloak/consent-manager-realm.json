@@ -1,0 +1,116 @@
+{
+  "realm": "consent-manager-test",
+  "enabled": true,
+  "sslRequired": "none",
+  "accessTokenLifespan": 300,
+  "roles": {
+    "realm": [
+      {
+        "name": "dataspace-user",
+        "description": "Raw provider role mapped to this service's USER role."
+      },
+      {
+        "name": "dataspace-participant",
+        "description": "Raw provider role mapped to this service's PARTICIPANT role."
+      },
+      {
+        "name": "dataspace-catalog",
+        "description": "Raw provider role mapped to this service's CATALOG role."
+      },
+      {
+        "name": "dataspace-outsider",
+        "description": "Deliberately absent from the service's role mapping, so a token carrying only this role authenticates with zero roles."
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "consent-manager-test-client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "test-client-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "consent-manager-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "consent-manager",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "participant-identifier",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "participant_id",
+            "claim.name": "participant_id",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "user-principal",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "user-principal@test.invalid",
+      "firstName": "User",
+      "lastName": "Principal",
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "test-password", "temporary": false }],
+      "realmRoles": ["dataspace-user"]
+    },
+    {
+      "username": "participant-principal",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "participant-principal@test.invalid",
+      "firstName": "Participant",
+      "lastName": "Principal",
+      "requiredActions": [],
+      "attributes": { "participant_id": ["urn:test:participant:keycloak"] },
+      "credentials": [{ "type": "password", "value": "test-password", "temporary": false }],
+      "realmRoles": ["dataspace-participant"]
+    },
+    {
+      "username": "catalog-principal",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "catalog-principal@test.invalid",
+      "firstName": "Catalog",
+      "lastName": "Principal",
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "test-password", "temporary": false }],
+      "realmRoles": ["dataspace-catalog"]
+    },
+    {
+      "username": "outsider-principal",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "outsider-principal@test.invalid",
+      "firstName": "Outsider",
+      "lastName": "Principal",
+      "requiredActions": [],
+      "credentials": [{ "type": "password", "value": "test-password", "temporary": false }],
+      "realmRoles": ["dataspace-outsider"]
+    }
+  ]
+}

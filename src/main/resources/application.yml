@@ -19,10 +19,98 @@ micronaut:
 
   security:
     enabled: true
-    # Allow unauthenticated access to management endpoints.
-    # TODO: With management endpoints on a dedicated port (see endpoints.all.port),
-    #   these patterns may need revisiting once the security layer is fully wired.
+
+    # This resource server accepts one credential: a bearer JWT from the trust list.
+    # Left at its default basic auth is ENABLED, which registers an authentication
+    # fetcher for `Authorization: Basic` and a challenge provider that answers every
+    # 401 with `Basic realm="<application name>"` alongside the Bearer challenge -
+    # inviting a client to retry with a credential this service has no way to verify,
+    # since it holds no passwords at all.
+    basic-auth:
+      enabled: false
+
+    # A resource server answers a refused request; it never sends the caller somewhere
+    # to log in. Left at its default this is ENABLED, and the module's authorization
+    # handler then turns any refusal whose `Accept` includes `text/html` into a 303 to
+    # `/` - a browser or a curl with a wildcard Accept would see a redirect instead of
+    # the 401 or 403 the specification promises, and the WWW-Authenticate challenge
+    # would be dropped with it. Switched off so the status is the same for every client.
+    redirect:
+      enabled: false
+
+    # Left at its default, stated here because it is a deliberate choice rather than
+    # an oversight: a request that matches no route is refused like any other
+    # unauthorised request instead of being answered 404. Answering 404 would let an
+    # anonymous caller map the URL space by watching which paths come back as missing.
+    #
+    # This flag is also the whole of "no implicit access". A MATCHED route that no
+    # security rule allowed is already rejected by `SecurityFilter` - the branch taken
+    # when every rule returns UNKNOWN errors with an `AuthorizationException` unless the
+    # route is absent AND this flag is false - so an endpoint that simply forgets
+    # `@Secured` is refused, not public. There is deliberately no catch-all
+    # `intercept-url-map` entry and no custom catch-all `SecurityRule`: either would
+    # only restate that. A `/**` entry would in fact be worse than nothing, because
+    # `ConfigurationInterceptUrlMapRule` is ordered ahead of `SecuredAnnotationRule` and
+    # the filter stops at the first rule that answers, so a `/**` entry granting
+    # `isAuthenticated()` would silence every `@Secured` role requirement.
+    # `PrincipalResolutionIT.routeWithoutSecuredAnnotationIsRefused` pins the behaviour.
+    reject-not-found: true
+
+    # Keep every route-publishing bean of micronaut-security-oauth2 switched off.
+    #
+    # That module is a compile dependency for its OpenID discovery components alone
+    # (docs/adr/0003-use-micronaut-security-oauth2-for-openid-discovery.md):
+    # `IdentityProviderRegistry` drives its `DefaultOpenIdProviderMetadataFetcher`
+    # directly. This service is a resource server - it issues no tokens and runs no
+    # OAuth2 client.
+    #
+    # The login, callback and logout routes stay unregistered on their own because no
+    # `micronaut.security.oauth2.clients.*` property is set. The RFC 9728
+    # protected-resource-metadata beans do NOT: they are gated on the two properties
+    # below and default to ENABLED, so both have to be switched off by hand.
+    #
+    #   enabled:          serves `/.well-known/oauth-protected-resource` anonymously,
+    #                     advertising this service's own base URL and, once
+    #                     authorization servers are listed, the very issuers the trust
+    #                     list deliberately does not disclose (US-ID-008).
+    #   www-authenticate: adds a `resource_metadata="<base-url>/.well-known/
+    #                     oauth-protected-resource"` parameter to every 401 challenge.
+    #                     It is a SEPARATE switch: the challenge provider is gated on
+    #                     this property alone and is NOT gated on `enabled`, so turning
+    #                     the controller off would otherwise leave every 401 pointing
+    #                     at a route that 404s while still leaking the base URL.
+    #
+    # This block must stay the only `micronaut.security.oauth2` key in this file: YAML
+    # takes the last of two duplicate keys, so a second block would silently drop
+    # whichever of these two lines it did not repeat.
+    #
+    # TokenSignatureEnforcementTest pins both: `exposesNoOAuth2Routes` for the routes and
+    # `challengeCarriesNoResourceMetadataParameter` for the challenge parameter.
+    oauth2:
+      protected-resource-metadata:
+        enabled: false
+        www-authenticate: false
+
+    # Allow unauthenticated access to the health endpoints.
+    #
+    # These patterns are matched against the request path with the server context
+    # path already stripped, so `/swagger-ui/**` still covers `${API_PREFIX}/swagger-ui/**`.
+    # ManagementEndpointSecurityIT pins that, including a control case that tightens
+    # the Swagger UI entry and requires the request to be challenged.
+    #
+    # Note that `endpoints.all.port` moves management endpoints to their own port but
+    # does NOT take them out of the context path: the health endpoint is reached at
+    # `http://<host>:${MANAGEMENT_PORT}${API_PREFIX}/health`. That is the URL the
+    # compose healthcheck and any orchestrator probe must use.
+    #
+    # Both `/health` and `/health/**` are listed: the bare path is what a liveness
+    # probe actually requests, and relying on `/**` to also match the empty remainder
+    # is an assumption about the matcher rather than something this file states.
     intercept-url-map:
+      - pattern: /health
+        http-method: GET
+        access:
+          - isAnonymous()
       - pattern: /health/**
         http-method: GET
         access:
@@ -43,14 +131,70 @@ micronaut:
         http-method: GET
         access:
           - isAuthenticated()
-    # JWT/JWKS configuration placeholder (detailed in TICKET-003)
+    # Micronaut's own JWT support stays ENABLED: the flag gates the `TokenValidator`
+    # SPI that `ConsentManagerTokenValidator` plugs into, along with the security filter
+    # and the bearer-token reader.
+    #
+    # There are deliberately no `claims-validators.issuer` / `.audience` entries: each
+    # holds a single global value, while every provider in the trust list has its own.
     token:
       jwt:
         enabled: true
-        signatures:
-          jwks:
-            keycloak:
-              url: ${IDP_JWKS_URL:`https://localhost/realms/master/protocol/openid-connect/certs`}
+
+        # A security control, not a tidy-up: `TokenAuthenticationFetcher` takes the first
+        # `Authentication` ANY registered `TokenValidator` returns, so the module's own
+        # validator would be a laxer path beside `ConsentManagerTokenValidator`. No
+        # verifier is a bean here, so only `UnsignedTokenRejector` keeps that validator
+        # from treating `alg: none` as validly signed - a latent hole, not an open one.
+        # Both guards are kept so undoing either alone cannot open it, and
+        # `TokenSignatureEnforcementTest` pins both. Reasoning in
+        # docs/adr/0005-own-token-validator-on-micronaut-security-jwt.md.
+        nimbus:
+          validator: false
+          reactive-validator: false
+
+  # ---------------------------------------------------------------------------
+  # JWK Set cache
+  # ---------------------------------------------------------------------------
+  # Declaring a cache named `jwks` is what switches `micronaut-security-jwt` from its
+  # built-in in-memory fetcher to `CacheableJwkSetFetcher`, so this block is not tuning -
+  # it selects the implementation. Keys are cached per (provider name, jwks_uri).
+  #
+  # `expire-after-write` is the only knob that matters here, and it sets both halves of
+  # the key-handling budget:
+  #
+  #   rotation latency   - the module has no refresh-on-miss path, so from the moment a
+  #                        provider starts signing with a newly published key until this
+  #                        cache expires, EVERY token signed by that key is rejected.
+  #                        Keycloak publishes the new key and starts signing with it at
+  #                        the same moment, so this window is a total authentication
+  #                        outage, not a degraded mode. No restart is needed to recover,
+  #                        it just takes up to one TTL (AC 13).
+  #   outbound request   - in steady state, with a REACHABLE provider, at most one JWK Set
+  #     rate               request per provider per TTL whatever the inbound traffic is. A
+  #                        flood of tokens bearing `kid` values no provider ever published
+  #                        costs no extra request at all, because nothing invalidates this
+  #                        cache on a miss (AC 14). Only a burst of concurrent FIRST-EVER
+  #                        verifications for one provider can exceed one load, and that is
+  #                        bounded by concurrency at that instant, not by traffic.
+  #
+  # This cache does NOT bound the request rate while a provider's key endpoint is failing.
+  # A failed fetch is never cached: the module's JWKS client turns an HTTP failure into an
+  # empty result and Micronaut Cache invalidates the key instead of storing it. Once the
+  # entry has expired with the endpoint down, every verification would issue its own
+  # request. That case is handled one layer up, in `IssuerSignatureVerifier`, which stops
+  # consulting a provider whose key set could not be read for a fixed cooldown - see
+  # `IssuerSignatureVerifier.KEY_SET_UNAVAILABLE_COOLDOWN`. Tokens from that provider are
+  # rejected for as long as its keys are unreadable, whichever layer answers.
+  #
+  # The two pull in opposite directions, and the trade is lopsided: a short lifetime costs
+  # one request per provider per minute, which no provider notices, while a long one buys
+  # that back with minutes of blanket 401s after every rotation. Hence 60s rather than the
+  # 5m first proposed. RAISING THIS VALUE BUYS ROTATION DOWNTIME - see
+  # docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md.
+  caches:
+    jwks:
+      expire-after-write: ${IDP_JWKS_CACHE_TTL:60s}
 
   metrics:
     enabled: true
@@ -82,15 +226,45 @@ flyway:
 
 endpoints:
   all:
-    # Serve management endpoints on a dedicated port, outside the API context path.
-    # This ensures health/metrics are reachable without the /v1 prefix.
+    # Serve management endpoints on a dedicated port so they can be exposed to an
+    # orchestrator without exposing the API port. The dedicated port does NOT take
+    # them out of `micronaut.server.context-path`: with a context path of /v1 the
+    # health endpoints are under http://<host>:${MANAGEMENT_PORT}/v1/health. The
+    # healthcheck in compose.yaml probes the readiness branch of that tree,
+    # .../v1/health/readiness, not the aggregate .../v1/health - the aggregate also
+    # folds in liveness, so an identity provider outage would restart the container
+    # instead of draining it. ManagementEndpointSecurityIT pins both paths.
     port: ${MANAGEMENT_PORT:9090}
   health:
     enabled: true
     sensitive: false
+    # Per-indicator detail — including which identity providers are configured and
+    # how far their discovery has got — is shown only to an authenticated caller.
+    # An anonymous probe sees the aggregate UP/DOWN and nothing else, so the
+    # readiness endpoint cannot be used to enumerate this deployment's trust list.
     details-visible: AUTHENTICATED
-    # Health indicators (DiskSpaceHealthIndicator, JdbcHealthIndicator) are
-    # auto-discovered from the classpath — no explicit enablement needed.
+    # Health indicators (DiskSpaceHealthIndicator, JdbcHealthIndicator,
+    # IdentityProviderHealthIndicator) are auto-discovered from the classpath — no
+    # explicit enablement needed.
+    #
+    # Micronaut serves three distinct routes off this one endpoint, and an
+    # orchestrator must use them for different purposes:
+    #
+    #   /health            — the aggregate: UP only when liveness AND readiness are UP.
+    #   /health/liveness   — "is the process alive?". No indicator here depends on an
+    #                        external system, so this stays UP through a database or
+    #                        identity-provider outage. This is the one a restart policy
+    #                        may act on; probing /health instead would restart the
+    #                        service over someone else's downtime.
+    #   /health/readiness  — "can this instance serve?". Covers the datasource and
+    #                        IdentityProviderHealthIndicator, so an instance whose
+    #                        identity providers are not yet discovered is drained
+    #                        rather than killed. This is the one a load balancer uses.
+    #
+    # compose.yaml's healthcheck probes /health/readiness, because a Compose
+    # dependency must wait for an instance that can actually serve; its restart
+    # policy deliberately does not act on that signal. ManagementEndpointSecurityIT
+    # pins where these routes resolve.
   metrics:
     enabled: true
     sensitive: true
@@ -116,3 +290,78 @@ tracing:
 consent-manager:
   url: ${CONSENT_MANAGER_URL:`http://localhost:8080`}
   contract-service-url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
+
+  # ---------------------------------------------------------------------------
+  # Identity provider trust list
+  # ---------------------------------------------------------------------------
+  # One entry per trusted OpenID Connect provider, keyed by name. Each entry is
+  # self-contained: the issuer, the discovery document URL, the audience this service
+  # expects, the clock skew, the claim paths and the role mapping. No `client-id` and no
+  # `client-secret` appear anywhere - this service is a resource server, runs no OAuth2
+  # flow and stores no credential.
+  #
+  # The JWK Set cache is deliberately NOT per provider. Fetching and caching the keys is
+  # done by `micronaut-security-jwt`, whose cache is a single Micronaut Cache named
+  # `jwks` shared by every provider (see `micronaut.caches.jwks` above and
+  # docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md). A
+  # per-provider lifetime is not expressible without reimplementing the cache, which is
+  # not worth a knob nobody has asked to turn.
+  #
+  # The trust list is read ONCE at startup and is immutable for the lifetime of the
+  # process: no runtime reload, no admin endpoint, no auto-registration. Adding,
+  # removing or re-pointing a provider requires a config change and a restart. Only the
+  # per-provider metadata discovered for that fixed set (the jwks_uri and the cached
+  # signing keys) changes afterwards, which is what lets a key rotation be picked up
+  # without a restart.
+  #
+  # Startup FAILS when the list is empty, an entry is malformed, two entries declare the
+  # same issuer, or an entry declares a key this service does not read. `IDP_ISSUER`,
+  # `IDP_DISCOVERY_URL` and `IDP_AUDIENCE` intentionally have no default, so a deployment
+  # that forgets to configure an IdP aborts at startup with a message naming the missing
+  # property rather than silently trusting something.
+  #
+  # Environment variables can only OVERRIDE values of a provider already declared here;
+  # they cannot ADD one. A name that appears only in an environment variable never
+  # becomes a configuration entry and is silently ignored - add the second provider to
+  # this file (or to a deployment overlay) and parameterise its values.
+  #
+  # Why the issuer, discovery and key caching are configured here rather than delegated
+  # to `micronaut.security.oauth2.clients.<name>.openid.issuer`:
+  #   docs/adr/0002-own-identity-provider-registry-on-nimbus.md
+  identity-providers:
+    primary:
+      issuer: ${IDP_ISSUER:}
+      # Fetched at startup to discover the provider's jwks_uri. Kept separate from the
+      # issuer because a provider may publish its metadata at a path that is not the
+      # issuer plus the well-known suffix; step 3 verifies that the document's `issuer`
+      # equals the value above and refuses the provider when they disagree.
+      discovery-url: ${IDP_DISCOVERY_URL:}
+      audience: ${IDP_AUDIENCE:}
+      # The discovery document is this service's trust anchor: it names the issuer that
+      # is verified byte-for-byte and the jwks_uri signing keys are fetched from. Over
+      # cleartext http anyone on the network path supplies both, so an http issuer or
+      # discovery-url aborts startup unless this is switched on. Leave it false outside
+      # local development; it is logged at WARN on every startup when it is not.
+      allow-insecure-transport: ${IDP_ALLOW_INSECURE_TRANSPORT:false}
+      # Tolerance applied to the exp, iat and nbf claims.
+      clock-skew: ${IDP_CLOCK_SKEW:30s}
+      # Claim names are per provider and are configured as a list of segments, so how a
+      # name is read is fixed here and never inferred from the token: a nested path is
+      # [realm_access, roles], while a top-level name that merely contains dots is one
+      # segment. A scalar is one segment; a comma-separated scalar is its segments,
+      # which is how an environment variable supplies a nested path.
+      claims:
+        # The user identifier keys the `users` row and is not scoped by issuer, so
+        # it must be unique across every provider in this trust list - the default,
+        # `sub`, is only unique within one. A deployment trusting more than one
+        # provider must point this at a claim that is unique across all of them.
+        user-identifier: ${IDP_CLAIM_USER_IDENTIFIER:sub}
+        participant-identifier: ${IDP_CLAIM_PARTICIPANT_IDENTIFIER:participant_id}
+        roles: ${IDP_CLAIM_ROLES:realm_access,roles}
+      # Maps this service's roles to the raw role strings the provider emits.
+      # Keys are written in lower case so that an override replaces the configured
+      # value instead of adding a second entry for the same role.
+      role-mapping:
+        user: ${IDP_ROLE_USER:consent-user}
+        participant: ${IDP_ROLE_PARTICIPANT:consent-participant}
+        catalog: ${IDP_ROLE_CATALOG:consent-catalog}
