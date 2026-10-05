@@ -36,6 +36,14 @@ securitySchemes:
       may be an email address, a DID, an arbitrary URI or a hash of an EUDI Wallet
       PID. The service compares them for equality and stores them verbatim.
 
+      **Identifiers must be unique across the whole trust list, not just within
+      one provider.** A user identifier is the key of the `users` row the identity
+      is provisioned to, and is not scoped by issuer: two providers emitting the
+      same identifier name the same user and share one set of consents. The
+      default claim, `sub`, is only guaranteed unique per issuer, so a deployment
+      trusting more than one provider must configure a claim that is unique across
+      all of them.
+
       **What "Required" means below.** The column states what a conforming
       identity provider must emit, which is what its operator configures against.
       It is not a statement of what the service refuses a token for. The one place

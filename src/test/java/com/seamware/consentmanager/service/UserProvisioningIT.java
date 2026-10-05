@@ -53,17 +53,10 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * End-to-end check of just-in-time user provisioning: that a {@code USER} token reaches a handler
- * with a row behind it, that the row is created once and only once however many requests race for
- * it, and that its display fields track the token without being rewritten on every request.
+ * End-to-end check of just-in-time provisioning against real PostgreSQL, where {@code
+ * uq_users_identifier} settles the race, and a WireMock provider signing the tokens.
  *
- * <p>Runs against a full context - real PostgreSQL, because the unique constraint is what makes the
- * concurrent case correct and an in-memory stand-in would not enforce it, and a WireMock identity
- * provider whose keys actually sign the tokens, because provisioning only happens for a token that
- * got through validation.
- *
- * <p>Not transactional: the server answers on its own connection, so a row written inside a test
- * transaction would be invisible to it and the rows it writes have to be cleaned up explicitly.
+ * <p>Not transactional, so the rows it commits are cleaned up explicitly.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Just-in-time user provisioning")
@@ -141,8 +134,6 @@ class UserProvisioningIT extends PostgresTestResource {
     /**
      * Points the trust list at the stub provider and switches security on, which {@code
      * application-test.yml} leaves off for every other test.
-     *
-     * @return the property overrides, on top of the Testcontainers datasource
      */
     @Override
     public Map<String, String> getProperties() {
@@ -171,7 +162,7 @@ class UserProvisioningIT extends PostgresTestResource {
                 identifier -> users.findByIdentifier(identifier).ifPresent(users::delete));
     }
 
-    /** Waits for discovery to resolve, without which no token would get as far as provisioning. */
+    /** Waits for discovery, without which no token would get as far as provisioning. */
     @BeforeEach
     void awaitDiscovery() {
         Await.until(
@@ -229,14 +220,7 @@ class UserProvisioningIT extends PostgresTestResource {
         assertThat(row(identifier).getCreatedAt()).isEqualTo(createdAt);
     }
 
-    /**
-     * A display claim that changed is written back, and the row keeps its identity while doing so.
-     *
-     * @param description what the token changed, for the test name
-     * @param email the {@code email} claim the second token carries
-     * @param givenName the {@code given_name} claim the second token carries
-     * @param familyName the {@code family_name} claim the second token carries
-     */
+    /** A display claim that changed is written back, and the row keeps its identity. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("changedProfileClaims")
     @DisplayName("a changed display claim is written back to the existing row")
@@ -258,7 +242,7 @@ class UserProvisioningIT extends PostgresTestResource {
         assertThat(row.getUpdatedAt()).isAfter(updatedAt);
     }
 
-    /** One changed claim per case, plus the case where the provider stops sending one. */
+    /** One changed display claim per case. */
     static Stream<Arguments> changedProfileClaims() {
         return Stream.of(
                 Arguments.of(
@@ -268,8 +252,25 @@ class UserProvisioningIT extends PostgresTestResource {
                         INITIAL_FAMILY_NAME),
                 Arguments.of(
                         "the given name changed", INITIAL_EMAIL, "Augusta", INITIAL_FAMILY_NAME),
-                Arguments.of("the family name changed", INITIAL_EMAIL, INITIAL_GIVEN_NAME, "King"),
-                Arguments.of("every display claim was dropped", null, null, null));
+                Arguments.of("the family name changed", INITIAL_EMAIL, INITIAL_GIVEN_NAME, "King"));
+    }
+
+    /** A lesser-scoped client must not wipe the fields a full-scoped one provisioned. */
+    @Test
+    @DisplayName("a dropped display claim leaves the stored value in place")
+    void droppedClaimsDoNotClearTheRow() {
+        String identifier = unknownIdentifier();
+        get(token(claims(identifier)));
+        Instant updatedAt = row(identifier).getUpdatedAt();
+
+        HttpResponse<String> bare = get(token(bareClaims(identifier)));
+
+        assertThat(bare.code()).isEqualTo(HttpStatus.OK.getCode());
+        User row = row(identifier);
+        assertThat(row.getEmail()).isEqualTo(INITIAL_EMAIL);
+        assertThat(row.getFirstName()).isEqualTo(INITIAL_GIVEN_NAME);
+        assertThat(row.getLastName()).isEqualTo(INITIAL_FAMILY_NAME);
+        assertThat(row.getUpdatedAt()).isEqualTo(updatedAt);
     }
 
     /** An unchanged claim set must not rewrite the row, which every request would otherwise do. */
@@ -286,13 +287,7 @@ class UserProvisioningIT extends PostgresTestResource {
         assertThat(row(identifier).getUpdatedAt()).isEqualTo(updatedAt);
     }
 
-    /**
-     * Requests racing for one brand-new identifier all succeed and all land on the same row.
-     *
-     * <p>This is the case the unique constraint exists for: without it the losers would either
-     * insert a duplicate or fail the request, and with a pre-check alone they would do so only
-     * occasionally, which is worse.
-     */
+    /** Requests racing for one brand-new identifier all succeed and all land on the same row. */
     @Test
     @DisplayName("concurrent first requests for one identifier leave exactly one row")
     void concurrentFirstRequestsProvisionOnce() throws Exception {
@@ -332,23 +327,14 @@ class UserProvisioningIT extends PostgresTestResource {
         assertThat(countRowsFor(identifier)).isOne();
     }
 
-    /**
-     * An identifier no row exists for, remembered so the row it provisions is cleaned up.
-     *
-     * @return the identifier
-     */
+    /** An identifier no row exists for, remembered so the row it provisions is cleaned up. */
     private String unknownIdentifier() {
         String identifier = "urn:test:user:" + UUID.randomUUID();
         provisioned.add(identifier);
         return identifier;
     }
 
-    /**
-     * Reads the row an identifier provisioned, failing the test when there is none.
-     *
-     * @param identifier the user identifier
-     * @return the row
-     */
+    /** Reads the row an identifier provisioned, failing the test when there is none. */
     private User row(String identifier) {
         Optional<User> row = users.findByIdentifier(identifier);
         assertThat(row).as("the row for %s", identifier).isPresent();
@@ -356,11 +342,8 @@ class UserProvisioningIT extends PostgresTestResource {
     }
 
     /**
-     * Counts the rows an identifier has, straight from the database rather than through the
-     * repository, so a duplicate the schema somehow allowed would be visible rather than throwing.
-     *
-     * @param identifier the user identifier
-     * @return how many rows carry it
+     * Counts an identifier's rows straight from the database rather than through the repository, so
+     * a duplicate the schema somehow allowed is visible rather than thrown.
      */
     private long countRowsFor(String identifier) {
         // The injected DataSource is Micronaut Data's contextual wrapper, which hands out a
@@ -379,12 +362,7 @@ class UserProvisioningIT extends PostgresTestResource {
         }
     }
 
-    /**
-     * Calls the probe with a bearer token.
-     *
-     * @param token the bearer token
-     * @return the response, refusals included
-     */
+    /** Calls the probe with a bearer token, returning refusals rather than throwing. */
     @SuppressWarnings("unchecked")
     private HttpResponse<String> get(String token) {
         try {
@@ -395,35 +373,17 @@ class UserProvisioningIT extends PostgresTestResource {
         }
     }
 
-    /**
-     * Signs a claim set with the stub provider's current key.
-     *
-     * @param claims the claims to sign
-     * @return the serialized bearer token
-     */
+    /** Signs a claim set with the stub provider's current key. */
     private static String token(JWTClaimsSet claims) {
         return IDENTITY_PROVIDER.signToken(IDENTITY_PROVIDER.initialKeyId(), claims).serialize();
     }
 
-    /**
-     * A user claim set carrying the initial profile claims.
-     *
-     * @param identifier the user identifier, which is the {@code sub} the trust list reads
-     * @return the claims
-     */
+    /** A user claim set carrying the initial profile claims. */
     private static JWTClaimsSet claims(String identifier) {
         return claims(identifier, INITIAL_EMAIL, INITIAL_GIVEN_NAME, INITIAL_FAMILY_NAME);
     }
 
-    /**
-     * A user claim set carrying the given profile claims, omitting each one that is {@code null}.
-     *
-     * @param identifier the user identifier
-     * @param email the {@code email} claim, or {@code null} to omit it
-     * @param givenName the {@code given_name} claim, or {@code null} to omit it
-     * @param familyName the {@code family_name} claim, or {@code null} to omit it
-     * @return the claims
-     */
+    /** A user claim set carrying the given profile claims, omitting each {@code null} one. */
     private static JWTClaimsSet claims(
             String identifier, String email, String givenName, String familyName) {
         JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder(bareClaims(identifier));
@@ -439,12 +399,7 @@ class UserProvisioningIT extends PostgresTestResource {
         return builder.build();
     }
 
-    /**
-     * A user claim set carrying nothing beyond what validation requires.
-     *
-     * @param identifier the user identifier
-     * @return the claims
-     */
+    /** A user claim set carrying nothing beyond what validation requires. */
     private static JWTClaimsSet bareClaims(String identifier) {
         Instant now = Instant.now();
         return new JWTClaimsSet.Builder()
@@ -457,20 +412,12 @@ class UserProvisioningIT extends PostgresTestResource {
                 .build();
     }
 
-    /**
-     * The route that exists only for this test, taking its caller from the token and nothing else.
-     */
+    /** The route that exists only for this test, taking its caller from the token alone. */
     @Requires(property = PROBE_ENABLED, value = "true")
     @Controller(PROBE_PATH)
     static class ProvisioningProbeController {
 
-        /**
-         * Renders the identifier of the row the caller was provisioned to, which is the whole point
-         * of the step: a handler sees a persisted user, not just claims.
-         *
-         * @param principal the resolved caller
-         * @return the row's primary key
-         */
+        /** Renders the primary key of the row the caller was provisioned to. */
         @Get
         @Secured("USER")
         String provisionedUser(UserPrincipal principal) {

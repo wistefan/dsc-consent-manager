@@ -21,8 +21,7 @@ import io.micronaut.core.annotation.Nullable;
  * @param name the {@code name} claim, or {@code null}
  * @param givenName the {@code given_name} claim, or {@code null}
  * @param familyName the {@code family_name} claim, or {@code null}
- * @param user the provisioned {@code users} row; never {@code null} on a principal a handler
- *     receives, and {@code null} only on the half-built value {@link #withUser} is applied to
+ * @param user the provisioned {@code users} row; {@code null} only before {@link #withUser}
  */
 public record UserPrincipal(
         String issuer,

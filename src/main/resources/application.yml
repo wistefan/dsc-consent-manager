@@ -351,6 +351,10 @@ consent-manager:
       # segment. A scalar is one segment; a comma-separated scalar is its segments,
       # which is how an environment variable supplies a nested path.
       claims:
+        # The user identifier keys the `users` row and is not scoped by issuer, so
+        # it must be unique across every provider in this trust list - the default,
+        # `sub`, is only unique within one. A deployment trusting more than one
+        # provider must point this at a claim that is unique across all of them.
         user-identifier: ${IDP_CLAIM_USER_IDENTIFIER:sub}
         participant-identifier: ${IDP_CLAIM_PARTICIPANT_IDENTIFIER:participant_id}
         roles: ${IDP_CLAIM_ROLES:realm_access,roles}

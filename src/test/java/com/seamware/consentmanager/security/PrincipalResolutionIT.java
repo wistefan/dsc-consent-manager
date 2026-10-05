@@ -201,8 +201,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
     }
 
     /**
-     * Removes the rows that outlive the test: the participant registered for it, and the user
-     * just-in-time provisioning created for every token minted with {@link #SUBJECT}.
+     * Removes the rows that outlive the test: the registered participant and the provisioned user.
      */
     @AfterAll
     void removeCommittedRows() {

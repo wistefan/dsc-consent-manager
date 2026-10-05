@@ -51,9 +51,8 @@ import reactor.core.scheduler.Schedulers;
  * PARTICIPANT} whose identifier is not registered - participants are created explicitly
  * (TICKET-005), never on the strength of a token.
  *
- * <p>A {@code USER} is the one identity a token does create: {@link UserProvisioningService} backs
- * the resolved identifier with a {@code users} row, so a {@link UserPrincipal} reaching a handler
- * always carries one.
+ * <p>A {@code USER} is the one identity a token does create: {@link UserProvisioningService} gives
+ * every {@link UserPrincipal} a persisted row.
  */
 @Singleton
 @ServerFilter(ServerFilter.MATCH_ALL_PATTERN)
@@ -101,9 +100,8 @@ public class PrincipalResolutionFilter implements Ordered {
      * @param claimMapper reads claims by those configured names
      * @param participants resolves a participant identifier to its registered row
      * @param provisioning backs a user identifier with the row the principal carries
-     * @param blockingExecutor carries the steps that block - the participant lookup and the user
-     *     provisioning, both over JDBC - off the event loop, so the requests that take no principal
-     *     pay no thread hop
+     * @param blockingExecutor carries the JDBC work off the event loop, so a request that takes no
+     *     principal pays no thread hop
      */
     public PrincipalResolutionFilter(
             IdentityProviderRegistry registry,
@@ -249,9 +247,8 @@ public class PrincipalResolutionFilter implements Ordered {
     }
 
     /**
-     * Builds a {@link UserPrincipal} carrying the row its identifier was provisioned to, so a
-     * handler never sees a user whose {@link UserPrincipal#user()} is {@code null}. Reads and may
-     * write the database, so it runs on {@link #blocking}.
+     * Builds a {@link UserPrincipal} carrying its provisioned row, so {@link UserPrincipal#user()}
+     * is never {@code null} at a handler. Touches the database, so it runs on {@link #blocking}.
      *
      * @throws AuthorizationException {@code 403} when the token carries no user identifier
      */
