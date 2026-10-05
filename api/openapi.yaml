@@ -154,6 +154,118 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /users/search:
+    post:
+      operationId: searchUsers
+      summary: Search registered users
+      description: >
+        Returns the registered users matching every criterion in the body, as
+        far as the caller is entitled to see them. A `PARTICIPANT` caller sees
+        only users linked to itself — a `participantIdentifier` naming another
+        participant narrows that result rather than widening it — while a
+        `CATALOG` caller reads across the dataspace. A body naming no criterion
+        at all is rejected with `400 Bad Request` rather than listing everybody.
+
+
+        Matching on `email` is exact but case-insensitive, and email is neither
+        unique nor authoritative in this service, so the result may name several
+        users. Matching on `identifier` is exact and case-sensitive, and is the
+        documented way to reach a user that `GET /users/{identifier}` cannot
+        address: one whose identifier contains `/`, or whose identifier is the
+        literal `me`.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [PARTICIPANT, CATALOG]
+      x-roles: [PARTICIPANT, CATALOG]
+      x-principal: ConsentManagerPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserSearch"
+      responses:
+        "200":
+          description: >
+            The matching users, sorted by identifier so the order is stable
+            between requests. Empty when nothing matches — a search that finds
+            nobody is not a `404`.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /users/{identifier}:
+    get:
+      operationId: getUser
+      summary: Look a user up by their global identifier
+      description: >
+        Returns the user the identifier names, provided the caller is entitled
+        to see them: a `PARTICIPANT` caller may read only users linked to
+        itself, a `CATALOG` caller reads across the dataspace.
+
+
+        A caller not entitled to the user receives `404 Not Found` with the same
+        body as for an identifier naming nobody at all, deliberately — a `403`
+        would confirm that the identifier names a registered user, which is
+        precisely what the caller is not entitled to learn.
+
+
+        `{identifier}` is the URL-encoded global user identifier. A path
+        variable never spans a `/`, and the container percent-decodes before
+        routing, so an identifier containing a slash is not addressable here
+        even when encoded; look it up through `POST /users/search` instead. The
+        literal identifier `me` is likewise unreachable, because `GET /users/me`
+        claims that path for the caller's own record.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [PARTICIPANT, CATALOG]
+      x-roles: [PARTICIPANT, CATALOG]
+      x-principal: ConsentManagerPrincipal
+      parameters:
+        - name: identifier
+          in: path
+          required: true
+          description: The URL-encoded global user identifier.
+          schema:
+            type: string
+          example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+      responses:
+        "200":
+          description: The user the identifier names.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -168,6 +280,9 @@ components:
 
     User:
       $ref: "./components/schemas/User.yaml"
+
+    UserSearch:
+      $ref: "./components/schemas/UserSearch.yaml"
 
   responses:
     # Shared error responses referenced by every secured operation. `/api-status`

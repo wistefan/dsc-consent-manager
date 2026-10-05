@@ -1,0 +1,35 @@
+# Schema: UserSearch — referenced from api/openapi.yaml as components.schemas.UserSearch.
+#
+# Every criterion is optional individually, but a body naming none is rejected
+# with 400: an unbounded listing of the dataspace's users is not an operation
+# this service offers.
+type: object
+description: >
+  Criteria for a user search. Criteria combine conjunctively — a body naming
+  both `email` and `participantIdentifier` matches only users satisfying both —
+  and a body naming none at all is rejected with `400 Bad Request`.
+properties:
+  identifier:
+    type: string
+    description: >
+      Exact, case-sensitive global user identifier. This is the escape hatch for
+      identifiers that `GET /users/{identifier}` cannot address: one containing
+      `/`, and the literal `me`, which the self route claims.
+    example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+  email:
+    type: string
+    format: email
+    description: >
+      Exact contact address, matched case-insensitively. Email is neither unique
+      nor authoritative here — several users may share an address, and the match
+      is on whatever was last written to the record rather than on a verified
+      one — so this criterion may return more than one user and must not be used
+      as an identity check.
+    example: "ada@example.org"
+  participantIdentifier:
+    type: string
+    description: >
+      Restrict the result to users linked to this participant. A `PARTICIPANT`
+      caller is confined to its own links regardless of what it names here, so
+      naming another participant narrows its result rather than widening it.
+    example: "urn:example:participant:clinic"

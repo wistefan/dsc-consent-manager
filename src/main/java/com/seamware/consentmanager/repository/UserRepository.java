@@ -4,6 +4,8 @@ import com.seamware.consentmanager.domain.User;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
 import io.micronaut.data.model.query.builder.sql.Dialect;
 import io.micronaut.data.repository.CrudRepository;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -25,15 +27,17 @@ public interface UserRepository extends CrudRepository<User, UUID> {
     Optional<User> findByIdentifier(String identifier);
 
     /**
-     * Finds a user by their email address, ignoring case.
+     * Every user holding the email address, matched case-insensitively against the partial index on
+     * {@code lower(email)}.
      *
-     * <p>This leverages the partial index on {@code lower(email)} in the database schema for
-     * efficient lookups.
-     *
-     * @param email the email address to search for (case-insensitive)
-     * @return an {@link Optional} containing the user if found, or empty if no match
+     * <p>Returns a list rather than an {@code Optional} because the schema deliberately permits
+     * several users to share an address - {@code idx_users_email_lower} is not unique - and a
+     * single-result finder would raise {@code NonUniqueResultException} the moment two do.
      */
-    Optional<User> findByEmailIgnoreCase(String email);
+    List<User> findAllByEmailIgnoreCase(String email);
+
+    /** Loads several users by primary key, so a link set resolves in one query. */
+    List<User> findByIdIn(Collection<UUID> ids);
 
     /**
      * Checks whether a user with the given external identifier exists.

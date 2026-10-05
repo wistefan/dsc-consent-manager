@@ -4,6 +4,7 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.domain.UserParticipant.UserParticipantId;
+import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
@@ -11,6 +12,8 @@ import com.seamware.consentmanager.security.UserPrincipal;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -22,7 +25,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Owns the {@code users} row and its participant links: just-in-time provisioning from a {@code
- * USER} token and the deterministic create-or-link registration rule. Blocks on JDBC.
+ * USER} token, the deterministic create-or-link registration rule, and the scoped reads behind the
+ * lookup and search operations. Blocks on JDBC.
  *
  * <p>Users only - participants are registered explicitly (TICKET-005).
  *
@@ -47,6 +51,12 @@ import org.slf4j.LoggerFactory;
 public class UserService {
 
     private static final Logger LOG = LoggerFactory.getLogger(UserService.class);
+
+    /**
+     * Why a search naming no criterion is refused; published to the caller as the problem detail.
+     */
+    private static final String EMPTY_SEARCH_DETAIL =
+            "A user search must name at least one of identifier, email or participantIdentifier.";
 
     private final UserRepository users;
 
@@ -96,6 +106,114 @@ public class UserService {
     /** The user a global identifier names, or empty when no such user is registered. */
     public Optional<User> findByIdentifier(String identifier) {
         return users.findByIdentifier(identifier);
+    }
+
+    /**
+     * The user an identifier names, as far as this caller may see it.
+     *
+     * <p>Empty for an identifier naming nobody and for a user outside the caller's scope alike, so
+     * the lookup route answers {@code 404} for both and never confirms that an identifier it may
+     * not read is registered.
+     */
+    public Optional<User> lookup(String identifier, CallerScope scope) {
+        return search(new UserSearchCriteria(identifier, null, null), scope).stream().findFirst();
+    }
+
+    /**
+     * The users matching every supplied criterion, confined to what the caller may read.
+     *
+     * <p>A {@code PARTICIPANT} caller's result is intersected with its own links whatever the
+     * criteria say, so a {@code participantIdentifier} naming somebody else only narrows it; a
+     * {@code CATALOG} caller reads across the dataspace. Criteria naming nobody is an empty list,
+     * but criteria naming <em>nothing</em> is a {@link BadRequestException} rather than a listing
+     * of every registered user.
+     */
+    public List<User> search(UserSearchCriteria criteria, CallerScope scope) {
+        if (criteria.isEmpty()) {
+            throw new BadRequestException(EMPTY_SEARCH_DETAIL);
+        }
+        Optional<List<UUID>> required = requiredParticipants(criteria, scope);
+        if (required.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> participantIds = required.get();
+        return candidates(criteria, participantIds).stream()
+                .filter(user -> matchesEmail(user, criteria.email()))
+                .filter(user -> isLinkedToAll(user, participantIds))
+                .sorted(Comparator.comparing(User::getIdentifier))
+                .toList();
+    }
+
+    /**
+     * Participants every match must be linked to, or empty when no user can possibly satisfy them.
+     *
+     * <p>The caller's own participant comes first so {@link #candidates} starts from its links when
+     * the criteria name no user attribute. An unregistered {@code participantIdentifier} has no
+     * links at all, which is an empty result rather than an error: whether that identifier exists
+     * is not something a search is entitled to reveal.
+     */
+    private Optional<List<UUID>> requiredParticipants(
+            UserSearchCriteria criteria, CallerScope scope) {
+        List<UUID> required = new ArrayList<>();
+        if (scope.participant() != null) {
+            required.add(scope.participant().getId());
+        }
+        if (criteria.participantIdentifier() != null) {
+            Optional<Participant> requested =
+                    participants.findByIdentifier(criteria.participantIdentifier());
+            if (requested.isEmpty()) {
+                return Optional.empty();
+            }
+            UUID id = requested.get().getId();
+            if (!required.contains(id)) {
+                required.add(id);
+            }
+        }
+        return Optional.of(required);
+    }
+
+    /**
+     * The rows the cheapest criterion narrows to, before the remaining criteria filter them.
+     *
+     * <p>Falling through to the links means the criteria named no user attribute, which - the empty
+     * set having already been rejected - leaves {@code participantIdentifier} as the only
+     * possibility and therefore guarantees {@code participantIds} is not empty.
+     */
+    private List<User> candidates(UserSearchCriteria criteria, List<UUID> participantIds) {
+        if (criteria.identifier() != null) {
+            return users.findByIdentifier(criteria.identifier()).map(List::of).orElseGet(List::of);
+        }
+        if (criteria.email() != null) {
+            return users.findAllByEmailIgnoreCase(criteria.email());
+        }
+        return usersLinkedTo(participantIds.get(0));
+    }
+
+    /** The users a participant is linked to, resolved in one query per table. */
+    private List<User> usersLinkedTo(UUID participantId) {
+        Set<UUID> userIds =
+                links.findByIdParticipantId(participantId).stream()
+                        .map(UserParticipant::getUserId)
+                        .collect(Collectors.toSet());
+        return userIds.isEmpty() ? List.of() : users.findByIdIn(userIds);
+    }
+
+    /** A null criterion matches every user; a supplied one matches exactly, ignoring case. */
+    private static boolean matchesEmail(User user, @Nullable String email) {
+        return email == null
+                || (user.getEmail() != null && user.getEmail().equalsIgnoreCase(email));
+    }
+
+    /** Whether the user is linked to every one of the participants the search requires. */
+    private boolean isLinkedToAll(User user, List<UUID> participantIds) {
+        if (participantIds.isEmpty()) {
+            return true;
+        }
+        Set<UUID> linked =
+                links.findByIdUserId(user.getId()).stream()
+                        .map(UserParticipant::getParticipantId)
+                        .collect(Collectors.toSet());
+        return linked.containsAll(participantIds);
     }
 
     /** The identifiers of the participants a user is linked to, sorted so responses are stable. */
