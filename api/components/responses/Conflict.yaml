@@ -5,10 +5,11 @@
 # later steps of this ticket do.
 description: >
   The request is well-formed but conflicts with the state the resource is
-  already in — for instance linking a user to a participant it is already linked
-  to. Registration itself is idempotent and does not produce this: registering an
-  identifier that already exists adopts the existing user rather than conflicting
-  with it.
+  already in — for instance unlinking a user from a participant while a consent
+  granted to that participant is still in force. Registration itself is
+  idempotent and never produces this: registering an identifier that already
+  exists adopts the existing user, and re-registering a user that is already
+  linked is reported as a no-op outcome with 200.
 content:
   application/problem+json:
     schema:
@@ -17,5 +18,5 @@ content:
       type: "https://consent-manager.example/problems/conflict"
       title: "Conflict"
       status: 409
-      detail: "The user is already linked to this participant."
-      instance: "/v1/participants/me/users"
+      detail: "The user has a granted consent with this participant; revoke it before unlinking."
+      instance: "/v1/participants/me/users/urn:example:user:42"

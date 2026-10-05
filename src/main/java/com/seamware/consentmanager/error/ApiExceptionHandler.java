@@ -23,15 +23,6 @@ public class ApiExceptionHandler
 
     private static final Logger LOG = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
-    /** Lowest status code that reports a fault on this side of the connection. */
-    private static final int LOWEST_SERVER_ERROR_STATUS = 500;
-
-    /**
-     * Stands in for the message of a server-side failure, which is logged rather than published.
-     */
-    private static final String SERVER_ERROR_DETAIL =
-            "An unexpected error occurred. Please try again later.";
-
     /**
      * Maps the exception to its declared status and body, publishing the message only for a client
      * error.
@@ -39,7 +30,8 @@ public class ApiExceptionHandler
     @Override
     public HttpResponse<ProblemDetail> handle(HttpRequest request, ApiException exception) {
         ProblemType problemType = exception.problemType();
-        boolean serverError = problemType.status().getCode() >= LOWEST_SERVER_ERROR_STATUS;
+        boolean serverError =
+                problemType.status().getCode() >= ProblemType.LOWEST_SERVER_ERROR_STATUS;
         if (serverError) {
             LOG.error(
                     "{} {} failed with {}: {}",
@@ -57,7 +49,7 @@ public class ApiExceptionHandler
                     exception.getMessage());
         }
 
-        String detail = serverError ? SERVER_ERROR_DETAIL : exception.getMessage();
+        String detail = serverError ? ProblemType.SERVER_ERROR_DETAIL : exception.getMessage();
         ProblemDetail problem = problemType.toProblemDetail(detail, request.getPath());
         return HttpResponse.<ProblemDetail>status(problemType.status())
                 .body(problem)

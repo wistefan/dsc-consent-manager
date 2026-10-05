@@ -120,6 +120,44 @@ class ProblemMappingTest {
                 .doesNotContain("10.0.0.7");
     }
 
+    /**
+     * Netty hands the raw request target through, so the path reaching a handler is not guaranteed
+     * to be a URI. Rendering must never fail on one.
+     */
+    @Nested
+    @DisplayName("request paths that are not URIs")
+    class RequestPaths {
+
+        /** A path already carrying percent-encoding, which must not be encoded a second time. */
+        private static final String ENCODED_PATH = "/v1/users/urn%3Aexample%3Auser%3A42";
+
+        static Stream<Arguments> paths() {
+            return Stream.of(
+                    Arguments.of("plain", REQUEST_PATH, REQUEST_PATH),
+                    Arguments.of("already percent-encoded", ENCODED_PATH, ENCODED_PATH),
+                    Arguments.of("non-ASCII", "/v1/users/Jos\u00e9", "/v1/users/Jos%C3%A9"),
+                    Arguments.of("curly braces", "/v1/users/{id}", "/v1/users/%7Bid%7D"),
+                    Arguments.of("pipe and caret", "/v1/users/a|b^c", "/v1/users/a%7Cb%5Ec"));
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @MethodSource("paths")
+        void escapesWhatIsNotAlreadyAUri(String name, String path, String expected) {
+            ProblemDetail problem = ProblemType.NOT_FOUND.toProblemDetail("No such user.", path);
+
+            assertThat(problem.getInstance()).isNotNull();
+            assertThat(problem.getInstance().toASCIIString()).isEqualTo(expected);
+        }
+
+        @Test
+        @DisplayName("a path that is no help at all simply loses the optional member")
+        void omitsAnInstanceItCannotRender() {
+            ProblemDetail problem = ProblemType.NOT_FOUND.toProblemDetail("No such user.", "  ");
+
+            assertThat(problem.getInstance()).isNull();
+        }
+    }
+
     /** Bean-validation failures are their own path: no {@link ApiException} is ever constructed. */
     @Nested
     @DisplayName("bean-validation failures")

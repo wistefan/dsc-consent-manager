@@ -8,6 +8,7 @@ import io.micronaut.context.annotation.Requires;
 import io.micronaut.core.type.Argument;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
+import io.micronaut.http.MediaType;
 import io.micronaut.http.annotation.Body;
 import io.micronaut.http.annotation.Controller;
 import io.micronaut.http.annotation.Get;
@@ -55,6 +56,15 @@ class ProblemResponseIT extends PostgresTestResource {
 
     /** Namespace every problem type URI is minted under. */
     private static final String TYPE_PREFIX = "https://consent-manager.example/problems/";
+
+    /**
+     * RFC 7807's "no semantics beyond the status", used for statuses this service mints no type
+     * for.
+     */
+    private static final String UNTYPED = "about:blank";
+
+    /** A body that is not JSON at all, so the request fails before any model is bound. */
+    private static final String MALFORMED_BODY = "{\"identifier\":";
 
     /** Message of the deliberate defect below; asserted absent from the 500 it produces. */
     private static final String DEFECT_MESSAGE = "jdbc:postgresql://db:5432 credentials rejected";
@@ -106,6 +116,52 @@ class ProblemResponseIT extends PostgresTestResource {
                 .doesNotContainKey("_links");
     }
 
+    /**
+     * One case per refusal the framework produces before any handler of this service is reached.
+     */
+    static Stream<Arguments> frameworkErrors() {
+        return Stream.of(
+                Arguments.of(
+                        "unroutable path",
+                        HttpRequest.GET(PROBE_PATH + "/no-such-route"),
+                        404,
+                        TYPE_PREFIX + "not-found"),
+                Arguments.of(
+                        "method the route does not accept",
+                        HttpRequest.POST(PROBE_PATH + "/defect", "{}")
+                                .contentType(MediaType.APPLICATION_JSON),
+                        405,
+                        UNTYPED),
+                Arguments.of(
+                        "malformed request body",
+                        HttpRequest.POST(PROBE_PATH + "/validate", MALFORMED_BODY)
+                                .contentType(MediaType.APPLICATION_JSON),
+                        400,
+                        TYPE_PREFIX + "bad-request"),
+                Arguments.of(
+                        "unsupported content type",
+                        HttpRequest.POST(PROBE_PATH + "/validate", "identifier=x")
+                                .contentType(MediaType.TEXT_PLAIN),
+                        415,
+                        UNTYPED));
+    }
+
+    @ParameterizedTest(name = "{0} -> {2}")
+    @MethodSource("frameworkErrors")
+    @DisplayName("a refusal the framework raised is a problem detail too")
+    void rendersFrameworkErrorsAsProblems(
+            String name, HttpRequest<?> request, int status, String type) throws IOException {
+        HttpResponse<String> response = exchange(request);
+
+        assertThat(response.status().getCode()).isEqualTo(status);
+        assertThat(response.getContentType().orElseThrow().toString()).isEqualTo(PROBLEM_JSON);
+        assertThat(bodyOf(response))
+                .containsEntry("type", type)
+                .containsEntry("status", status)
+                .doesNotContainKey("_embedded")
+                .doesNotContainKey("_links");
+    }
+
     @Test
     @DisplayName("an unhandled defect is a 500 that discloses nothing about itself")
     void withholdsEverythingAboutAnUnexpectedFailure() throws IOException {
@@ -113,6 +169,9 @@ class ProblemResponseIT extends PostgresTestResource {
 
         assertThat(response.status().getCode()).isEqualTo(500);
         assertThat(response.getContentType().orElseThrow().toString()).isEqualTo(PROBLEM_JSON);
+        assertThat(bodyOf(response))
+                .containsEntry("type", TYPE_PREFIX + "internal-server-error")
+                .containsEntry("title", "Internal Server Error");
         assertThat(response.body())
                 .doesNotContain(DEFECT_MESSAGE)
                 .doesNotContain("IllegalStateException")
