@@ -13,6 +13,14 @@ micronaut:
     # share the same root, simplifying test HTTP client usage.
     context-path: /
 
+    # Bind a random free port instead of application.yml's fixed 8080. Test classes run
+    # sequentially, but a fixed port makes every @MicronautTest fail with "Address already
+    # in use" whenever anything else on the machine holds 8080 - an orphaned JVM from an
+    # interrupted build, a locally running instance, a parallel CI job. Tests address the
+    # server through @Client("/"), which resolves the port at runtime, so nothing depends
+    # on its value.
+    port: -1
+
 # Datasource properties are injected at runtime by PostgresTestResource
 # (Testcontainers), so no static values are needed here.
 
