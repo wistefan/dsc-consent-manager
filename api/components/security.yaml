@@ -122,6 +122,33 @@ securitySchemes:
       | `PARTICIPANT` | A dataspace participant | May manage and read consent records relating to itself as a participant. |
       | `CATALOG` | The dataspace catalog service | May read consent state across the dataspace. |
 
+      ### Tokens granting more than one role
+
+      A token may grant several of these roles at once, and a catalog token
+      commonly does: the natural way to issue one is a service account that
+      holds both the participant role and the catalog role.
+
+      Authorization reads the **whole** set — an operation is permitted if any
+      granted role permits it. Which single identity the caller then acts as is
+      settled per operation: of the roles that operation accepts, the caller
+      acts as the one highest in the fixed precedence
+
+      `CATALOG` > `PARTICIPANT` > `USER`
+
+      and that precedence decides alone where the operation accepts any
+      authenticated caller. So a `USER` + `PARTICIPANT` token acts as the user
+      on a user-scoped operation and as the participant on a participant-scoped
+      one, and a `PARTICIPANT` + `CATALOG` token acts as the catalog wherever
+      both are accepted.
+
+      A token must carry the identifier claim of **at least one** role it
+      grants — a user identifier, a participant identifier, or, for `CATALOG`,
+      neither, since the catalog is identified by issuer and subject alone — and
+      is rejected with `401` if it carries none. The identifier the *acting*
+      role needs is required where the caller acts: a `USER` + `PARTICIPANT`
+      token with no participant identifier authenticates and may act as the
+      user, but receives `403` on a participant-scoped operation.
+
       ### Authentication versus authorization failures
 
       A request that fails **authentication** receives `401 Unauthorized`: the
@@ -133,4 +160,6 @@ securitySchemes:
       A request that authenticates successfully but lacks the role required by the
       operation receives `403 Forbidden`. A token whose roles claim is absent, or
       whose roles are all unmappable, authenticates with zero roles and therefore
-      also receives `403` on any secured operation.
+      also receives `403` on any secured operation, as does a participant token
+      whose identifier is not registered with this service. The `403` body does
+      not say which of these applies.

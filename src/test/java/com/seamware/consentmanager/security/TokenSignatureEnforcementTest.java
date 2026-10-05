@@ -308,6 +308,10 @@ class TokenSignatureEnforcementTest {
     /**
      * Builds a claim set, leaving every field not named by a parameter valid.
      *
+     * <p>The roles claim grants {@link Role#USER}, so what these cases exercise is a token the
+     * published contract would call complete: a refusal is then attributable to the one field the
+     * case varies, and not to a claim the fixture happened to leave out.
+     *
      * @param issuer value of the {@code iss} claim
      * @param audience value of the {@code aud} claim
      * @param expiresAt value of the {@code exp} claim
@@ -321,6 +325,9 @@ class TokenSignatureEnforcementTest {
                         .issuer(issuer)
                         .audience(audience)
                         .subject(SUBJECT)
+                        .claim(
+                                ROLES_CLAIM.getFirst(),
+                                Map.of(ROLES_CLAIM.get(1), List.of(USER_ROLE_VALUE)))
                         .issueTime(Date.from(Instant.now()))
                         .expirationTime(Date.from(expiresAt));
         if (notBefore != null) {
@@ -551,10 +558,13 @@ class TokenSignatureEnforcementTest {
             assertThat(statusFor(bypassedClient, unsignedToken()))
                     .as(
                             "without UnsignedTokenRejector the empty signature-configuration"
-                                    + " collection makes Micronaut treat a PlainJWT as validly signed."
-                                    + " If this ever returns 401, the bypass is closed by something"
-                                    + " else and the rejector's own assertions have stopped proving"
-                                    + " anything")
+                                    + " collection makes Micronaut treat a PlainJWT as validly"
+                                    + " signed, so the request authenticates and is served - which"
+                                    + " is the bypass this bean exists to close. The probe route"
+                                    + " declares no principal parameter, so PrincipalResolutionFilter"
+                                    + " never runs and cannot mask the bypass behind a 403. If this"
+                                    + " ever returns 401 the bypass is closed by something else and"
+                                    + " the rejector's own assertions have stopped proving anything")
                     .isEqualTo(HttpStatus.OK.getCode());
         }
     }

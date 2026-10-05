@@ -78,6 +78,15 @@ class ClaimMapperTest {
     /** A participant identifier value used wherever a well-formed string claim is needed. */
     private static final String PARTICIPANT_ID = "did:web:participant.example";
 
+    /** Standard OpenID Connect claim whose value is only ever read as a real boolean. */
+    private static final String EMAIL_VERIFIED_CLAIM = "email_verified";
+
+    /** The string an IDP emits when it serialises a boolean claim as text. */
+    private static final String STRINGIFIED_TRUE = "true";
+
+    /** The string an IDP emits when it serialises a boolean claim as a numeric flag. */
+    private static final String NUMERIC_TRUE = "1";
+
     private final ClaimMapper mapper = new ClaimMapper();
 
     /**
@@ -345,6 +354,66 @@ class ClaimMapperTest {
         assertThat(mapper.mapRoles(injected, provider()))
                 .as("a caller holding no realm role cannot grant itself one by claim name")
                 .isEmpty();
+    }
+
+    /**
+     * Cases for {@link ClaimMapper#isTrue(Map, List)}.
+     *
+     * <p>Only the boolean {@code true} may read as true. The stringified and numeric spellings are
+     * listed because they are what a provider that serialises claims loosely actually emits, and
+     * accepting either would let an unverified address pass for a verified one.
+     *
+     * @return description, the claims by name, configured claim-name segments, expected verdict
+     */
+    private static Stream<Arguments> booleanClaims() {
+        return Stream.of(
+                Arguments.of(
+                        "the boolean true",
+                        Map.of(EMAIL_VERIFIED_CLAIM, Boolean.TRUE),
+                        List.of(EMAIL_VERIFIED_CLAIM),
+                        true),
+                Arguments.of(
+                        "the boolean false",
+                        Map.of(EMAIL_VERIFIED_CLAIM, Boolean.FALSE),
+                        List.of(EMAIL_VERIFIED_CLAIM),
+                        false),
+                Arguments.of(
+                        "the string \"true\", which is never coerced",
+                        Map.of(EMAIL_VERIFIED_CLAIM, STRINGIFIED_TRUE),
+                        List.of(EMAIL_VERIFIED_CLAIM),
+                        false),
+                Arguments.of(
+                        "the string \"1\", which is never coerced either",
+                        Map.of(EMAIL_VERIFIED_CLAIM, NUMERIC_TRUE),
+                        List.of(EMAIL_VERIFIED_CLAIM),
+                        false),
+                Arguments.of(
+                        "the number 1",
+                        Map.of(EMAIL_VERIFIED_CLAIM, 1),
+                        List.of(EMAIL_VERIFIED_CLAIM),
+                        false),
+                Arguments.of(
+                        "a nested boolean true",
+                        Map.of(REALM_ACCESS_CLAIM, Map.of(EMAIL_VERIFIED_CLAIM, Boolean.TRUE)),
+                        List.of(REALM_ACCESS_CLAIM, EMAIL_VERIFIED_CLAIM),
+                        true),
+                Arguments.of(
+                        "an absent claim",
+                        Map.of(PARTICIPANT_CLAIM, PARTICIPANT_ID),
+                        List.of(EMAIL_VERIFIED_CLAIM),
+                        false),
+                Arguments.of("no claims at all", null, List.of(EMAIL_VERIFIED_CLAIM), false));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("booleanClaims")
+    @DisplayName("reads a boolean claim as true only when it holds the boolean true")
+    void readsBooleanClaims(
+            String description,
+            Map<String, Object> claims,
+            List<String> claimPath,
+            boolean expected) {
+        assertThat(mapper.isTrue(claims, claimPath)).as("%s", description).isEqualTo(expected);
     }
 
     /**

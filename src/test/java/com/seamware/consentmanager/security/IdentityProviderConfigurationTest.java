@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Stream;
 import org.assertj.core.api.AbstractThrowableAssert;
@@ -666,6 +667,87 @@ class IdentityProviderConfigurationTest {
         @DisplayName("returns empty for null")
         void rejectsNull() {
             assertThat(Role.fromConfiguredName(null)).isEqualTo(Optional.empty());
+        }
+    }
+
+    /**
+     * Pins the precedence by which a token granting several roles settles on one identity.
+     *
+     * <p>The order is published in {@code api/components/security.yaml} as part of the token
+     * contract, so it is a compatibility promise and not an implementation detail. The
+     * participant-plus-catalog case is the one a dataspace actually issues: a catalog token is a
+     * participant token that additionally bears the catalog role.
+     */
+    @Nested
+    @DisplayName("Role.effective")
+    class RolePrecedence {
+
+        /**
+         * Every granted role set and the identity it settles on where the operation accepts any
+         * authenticated caller.
+         *
+         * @return the granted roles and the expected effective role
+         */
+        static Stream<Arguments> grantedRoles() {
+            return Stream.of(
+                    Arguments.of(Set.of(Role.USER), Role.USER),
+                    Arguments.of(Set.of(Role.PARTICIPANT), Role.PARTICIPANT),
+                    Arguments.of(Set.of(Role.CATALOG), Role.CATALOG),
+                    Arguments.of(Set.of(Role.USER, Role.PARTICIPANT), Role.PARTICIPANT),
+                    Arguments.of(Set.of(Role.USER, Role.CATALOG), Role.CATALOG),
+                    Arguments.of(Set.of(Role.PARTICIPANT, Role.CATALOG), Role.CATALOG),
+                    Arguments.of(Set.of(Role.USER, Role.PARTICIPANT, Role.CATALOG), Role.CATALOG));
+        }
+
+        @ParameterizedTest(name = "{0} acts as {1}")
+        @MethodSource("grantedRoles")
+        @DisplayName("acts as the highest-precedence role the token grants")
+        void picksTheHighestPrecedenceRole(Set<Role> granted, Role expected) {
+            assertThat(Role.effective(granted, Set.of())).contains(expected);
+        }
+
+        /**
+         * What the same multi-role token acts as on operations scoped to different roles.
+         *
+         * @return the granted roles, the roles the operation accepts and the expected identity
+         */
+        static Stream<Arguments> scopedOperations() {
+            Set<Role> userAndParticipant = Set.of(Role.USER, Role.PARTICIPANT);
+            Set<Role> participantAndCatalog = Set.of(Role.PARTICIPANT, Role.CATALOG);
+            return Stream.of(
+                    Arguments.of(userAndParticipant, Set.of(Role.USER), Role.USER),
+                    Arguments.of(userAndParticipant, Set.of(Role.PARTICIPANT), Role.PARTICIPANT),
+                    Arguments.of(
+                            userAndParticipant,
+                            Set.of(Role.USER, Role.PARTICIPANT),
+                            Role.PARTICIPANT),
+                    Arguments.of(participantAndCatalog, Set.of(Role.PARTICIPANT), Role.PARTICIPANT),
+                    Arguments.of(participantAndCatalog, Set.of(Role.CATALOG), Role.CATALOG));
+        }
+
+        @ParameterizedTest(name = "{0} on an operation accepting {1} acts as {2}")
+        @MethodSource("scopedOperations")
+        @DisplayName("acts as a role the operation itself accepts")
+        void prefersARoleTheOperationAccepts(Set<Role> granted, Set<Role> accepted, Role expected) {
+            assertThat(Role.effective(granted, accepted)).contains(expected);
+        }
+
+        @Test
+        @DisplayName("returns empty when the token grants no role the operation accepts")
+        void returnsEmptyWhenNoGrantedRoleIsAccepted() {
+            assertThat(Role.effective(Set.of(Role.USER), Set.of(Role.CATALOG))).isEmpty();
+        }
+
+        @Test
+        @DisplayName("returns empty when the token grants no role at all")
+        void returnsEmptyWithoutAnyRole() {
+            assertThat(Role.effective(Set.of(), Set.of())).isEmpty();
+        }
+
+        @Test
+        @DisplayName("returns empty for null")
+        void returnsEmptyForNull() {
+            assertThat(Role.effective(null, Set.of())).isEqualTo(Optional.empty());
         }
     }
 
