@@ -3,6 +3,7 @@ package com.seamware.consentmanager.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
@@ -68,6 +69,9 @@ class UserServiceTest {
     /** Local identifier a later registration supplies instead. */
     private static final String CHANGED_LOCAL_IDENTIFIER = "customer-2";
 
+    /** A cap below the number of users the seeded directory matches, so truncation shows. */
+    private static final int SEARCH_CAP = 2;
+
     private static final String PARTICIPANT_ALPHA = "urn:test:participant:alpha";
 
     private static final String PARTICIPANT_BETA = "urn:test:participant:beta";
@@ -88,7 +92,10 @@ class UserServiceTest {
 
     private final StubParticipantRepository participants = new StubParticipantRepository();
 
-    private final UserService service = new UserService(users, links, participants);
+    private final ConsentManagerConfiguration.Users limits =
+            new ConsentManagerConfiguration.Users();
+
+    private final UserService service = new UserService(users, links, participants, limits);
 
     /** An identifier no row exists for is inserted from the claims, and reported as created. */
     @Test
@@ -431,6 +438,69 @@ class UserServiceTest {
                 .containsExactlyElementsOf(expected);
     }
 
+    /**
+     * Criteria combine conjunctively, which only a case naming two of them at once can prove.
+     *
+     * <p>{@code identifier} short-circuits the candidate query, so a regression that dropped the
+     * email filter afterwards would still satisfy every single-criterion case.
+     */
+    @ParameterizedTest(name = "{0} together with {1} finds {2}")
+    @MethodSource("conjunctiveSearches")
+    @DisplayName("criteria narrow one another rather than being taken in turn")
+    void criteriaCombineConjunctively(
+            @Nullable String identifier,
+            @Nullable String email,
+            @Nullable String participantIdentifier,
+            List<String> expected) {
+        Directory directory = directory();
+        UserSearchCriteria criteria =
+                new UserSearchCriteria(identifier, email, participantIdentifier);
+
+        assertThat(identifiers(service.search(criteria, Caller.ALPHA.scope(directory))))
+                .containsExactlyElementsOf(expected);
+    }
+
+    /** The cap is what keeps an unpaginated listing from serialising a whole user base. */
+    @Test
+    @DisplayName("a search returns at most the configured number of users, lowest identifier first")
+    void aSearchIsCappedAtTheConfiguredMaximum() {
+        directory();
+        limits.setSearchMaxResults(SEARCH_CAP);
+
+        assertThat(identifiers(service.search(byEmail(), CATALOG)))
+                .containsExactly(USER_ON_ALPHA, USER_ON_BOTH);
+    }
+
+    /**
+     * A participant learns about its own link and no other, so a search cannot be used to discover
+     * which competitors a data subject is also registered with.
+     */
+    @ParameterizedTest(name = "{0} reading the shared user sees {1}")
+    @MethodSource("disclosedLinks")
+    @DisplayName("the participant links a caller is told about are scoped to that caller")
+    void participantLinksAreScopedToTheCaller(Caller caller, List<String> expected) {
+        Directory directory = directory();
+        User onBoth = users.findByIdentifier(USER_ON_BOTH).orElseThrow();
+
+        assertThat(service.participantIdentifiersFor(onBoth, caller.scope(directory)))
+                .containsExactlyElementsOf(expected);
+    }
+
+    static Stream<Arguments> conjunctiveSearches() {
+        return Stream.of(
+                Arguments.of(USER_ON_ALPHA, STORED_EMAIL, null, List.of(USER_ON_ALPHA)),
+                Arguments.of(USER_ON_ALPHA, REGISTERED_EMAIL, null, List.of()),
+                Arguments.of(USER_ON_ALPHA, null, PARTICIPANT_BETA, List.of()),
+                Arguments.of(USER_ON_BOTH, STORED_EMAIL, PARTICIPANT_BETA, List.of(USER_ON_BOTH)),
+                Arguments.of(null, STORED_EMAIL, PARTICIPANT_BETA, List.of(USER_ON_BOTH)));
+    }
+
+    static Stream<Arguments> disclosedLinks() {
+        return Stream.of(
+                Arguments.of(Caller.ALPHA, List.of(PARTICIPANT_ALPHA)),
+                Arguments.of(Caller.CATALOG, List.of(PARTICIPANT_ALPHA, PARTICIPANT_BETA)));
+    }
+
     /** Whether an identifier names a registered participant is not a search's to reveal. */
     @Test
     @DisplayName("a search for an unregistered participant finds nobody rather than failing")
@@ -713,7 +783,7 @@ class UserServiceTest {
 
         @Override
         public boolean existsByIdUserIdAndIdParticipantId(UUID userId, UUID participantId) {
-            throw unsupported();
+            return rows().containsKey(new UserParticipantId(userId, participantId));
         }
 
         @Override

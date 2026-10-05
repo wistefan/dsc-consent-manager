@@ -173,6 +173,18 @@ paths:
         documented way to reach a user that `GET /users/{identifier}` cannot
         address: one whose identifier contains `/`, or whose identifier is the
         literal `me`.
+
+
+        The `participants` array of each returned user is scoped the same way the
+        result is: a `PARTICIPANT` caller sees only its own link, a `CATALOG`
+        caller sees every one. A participant does not learn which other
+        participants the user is affiliated with.
+
+
+        The result is capped at `consent-manager.users.search-max-results` users
+        (200 by default) and this operation is not paginated, so a result of
+        exactly that size may have been truncated and the caller should narrow
+        its criteria rather than treat it as the complete answer.
       tags:
         - Users
       security:
@@ -189,8 +201,8 @@ paths:
         "200":
           description: >
             The matching users, sorted by identifier so the order is stable
-            between requests. Empty when nothing matches — a search that finds
-            nobody is not a `404`.
+            between requests and truncation is deterministic. Empty when nothing
+            matches — a search that finds nobody is not a `404`.
           content:
             application/json:
               schema:
@@ -232,6 +244,12 @@ paths:
         even when encoded; look it up through `POST /users/search` instead. The
         literal identifier `me` is likewise unreachable, because `GET /users/me`
         claims that path for the caller's own record.
+
+
+        The `participants` array of the returned user is scoped to the caller: a
+        `PARTICIPANT` sees only its own link, a `CATALOG` caller sees every one.
+        A participant does not learn which other participants the user is
+        affiliated with.
       tags:
         - Users
       security:

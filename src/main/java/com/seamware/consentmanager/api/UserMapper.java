@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.api;
 
 import com.seamware.consentmanager.api.generated.model.User;
+import com.seamware.consentmanager.service.CallerScope;
 import com.seamware.consentmanager.service.UserService;
 import jakarta.inject.Singleton;
 import java.time.Instant;
@@ -24,9 +25,22 @@ public class UserMapper {
         this.users = users;
     }
 
-    /** The representation of a stored user, with its participant links resolved and sorted. */
+    /** The representation of a stored user, disclosing every participant link it has. */
     public User toRepresentation(com.seamware.consentmanager.domain.User stored) {
-        List<String> participants = users.participantIdentifiersFor(stored);
+        return toRepresentation(stored, users.participantIdentifiersFor(stored));
+    }
+
+    /**
+     * The representation a given caller may read, whose {@code participants} array is scoped: a
+     * {@code PARTICIPANT} is told about its own link only, a dataspace-wide caller about all.
+     */
+    public User toRepresentation(
+            com.seamware.consentmanager.domain.User stored, CallerScope scope) {
+        return toRepresentation(stored, users.participantIdentifiersFor(stored, scope));
+    }
+
+    private User toRepresentation(
+            com.seamware.consentmanager.domain.User stored, List<String> participants) {
         return new User(stored.getIdentifier(), participants)
                 .email(stored.getEmail())
                 .firstName(stored.getFirstName())

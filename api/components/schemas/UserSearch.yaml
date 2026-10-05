@@ -18,13 +18,21 @@ properties:
     example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
   email:
     type: string
-    format: email
     description: >
       Exact contact address, matched case-insensitively. Email is neither unique
       nor authoritative here — several users may share an address, and the match
       is on whatever was last written to the record rather than on a verified
       one — so this criterion may return more than one user and must not be used
       as an identity check.
+
+
+      Deliberately declared without `format: email`, and not to be given one: the
+      generator turns that format into `@Email` on the request model, which would
+      refuse the whole search with `400` for a criterion that is not RFC-valid.
+      A stored address need not be RFC-valid — it is whatever claim the user's
+      identity provider asserted — so validating the criterion would make exactly
+      those users unsearchable rather than merely unmatched. The criterion is an
+      opaque string compared against what is stored.
     example: "ada@example.org"
   participantIdentifier:
     type: string

@@ -57,12 +57,15 @@ public class UserController extends AbstractUsersController {
      * The user the identifier names, or {@code 404} when the caller may not read them.
      *
      * <p>An unscoped user is reported exactly as an absent one, deliberately: a {@code 403} here
-     * would confirm that the identifier names a registered user.
+     * would confirm that the identifier names a registered user. The {@code participants} array is
+     * scoped to the caller for the same reason the 404 is: a participant does not learn which
+     * others the user is affiliated with.
      */
     @Override
     public HttpResponse<User> getUser(ConsentManagerPrincipal principal, String identifier) {
-        return users.lookup(identifier, CallerScope.of(principal))
-                .map(mapper::toRepresentation)
+        CallerScope scope = CallerScope.of(principal);
+        return users.lookup(identifier, scope)
+                .map(user -> mapper.toRepresentation(user, scope))
                 .map(HttpResponse::ok)
                 .orElseThrow(() -> new NotFoundException(NOT_FOUND_DETAIL));
     }
@@ -71,9 +74,10 @@ public class UserController extends AbstractUsersController {
     @Override
     public HttpResponse<List<User>> searchUsers(
             ConsentManagerPrincipal principal, UserSearch criteria) {
+        CallerScope scope = CallerScope.of(principal);
         List<User> found =
-                users.search(toCriteria(criteria), CallerScope.of(principal)).stream()
-                        .map(mapper::toRepresentation)
+                users.search(toCriteria(criteria), scope).stream()
+                        .map(user -> mapper.toRepresentation(user, scope))
                         .toList();
         return HttpResponse.ok(found);
     }

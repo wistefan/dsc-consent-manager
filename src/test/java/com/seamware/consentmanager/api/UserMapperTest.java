@@ -3,6 +3,8 @@ package com.seamware.consentmanager.api;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.domain.User;
+import com.seamware.consentmanager.security.Role;
+import com.seamware.consentmanager.service.CallerScope;
 import com.seamware.consentmanager.service.UserService;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -23,13 +25,29 @@ class UserMapperTest {
 
     private static final Instant CREATED_AT = Instant.parse("2026-01-02T03:04:05Z");
 
+    /** The links a caller reading dataspace-wide is told about, for a user linked to two. */
+    private static final List<String> ALL_LINKS = List.of("urn:a", "urn:b");
+
+    /** What the same user's links narrow to for a participant caller: its own, never the other. */
+    private static final List<String> SCOPED_LINKS = List.of("urn:a");
+
     /** A stub rather than a mock: the project carries no mocking framework. */
     private static UserMapper mapperLinkedTo(List<String> participants) {
+        return mapperLinkedTo(participants, SCOPED_LINKS);
+    }
+
+    /** A stub whose two link reads answer differently, so which one the mapper used is visible. */
+    private static UserMapper mapperLinkedTo(List<String> all, List<String> scoped) {
         return new UserMapper(
-                new UserService(null, null, null) {
+                new UserService(null, null, null, null) {
                     @Override
                     public List<String> participantIdentifiersFor(User user) {
-                        return participants;
+                        return all;
+                    }
+
+                    @Override
+                    public List<String> participantIdentifiersFor(User user, CallerScope scope) {
+                        return scoped;
                     }
                 });
     }
@@ -84,12 +102,23 @@ class UserMapperTest {
     @Test
     @DisplayName("reports the participants the user is linked to")
     void reportsTheParticipantLinks() {
-        List<String> linked = List.of("urn:a", "urn:b");
-
         assertThat(
-                        mapperLinkedTo(linked)
+                        mapperLinkedTo(ALL_LINKS)
                                 .toRepresentation(storedUser(null, null, null))
                                 .getParticipants())
-                .isEqualTo(linked);
+                .isEqualTo(ALL_LINKS);
+    }
+
+    /** The scoped overload must not fall through to the unscoped read; that is the disclosure. */
+    @Test
+    @DisplayName("narrows the participants to what the reading caller may see")
+    void narrowsTheParticipantLinksToTheCaller() {
+        CallerScope scope = new CallerScope(Role.PARTICIPANT, null);
+
+        assertThat(
+                        mapperLinkedTo(ALL_LINKS, SCOPED_LINKS)
+                                .toRepresentation(storedUser(null, null, null), scope)
+                                .getParticipants())
+                .isEqualTo(SCOPED_LINKS);
     }
 }

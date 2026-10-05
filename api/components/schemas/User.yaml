@@ -39,6 +39,15 @@ properties:
       Identifiers of the participants this user is linked to, sorted so the
       representation is stable between requests. Empty when the user has
       registered with the service but not yet with any participant.
+
+
+      Scoped to the reader, never dataspace-wide for everybody: the user's own
+      record (`GET /users/me`) and a `CATALOG` caller see every link, while a
+      `PARTICIPANT` caller sees only its own. Which participants a user is
+      affiliated with is a more sensitive disclosure than whether the identifier
+      exists at all, and the lookup route already answers `404` rather than `403`
+      to withhold the latter — publishing the full list to one participant would
+      tell it that the data subject is also registered with its competitors.
     items:
       type: string
     example:

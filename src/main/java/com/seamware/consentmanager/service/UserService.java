@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.service;
 
+import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
@@ -64,13 +65,17 @@ public class UserService {
 
     private final ParticipantRepository participants;
 
+    private final ConsentManagerConfiguration.Users configuration;
+
     public UserService(
             UserRepository users,
             UserParticipantRepository links,
-            ParticipantRepository participants) {
+            ParticipantRepository participants,
+            ConsentManagerConfiguration.Users configuration) {
         this.users = users;
         this.links = links;
         this.participants = participants;
+        this.configuration = configuration;
     }
 
     /**
@@ -127,6 +132,11 @@ public class UserService {
      * {@code CATALOG} caller reads across the dataspace. Criteria naming nobody is an empty list,
      * but criteria naming <em>nothing</em> is a {@link BadRequestException} rather than a listing
      * of every registered user.
+     *
+     * <p>Sorted by identifier and then capped at {@code consent-manager.users.search-max-results},
+     * so an unbounded population cannot be serialised in one response and what the cap drops is the
+     * same set on every request. There is no pagination: a result of exactly the cap's size may be
+     * truncated, which the operation description tells the caller to answer by narrowing criteria.
      */
     public List<User> search(UserSearchCriteria criteria, CallerScope scope) {
         if (criteria.isEmpty()) {
@@ -137,10 +147,13 @@ public class UserService {
             return List.of();
         }
         List<UUID> participantIds = required.get();
-        return candidates(criteria, participantIds).stream()
+        Candidates candidates = candidates(criteria, participantIds);
+        List<UUID> unproven = candidates.unproven(participantIds);
+        return candidates.users().stream()
                 .filter(user -> matchesEmail(user, criteria.email()))
-                .filter(user -> isLinkedToAll(user, participantIds))
+                .filter(user -> isLinkedToAll(user, unproven))
                 .sorted(Comparator.comparing(User::getIdentifier))
+                .limit(configuration.getSearchMaxResults())
                 .toList();
     }
 
@@ -179,14 +192,32 @@ public class UserService {
      * set having already been rejected - leaves {@code participantIdentifier} as the only
      * possibility and therefore guarantees {@code participantIds} is not empty.
      */
-    private List<User> candidates(UserSearchCriteria criteria, List<UUID> participantIds) {
+    private Candidates candidates(UserSearchCriteria criteria, List<UUID> participantIds) {
         if (criteria.identifier() != null) {
-            return users.findByIdentifier(criteria.identifier()).map(List::of).orElseGet(List::of);
+            return new Candidates(
+                    users.findByIdentifier(criteria.identifier()).map(List::of).orElseGet(List::of),
+                    null);
         }
         if (criteria.email() != null) {
-            return users.findAllByEmailIgnoreCase(criteria.email());
+            return new Candidates(users.findAllByEmailIgnoreCase(criteria.email()), null);
         }
-        return usersLinkedTo(participantIds.get(0));
+        UUID from = participantIds.get(0);
+        return new Candidates(usersLinkedTo(from), from);
+    }
+
+    /**
+     * Candidate rows, plus the participant whose link set produced them.
+     *
+     * <p>That link needs no re-checking, which on the commonest participant path - a caller listing
+     * its own users - removes the link query {@link #isLinkedToAll} would otherwise issue for every
+     * single candidate.
+     */
+    private record Candidates(List<User> users, @Nullable UUID provenLink) {
+
+        /** The required links a candidate's provenance does not already establish. */
+        List<UUID> unproven(List<UUID> participantIds) {
+            return participantIds.stream().filter(id -> !id.equals(provenLink)).toList();
+        }
     }
 
     /** The users a participant is linked to, resolved in one query per table. */
@@ -204,19 +235,41 @@ public class UserService {
                 || (user.getEmail() != null && user.getEmail().equalsIgnoreCase(email));
     }
 
-    /** Whether the user is linked to every one of the participants the search requires. */
+    /**
+     * Whether the user is linked to every one of the participants the search still requires.
+     *
+     * <p>Asks the index one membership question per participant rather than materialising the
+     * user's whole link set: the list never holds more than the caller's own participant and the
+     * one the criteria name, and the commonest case has been emptied by {@link Candidates}.
+     */
     private boolean isLinkedToAll(User user, List<UUID> participantIds) {
-        if (participantIds.isEmpty()) {
-            return true;
-        }
-        Set<UUID> linked =
-                links.findByIdUserId(user.getId()).stream()
-                        .map(UserParticipant::getParticipantId)
-                        .collect(Collectors.toSet());
-        return linked.containsAll(participantIds);
+        return participantIds.stream()
+                .allMatch(id -> links.existsByIdUserIdAndIdParticipantId(user.getId(), id));
     }
 
-    /** The identifiers of the participants a user is linked to, sorted so responses are stable. */
+    /**
+     * The participant identifiers a caller may be told about, which is not always every one.
+     *
+     * <p>A {@code PARTICIPANT} is told about its own link and nothing else: which <em>other</em>
+     * participants a user is affiliated with is a more sensitive disclosure than whether the
+     * identifier exists at all, and the scoped reads already answer {@code 404} rather than {@code
+     * 403} to withhold the latter. A caller reading dataspace-wide sees the full list, as does the
+     * user's own record.
+     *
+     * <p>Costs one index probe rather than the whole link set for a participant caller, so a search
+     * returning many users does not materialise every one of their affiliations only to discard it.
+     */
+    public List<String> participantIdentifiersFor(User user, CallerScope scope) {
+        Participant caller = scope.participant();
+        if (caller == null) {
+            return participantIdentifiersFor(user);
+        }
+        return links.existsByIdUserIdAndIdParticipantId(user.getId(), caller.getId())
+                ? List.of(caller.getIdentifier())
+                : List.of();
+    }
+
+    /** Every participant a user is linked to, sorted so responses are stable. */
     public List<String> participantIdentifiersFor(User user) {
         Set<UUID> linked =
                 links.findByIdUserId(user.getId()).stream()

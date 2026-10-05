@@ -241,6 +241,32 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
                 .containsExactly(ME_USER);
     }
 
+    /**
+     * Which <em>other</em> participants a user is affiliated with is not a participant's to learn.
+     *
+     * <p>Asserted on both read routes and in both directions, so neither a widening of the mapper
+     * nor a narrowing of the catalog view can pass unnoticed.
+     */
+    @ParameterizedTest(name = "{0} reading the shared user is told about {1}")
+    @MethodSource("disclosedLinks")
+    @DisplayName("the participant links a caller is told about are scoped to that caller")
+    void participantLinksAreScopedToTheCaller(RealmPrincipal caller, List<String> expected)
+            throws IOException {
+        HttpResponse<String> looked = lookup(SHARED_USER, token(caller));
+        assertThat(looked.code()).isEqualTo(HttpStatus.OK.getCode());
+
+        assertThat(participantsOf(body(looked))).containsExactlyInAnyOrderElementsOf(expected);
+        assertThat(participantsOf(usersFound(Map.of("identifier", SHARED_USER), caller).get(0)))
+                .containsExactlyInAnyOrderElementsOf(expected);
+    }
+
+    static Stream<Arguments> disclosedLinks() {
+        return Stream.of(
+                Arguments.of(RealmPrincipal.PARTICIPANT, List.of(CALLER_PARTICIPANT)),
+                Arguments.of(
+                        RealmPrincipal.CATALOG, List.of(CALLER_PARTICIPANT, OTHER_PARTICIPANT)));
+    }
+
     private HttpResponse<String> lookup(String identifier, String token) {
         return exchange(HttpRequest.GET("/users/" + identifier), token);
     }
@@ -248,16 +274,25 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
     /** The identifiers a search returns, in the order the service published them. */
     private List<String> identifiersFound(Map<String, Object> criteria, RealmPrincipal caller)
             throws IOException {
+        return usersFound(criteria, caller).stream()
+                .map(found -> (String) found.get("identifier"))
+                .toList();
+    }
+
+    /** The whole user representations a search returns, for assertions beyond the identifier. */
+    private List<Map<String, Object>> usersFound(
+            Map<String, Object> criteria, RealmPrincipal caller) throws IOException {
         HttpResponse<String> response =
                 exchange(HttpRequest.POST(PATH_SEARCH, criteria), token(caller));
         assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
-        return json
-                .<List<Map<String, Object>>>readValue(
-                        response.body(),
-                        Argument.listOf(Argument.mapOf(String.class, Object.class)))
-                .stream()
-                .map(found -> (String) found.get("identifier"))
-                .toList();
+        return json.readValue(
+                response.body(), Argument.listOf(Argument.mapOf(String.class, Object.class)));
+    }
+
+    /** The {@code participants} array of a representation, as the caller received it. */
+    @SuppressWarnings("unchecked")
+    private static List<String> participantsOf(Map<String, Object> representation) {
+        return (List<String>) representation.get("participants");
     }
 
     private static String token(RealmPrincipal caller) {
