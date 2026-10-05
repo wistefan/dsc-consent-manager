@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.repository.ParticipantRepository;
+import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.OidcDiscoveryStub;
 import com.seamware.consentmanager.support.PostgresTestResource;
@@ -171,6 +172,8 @@ class PrincipalResolutionIT extends PostgresTestResource {
 
     @Inject ParticipantRepository participants;
 
+    @Inject UserRepository users;
+
     /**
      * Points the trust list at the stub provider and switches security on, which {@code
      * application-test.yml} leaves off for every other test.
@@ -197,10 +200,14 @@ class PrincipalResolutionIT extends PostgresTestResource {
         IDENTITY_PROVIDER.close();
     }
 
-    /** Removes the committed participant row, which outlives the test without this. */
+    /**
+     * Removes the rows that outlive the test: the participant registered for it, and the user
+     * just-in-time provisioning created for every token minted with {@link #SUBJECT}.
+     */
     @AfterAll
-    void removeRegisteredParticipant() {
+    void removeCommittedRows() {
         participants.findByIdentifier(REGISTERED_PARTICIPANT).ifPresent(participants::delete);
+        users.findByIdentifier(SUBJECT).ifPresent(users::delete);
     }
 
     /** Waits for discovery to resolve and makes sure the registered participant exists. */

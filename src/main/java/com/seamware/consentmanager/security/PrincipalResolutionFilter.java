@@ -2,6 +2,7 @@ package com.seamware.consentmanager.security;
 
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.repository.ParticipantRepository;
+import com.seamware.consentmanager.service.UserProvisioningService;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.core.order.Ordered;
 import io.micronaut.core.type.Argument;
@@ -41,13 +42,18 @@ import reactor.core.scheduler.Schedulers;
  * matters: an authenticated request may arrive at a route the specification declares {@code
  * security: []} - {@code /api-status}, {@code /health}, the Swagger assets - and resolving there
  * would let a token naming no usable caller turn a public reachability probe into a {@code 403}. It
- * also keeps the participant lookup off every request that would never read its result.
+ * also keeps the database work - the participant lookup and the user provisioning - off every
+ * request that would never read its result.
  *
  * <p>Everything this filter refuses is a {@code 403}, never a {@code 401}: the token authenticated,
  * it simply does not name a caller this service will act for. That covers a token granting no role
  * the route accepts, one missing the identifier claim its acting role requires, and a {@code
  * PARTICIPANT} whose identifier is not registered - participants are created explicitly
  * (TICKET-005), never on the strength of a token.
+ *
+ * <p>A {@code USER} is the one identity a token does create: {@link UserProvisioningService} backs
+ * the resolved identifier with a {@code users} row, so a {@link UserPrincipal} reaching a handler
+ * always carries one.
  */
 @Singleton
 @ServerFilter(ServerFilter.MATCH_ALL_PATTERN)
@@ -84,6 +90,8 @@ public class PrincipalResolutionFilter implements Ordered {
 
     private final ParticipantRepository participants;
 
+    private final UserProvisioningService provisioning;
+
     private final Scheduler blocking;
 
     /**
@@ -92,17 +100,21 @@ public class PrincipalResolutionFilter implements Ordered {
      * @param registry resolves the verified issuer back to the provider whose claim names apply
      * @param claimMapper reads claims by those configured names
      * @param participants resolves a participant identifier to its registered row
-     * @param blockingExecutor carries the one step that blocks - the participant lookup over JDBC -
-     *     off the event loop, so the requests that take no principal pay no thread hop
+     * @param provisioning backs a user identifier with the row the principal carries
+     * @param blockingExecutor carries the steps that block - the participant lookup and the user
+     *     provisioning, both over JDBC - off the event loop, so the requests that take no principal
+     *     pay no thread hop
      */
     public PrincipalResolutionFilter(
             IdentityProviderRegistry registry,
             ClaimMapper claimMapper,
             ParticipantRepository participants,
+            UserProvisioningService provisioning,
             @Named(TaskExecutors.BLOCKING) ExecutorService blockingExecutor) {
         this.registry = registry;
         this.claimMapper = claimMapper;
         this.participants = participants;
+        this.provisioning = provisioning;
         this.blocking = Schedulers.fromExecutorService(blockingExecutor);
     }
 
@@ -181,7 +193,16 @@ public class PrincipalResolutionFilter implements Ordered {
         }
         String subject = authentication.getName();
         return switch (effective.get()) {
-            case USER -> Mono.just(user(authentication, configuration, issuer, subject, claims));
+            case USER ->
+                    Mono.<ConsentManagerPrincipal>fromCallable(
+                                    () ->
+                                            user(
+                                                    authentication,
+                                                    configuration,
+                                                    issuer,
+                                                    subject,
+                                                    claims))
+                            .subscribeOn(blocking);
             case CATALOG -> Mono.just(new CatalogPrincipal(issuer, subject));
             case PARTICIPANT ->
                     Mono.<ConsentManagerPrincipal>fromCallable(
@@ -228,8 +249,9 @@ public class PrincipalResolutionFilter implements Ordered {
     }
 
     /**
-     * Builds a {@link UserPrincipal}. The {@link UserPrincipal#user()} row stays {@code null} here;
-     * just-in-time provisioning fills it.
+     * Builds a {@link UserPrincipal} carrying the row its identifier was provisioned to, so a
+     * handler never sees a user whose {@link UserPrincipal#user()} is {@code null}. Reads and may
+     * write the database, so it runs on {@link #blocking}.
      *
      * @throws AuthorizationException {@code 403} when the token carries no user identifier
      */
@@ -244,16 +266,18 @@ public class PrincipalResolutionFilter implements Ordered {
         if (identifier.isEmpty()) {
             throw forbidden(authentication, "it carries no user identifier claim");
         }
-        return new UserPrincipal(
-                issuer,
-                subject,
-                identifier.get(),
-                claimMapper.findString(claims, EMAIL_CLAIM).orElse(null),
-                claimMapper.isTrue(claims, EMAIL_VERIFIED_CLAIM),
-                claimMapper.findString(claims, NAME_CLAIM).orElse(null),
-                claimMapper.findString(claims, GIVEN_NAME_CLAIM).orElse(null),
-                claimMapper.findString(claims, FAMILY_NAME_CLAIM).orElse(null),
-                null);
+        UserPrincipal principal =
+                new UserPrincipal(
+                        issuer,
+                        subject,
+                        identifier.get(),
+                        claimMapper.findString(claims, EMAIL_CLAIM).orElse(null),
+                        claimMapper.isTrue(claims, EMAIL_VERIFIED_CLAIM),
+                        claimMapper.findString(claims, NAME_CLAIM).orElse(null),
+                        claimMapper.findString(claims, GIVEN_NAME_CLAIM).orElse(null),
+                        claimMapper.findString(claims, FAMILY_NAME_CLAIM).orElse(null),
+                        null);
+        return principal.withUser(provisioning.provision(principal));
     }
 
     /**
