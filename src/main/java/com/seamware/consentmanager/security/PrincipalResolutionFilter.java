@@ -2,6 +2,7 @@ package com.seamware.consentmanager.security;
 
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.repository.ParticipantRepository;
+import com.seamware.consentmanager.service.ProvisionedUser;
 import com.seamware.consentmanager.service.UserService;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.core.order.Ordered;
@@ -275,7 +276,8 @@ public class PrincipalResolutionFilter implements Ordered {
                         claimMapper.findString(claims, FAMILY_NAME_CLAIM).orElse(null),
                         null,
                         false);
-        return principal.withUser(userService.provisionFromToken(principal));
+        ProvisionedUser provisioned = userService.provisionFromToken(principal);
+        return principal.withUser(provisioned.user(), provisioned.created());
     }
 
     /**

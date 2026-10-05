@@ -1,7 +1,6 @@
 package com.seamware.consentmanager.security;
 
 import com.seamware.consentmanager.domain.User;
-import com.seamware.consentmanager.service.ProvisionedUser;
 import io.micronaut.core.annotation.Nullable;
 
 /**
@@ -46,12 +45,14 @@ public record UserPrincipal(
     }
 
     /**
-     * Returns a copy carrying the provisioned row and the create signal that produced it.
+     * Returns a copy carrying the provisioned row and whether this request's insert created it.
      *
      * <p>The signal is propagated rather than re-derived because provisioning runs in the filter: a
-     * handler that asked again would always see the row already there.
+     * handler that asked again would always see the row already there. It is passed as a plain
+     * boolean rather than as the service's own result type so that {@code security} keeps no
+     * dependency on {@code service}.
      */
-    public UserPrincipal withUser(ProvisionedUser provisioned) {
+    public UserPrincipal withUser(User provisioned, boolean created) {
         return new UserPrincipal(
                 issuer,
                 subject,
@@ -61,7 +62,7 @@ public record UserPrincipal(
                 name,
                 givenName,
                 familyName,
-                provisioned.user(),
-                provisioned.created());
+                provisioned,
+                created);
     }
 }

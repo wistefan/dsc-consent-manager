@@ -32,7 +32,16 @@ import org.slf4j.LoggerFactory;
  * transaction: inside one the violation aborts the transaction and the re-read fails with "current
  * transaction is aborted" instead. Each repository call is therefore its own transaction, and
  * {@link #registerForParticipant} is written to be safe when re-entered rather than atomic across
- * the two tables - the worst interleaving leaves a user with no link, which the next call repairs.
+ * the two tables.
+ *
+ * <p>The cost of that is an orphan: <em>any</em> failure of the link insert - not only a lost race,
+ * but a connection loss, a timeout or a deleted participant - leaves behind the {@code users} row
+ * the same call just created, and propagates the exception. Re-entering repairs the link, but
+ * because attributes are write-on-create the orphan permanently carries the first caller's {@code
+ * email}, {@code firstName} and {@code lastName}, which every later participant - and the user's
+ * own identity provider, for any claim it does not assert - then inherits. The retry also reports
+ * {@link RegistrationOutcome#LINKED} rather than {@code CREATED}, so the caller that in fact
+ * created the record never learns it did.
  */
 @Singleton
 public class UserService {
