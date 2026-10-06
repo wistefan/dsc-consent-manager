@@ -125,6 +125,13 @@ public class UserService {
      */
     private static final String ERASED_IDENTIFIER_PREFIX = "urn:consent-manager:erased:";
 
+    /**
+     * Statuses an erasure terminates rather than revokes: offers that were never answered and now
+     * never can be, because the person they were put to is gone.
+     */
+    private static final Set<ConsentStatus> UNANSWERED_STATUSES =
+            Set.of(ConsentStatus.PENDING, ConsentStatus.DRAFT);
+
     /** Attributed to the service rather than to a person, who no longer exists by then. */
     private static final String ERASURE_ACTOR = "consent-manager";
 
@@ -484,50 +491,115 @@ public class UserService {
     /**
      * Erases the data subject and reports what that cost, in one all-or-nothing transaction.
      *
-     * <p>Every {@code GRANTED} consent is revoked with a {@code CONSENT_REVOKED} event appended,
-     * every participant link is removed, the display attributes are cleared, and the global
-     * identifier is replaced by a fresh opaque pseudonym. The consent and event rows themselves
-     * survive: they are the evidence of what was authorised while it was authorised, which is why
-     * {@code consents.user_id} is {@code ON DELETE RESTRICT}. What dies is the link between those
-     * rows and the person.
+     * <p>Every consent still open is closed - {@code GRANTED} ones are revoked, the unanswered
+     * {@code PENDING} and {@code DRAFT} ones are terminated - each with the matching event appended
+     * to its trail, and every participant link is removed. The {@code users} row then goes one of
+     * two ways. A row no consent refers to is deleted outright: nothing is being retained that
+     * would need it, and leaving a renamed husk behind would accumulate rows no later call can ever
+     * remove. A row consents still name survives with its display attributes cleared and its global
+     * identifier replaced by a fresh opaque pseudonym, because those consents are the evidence of
+     * what was authorised while it was authorised and {@code consents.user_id} is {@code ON DELETE
+     * RESTRICT}. Either way what dies is the tie between the records and the person.
      *
      * <p>{@code @Transactional} is right here and nowhere else in this class. Erasure must be
      * atomic - a half-erased subject is worse than an un-erased one - and unlike the registration
      * writes it contains no insert-and-catch to recover from: the pseudonym is a fresh UUIDv7 that
      * will not collide, so no constraint violation is expected to be caught inside the transaction.
      *
-     * <p>The returned {@link User} instance is mutated in place; callers holding the pre-erasure
-     * row see the erased state afterwards.
+     * <p>The {@code user} argument is mutated in place when the record is pseudonymised, so a
+     * caller holding the pre-erasure row - the request's own {@code UserPrincipal} - sees the
+     * erased state afterwards.
      */
     @Transactional
     public ErasureResult erase(User user) {
         UUID userId = user.getId();
-        List<Consent> granted = consents.findByUserIdAndStatus(userId, ConsentStatus.GRANTED);
-        for (Consent consent : granted) {
-            consent.updateStatus(ConsentStatus.REVOKED);
-            consents.update(consent);
-            consentEvents.save(
-                    new ConsentEvent(
-                            consent.getId(),
-                            ConsentEventState.CONSENT_REVOKED,
-                            ERASURE_ACTOR,
-                            Map.of(ERASURE_DETAIL_KEY, ERASURE_DETAIL_REASON)));
-        }
+        int revoked =
+                close(
+                        userId,
+                        Set.of(ConsentStatus.GRANTED),
+                        ConsentStatus.REVOKED,
+                        ConsentEventState.CONSENT_REVOKED);
+        int terminated =
+                close(
+                        userId,
+                        UNANSWERED_STATUSES,
+                        ConsentStatus.TERMINATED,
+                        ConsentEventState.CONSENT_TERMINATED);
         long linksRemoved = links.deleteByIdUserId(userId);
+        String pseudonym = pseudonymiseOrDelete(user);
 
+        LOG.info(
+                "Erased user {}: revoked {}, terminated {}, unlinked {}, record {}",
+                userId,
+                revoked,
+                terminated,
+                linksRemoved,
+                pseudonym == null ? "deleted" : "pseudonymised");
+        return new ErasureResult(pseudonym, revoked, terminated, Math.toIntExact(linksRemoved));
+    }
+
+    /**
+     * Moves every consent of the user in {@code from} to {@code to}, appending {@code event} to
+     * each trail, and reports how many moved.
+     *
+     * <p>Batched rather than updated row by row: an erasure costs two statements however long the
+     * subject has been a member.
+     */
+    private int close(
+            UUID userId, Set<ConsentStatus> from, ConsentStatus to, ConsentEventState event) {
+        List<Consent> closed =
+                consents.findByUserIdAndStatusIn(userId, from).stream()
+                        .map(consent -> withStatus(consent, to))
+                        .toList();
+        if (closed.isEmpty()) {
+            return 0;
+        }
+        consents.updateAll(closed);
+        consentEvents.saveAll(
+                closed.stream().map(consent -> erasureEvent(consent, event)).toList());
+        return closed.size();
+    }
+
+    /** The same consent, moved to the given status. */
+    private static Consent withStatus(Consent consent, ConsentStatus status) {
+        consent.updateStatus(status);
+        return consent;
+    }
+
+    /**
+     * The trail entry saying an erasure closed this consent, naming the service rather than one.
+     */
+    private static ConsentEvent erasureEvent(Consent consent, ConsentEventState state) {
+        return new ConsentEvent(
+                consent.getId(),
+                state,
+                ERASURE_ACTOR,
+                Map.of(ERASURE_DETAIL_KEY, ERASURE_DETAIL_REASON));
+    }
+
+    /**
+     * Deletes the record, or pseudonymises it and returns the pseudonym when consents still name
+     * it.
+     *
+     * <p>Deleting is the default because it is the more complete erasure; the row survives only to
+     * satisfy the {@code ON DELETE RESTRICT} that protects the retained audit trail. Keeping one
+     * regardless would be unbounded: the route's own authentication registers an unknown subject
+     * before the handler runs, so a token replayed against it would mint a consent-free husk per
+     * request, and nothing in this service ever deletes those.
+     */
+    @Nullable
+    private String pseudonymiseOrDelete(User user) {
+        if (!consents.existsByUserId(user.getId())) {
+            users.delete(user);
+            return null;
+        }
         String pseudonym = ERASED_IDENTIFIER_PREFIX + UuidGenerator.uuidV7();
         user.setIdentifier(pseudonym);
         user.setEmail(null);
         user.setFirstName(null);
         user.setLastName(null);
         users.update(user);
-
-        LOG.info(
-                "Erased user {}: revoked {} consent(s), removed {} link(s)",
-                userId,
-                granted.size(),
-                linksRemoved);
-        return new ErasureResult(pseudonym, granted.size(), Math.toIntExact(linksRemoved));
+        return pseudonym;
     }
 
     /**

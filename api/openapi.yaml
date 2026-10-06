@@ -159,10 +159,11 @@ paths:
       summary: Erase the calling user's record
       description: >
         Erases the natural person the bearer token names, and answers with what
-        that cost. The `users` row survives under a freshly generated opaque
-        pseudonym with its `email`, `firstName` and `lastName` cleared, every
-        participant link is removed, and every consent still `GRANTED` is
-        revoked with a `CONSENT_REVOKED` event appended to its audit trail.
+        that cost. Every participant link is removed, every consent still
+        `GRANTED` is revoked with a `CONSENT_REVOKED` event appended to its
+        audit trail, and every consent still unanswered — `PENDING` or `DRAFT` —
+        is `TERMINATED` with a `CONSENT_TERMINATED` event, because an offer put
+        to someone who is gone can never be answered.
 
 
         The consent records and their events are **retained**, deliberately:
@@ -172,6 +173,16 @@ paths:
         call nothing in them names the data subject, and the pseudonym returned
         here is the only handle onto them that ever existed outside the
         participants' own systems. It is published once and never again.
+
+
+        What happens to the `users` row follows from that. If consents refer to
+        it, it survives under a freshly generated opaque pseudonym with its
+        `email`, `firstName` and `lastName` cleared, since `consents.user_id` is
+        `ON DELETE RESTRICT` and the trail has to stay reachable. If no consent
+        refers to it — a caller who never consented to anything, including one
+        this service first saw in this very request — the row is **deleted**,
+        and the response then carries no `pseudonym` because nothing is left for
+        one to point at.
 
 
         The pseudonym is a fresh value under a reserved prefix, not a hash of

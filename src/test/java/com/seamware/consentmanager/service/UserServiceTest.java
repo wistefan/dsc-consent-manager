@@ -38,6 +38,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -558,11 +559,11 @@ class UserServiceTest {
     }
 
     /**
-     * Erasure revokes what was granted, unlinks everything, clears the attributes and renames the
-     * row - while leaving the consent and event rows themselves in place.
+     * Erasure closes everything still open, unlinks everything, clears the attributes and renames
+     * the row - while leaving the consent and event rows themselves in place.
      */
     @Test
-    @DisplayName("erasure revokes, unlinks and pseudonymises, and keeps the audit trail")
+    @DisplayName("erasure closes, unlinks and pseudonymises, and keeps the audit trail")
     void erasureRevokesUnlinksAndPseudonymises() {
         Participant alpha = participants.put(participant());
         Participant beta = participants.put(participant(PARTICIPANT_BETA));
@@ -570,11 +571,14 @@ class UserServiceTest {
         links.put(new UserParticipant(user.getId(), alpha.getId(), STORED_LOCAL_IDENTIFIER));
         links.put(new UserParticipant(user.getId(), beta.getId(), null));
         Consent granted = consents.put(consent(user, ConsentStatus.GRANTED, alpha, beta));
+        Consent pending = consents.put(consent(user, ConsentStatus.PENDING, alpha, beta));
+        Consent draft = consents.put(consent(user, ConsentStatus.DRAFT, beta, alpha));
         Consent revoked = consents.put(consent(user, ConsentStatus.REVOKED, beta, alpha));
 
         ErasureResult result = service.erase(user);
 
         assertThat(result.consentsRevoked()).isEqualTo(1);
+        assertThat(result.consentsTerminated()).isEqualTo(2);
         assertThat(result.linksRemoved()).isEqualTo(2);
         assertThat(result.pseudonym()).startsWith(ERASED_PREFIX).isNotEqualTo(IDENTIFIER);
 
@@ -584,26 +588,32 @@ class UserServiceTest {
         assertThat(user.getFirstName()).isNull();
         assertThat(user.getLastName()).isNull();
 
-        assertThat(consents.rows()).containsOnlyKeys(granted.getId(), revoked.getId());
+        assertThat(consents.rows())
+                .containsKeys(granted.getId(), pending.getId(), draft.getId(), revoked.getId());
         assertThat(granted.getStatus()).isEqualTo(ConsentStatus.REVOKED);
         assertThat(granted.isConsented()).isFalse();
-        assertThat(consentEvents.appendedFor(granted.getId()))
-                .singleElement()
-                .extracting(ConsentEvent::getEventState)
-                .isEqualTo(ConsentEventState.CONSENT_REVOKED);
+        assertThat(pending.getStatus()).isEqualTo(ConsentStatus.TERMINATED);
+        assertThat(draft.getStatus()).isEqualTo(ConsentStatus.TERMINATED);
+        assertThat(eventStatesFor(granted)).containsExactly(ConsentEventState.CONSENT_REVOKED);
+        assertThat(eventStatesFor(pending)).containsExactly(ConsentEventState.CONSENT_TERMINATED);
+        assertThat(eventStatesFor(draft)).containsExactly(ConsentEventState.CONSENT_TERMINATED);
         assertThat(consentEvents.appendedFor(revoked.getId()))
-                .as("a consent that was not granted is not re-revoked")
+                .as("a consent that was already closed is not closed again")
                 .isEmpty();
     }
 
     /**
      * Two erasures must not produce the same pseudonym, or they would be linkable to each other.
+     * Both subjects hold a consent, since that is what makes a pseudonym exist at all.
      */
     @Test
     @DisplayName("each erasure mints its own pseudonym")
     void erasureMintsAFreshPseudonymEveryTime() {
+        Participant alpha = participants.put(participant());
         User first = users.put(stored());
         User second = users.put(new User(USER_ON_BETA, null, null, null));
+        consents.put(consent(first, ConsentStatus.GRANTED, alpha, alpha));
+        consents.put(consent(second, ConsentStatus.GRANTED, alpha, alpha));
 
         String one = service.erase(first).pseudonym();
         String other = service.erase(second).pseudonym();
@@ -611,17 +621,54 @@ class UserServiceTest {
         assertThat(one).isNotEqualTo(other);
     }
 
-    /** Nothing to revoke and nothing to unlink still erases the record and reports zeroes. */
+    /**
+     * A record no consent refers to is deleted outright rather than tombstoned, so a replayed token
+     * cannot grow the table with husks nothing will ever remove.
+     */
     @Test
-    @DisplayName("erasing a user with no consents and no links reports zeroes")
-    void erasureOfABareUserReportsZeroes() {
+    @DisplayName("erasing a user no consent refers to deletes the record and reports no pseudonym")
+    void erasureOfABareUserDeletesTheRecord() {
         User user = users.put(stored());
 
         ErasureResult result = service.erase(user);
 
         assertThat(result.consentsRevoked()).isZero();
+        assertThat(result.consentsTerminated()).isZero();
         assertThat(result.linksRemoved()).isZero();
-        assertThat(result.pseudonym()).startsWith(ERASED_PREFIX);
+        assertThat(result.pseudonym()).isNull();
+        assertThat(users.rows()).isEmpty();
+    }
+
+    /**
+     * One subject's erasure must not reach another's rows - the service filters by user id, and
+     * this is the assertion that keeps it that way.
+     */
+    @Test
+    @DisplayName("erasure leaves another subject's consents and links untouched")
+    void erasureSparesEveryOtherSubject() {
+        Participant alpha = participants.put(participant());
+        User erased = users.put(stored());
+        User bystander = users.put(new User(USER_ON_BETA, STORED_EMAIL, null, null));
+        links.put(new UserParticipant(erased.getId(), alpha.getId(), null));
+        links.put(new UserParticipant(bystander.getId(), alpha.getId(), null));
+        consents.put(consent(erased, ConsentStatus.GRANTED, alpha, alpha));
+        Consent theirs = consents.put(consent(bystander, ConsentStatus.GRANTED, alpha, alpha));
+
+        service.erase(erased);
+
+        assertThat(theirs.getStatus()).isEqualTo(ConsentStatus.GRANTED);
+        assertThat(consentEvents.appendedFor(theirs.getId())).isEmpty();
+        assertThat(links.rows().values())
+                .extracting(link -> link.getId().getUserId())
+                .containsExactly(bystander.getId());
+        assertThat(bystander.getEmail()).isEqualTo(STORED_EMAIL);
+    }
+
+    /** The states appended against one consent, in the order they were appended. */
+    private List<ConsentEventState> eventStatesFor(Consent consent) {
+        return consentEvents.appendedFor(consent.getId()).stream()
+                .map(ConsentEvent::getEventState)
+                .toList();
     }
 
     /** A consent of the given status between two participants, with no notice behind it. */
@@ -937,6 +984,11 @@ class UserServiceTest {
         }
 
         @Override
+        public void delete(User entity) {
+            rows().remove(keyOf(entity));
+        }
+
+        @Override
         public boolean existsByIdentifier(String identifier) {
             throw unsupported();
         }
@@ -1119,6 +1171,24 @@ class UserServiceTest {
         }
 
         @Override
+        public List<Consent> findByUserIdAndStatusIn(
+                UUID userId, Collection<ConsentStatus> statuses) {
+            return rows().values().stream()
+                    .filter(c -> c.getUserId().equals(userId) && statuses.contains(c.getStatus()))
+                    .toList();
+        }
+
+        @Override
+        public boolean existsByUserId(UUID userId) {
+            return rows().values().stream().anyMatch(c -> c.getUserId().equals(userId));
+        }
+
+        @Override
+        public <S extends Consent> List<S> updateAll(Iterable<S> entities) {
+            return collect(entities, this::put);
+        }
+
+        @Override
         public Page<Consent> findByUserId(UUID userId, Pageable pageable) {
             throw unsupported();
         }
@@ -1194,6 +1264,11 @@ class UserServiceTest {
         public <S extends ConsentEvent> S save(S entity) {
             put(entity);
             return entity;
+        }
+
+        @Override
+        public <S extends ConsentEvent> List<S> saveAll(Iterable<S> entities) {
+            return collect(entities, this::put);
         }
 
         /** The events appended against one consent, in the order they were appended. */
@@ -1317,6 +1392,17 @@ class UserServiceTest {
 
         public void deleteAll() {
             throw unsupported();
+        }
+
+        /** Applies {@code write} to every entity and returns them in the order given. */
+        static <S> List<S> collect(Iterable<S> entities, Consumer<S> write) {
+            List<S> all = new ArrayList<>();
+            entities.forEach(
+                    entity -> {
+                        write.accept(entity);
+                        all.add(entity);
+                    });
+            return all;
         }
 
         /** Guards the operations this service must never reach. */

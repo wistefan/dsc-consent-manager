@@ -59,16 +59,20 @@ public class UserController extends AbstractUsersController {
      * Erases the caller's record and answers with what that entailed.
      *
      * <p>No {@code 404}: a subject this service has not seen is registered by its own
-     * authentication before the route runs, so there is always a record here to erase. The
-     * pseudonym in the response is published exactly once - it is the only handle left on the
-     * consent records that are deliberately retained.
+     * authentication before the route runs, so there is always a record here to erase - and, having
+     * consented to nothing, that record is deleted rather than kept, which is why the pseudonym is
+     * omitted from such a response. When it is present it is published exactly once, because it is
+     * the only handle left on the consent records that are deliberately retained.
      */
     @Override
     public HttpResponse<ErasureSummary> eraseCurrentUser(UserPrincipal principal) {
         ErasureResult erased = users.erase(principal.user());
         return HttpResponse.ok(
                 new ErasureSummary(
-                        erased.pseudonym(), erased.consentsRevoked(), erased.linksRemoved()));
+                                erased.consentsRevoked(),
+                                erased.consentsTerminated(),
+                                erased.linksRemoved())
+                        .pseudonym(erased.pseudonym()));
     }
 
     /**

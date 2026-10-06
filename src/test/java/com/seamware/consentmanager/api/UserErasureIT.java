@@ -53,8 +53,9 @@ import org.junit.jupiter.params.provider.EnumSource;
  *
  * <p>What is under test is the shape of the erasure rather than the bare status code: that the
  * person is gone from the record while the consents and their events stay, with their original ids,
- * as the evidence of what was once authorised; and that the subject is a stranger to this service
- * afterwards - a later token provisions a new row instead of resurrecting the erased one.
+ * as the evidence of what was once authorised; that a record no consent refers to is deleted
+ * outright, so a replayed token cannot accumulate husks; and that the subject is a stranger to this
+ * service afterwards - a later token provisions a new row instead of resurrecting the erased one.
  */
 @MicronautTest(transactional = false)
 @DisplayName("User erasure")
@@ -77,6 +78,9 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
 
     /** The local identifier the seeded links carry, so their disappearance is visible. */
     private static final String LOCAL_IDENTIFIER = "patient-55018";
+
+    /** A second subject, seeded so an erasure can be shown not to reach past its own rows. */
+    private static final String BYSTANDER_IDENTIFIER = "urn:test:user:erasure-bystander";
 
     /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
@@ -136,7 +140,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
     }
 
     @Test
-    @DisplayName("revokes, unlinks and pseudonymises while keeping the consent trail intact")
+    @DisplayName("revokes, terminates, unlinks and pseudonymises while keeping the trail intact")
     void erasesTheCallerAndKeepsTheConsentTrail() throws IOException {
         User caller = registeredCaller();
         UUID callerId = caller.getId();
@@ -146,8 +150,11 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
                 grant(caller, ConsentStatus.GRANTED, PROVIDER_PARTICIPANT, CONSUMER_PARTICIPANT);
         UUID inbound =
                 grant(caller, ConsentStatus.GRANTED, CONSUMER_PARTICIPANT, PROVIDER_PARTICIPANT);
+        UUID unanswered =
+                grant(caller, ConsentStatus.PENDING, PROVIDER_PARTICIPANT, CONSUMER_PARTICIPANT);
         UUID alreadyRevoked =
                 grant(caller, ConsentStatus.REVOKED, PROVIDER_PARTICIPANT, CONSUMER_PARTICIPANT);
+        User bystander = bystander();
 
         HttpResponse<String> response = erase();
 
@@ -156,6 +163,9 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
         assertThat(count(summary, "consentsRevoked"))
                 .as("only the granted consents are revoked")
                 .isEqualTo(2);
+        assertThat(count(summary, "consentsTerminated"))
+                .as("an offer nobody is left to answer is closed rather than left open")
+                .isEqualTo(1);
         assertThat(count(summary, "linksRemoved")).isEqualTo(2);
         String pseudonym = (String) summary.get("pseudonym");
         assertThat(pseudonym)
@@ -175,19 +185,30 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
         assertThat(consents.findByUserId(callerId, Pageable.UNPAGED).getContent())
                 .as("the consent records survive under their original ids")
                 .extracting(Consent::getId)
-                .containsExactlyInAnyOrder(outbound, inbound, alreadyRevoked);
+                .containsExactlyInAnyOrder(outbound, inbound, unanswered, alreadyRevoked);
         assertThat(consents.findByUserIdAndStatus(callerId, ConsentStatus.GRANTED)).isEmpty();
-        assertThat(revocationsOf(outbound)).hasSize(1);
-        assertThat(revocationsOf(inbound)).hasSize(1);
-        assertThat(events.findByConsentIdOrderByOccurredAtAsc(alreadyRevoked))
-                .as("a consent that was not granted is not re-revoked")
+        assertThat(eventStatesOf(outbound)).containsExactly(ConsentEventState.CONSENT_REVOKED);
+        assertThat(eventStatesOf(inbound)).containsExactly(ConsentEventState.CONSENT_REVOKED);
+        assertThat(eventStatesOf(unanswered)).containsExactly(ConsentEventState.CONSENT_TERMINATED);
+        assertThat(eventStatesOf(alreadyRevoked))
+                .as("a consent that was already closed is not closed again")
                 .isEmpty();
+
+        UUID bystanderId = bystander.getId();
+        assertThat(users.findById(bystanderId).orElseThrow().getIdentifier())
+                .as("one subject's erasure does not reach another's record")
+                .isEqualTo(BYSTANDER_IDENTIFIER);
+        assertThat(links.findByIdUserId(bystanderId)).hasSize(1);
+        assertThat(consents.findByUserIdAndStatus(bystanderId, ConsentStatus.GRANTED)).hasSize(1);
     }
 
     @Test
     @DisplayName("a later token for the erased subject provisions a new record")
     void aLaterTokenProvisionsANewRecord() {
-        UUID erasedId = registeredCaller().getId();
+        User caller = registeredCaller();
+        UUID erasedId = caller.getId();
+        // A retained consent is what keeps the row alive to be found again under its pseudonym.
+        grant(caller, ConsentStatus.GRANTED, PROVIDER_PARTICIPANT, CONSUMER_PARTICIPANT);
 
         erase();
 
@@ -203,27 +224,44 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
     @Test
     @DisplayName("each erasure mints its own pseudonym")
     void successiveErasuresDoNotCollide() throws IOException {
-        registeredCaller();
-        String first = pseudonymOf(erase());
+        String first = pseudonymOf(eraseAConsentingCaller());
+        String second = pseudonymOf(eraseAConsentingCaller());
 
-        registeredCaller();
-        String second = pseudonymOf(erase());
-
+        assertThat(first).startsWith(ERASED_PREFIX);
         assertThat(second)
                 .as("two erased records that shared an identifier would be linkable")
                 .isNotEqualTo(first);
     }
 
     @Test
-    @DisplayName("erases a caller this service has not seen before, with nothing to report")
+    @DisplayName("deletes a caller no consent refers to rather than leaving a husk behind")
     void erasesACallerWithNothingToErase() throws IOException {
         HttpResponse<String> response = erase();
 
         assertThat(response.code())
                 .as("the route's own authentication registers the caller, so there is no 404")
                 .isEqualTo(HttpStatus.OK.getCode());
-        assertThat(count(body(response), "consentsRevoked")).isZero();
-        assertThat(count(body(response), "linksRemoved")).isZero();
+        Map<String, Object> summary = body(response);
+        assertThat(count(summary, "consentsRevoked")).isZero();
+        assertThat(count(summary, "consentsTerminated")).isZero();
+        assertThat(count(summary, "linksRemoved")).isZero();
+        assertThat(summary.get("pseudonym"))
+                .as("nothing was retained, so nothing needs a handle onto it")
+                .isNull();
+        assertThat(users.findByIdentifier(identifier)).isEmpty();
+        assertThat(erasedUsers()).as("and no pseudonymised husk is left behind").isEmpty();
+    }
+
+    @Test
+    @DisplayName("a replayed token cannot grow the table with husks")
+    void repeatedErasureLeavesNothingBehind() {
+        erase();
+        erase();
+        erase();
+
+        assertThat(erasedUsers())
+                .as("each pass deletes the consent-free record its own authentication provisioned")
+                .isEmpty();
         assertThat(users.findByIdentifier(identifier)).isEmpty();
     }
 
@@ -254,6 +292,16 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
         return exchange(HttpRequest.DELETE(PATH_ME), userToken());
     }
 
+    /** Erases a caller holding one granted consent, so the record is kept under a pseudonym. */
+    private HttpResponse<String> eraseAConsentingCaller() {
+        grant(
+                registeredCaller(),
+                ConsentStatus.GRANTED,
+                PROVIDER_PARTICIPANT,
+                CONSUMER_PARTICIPANT);
+        return erase();
+    }
+
     private String pseudonymOf(HttpResponse<String> response) throws IOException {
         return (String) body(response).get("pseudonym");
     }
@@ -264,11 +312,19 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
         return users.findByIdentifier(identifier).orElseThrow();
     }
 
-    /** The {@code CONSENT_REVOKED} events standing against one consent. */
-    private List<ConsentEvent> revocationsOf(UUID consentId) {
+    /** The event states standing against one consent, in the order they were appended. */
+    private List<ConsentEventState> eventStatesOf(UUID consentId) {
         return events.findByConsentIdOrderByOccurredAtAsc(consentId).stream()
-                .filter(event -> event.getEventState() == ConsentEventState.CONSENT_REVOKED)
+                .map(ConsentEvent::getEventState)
                 .toList();
+    }
+
+    /** A second registered subject, linked and consenting, who this erasure must not touch. */
+    private User bystander() {
+        User other = users.save(new User(BYSTANDER_IDENTIFIER, null, null, null));
+        link(other, PROVIDER_PARTICIPANT);
+        grant(other, ConsentStatus.GRANTED, PROVIDER_PARTICIPANT, CONSUMER_PARTICIPANT);
+        return other;
     }
 
     private List<User> erasedUsers() {
@@ -345,6 +401,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
     /** Removes a user this test created, consents first because the row they name is retained. */
     private void removeIfSeeded(User user) {
         if (!identifier.equals(user.getIdentifier())
+                && !BYSTANDER_IDENTIFIER.equals(user.getIdentifier())
                 && !user.getIdentifier().startsWith(ERASED_PREFIX)) {
             return;
         }

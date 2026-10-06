@@ -3,11 +3,12 @@
 #
 # What `DELETE /users/me` did, reported back to the data subject. Every count is
 # always present, zero included, so a caller can read a tally without having to
-# tell "none" from "not reported".
+# tell "none" from "not reported". `pseudonym` is the exception: its absence is
+# itself the report that the record was deleted rather than kept.
 type: object
 description: >
-  The outcome of an erasure: the opaque identifier the record now carries, and
-  how much was revoked and unlinked on the way there.
+  The outcome of an erasure: how much was closed and unlinked, and the opaque
+  identifier the record now carries if it had to be kept at all.
 properties:
   pseudonym:
     type: string
@@ -17,6 +18,12 @@ properties:
       cannot be reversed into it. It is published once, here, because it is the
       only handle left on the retained consent records; this service never
       resolves a token back to it.
+
+
+      **Absent when the record was deleted outright.** That is what happens when
+      no consent referred to it — there is then nothing retained for a handle to
+      point at, and keeping a renamed husk would leave a row nothing can ever
+      remove.
     example: "urn:consent-manager:erased:0192f0a3-6b1e-7c4d-8f2a-9b7c1d3e5f60"
   consentsRevoked:
     type: integer
@@ -26,6 +33,16 @@ properties:
       Consents that were `GRANTED` and are now `REVOKED`, each with a new
       `CONSENT_REVOKED` event. The consent records themselves are retained.
     example: 2
+  consentsTerminated:
+    type: integer
+    format: int32
+    minimum: 0
+    description: >
+      Consents that were still unanswered — `PENDING` or `DRAFT` — and are now
+      `TERMINATED`, each with a new `CONSENT_TERMINATED` event. An offer that
+      was never answered cannot be answered after the person it was put to is
+      gone, so erasure closes it rather than leaving it open.
+    example: 1
   linksRemoved:
     type: integer
     format: int32
@@ -33,6 +50,6 @@ properties:
     description: Participant links that were removed, ending every affiliation.
     example: 2
 required:
-  - pseudonym
   - consentsRevoked
+  - consentsTerminated
   - linksRemoved
