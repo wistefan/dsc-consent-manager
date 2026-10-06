@@ -25,6 +25,7 @@ import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
 import jakarta.transaction.Transactional;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -135,6 +136,16 @@ public class UserService {
     /** Attributed to the service rather than to a person, who no longer exists by then. */
     private static final String ERASURE_ACTOR = "consent-manager";
 
+    /**
+     * Marks the trail entries an erasure appends as automated.
+     *
+     * <p>Not {@link ConsentEvent#DEFAULT_EVENT_TYPE}: the subject asked to be erased, but no one
+     * answered the consent itself - least of all the {@code PENDING} offers this closes unanswered
+     * - so attributing the entry to the service and typing it {@code explicit} would contradict
+     * each other.
+     */
+    private static final String ERASURE_EVENT_TYPE = "system";
+
     /** Says, in the retained audit trail, why a consent was revoked without naming anyone. */
     private static final String ERASURE_DETAIL_KEY = "reason";
 
@@ -150,6 +161,8 @@ public class UserService {
 
     private final ConsentEventRepository consentEvents;
 
+    private final ErasureVerifier erasureVerifier;
+
     private final ConsentManagerConfiguration.Users configuration;
 
     public UserService(
@@ -158,12 +171,14 @@ public class UserService {
             ParticipantRepository participants,
             ConsentRepository consents,
             ConsentEventRepository consentEvents,
+            ErasureVerifier erasureVerifier,
             ConsentManagerConfiguration.Users configuration) {
         this.users = users;
         this.links = links;
         this.participants = participants;
         this.consents = consents;
         this.consentEvents = consentEvents;
+        this.erasureVerifier = erasureVerifier;
         this.configuration = configuration;
     }
 
@@ -506,6 +521,9 @@ public class UserService {
      * writes it contains no insert-and-catch to recover from: the pseudonym is a fresh UUIDv7 that
      * will not collide, so no constraint violation is expected to be caught inside the transaction.
      *
+     * <p>A retained row carries a keyed verifier of the identifier it lost; see {@link
+     * ErasureVerifier}.
+     *
      * <p>The {@code user} argument is mutated in place when the record is pseudonymised, so a
      * caller holding the pre-erasure row - the request's own {@code UserPrincipal} - sees the
      * erased state afterwards.
@@ -573,7 +591,9 @@ public class UserService {
         return new ConsentEvent(
                 consent.getId(),
                 state,
+                ERASURE_EVENT_TYPE,
                 ERASURE_ACTOR,
+                Instant.now(),
                 Map.of(ERASURE_DETAIL_KEY, ERASURE_DETAIL_REASON));
     }
 
@@ -586,6 +606,11 @@ public class UserService {
      * regardless would be unbounded: the route's own authentication registers an unknown subject
      * before the handler runs, so a token replayed against it would mint a consent-free husk per
      * request, and nothing in this service ever deletes those.
+     *
+     * <p>A retained row also keeps the {@link ErasureVerifier} value for the identifier it is
+     * losing, so the operator can still confirm that a named person consented. It is written here
+     * and read nowhere: provisioning matches on {@code identifier} alone, so a returning subject is
+     * a stranger rather than a recognised one.
      */
     @Nullable
     private String pseudonymiseOrDelete(User user) {
@@ -594,6 +619,7 @@ public class UserService {
             return null;
         }
         String pseudonym = ERASED_IDENTIFIER_PREFIX + UuidGenerator.uuidV7();
+        user.setErasureVerifier(erasureVerifier.verifierFor(user.getIdentifier()));
         user.setIdentifier(pseudonym);
         user.setEmail(null);
         user.setFirstName(null);

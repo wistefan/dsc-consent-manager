@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.config;
 
 import io.micronaut.context.annotation.ConfigurationProperties;
+import io.micronaut.core.annotation.Nullable;
 
 /**
  * Root configuration properties for the Consent Manager application.
@@ -65,6 +66,32 @@ public class ConsentManagerConfiguration {
      */
     public void setContractServiceUrl(String contractServiceUrl) {
         this.contractServiceUrl = contractServiceUrl;
+    }
+
+    /** Settings of the erasure path, bound under {@code consent-manager.erasure}. */
+    @ConfigurationProperties("erasure")
+    public static class Erasure {
+
+        private String verificationSecret;
+
+        /**
+         * Key of the HMAC an erased record carries instead of its identifier, bound to {@code
+         * ERASURE_VERIFICATION_SECRET}.
+         *
+         * <p>Held by the operator, never by a participant and never in the database, so that only
+         * the operator can confirm a candidate identifier against an erased record. Blank or unset
+         * - the default - means erased records carry no verifier at all, and nothing can be
+         * confirmed against them ever again.
+         */
+        @Nullable
+        public String getVerificationSecret() {
+            return verificationSecret;
+        }
+
+        /** Sets the key; changing it abandons every verifier written under the previous one. */
+        public void setVerificationSecret(@Nullable String verificationSecret) {
+            this.verificationSecret = verificationSecret;
+        }
     }
 
     /** Limits on the user directory, bound under {@code consent-manager.users}. */

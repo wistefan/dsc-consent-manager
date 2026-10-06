@@ -61,9 +61,46 @@ The obvious alternative is `sha256(identifier)`: stable, collision-free, and it 
 re-derive the pseudonym from a known identifier. That last property is the problem. Subject
 identifiers and email addresses are drawn from a small, guessable space, so a hash of one is
 reversible by enumeration: anyone holding the erased row and a list of candidate identifiers
-recovers the person. A keyed hash only moves the secret, and a service that holds the key holds the
-ability to undo the erasure on request. A value that was never a function of the identifier cannot
-be inverted by anyone, with or without a key, which is the property erasure actually needs.
+recovers the person. Keying the hash fixes the enumeration but not the rest: the pseudonym is the
+row's unique key *and* is published to the data subject, so it travels further than the key does,
+and a derived value is a stable correlator — the same person erased twice would land on the same
+pseudonym, re-linking the two records the erasure was meant to separate. A value that was never a
+function of the identifier has neither property, which is what the identifier column needs.
+
+Confirming that a *named* person consented is a different requirement, and it gets its own field
+rather than a weaker identifier.
+
+### Keeping a keyed verifier, so a named person can still be checked
+
+Taken alone, the previous section proves too much. A consent record is evidence under Art. 7(1)
+only if someone can tie it to a person when it legitimately matters — a dispute between a
+participant and an individual, a supervisory inquiry, a complaint. The reply "the participant has
+its own record" is weaker than it sounds: ISO/IEC 29184 does place the record of consent and of its
+withdrawal on the PII controller, so each participant has that obligation in principle, but in this
+data space participants delegate it to the consent manager in practice — that is what the service
+is for. An erasure that destroys every tie would quietly destroy the evidence they rely on, and
+leave a retained trail that is not evidence of anything about a person at all.
+
+So a retained record also keeps `users.erasure_verifier`:
+`base64url(HMAC-SHA256(secret, identifier))` over the identifier it is losing.
+
+- **It confirms, it does not reveal.** Given a candidate identifier the asker already holds, the
+  operator recomputes the value and compares. The column yields no identifier on its own, and
+  without the secret it is not computable at all — a database dump is not enough.
+- **The secret lives with the operator.** `ERASURE_VERIFICATION_SECRET`, outside the database,
+  never with a participant. Only the authority running the service can perform the check, which is
+  the point: the capability is held by the party already accountable for the records.
+- **It is never a lookup path.** No repository method, no index, no API operation reads it, and
+  provisioning matches on `identifier` alone. A subject who authenticates again after erasure is
+  still a stranger: recognising them by their verifier would reveal to the service — and through it
+  to participants — that this person was here before, which is exactly what they asked to undo.
+- **The honest cost.** For the holder of the key the retained rows are pseudonymous, not anonymous:
+  the Recital 26 argument below holds against everyone except the operator, who can test candidates
+  and, given a list of identifiers, enumerate them. That is a deliberate trade of a residual
+  capability held by exactly one accountable party against evidence that would otherwise be worth
+  nothing. Two levers bound it: leaving the secret unset (the default) stores no verifier at all,
+  and destroying or rotating the secret retires every verifier written under it, completing the
+  anonymisation for those records without touching the trail itself.
 
 ### What a consent that names nobody is still worth
 
@@ -72,12 +109,13 @@ human looks like an empty artefact — and if it is empty, retaining it is not a
 erasure right, it is just a failure to honour it. The honest answer is that such a record loses one
 kind of weight and keeps another, and the two must not be conflated.
 
-**It is no longer evidence that a particular person consented.** GDPR Art. 7(1) requires the
-controller to be able to demonstrate that *the data subject* consented. After erasure this service
-cannot: it cannot name the subject of a retained consent, and will not try. Any participant that
-needs to demonstrate an individual's consent must do so from its own records, against its own copy
-of the identifier — this service's retained row cannot stand in for that, and nobody should plan for
-it to. Equally, it cannot be used *against* the erased person, which is the point.
+**It no longer names the person who consented.** GDPR Art. 7(1) requires the controller to be able
+to demonstrate that *the data subject* consented. After erasure this service cannot produce the
+subject of a retained consent, and will not try: nothing in it resolves a record to a person, so
+the trail cannot be used *against* the erased individual, which is the point. What survives is the
+narrower confirmation described above — an operator holding both the key and a candidate identifier
+can establish that this record was that person's — which is enough for a dispute or an inquiry
+raised by someone who already knows who they are asking about, and useless for anything else.
 
 **It remains evidence about the controller's own processing.** GDPR Art. 5(2) accountability is not
 about one data subject; it is about whether the operator can show what the system did. The retained
@@ -92,7 +130,8 @@ deleting the consent would delete the record that it was withdrawn.
 data.** Recital 26 is explicit that the principles do not apply to information that does not relate
 to an identifiable person. The pseudonym was never a function of the identifier and this service
 retains no mapping from one to the other, so by the means reasonably likely to be used here the
-retained rows no longer relate to an identifiable person. Art. 11 describes the resulting position
+retained rows no longer relate to an identifiable person — for everyone but the operator, whose
+keyed verifier is the bounded exception argued above. Art. 11 describes the resulting position
 directly: a controller that can no longer identify the data subject is not obliged to acquire more
 information merely to comply — and the data subject may still supply information enabling
 identification. That is precisely what the published pseudonym is for.
@@ -135,5 +174,16 @@ to someone who asked to be forgotten, so erasure closes those too.
   identifier, email or a participant's local identifier in `actor`, `details` or a consent snapshot
   breaks that silently — the erasure here would leave it behind. Any such column has to be swept by
   `UserService.erase` in the same change that introduces it.
+- The verification secret is an operational secret of the same weight as a signing key. It belongs
+  outside the database and outside every participant's reach: a participant holding it gains an
+  oracle over erased records. Losing it is irreversible in the other direction — every verifier
+  written under it becomes dead weight — and that is also the documented way to finish anonymising
+  a retained trail.
+- The verifier is a yes/no oracle, never an index. There is deliberately no query path to it, and
+  a later ticket must not add one — least of all to recognise a re-registering subject, which would
+  turn erasure into a rename.
+- `users.erasure_verifier` is nullable and stays null for every live record, so it is readable as
+  "this row has been erased" by anyone with database access. That is already visible from the
+  reserved identifier prefix, so it discloses nothing new.
 - Erasure now closes `PENDING` and `DRAFT` consents as well as `GRANTED` ones. A consent-lifecycle
   ticket must not treat `TERMINATED` as a state its own flows can resume from.

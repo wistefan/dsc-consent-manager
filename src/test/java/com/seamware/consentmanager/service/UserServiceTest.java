@@ -97,6 +97,9 @@ class UserServiceTest {
     /** The reserved prefix every erased identifier carries; mirrors the service's own constant. */
     private static final String ERASED_PREFIX = "urn:consent-manager:erased:";
 
+    /** The key verifiers are computed under here; a deployment configures none by default. */
+    private static final String VERIFICATION_SECRET = "unit-test-erasure-secret";
+
     /** A caller reading across participants; it carries no participant row of its own. */
     private static final CallerScope CATALOG = new CallerScope(Role.CATALOG, null);
 
@@ -113,8 +116,11 @@ class UserServiceTest {
     private final ConsentManagerConfiguration.Users limits =
             new ConsentManagerConfiguration.Users();
 
+    private final ErasureVerifier erasureVerifier = verifierWith(VERIFICATION_SECRET);
+
     private final UserService service =
-            new UserService(users, links, participants, consents, consentEvents, limits);
+            new UserService(
+                    users, links, participants, consents, consentEvents, erasureVerifier, limits);
 
     /** An identifier no row exists for is inserted from the claims, and reported as created. */
     @Test
@@ -587,6 +593,10 @@ class UserServiceTest {
         assertThat(user.getEmail()).isNull();
         assertThat(user.getFirstName()).isNull();
         assertThat(user.getLastName()).isNull();
+        assertThat(user.getErasureVerifier())
+                .as("the kept row carries a verifier of the identifier it lost, not of its new one")
+                .isEqualTo(erasureVerifier.verifierFor(IDENTIFIER))
+                .isNotEqualTo(erasureVerifier.verifierFor(result.pseudonym()));
 
         assertThat(consents.rows())
                 .containsKeys(granted.getId(), pending.getId(), draft.getId(), revoked.getId());
@@ -662,6 +672,38 @@ class UserServiceTest {
                 .extracting(link -> link.getId().getUserId())
                 .containsExactly(bystander.getId());
         assertThat(bystander.getEmail()).isEqualTo(STORED_EMAIL);
+    }
+
+    /**
+     * Without a configured secret - the default - a kept row carries no verifier, so nothing can
+     * ever be confirmed against it.
+     */
+    @Test
+    @DisplayName("erasure stores no verifier when the deployment configured no secret")
+    void erasureWithoutASecretStoresNoVerifier() {
+        UserService withoutSecret =
+                new UserService(
+                        users,
+                        links,
+                        participants,
+                        consents,
+                        consentEvents,
+                        verifierWith(null),
+                        limits);
+        Participant alpha = participants.put(participant());
+        User user = users.put(stored());
+        consents.put(consent(user, ConsentStatus.GRANTED, alpha, alpha));
+
+        withoutSecret.erase(user);
+
+        assertThat(user.getErasureVerifier()).isNull();
+    }
+
+    /** An {@link ErasureVerifier} over the given key; {@code null} stands for an unset one. */
+    private static ErasureVerifier verifierWith(String secret) {
+        ConsentManagerConfiguration.Erasure erasure = new ConsentManagerConfiguration.Erasure();
+        erasure.setVerificationSecret(secret);
+        return new ErasureVerifier(erasure);
     }
 
     /** The states appended against one consent, in the order they were appended. */

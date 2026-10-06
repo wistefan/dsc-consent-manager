@@ -48,6 +48,17 @@ public class User {
     @MappedProperty("last_name")
     private String lastName;
 
+    /**
+     * Keyed HMAC of the identifier this record carried before it was erased; {@code null} while the
+     * record is live.
+     *
+     * <p>Lets the operator confirm that a named person consented without the row naming anyone. It
+     * is never read by this service and never a lookup key - see {@code ErasureVerifier}.
+     */
+    @Nullable
+    @MappedProperty("erasure_verifier")
+    private String erasureVerifier;
+
     /** Timestamp when this user record was created; set automatically on insert. */
     @DateCreated
     @MappedProperty("created_at")
@@ -123,6 +134,25 @@ public class User {
      */
     public void setIdentifier(@NonNull String identifier) {
         this.identifier = identifier;
+    }
+
+    /**
+     * Returns the keyed verifier of the pre-erasure identifier.
+     *
+     * @return the verifier, or {@code null} while the record is live
+     */
+    @Nullable
+    public String getErasureVerifier() {
+        return erasureVerifier;
+    }
+
+    /**
+     * Sets the keyed verifier of the pre-erasure identifier.
+     *
+     * @param erasureVerifier the verifier, or {@code null} to clear
+     */
+    public void setErasureVerifier(@Nullable String erasureVerifier) {
+        this.erasureVerifier = erasureVerifier;
     }
 
     /**

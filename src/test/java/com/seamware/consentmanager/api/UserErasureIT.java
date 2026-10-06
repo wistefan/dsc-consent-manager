@@ -19,6 +19,7 @@ import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.IdentityProviderRegistry;
+import com.seamware.consentmanager.service.ErasureVerifier;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
@@ -105,6 +106,8 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
 
     @Inject PrivacyNoticeRepository notices;
 
+    @Inject ErasureVerifier verifier;
+
     /** The caller's global identifier, resolved once because reading it costs a token request. */
     private String identifier;
 
@@ -178,6 +181,11 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
         assertThat(erased.getEmail()).isNull();
         assertThat(erased.getFirstName()).isNull();
         assertThat(erased.getLastName()).isNull();
+        assertThat(erased.getErasureVerifier())
+                .as(
+                        "the kept row lets the operator confirm the identifier it lost, not its new one")
+                .isEqualTo(verifier.verifierFor(identifier))
+                .isNotEqualTo(verifier.verifierFor(pseudonym));
         assertThat(links.findByIdUserId(callerId))
                 .as("every affiliation ends with the person")
                 .isEmpty();
@@ -271,20 +279,47 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
             names = {"PARTICIPANT", "CATALOG"})
     @DisplayName("refuses a token that authenticates but holds no USER role")
     void refusesANonUserRole(RealmPrincipal role) {
+        User seeded = aSubjectAnErasureWouldStripBare();
+
         assertThat(
                         exchange(
                                         HttpRequest.DELETE(PATH_ME),
                                         KeycloakTestResource.accessToken(role))
                                 .code())
                 .isEqualTo(HttpStatus.FORBIDDEN.getCode());
-        assertThat(erasedUsers()).as("a refused request erases nothing").isEmpty();
+
+        assertUntouched(seeded);
     }
 
     @Test
     @DisplayName("refuses an unauthenticated request")
     void refusesAnUnauthenticatedRequest() {
+        User seeded = aSubjectAnErasureWouldStripBare();
+
         assertThat(exchange(HttpRequest.DELETE(PATH_ME), null).code())
                 .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+
+        assertUntouched(seeded);
+    }
+
+    /** A caller holding everything an erasure visibly destroys: a name, a link and a consent. */
+    private User aSubjectAnErasureWouldStripBare() {
+        User caller = registeredCaller();
+        link(caller, PROVIDER_PARTICIPANT);
+        grant(caller, ConsentStatus.GRANTED, PROVIDER_PARTICIPANT, CONSUMER_PARTICIPANT);
+        return caller;
+    }
+
+    /** Asserts a refused request left every row {@link #aSubjectAnErasureWouldStripBare} seeded. */
+    private void assertUntouched(User caller) {
+        UUID callerId = caller.getId();
+        assertThat(users.findById(callerId).orElseThrow().getIdentifier())
+                .as("a refused request leaves the subject named")
+                .isEqualTo(identifier);
+        assertThat(links.findByIdUserId(callerId)).as("and still affiliated").hasSize(1);
+        assertThat(consents.findByUserIdAndStatus(callerId, ConsentStatus.GRANTED))
+                .as("and still consenting")
+                .hasSize(1);
         assertThat(erasedUsers()).isEmpty();
     }
 
