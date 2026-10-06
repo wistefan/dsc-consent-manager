@@ -284,6 +284,86 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /participants/me/users:
+    post:
+      operationId: registerParticipantUser
+      summary: Register a user for the calling participant
+      description: >
+        Registers the user the body names and links them to the participant the
+        bearer token names, returning the stored record and which of the three
+        outcomes the call reached.
+
+
+        The rule is deterministic and keyed on the global user identifier alone.
+        No user carries it yet: the user is created from the supplied attributes,
+        linked, and the response is `201 Created` with outcome `CREATED`. A user
+        already carries it: that record is adopted and linked as it stands — its
+        `email`, `firstName` and `lastName` are **not** overwritten, because
+        attributes belong to whoever created the record and to the user's own
+        identity provider, never to a later registrant — and the response is
+        `200 OK` with outcome `LINKED`. The link already exists: nothing changes
+        beyond `localIdentifier`, and the response is `200 OK` with outcome
+        `ALREADY_LINKED`. Two records are never merged, and `email` is never
+        matched on: it is neither unique nor authoritative here.
+
+
+        The participant is read from the token and from nowhere else, so a
+        participant can only ever register a user for itself. A
+        `participantIdentifier` property in the body — whether it names the
+        caller, another participant or nobody at all — is ignored rather than
+        rejected, and changes nothing about which participant the user is linked
+        to.
+
+
+        Addressing is by the data space's global identifier alone.
+        `localIdentifier` is a convenience column on the calling participant's
+        own link: invisible to every other participant, never a lookup key, and
+        never part of matching. An identifier containing `/`, and the literal
+        value `me`, cannot be addressed as a path segment on
+        `GET /users/{identifier}` and are reached through `POST /users/search`
+        instead. The rationale in full is `docs/user-identifiers.md` in this
+        service's repository — deliberately named rather than linked, since the
+        published specification serves no path under which that file resolves.
+      tags:
+        - Participant Users
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserRegistration"
+      responses:
+        "200":
+          description: >
+            The user already existed. Outcome `LINKED` when this call linked them
+            to the caller, `ALREADY_LINKED` when the link was already there.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserRegistrationResult"
+        "201":
+          description: The user was created by this request and linked to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserRegistrationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -301,6 +381,12 @@ components:
 
     UserSearch:
       $ref: "./components/schemas/UserSearch.yaml"
+
+    UserRegistration:
+      $ref: "./components/schemas/UserRegistration.yaml"
+
+    UserRegistrationResult:
+      $ref: "./components/schemas/UserRegistrationResult.yaml"
 
   responses:
     # Shared error responses referenced by every secured operation. `/api-status`
