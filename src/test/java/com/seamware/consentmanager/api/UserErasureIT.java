@@ -181,11 +181,12 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
         assertThat(erased.getEmail()).isNull();
         assertThat(erased.getFirstName()).isNull();
         assertThat(erased.getLastName()).isNull();
-        assertThat(erased.getErasureVerifier())
-                .as(
-                        "the kept row lets the operator confirm the identifier it lost, not its new one")
-                .isEqualTo(verifier.verifierFor(identifier))
-                .isNotEqualTo(verifier.verifierFor(pseudonym));
+        assertThat(verifier.matches(erased.getErasureVerifier(), identifier))
+                .as("the kept row lets the operator confirm the identifier it lost")
+                .isTrue();
+        assertThat(verifier.matches(erased.getErasureVerifier(), pseudonym))
+                .as("but not its new one")
+                .isFalse();
         assertThat(links.findByIdUserId(callerId))
                 .as("every affiliation ends with the person")
                 .isEmpty();
@@ -230,7 +231,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
     }
 
     @Test
-    @DisplayName("each erasure mints its own pseudonym")
+    @DisplayName("successive erasures of one subject leave nothing that links them")
     void successiveErasuresDoNotCollide() throws IOException {
         String first = pseudonymOf(eraseAConsentingCaller());
         String second = pseudonymOf(eraseAConsentingCaller());
@@ -239,6 +240,15 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
         assertThat(second)
                 .as("two erased records that shared an identifier would be linkable")
                 .isNotEqualTo(first);
+
+        List<String> verifiers = erasedUsers().stream().map(User::getErasureVerifier).toList();
+        assertThat(verifiers)
+                .as("and so would two that shared a verifier - the salt is what prevents it")
+                .hasSize(2)
+                .doesNotHaveDuplicates();
+        assertThat(verifiers)
+                .as("yet each still confirms the identifier its own record lost")
+                .allMatch(stored -> verifier.matches(stored, identifier));
     }
 
     @Test

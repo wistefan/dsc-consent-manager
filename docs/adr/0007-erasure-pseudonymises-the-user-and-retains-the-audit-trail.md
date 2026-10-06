@@ -81,12 +81,21 @@ data space participants delegate it to the consent manager in practice — that 
 is for. An erasure that destroys every tie would quietly destroy the evidence they rely on, and
 leave a retained trail that is not evidence of anything about a person at all.
 
-So a retained record also keeps `users.erasure_verifier`:
-`base64url(HMAC-SHA256(secret, identifier))` over the identifier it is losing.
+So a retained record also keeps `users.erasure_verifier`: `<salt>.<mac>`, where `salt` is 16 fresh
+random bytes per record and `mac` is `base64url(HMAC-SHA256(secret, salt || identifier))` over the
+identifier the record is losing.
 
 - **It confirms, it does not reveal.** Given a candidate identifier the asker already holds, the
-  operator recomputes the value and compares. The column yields no identifier on its own, and
-  without the secret it is not computable at all — a database dump is not enough.
+  operator reads the salt from the stored value, recomputes the MAC and compares. The column yields
+  no identifier on its own, and without the secret it is not computable at all — a database dump is
+  not enough.
+- **It correlates nothing.** The salt is why this is not a plain keyed hash of the identifier.
+  Unsalted, a subject who is erased, authenticates again and is erased a second time would leave two
+  rows carrying the *same* value, and anyone who can read the table — no secret required — could link
+  them to one person. That is exactly the stable-correlator property this ADR rejects when it
+  refuses a derived pseudonym, and it would be no more acceptable in a second column. Salted, the
+  two rows look unrelated to everyone, including the operator, while verification is unaffected:
+  whoever checks a candidate has the row, and therefore its salt, in front of them.
 - **The secret lives with the operator.** `ERASURE_VERIFICATION_SECRET`, outside the database,
   never with a participant. Only the authority running the service can perform the check, which is
   the point: the capability is held by the party already accountable for the records.

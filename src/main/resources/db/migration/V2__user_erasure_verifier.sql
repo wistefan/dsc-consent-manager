@@ -6,7 +6,9 @@
 -- the original identifier so that the operator - and only the operator, since
 -- the key lives outside the database - can still confirm that a *named* person
 -- consented. It answers yes/no to a candidate identifier; it yields no
--- identifier on its own.
+-- identifier on its own. The value is <salt>.<mac> with a fresh random salt per
+-- record, so two erasures of the same person do not share a value and nobody
+-- can link the rows by reading the column.
 --
 -- Null for every live record, for a record erased while no verification secret
 -- was configured, and after a key rotation that abandons the old secret.

@@ -593,10 +593,12 @@ class UserServiceTest {
         assertThat(user.getEmail()).isNull();
         assertThat(user.getFirstName()).isNull();
         assertThat(user.getLastName()).isNull();
-        assertThat(user.getErasureVerifier())
-                .as("the kept row carries a verifier of the identifier it lost, not of its new one")
-                .isEqualTo(erasureVerifier.verifierFor(IDENTIFIER))
-                .isNotEqualTo(erasureVerifier.verifierFor(result.pseudonym()));
+        assertThat(erasureVerifier.matches(user.getErasureVerifier(), IDENTIFIER))
+                .as("the kept row carries a verifier of the identifier it lost")
+                .isTrue();
+        assertThat(erasureVerifier.matches(user.getErasureVerifier(), result.pseudonym()))
+                .as("and not of its new one")
+                .isFalse();
 
         assertThat(consents.rows())
                 .containsKeys(granted.getId(), pending.getId(), draft.getId(), revoked.getId());

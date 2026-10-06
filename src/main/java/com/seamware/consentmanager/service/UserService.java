@@ -608,9 +608,10 @@ public class UserService {
      * request, and nothing in this service ever deletes those.
      *
      * <p>A retained row also keeps the {@link ErasureVerifier} value for the identifier it is
-     * losing, so the operator can still confirm that a named person consented. It is written here
-     * and read nowhere: provisioning matches on {@code identifier} alone, so a returning subject is
-     * a stranger rather than a recognised one.
+     * losing, so the operator can still confirm that a named person consented. It is salted per
+     * record, so it links no two erasures, and it is written here and read nowhere: provisioning
+     * matches on {@code identifier} alone, so a returning subject is a stranger rather than a
+     * recognised one.
      */
     @Nullable
     private String pseudonymiseOrDelete(User user) {

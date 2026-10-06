@@ -49,11 +49,12 @@ public class User {
     private String lastName;
 
     /**
-     * Keyed HMAC of the identifier this record carried before it was erased; {@code null} while the
-     * record is live.
+     * Salted, keyed HMAC of the identifier this record carried before it was erased; {@code null}
+     * while the record is live.
      *
-     * <p>Lets the operator confirm that a named person consented without the row naming anyone. It
-     * is never read by this service and never a lookup key - see {@code ErasureVerifier}.
+     * <p>Lets the operator confirm that a named person consented without the row naming anyone. The
+     * salt is per record, so two erasures of one person do not collide here either. Never read by
+     * this service and never a lookup key - see {@code ErasureVerifier}.
      */
     @Nullable
     @MappedProperty("erasure_verifier")

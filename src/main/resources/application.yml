@@ -323,11 +323,12 @@ consent-manager:
     bulk-max-size: ${USERS_BULK_MAX_SIZE:500}
 
   erasure:
-    # Key of the HMAC an erased record keeps instead of its identifier, so that the
-    # operator - and nobody else, since the key is not in the database - can still
-    # confirm that a named person consented. Unset (the default) means erased records
-    # carry no verifier and nothing can be confirmed against them, ever. Rotating the
-    # key abandons every verifier written under the previous one.
+    # Key of the salted HMAC an erased record keeps instead of its identifier, so
+    # that the operator - and nobody else, since the key is not in the database -
+    # can still confirm that a named person consented. The salt is per record, so
+    # two erased records never carry the same value. Unset (the default) means
+    # erased records carry no verifier and nothing can be confirmed against them,
+    # ever. Rotating the key abandons every verifier written under the previous one.
     verification-secret: ${ERASURE_VERIFICATION_SECRET:}
 
   # ---------------------------------------------------------------------------
