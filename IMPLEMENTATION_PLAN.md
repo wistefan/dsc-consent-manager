@@ -15,14 +15,25 @@ abstract classes, and a transactional `ParticipantService` holds the behaviour.
 
 ### Decisions carried in from the analysis comment
 
-1. **Deregistration mirrors ADR-0007.** `DELETE /participants/me` rejects with `409` while
-   any consent naming the participant as provider or consumer is `GRANTED`; it then removes
-   all `user_participants` links and archives active privacy notices, and finally *deletes*
-   the `participants` row when nothing still references it or *pseudonymises* it when a
-   retained consent or privacy notice still points at it. One transaction. ADR-0008 records
-   this. Because `privacy_notices` carries `ON DELETE RESTRICT` on both participant foreign
-   keys, a participant that ever had a notice lands on the pseudonymise branch; outright
-   deletion is the never-transacted case.
+1. **Deregistration closes the participant's open business and keeps its identity legible.**
+   `DELETE /participants/me` rejects with `409` while any consent naming the participant as
+   provider or consumer is `GRANTED`; it terminates the participant's still-unanswered
+   (`PENDING`/`DRAFT`) consents, removes all `user_participants` links and archives active
+   privacy notices, and then either *deletes* the `participants` row when nothing still
+   references it or *retains it intact, marked deregistered*, when a retained consent or
+   privacy notice still points at it. One transaction. ADR-0008 records this.
+
+   The row is **not** pseudonymised. ADR-0007 scrubs a *user*'s identifier because it is
+   personal data and a data subject has an erasure right; a participant is an organization,
+   which has neither — and there is no keyed `erasure_verifier` counterpart here, so a
+   scrubbed participant could never be recovered by anyone, leaving every retained consent
+   naming a counterparty nobody can identify. Since `privacy_notices` carries
+   `ON DELETE RESTRICT` on both participant foreign keys, a participant that ever had a
+   notice always lands on the retain branch, so that branch is the normal one and it is the
+   one that has to stay legible. The single plausibly-personal field, `email` (a contact
+   person's address rather than the organization's), is cleared; the organization's own
+   identity fields are kept. Raised by review-agent-1 on PR #1, which was right that
+   "mirror ADR-0007" is not an argument for an organization.
 2. **Self-registration is made reachable by the minimal change.**
    `PrincipalResolutionFilter` stops turning an unregistered `PARTICIPANT` identifier into a
    `403` and instead resolves a `ParticipantPrincipal` carrying the identifier with its row
@@ -47,10 +58,12 @@ abstract classes, and a transactional `ParticipantService` holds the behaviour.
   `ParticipantRegistration` and `ParticipantUpdate`, so an identifier in the body is
   ignored rather than rejected.
 - US-PM-002 is documentation only; the validation behaviour stays owned by TICKET-003.
-- No Flyway migration is needed. `V1__initial_schema.sql` already carries `participants`
-  with `endpoints`/`legal_person` JSONB and `uq_participants_identifier`. Participant
-  pseudonymisation needs no verifier column — a participant is an organization, not a data
-  subject, so ADR-0007's keyed `erasure_verifier` has no counterpart here.
+- One small Flyway migration is needed, in Step 5 only. `V1__initial_schema.sql` already
+  carries `participants` with `endpoints`/`legal_person` JSONB and
+  `uq_participants_identifier`; Step 5 adds a nullable `deregistered_at TIMESTAMPTZ` so a
+  retained row can be marked without being scrubbed. No verifier column is needed — a
+  participant is an organization, not a data subject, so ADR-0007's keyed `erasure_verifier`
+  has no counterpart here.
 
 ### Constraints every step inherits
 
@@ -82,9 +95,15 @@ unreachable: the caller is rejected before `POST /participants` can run.
 - `src/main/java/com/seamware/consentmanager/security/ParticipantPrincipal.java` — make the
   `participant` component `@Nullable`. Add two accessors: `registered()` (the row is
   present) and `requireRegistered()`, which returns the `Participant` or throws
-  `ForbiddenException` with a detail naming registration as the remedy. The compact
-  constructor keeps `issuer`, `subject` and `identifier` non-null, so the identifier is
-  always available.
+  `ForbiddenException` with a detail naming registration as the remedy. The record has no
+  compact constructor today, so **add** one that rejects a null `issuer`, `subject` or
+  `identifier`; the identifier is then always available even when the row is not. Rewrite the
+  class javadoc too: it currently asserts the opposite of what this step makes true ("an
+  identifier that is not registered never becomes a principal at all and the request is
+  refused with `403`", and `@param participant ... never null`). It must instead say that an
+  unregistered identifier *does* become a principal, that `POST /participants` is the only
+  route that accepts one, and that every other participant-scoped caller goes through
+  `requireRegistered()`.
 - `src/main/java/com/seamware/consentmanager/security/PrincipalResolutionFilter.java` — the
   PARTICIPANT branch keeps the "no participant identifier claim" `403` and replaces the
   "not registered" `403` with `new ParticipantPrincipal(issuer, subject, identifier, null)`.
@@ -110,8 +129,14 @@ unreachable: the caller is rejected before `POST /participants` can run.
   must call `caller.requireRegistered()`, keeping the `403` at the scoping boundary. Update the
   record's javadoc to say that `null` means `CATALOG` reads dataspace-wide and never a
   participant.
-- After the two files above, grep `\.participant()` across `src/main/java` and confirm every
-  remaining hit is inside `CallerScope`/`UserService`'s dataspace-wide branch.
+- After the two files above, grep `\.participant()` across **both** `src/main/java` and
+  `src/test/java`, and confirm every remaining hit either sits in `CallerScope`/`UserService`'s
+  dataspace-wide branch or is a call site that only ever sees a registered principal. Two tests
+  dereference the component directly and would NPE rather than fail cleanly once it is nullable
+  — `PrincipalResolutionIT.java:746` and `KeycloakRoleMatrixIT.java:343`, both
+  `participant.participant().getLegalName()` — and this step adds a case that produces an
+  unregistered principal, so guard or narrow them explicitly rather than assuming they are
+  unreachable.
 
 **Tests**
 
@@ -119,8 +144,11 @@ unreachable: the caller is rejected before `POST /participants` can run.
   case asserting that a `PARTICIPANT` token whose identifier is not in `participants`
   resolves a principal with the identifier set and the row absent, rather than `403`.
 - `src/test/java/com/seamware/consentmanager/api/EndpointRoleMatrixIT.java` — assert the
-  existing `/participants/{identifier}/users...` routes still answer `403` for an
-  unregistered participant token, **and** that `POST /users/search` and
+  existing `/participants/me/users`, `/participants/me/users/{identifier}` and
+  `/participants/me/users/bulk` routes still answer `403` for an unregistered participant
+  token (those are the paths the spec actually declares; there is no
+  `/participants/{identifier}/users...`, and a test written against that path would assert
+  `403` against a `404`), **and** that `POST /users/search` and
   `GET /users/{identifier}` do too. The latter two are the routes Step 1 actually puts at
   risk: they take the widest principal type and reach `CallerScope.of()`, so without a case
   pinning them the scope widening above would land green. Assert the status, not just the
@@ -138,9 +166,11 @@ Covers US-PM-001, AC 1, AC 2, AC 3.
 **Spec** (`api/components/schemas/`, referenced from `openapi.yaml`'s `components`)
 
 - `Participant.yaml` — `identifier` (required), `legalName` (required),
-  `selfDescriptionUri`, `email`, `legalPerson`, `endpoints`, `createdAt`, `updatedAt`
-  (`format: date-time`). No property is `nullable`, matching `User.yaml`'s rationale: a
-  nullable response property forces `JsonNullable` on the model.
+  `selfDescriptionUri`, `email`, `legalPerson`, `endpoints`, `createdAt`, `updatedAt` and
+  `deregisteredAt` (all three `format: date-time`; `deregisteredAt` is simply *absent* for an
+  active participant, which is what Step 5's retain branch marks). No property is `nullable`,
+  matching `User.yaml`'s rationale: a nullable response property forces `JsonNullable` on the
+  model.
 - `ParticipantLegalPerson.yaml` — `registrationNumber`, `headquartersAddress`,
   `legalAddress`, `parentOrganization`, `subOrganization`, all optional strings with
   `maxLength`.
@@ -176,8 +206,9 @@ Covers US-PM-001, AC 1, AC 2, AC 3.
 
 - `api/ParticipantMapperTest.java` — unit, round-trips the JSONB-backed nested objects.
 - `api/ParticipantRegistrationIT.java` — registration from a token creates the record with
-  the token's identifier; an `identifier` in the body is ignored; a second registration
-  returns `409`.
+  the token's identifier; an `identifier` in the body is ignored; a second registration by an
+  already-registered participant returns `409`. Step 5 adds the reactivation case (a
+  deregistered identifier re-registers instead of conflicting) once `deregistered_at` exists.
 
 **Acceptance criteria:** AC 1, AC 2, AC 3; no response field is a credential (AC 14 for this
 surface); `./mvnw verify` green.
@@ -228,13 +259,34 @@ step introduces the first paged endpoint and the convention for later ones.
   write this schema **inline** in `openapi.yaml` alongside `BulkUserRegistration`, with a
   comment naming the reason.
 - `openapi.yaml` — `GET /participants` (`listParticipants`) with `page` (integer, min 0,
-  default 0) and `size` (integer, min 1, `maximum` matching the configured ceiling, default
-  matching the configured default) query parameters; `GET /participants/{identifier}`
-  (`getParticipantByIdentifier`) with the URL-encoded global identifier as a path parameter
-  and a `404` response. Both are `bearerAuth: [USER, PARTICIPANT, CATALOG]`,
+  default 0), `size` (integer, min 1, default matching the configured default) and
+  `identifier` (string, optional, exact and case-sensitive) query parameters;
+  `GET /participants/{identifier}` (`getParticipantByIdentifier`) with the global identifier
+  as a path parameter and a `404` response. Both are `bearerAuth: [USER, PARTICIPANT, CATALOG]`,
   `x-roles: [USER, PARTICIPANT, CATALOG]`, `x-principal: ConsentManagerPrincipal` — the
   widest principal type, as `SpecSecurityConsistencyTest` requires the declared principal to
   hold every admitted role.
+- **`size` declares no `maximum`.** A spec-level `maximum` and a runtime clamp are mutually
+  exclusive: Bean Validation would reject an over-large `size` with `400` before the handler
+  runs, making the clamp dead code, and a YAML literal cannot track a configurable ceiling, so
+  the two would drift the first time an operator changed `page-max-size`. The configurable
+  clamp wins; the operation description states that a `size` above the configured ceiling is
+  clamped rather than rejected, and that the response's `size` field reports the applied value.
+  `page`'s `minimum: 0` and `size`'s `minimum: 1` stay in the spec — those bounds are fixed.
+- **`GET /participants/{identifier}` cannot address a slash-bearing identifier, and the
+  `identifier` query filter is the escape hatch.** This repo already settled the same question
+  for users: `api/openapi.yaml`'s `/users/{identifier}` description (lines 291-292, 524-525)
+  and `docs/user-identifiers.md` both state that a path variable never spans a `/` and the
+  container percent-decodes before routing, so an encoded slash is still unaddressable, and
+  both point callers at `POST /users/search`'s exact `identifier` criterion instead. A
+  participant identifier may be a URI (`https://example.com/participant`) as well as a DID, so
+  without a fallback AC 5 would hold only for slash-free identifiers. The `identifier` query
+  parameter on `GET /participants` is that fallback, and the `{identifier}` operation
+  description carries the same limitation note and points at it.
+- **Deregistered participants are excluded from `GET /participants` by default** — the
+  directory lists who can be transacted with — but remain resolvable by
+  `GET /participants/{identifier}` and by the `identifier` filter, carrying `deregisteredAt`,
+  so a retained consent's counterparty stays legible (Step 5).
 
 **Implementation**
 
@@ -242,19 +294,28 @@ step introduces the first paged endpoint and the convention for later ones.
   nested class with `pageDefaultSize` and `pageMaxSize`, each backed by a named
   `DEFAULT_*` constant, following the `Users` nested class. Document both env vars in
   `.env.sample` and add them to `application.yml`.
-- `ParticipantService.list(int page, int size)` — clamps `size` to the configured ceiling and
-  delegates to `ParticipantRepository` (already a `PageableRepository`) via
-  `Pageable.from(page, size)`. `findByIdentifier(...).orElseThrow(NotFoundException::new)`
-  for the single-record lookup.
+- `ParticipantService.list(int page, int size, @Nullable String identifier)` — clamps `size`
+  to the configured ceiling (never rejects it), filters out deregistered rows, applies the
+  exact `identifier` match when one is given, and delegates to `ParticipantRepository`
+  (already a `PageableRepository`) via `Pageable.from(page, size)`.
+  `findByIdentifier(...).orElseThrow(NotFoundException::new)` for the single-record lookup,
+  which resolves a deregistered participant too.
 - `ParticipantController` — both handlers; the list maps a Micronaut Data `Page` onto
   `ParticipantPage`.
 
 **Tests**
 
 - `api/ParticipantDirectoryIT.java` — a paginated listing exposes the global identifier,
-  legal name, self-description URI and email; page/size boundaries and the clamp behave;
-  lookup by identifier resolves a URL-encoded DID and `404`s on an unknown one; all three
-  roles can read, and an unregistered participant token can read too (the route needs no row).
+  legal name, self-description URI and email; page boundaries behave; a `size` above the
+  configured ceiling returns **`200`** with the response's `size` equal to the ceiling (assert
+  the status explicitly — "the clamp behaves" and "`400`" are different tests, and this one
+  pins which of the two the spec chose), while `size: 0` and `page: -1` are `400` from the
+  declared minima; lookup by identifier resolves a DID and `404`s on an unknown one; a
+  URI-shaped identifier containing a `/` is **not** reachable through the path route and is
+  resolved through `GET /participants?identifier=...` instead; a deregistered participant is
+  absent from the unfiltered listing but still resolvable by identifier with `deregisteredAt`
+  set; all three roles can read, and an unregistered participant token can read too (the route
+  needs no row).
 
 **Acceptance criteria:** AC 4, AC 5, AC 14 on the read surface.
 
@@ -264,19 +325,43 @@ Covers US-PM-007, AC 10, AC 11.
 
 **ADR**
 
-- `docs/adr/0008-deregistration-pseudonymises-the-participant-and-retains-the-audit-trail.md`
+- `docs/adr/0008-deregistration-retains-the-participant-and-closes-its-open-business.md`
   — same structure as ADR-0007 (H1 title, bold metadata bullets, `## Context`, `## Decision`
-  with H3 subsections, `## Consequences`). Record: the `409` guard on `GRANTED` consents; why
-  consents and consent events are retained; why the row is pseudonymised rather than deleted
-  whenever anything still references it; why `ON DELETE RESTRICT` on `privacy_notices` makes
-  the pseudonymise branch the normal one; and why a participant needs no counterpart to the
-  user's keyed `erasure_verifier`.
+  with H3 subsections, `## Consequences`). It must argue the participant case **on its own
+  terms**, not by analogy to ADR-0007, because the premise differs: ADR-0007 scrubs a user
+  because the identifier is personal data of a data subject with an erasure right. Record:
+  - the `409` guard on `GRANTED` consents, and why a participant may not unilaterally end a
+    permission a user granted;
+  - why `PENDING`/`DRAFT` consents are terminated instead, carrying over ADR-0007's principle
+    that nothing may be left in a state a later lifecycle operation could still advance — a
+    `PENDING` consent naming a departed participant could otherwise be moved to `GRANTED`,
+    handing a data-sharing basis to an organization that is gone;
+  - why consents and consent events are retained;
+  - why the retained row keeps its identity **intact** rather than being pseudonymised: an
+    organization has no erasure right, the ticket's own reason for retaining consents is that
+    "the participant reference remains resolvable", and there is no `erasure_verifier`
+    counterpart, so a scrubbed participant would be unrecoverable by anyone — leaving every
+    retained consent naming a counterparty nobody can identify;
+  - why `email` is nonetheless cleared: it is a contact person's address, the one field on
+    `participants` that can be personal data of a natural person;
+  - why the ticket's "the row is deleted" cannot be honoured literally — `ON DELETE RESTRICT`
+    on `privacy_notices` and `consents` forbids it whenever either exists — and why outright
+    deletion is therefore kept only for the never-transacted participant;
+  - and what `deregistered_at` means to readers: excluded from the directory listing, still
+    resolvable by identifier, not a soft-deleted record pretending to be erased.
+
+**Schema**
+
+- `src/main/resources/db/migration/V3__participant_deregistration.sql` — add
+  `deregistered_at TIMESTAMPTZ` (nullable) to `participants`, plus a partial index on
+  `deregistered_at IS NULL` for the directory listing's default filter. `domain/Participant`
+  gains the field.
 
 **Spec**
 
-- `api/components/schemas/DeregistrationSummary.yaml` — the pseudonymous identifier (present
-  only when the row was retained), plus counts of links removed, notices archived and
-  consents retained. Mirrors `ErasureSummary`.
+- `api/components/schemas/DeregistrationSummary.yaml` — `deregisteredAt` (absent when the row
+  was deleted outright), plus counts of links removed, notices archived, consents terminated
+  and consents retained. Mirrors `ErasureSummary`.
 - `openapi.yaml` — `DELETE /participants/me` (`deregisterCurrentParticipant`), `PARTICIPANT` /
   `ParticipantPrincipal`, responses `200` (`DeregistrationSummary`), `401`, `403`, `409`,
   `default`. The description states the cascade in order and links the ADR.
@@ -285,32 +370,53 @@ Covers US-PM-007, AC 10, AC 11.
 
 - `ParticipantService.deregister(Participant)` — one `@Transactional` method:
   1. `ConflictException` if any consent names the participant as provider or consumer with
-     status `GRANTED`.
-  2. Delete every `user_participants` row for the participant.
-  3. Archive every active privacy notice where the participant is provider or consumer
+     status `GRANTED`. The message names the blocking consents, since the remedy is for the
+     users to revoke them.
+  2. Move every `PENDING` and `DRAFT` consent naming the participant as provider or consumer
+     to `TERMINATED`, each with a `CONSENT_TERMINATED` event attributed to the service and a
+     reason naming the deregistration. Without this the cascade would leave an open offer that
+     a later lifecycle operation could still advance to `GRANTED` — the exact failure ADR-0007
+     names and closes for users. Terminating rather than widening the `409` is deliberate: a
+     draft the participant itself opened must not be able to block the participant's own exit.
+  3. Delete every `user_participants` row for the participant.
+  4. Archive every active privacy notice where the participant is provider or consumer
      (set `archivedAt`).
-  4. Delete the `participants` row when nothing references it; otherwise pseudonymise:
-     replace `identifier` with `DEREGISTERED_IDENTIFIER_PREFIX + UuidGenerator.uuidV7()`
-     under a reserved prefix mirroring `urn:consent-manager:erased:`, set `legalName` to a
-     named placeholder constant (the column is `NOT NULL`), null `selfDescriptionUri`,
-     `email` and `legalPerson`, and reset `endpoints` to an empty map (the column is
-     `NOT NULL DEFAULT '{}'`).
-  5. Consents and consent events are untouched.
+  5. Delete the `participants` row when nothing references it; otherwise set
+     `deregistered_at` to the current instant and clear `email`, leaving `identifier`,
+     `legalName`, `selfDescriptionUri` and `legalPerson` intact so retained consents stay
+     legible. `endpoints` resets to an empty map (the column is `NOT NULL DEFAULT '{}'`) —
+     a departed participant must not keep advertising a callback.
+  6. Consent events are append-only and are never rewritten; the consents themselves are
+     retained apart from the status change in step 2.
+- `ParticipantService.register` (Step 2) gains one rule this step introduces: an identifier
+  whose row exists but is deregistered **reactivates** that row — clearing `deregistered_at`
+  and overwriting the mutable fields from the body — rather than returning `409`.
+  `uq_participants_identifier` makes a second row impossible, and refusing outright would
+  permanently bar an organization from rejoining the dataspace. Only an *active* row is a
+  `409`. Step 2's test list gains this case.
 - `repository/ConsentRepository.java` — add `existsByProviderIdAndStatus`,
-  `existsByConsumerIdAndStatus` and the reference-existence queries the delete-vs-pseudonymise
-  branch needs.
+  `existsByConsumerIdAndStatus`, the by-participant-and-status finder step 2 needs, and the
+  reference-existence queries the delete-vs-retain branch needs.
 - `repository/PrivacyNoticeRepository.java` — add the consumer-side and
   archive-by-participant queries missing today.
+- `repository/UserParticipantRepository.java` — add `long deleteByIdParticipantId(UUID
+  participantId)`. It has `deleteByIdUserId(UUID)` but no participant-side equivalent, and
+  cascade step 3 needs one: the foreign key's `ON DELETE CASCADE` only fires on the delete
+  branch, so the retain branch would otherwise leave every affiliation in place.
 - `ParticipantController.deregisterCurrentParticipant` — resolves via
   `requireRegistered()`.
 
 **Tests**
 
 - `service/ParticipantDeregistrationIT.java` — parameterized over `GRANTED` as provider and
-  as consumer, both `409`; links removed; active notices archived and already-archived ones
-  untouched; consents and consent events still readable afterwards; the retained row carries
-  the reserved-prefix identifier and no identity-bearing field; the delete branch fires for a
-  participant with no references.
+  as consumer, both `409`; parameterized over `PENDING` and `DRAFT` as provider and as
+  consumer, all four terminated with a `CONSENT_TERMINATED` event and none left advanceable;
+  `REVOKED`/`EXPIRED`/`TERMINATED`/`REFUSED` consents untouched; links removed on the retain
+  branch as well as the delete branch; active notices archived and already-archived ones
+  untouched; consents and consent events still readable afterwards; the retained row keeps its
+  identifier, legal name and self-description URI, carries `deregisteredAt`, and has `email`
+  and `endpoints` cleared; the delete branch fires for a participant with no references;
+  re-registering a deregistered identifier reactivates the row and clears `deregisteredAt`.
 - `service/ParticipantDeregistrationAtomicityIT.java` — a failure mid-cascade rolls the whole
   transaction back, mirroring `UserErasureAtomicityIT`.
 
@@ -365,8 +471,11 @@ API description and `docs/security.md`; `./mvnw verify` green (the spec is parse
   recorded as struck by owner agreement on PR #1 and owned end-to-end (route and keys) by
   TICKET-011, not merely deferred.
 - Update `AGENTS.md`: the participant module's files, the pagination convention introduced
-  in Step 4, the nullable-row `ParticipantPrincipal` contract from Step 1 (including
-  `CallerScope.of()` refusing an unregistered participant), and ADR-0008. Also carry over the
+  in Step 4 (configurable clamp, no spec-level `maximum`, and the `identifier` query filter as
+  the escape hatch for slash-bearing identifiers), the nullable-row `ParticipantPrincipal`
+  contract from Step 1 (including `CallerScope.of()` refusing an unregistered participant),
+  the new `V3__participant_deregistration.sql` migration and the `deregistered_at` semantics,
+  and ADR-0008. Also carry over the
   correction raised on PR #1: the `service/` line still names `UserProvisioningService`,
   which does not exist — JIT provisioning lives in `UserService` and returns a
   `ProvisionedUser`. The line should read `UserService (registration, JIT provisioning,
