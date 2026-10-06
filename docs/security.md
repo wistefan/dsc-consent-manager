@@ -79,8 +79,27 @@ implementation, when the concrete controller only inherits the generated delegat
 answers 501), when a secured operation declares no principal parameter or one whose type cannot
 hold a role it admits, and when a path item hides its operations behind a `$ref`.
 
-Implemented operations: `/api-status` (anonymous, `ApiStatusController`), `POST /users/register`
-and `GET /users/me` (`USER`, `UserController`).
+Implemented operations:
+
+| Operation | Roles | Controller |
+|---|---|---|
+| `GET /api-status` | anonymous | `ApiStatusController` |
+| `POST /users/register` | `USER` | `UserController` |
+| `GET /users/me` | `USER` | `UserController` |
+| `DELETE /users/me` | `USER` | `UserController` |
+| `POST /users/search` | `PARTICIPANT`, `CATALOG` | `UserController` |
+| `GET /users/{identifier}` | `PARTICIPANT`, `CATALOG` | `UserController` |
+| `POST /participants/me/users` | `PARTICIPANT` | `ParticipantUserController` |
+| `POST /participants/me/users/bulk` | `PARTICIPANT` | `ParticipantUserController` |
+| `PATCH /participants/me/users/{identifier}` | `PARTICIPANT` | `ParticipantUserController` |
+| `DELETE /participants/me/users/{identifier}` | `PARTICIPANT` | `ParticipantUserController` |
+
+`EndpointRoleMatrixIT` answers each of these with every role, with a token holding no role of this
+service and with no token at all, against a real Keycloak; it fails when an operation of the
+specification has no row, so the table above cannot quietly fall behind the specification.
+`KeycloakRoleMatrixIT` keeps proving the same of synthetic probe routes, which is where the
+mechanism itself — discovery, signature verification, claim mapping, principal resolution — is
+exercised independently of any published route.
 
 ## Erasure verification
 

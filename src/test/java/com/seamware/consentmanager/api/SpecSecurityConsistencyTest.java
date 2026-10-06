@@ -79,6 +79,12 @@ class SpecSecurityConsistencyTest {
     /** Keys of a path item that are operations rather than metadata such as {@code parameters}. */
     private static final Set<String> OPERATION_KEYS = ROUTING_ANNOTATIONS.keySet();
 
+    /**
+     * Operations {@code api/openapi.yaml} declares, which is how many cases every generated test
+     * below must run.
+     */
+    private static final int SPECIFIED_OPERATION_COUNT = 10;
+
     /** Path item key that would hide every operation beneath it from this test. */
     private static final String REF_KEY = "$ref";
 
@@ -178,7 +184,13 @@ class SpecSecurityConsistencyTest {
                                                                 globalSecurity));
                                             }
                                         }));
-        assertThat(operations).as("the specification declares at least one operation").isNotEmpty();
+        assertThat(operations)
+                .as(
+                        "every case below is generated from this list, so an operation missing from"
+                                + " it is not a failure but a silence; the count is stated here so"
+                                + " that a path item this parser cannot see costs a build. Raise it"
+                                + " in the commit that adds the operation")
+                .hasSize(SPECIFIED_OPERATION_COUNT);
         return operations.stream();
     }
 
