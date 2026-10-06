@@ -1,0 +1,34 @@
+# Schema: ParticipantUserLinkUpdate — referenced from api/openapi.yaml as
+# components.schemas.ParticipantUserLinkUpdate.
+#
+# Deliberately not `UserRegistration`, whose `identifier` is required and whose
+# attributes belong to the user rather than to the link: the only thing a
+# participant may change about an existing link is its own local identifier.
+#
+# Deliberately without `additionalProperties: false`, as elsewhere on this API —
+# a property this schema does not name is ignored rather than refused.
+#
+# `localIdentifier` is not declared `nullable`, so the generator emits a plain
+# `String` and an omitted property is indistinguishable from an explicit `null`.
+# That is what makes "omitted clears it" the only coherent reading: see the
+# description below.
+type: object
+description: >
+  The new state of the calling participant's link to a user.
+
+
+  The body carries exactly one property and replaces it outright, so an omitted
+  or `null` `localIdentifier` **clears** the stored value rather than leaving it
+  alone. There is no second property for a partial update to preserve, and
+  without this there would be no way to remove a local identifier once written.
+properties:
+  localIdentifier:
+    type: string
+    # Same bound as on UserRegistration: the backing column is TEXT and the
+    # value comes from a participant rather than from a validated token.
+    maxLength: 255
+    description: >
+      The calling participant's own identifier for this user, stored on that
+      participant's link and visible to nobody else. Omit it, or send `null`, to
+      clear the one currently stored.
+    example: "patient-10427"

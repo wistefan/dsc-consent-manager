@@ -4,12 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
+import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.domain.UserParticipant.UserParticipantId;
 import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ForbiddenException;
+import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
@@ -95,7 +98,8 @@ class UserServiceTest {
     private final ConsentManagerConfiguration.Users limits =
             new ConsentManagerConfiguration.Users();
 
-    private final UserService service = new UserService(users, links, participants, limits);
+    private final UserService service =
+            new UserService(users, links, participants, new StubConsentRepository(), limits);
 
     /** An identifier no row exists for is inserted from the claims, and reported as created. */
     @Test
@@ -850,6 +854,84 @@ class UserServiceTest {
 
         @Override
         public List<Participant> findAll(Sort sort) {
+            throw unsupported();
+        }
+    }
+
+    /**
+     * A {@link ConsentRepository} that answers nothing: only {@code unlink} consults consents, and
+     * {@code ParticipantUserLinkIT} exercises that against a real database.
+     */
+    private static final class StubConsentRepository extends StubRepository<UUID, Consent>
+            implements ConsentRepository {
+
+        @Override
+        UUID keyOf(Consent row) {
+            return row.getId();
+        }
+
+        @Override
+        public List<Consent> findByUserIdAndStatus(UUID userId, ConsentStatus status) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findByUserId(UUID userId, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findByProviderId(UUID providerId, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findByConsumerId(UUID consumerId, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findByPrivacyNoticeId(UUID privacyNoticeId) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findByParentConsentId(UUID parentConsentId) {
+            throw unsupported();
+        }
+
+        @Override
+        public <S extends Consent> S save(S entity) {
+            throw unsupported();
+        }
+
+        @Override
+        public <S extends Consent> S update(S entity) {
+            throw unsupported();
+        }
+
+        @Override
+        public Optional<Consent> findById(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
+        public boolean existsById(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
+        public void deleteById(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findAll(Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findAll(Sort sort) {
             throw unsupported();
         }
     }

@@ -1,13 +1,18 @@
 package com.seamware.consentmanager.service;
 
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
+import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.domain.UserParticipant.UserParticipantId;
 import com.seamware.consentmanager.error.ApiException;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.error.ConflictException;
+import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.error.ProblemType;
+import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
@@ -92,11 +97,26 @@ public class UserService {
     private static final String OVERSIZED_BATCH_DETAIL =
             "A bulk registration carried %d entries, more than the %d this deployment permits.";
 
+    /**
+     * Published for a link the caller does not hold and for an identifier naming nobody alike. A
+     * {@code 403} telling the two apart would confirm that the identifier names a registered user,
+     * which a participant without a link is not entitled to learn.
+     */
+    private static final String NO_LINK_DETAIL =
+            "This participant holds no link to a user under this identifier.";
+
+    /** Why an unlink is refused while the caller is still party to a granted consent. */
+    private static final String ACTIVE_CONSENT_DETAIL =
+            "This participant is still party to %d granted consent(s) for this user. "
+                    + "Revoke them before unlinking.";
+
     private final UserRepository users;
 
     private final UserParticipantRepository links;
 
     private final ParticipantRepository participants;
+
+    private final ConsentRepository consents;
 
     private final ConsentManagerConfiguration.Users configuration;
 
@@ -104,10 +124,12 @@ public class UserService {
             UserRepository users,
             UserParticipantRepository links,
             ParticipantRepository participants,
+            ConsentRepository consents,
             ConsentManagerConfiguration.Users configuration) {
         this.users = users;
         this.links = links;
         this.participants = participants;
+        this.consents = consents;
         this.configuration = configuration;
     }
 
@@ -372,6 +394,70 @@ public class UserService {
                     OVERSIZED_BATCH_DETAIL.formatted(registrations.size(), maximum));
         }
         return registrations.stream().map(entry -> apply(participant, entry)).toList();
+    }
+
+    /**
+     * Replaces the local identifier on the caller's own link and returns the row as re-read.
+     *
+     * <p>Returning the re-read entity rather than the object just mutated is deliberate: the
+     * response then reports what the database holds, including anything a concurrent write settled
+     * differently, instead of echoing an optimistic in-memory copy back to the caller.
+     *
+     * <p>The body carries one property and replaces it outright, so a {@code null} clears the
+     * stored value - unlike registration, where an omitted local identifier leaves the link alone.
+     * Without that there would be no way to remove one once written. The {@code users} row is out
+     * of reach here by design; attributes belong to whoever created the record and to the user's
+     * own identity provider.
+     */
+    public UserParticipant updateLink(
+            Participant participant, String identifier, @Nullable String localIdentifier) {
+        UserParticipant link = requireLink(participant, identifier);
+        link.setLocalIdentifier(localIdentifier);
+        links.update(link);
+        return links.findById(link.getId())
+                .orElseThrow(() -> new NotFoundException(NO_LINK_DETAIL));
+    }
+
+    /**
+     * Removes the caller's link to a user, leaving the user row, its consents and every other
+     * participant's link in place.
+     *
+     * <p>Refused with a {@link ConflictException} while any consent for that user is {@code
+     * GRANTED} and names the caller as provider or consumer: unlinking would strand a consent whose
+     * participant no longer knows the user. A granted consent between two other participants does
+     * not block it, and neither does one in any other status.
+     *
+     * <p>The check is advisory rather than a guarantee - a consent granted between it and the
+     * delete still slips through, since the two are separate statements and {@code consents} has no
+     * constraint that could serialise them. Erasure is the data subject's own concern and goes
+     * through a different path; this operation never touches {@link UserRepository}.
+     */
+    public void unlink(Participant participant, String identifier) {
+        UserParticipant link = requireLink(participant, identifier);
+        long blocking =
+                consents.findByUserIdAndStatus(link.getUserId(), ConsentStatus.GRANTED).stream()
+                        .filter(consent -> isParty(consent, participant))
+                        .count();
+        if (blocking > 0) {
+            throw new ConflictException(ACTIVE_CONSENT_DETAIL.formatted(blocking));
+        }
+        links.deleteByIdUserIdAndIdParticipantId(link.getUserId(), participant.getId());
+    }
+
+    /** The caller's own link to the user an identifier names; absence either way is a 404. */
+    private UserParticipant requireLink(Participant participant, String identifier) {
+        return users.findByIdentifier(identifier)
+                .flatMap(
+                        user ->
+                                links.findById(
+                                        new UserParticipantId(user.getId(), participant.getId())))
+                .orElseThrow(() -> new NotFoundException(NO_LINK_DETAIL));
+    }
+
+    /** Whether the participant is named on either side of the consent. */
+    private static boolean isParty(Consent consent, Participant participant) {
+        return participant.getId().equals(consent.getProviderId())
+                || participant.getId().equals(consent.getConsumerId());
     }
 
     /**

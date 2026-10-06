@@ -1,0 +1,38 @@
+# Schema: ParticipantUserLink — referenced from api/openapi.yaml as
+# components.schemas.ParticipantUserLink.
+#
+# The link row as its own participant sees it, which is deliberately not a
+# `User`: `localIdentifier` lives on the link rather than on the user, is
+# private to the participant that wrote it, and is therefore absent from every
+# user representation. No property is declared `nullable`, following `User.yaml`:
+# a local identifier this service does not hold is simply absent.
+type: object
+description: >
+  The link between the calling participant and one user. Scoped to the caller —
+  a participant never reads another participant's link, nor learns that one
+  exists.
+properties:
+  identifier:
+    type: string
+    description: >
+      The data space's global user identifier, echoing the one addressed in the
+      path. The link is keyed on this and it never changes.
+    example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+  localIdentifier:
+    type: string
+    description: >
+      The calling participant's own identifier for this user, absent when the
+      participant holds none. A convenience column for reconciling against the
+      participant's internal records — never a lookup key and never part of
+      matching.
+    example: "patient-10427"
+  linkedAt:
+    type: string
+    format: date-time
+    description: >
+      When this participant was first linked to the user, at UTC. Unaffected by
+      later changes to `localIdentifier`.
+    example: "2026-01-15T09:30:00Z"
+required:
+  - identifier
+  - linkedAt
