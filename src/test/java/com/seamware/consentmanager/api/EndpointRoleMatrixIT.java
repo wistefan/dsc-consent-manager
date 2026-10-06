@@ -306,6 +306,50 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         }
     }
 
+    /**
+     * The published routes a {@code PARTICIPANT} may only reach once its identifier is registered.
+     *
+     * <p>Every route under {@code /participants/me/users} is one, and so are {@code POST
+     * /users/search} and {@code GET /users/{identifier}}: those two admit the widest principal type
+     * and derive their scope from the caller's participant row, where an absent row would read as
+     * "dataspace-wide" rather than "unknown".
+     */
+    static Stream<Arguments> participantScopedEndpoints() {
+        return Stream.of(
+                Arguments.of(Endpoint.SEARCH_USERS),
+                Arguments.of(Endpoint.LOOKUP_USER),
+                Arguments.of(Endpoint.REGISTER_PARTICIPANT_USER),
+                Arguments.of(Endpoint.BULK_REGISTER_PARTICIPANT_USERS),
+                Arguments.of(Endpoint.UPDATE_LINK),
+                Arguments.of(Endpoint.UNLINK));
+    }
+
+    /**
+     * An unregistered identifier now resolves a principal instead of being refused by the filter,
+     * so each of these routes has to do the refusing itself.
+     *
+     * <p>The assertion is on the status rather than on an empty result, so a later change that
+     * answers an unregistered participant with an empty page - which would still be the scope
+     * widening this guards against, merely with nothing to disclose yet - fails here.
+     */
+    @ParameterizedTest(name = "{0} refuses an unregistered participant")
+    @MethodSource("participantScopedEndpoints")
+    @DisplayName("an unregistered participant is refused by every route but its own registration")
+    void unregisteredParticipantIsRefused(Endpoint endpoint) {
+        deregisterTheCallerParticipant();
+
+        HttpResponse<String> response = exchange(endpoint.request(), Caller.PARTICIPANT.token());
+
+        assertThat(response.code()).isEqualTo(HttpStatus.FORBIDDEN.getCode());
+    }
+
+    /** Drops the caller's {@code participants} row, leaving its token valid but unregistered. */
+    private void deregisterTheCallerParticipant() {
+        users.findByIdentifier(LINKED_USER)
+                .ifPresent(user -> links.findByIdUserId(user.getId()).forEach(links::delete));
+        participants.findByIdentifier(CALLER_PARTICIPANT).ifPresent(participants::delete);
+    }
+
     @Test
     @DisplayName("every operation the specification declares has a row in the matrix")
     void everySpecifiedOperationIsCovered() {

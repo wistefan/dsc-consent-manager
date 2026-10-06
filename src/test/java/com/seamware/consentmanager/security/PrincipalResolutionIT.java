@@ -144,6 +144,9 @@ class PrincipalResolutionIT extends PostgresTestResource {
     /** Legal name of the registered participant, asserted on to prove the row was resolved. */
     private static final String REGISTERED_LEGAL_NAME = "Registered Participant Ltd";
 
+    /** Rendering the probe gives a participant principal that carries no registered row. */
+    private static final String UNREGISTERED_MARKER = "<unregistered>";
+
     /** Lifetime given to every minted token. */
     private static final Duration TOKEN_LIFETIME = Duration.ofMinutes(5);
 
@@ -428,10 +431,26 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 Arguments.of("the only role is unmappable", claims(UNMAPPED_ROLE, null)),
                 Arguments.of(
                         "every role is unmappable",
-                        claims(new String[] {UNMAPPED_ROLE, "uma_authorization"}, null)),
-                Arguments.of(
-                        "the participant identifier is not registered",
-                        claims(PARTICIPANT_ROLE, UNREGISTERED_PARTICIPANT)));
+                        claims(new String[] {UNMAPPED_ROLE, "uma_authorization"}, null)));
+    }
+
+    /**
+     * Self-registration has to be reachable, so an identifier the {@code participants} table does
+     * not know resolves a principal carrying it with the row absent, rather than a 403.
+     */
+    @Test
+    @DisplayName("an unregistered participant identifier resolves a principal without its row")
+    void unregisteredParticipantResolvesWithoutItsRow() {
+        HttpResponse<String> response =
+                get(ANY_ROUTE, token(claims(PARTICIPANT_ROLE, UNREGISTERED_PARTICIPANT)));
+
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(response.getBody(String.class))
+                .hasValue(
+                        "ParticipantPrincipal PARTICIPANT "
+                                + UNREGISTERED_PARTICIPANT
+                                + " "
+                                + UNREGISTERED_MARKER);
     }
 
     /**
@@ -536,7 +555,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
     }
 
     /**
-     * Tokens that authenticate and then name no caller, every one of them a 403 on a secured route.
+     * Tokens that authenticate and then carry nothing an anonymous route needs to look at.
      *
      * @return one case per way
      */
@@ -743,7 +762,9 @@ class PrincipalResolutionIT extends PostgresTestResource {
                                 + " "
                                 + participant.identifier()
                                 + " "
-                                + participant.participant().getLegalName();
+                                + (participant.registered()
+                                        ? participant.participant().getLegalName()
+                                        : UNREGISTERED_MARKER);
                 case CatalogPrincipal catalog ->
                         "CatalogPrincipal " + catalog.role() + " " + catalog.subject();
             };

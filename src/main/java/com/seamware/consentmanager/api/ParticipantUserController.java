@@ -69,7 +69,7 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
     public HttpResponse<UserRegistrationResult> registerParticipantUser(
             ParticipantPrincipal principal, UserRegistration body) {
         RegistrationResult result =
-                users.registerForParticipant(principal.participant(), toRegistration(body));
+                users.registerForParticipant(principal.requireRegistered(), toRegistration(body));
         UserRegistrationResult payload =
                 new UserRegistrationResult(
                         mapper.toRepresentation(result.user(), CallerScope.of(principal)),
@@ -92,7 +92,7 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
             ParticipantPrincipal principal, BulkUserRegistration body) {
         List<BulkEntryResult> results =
                 users.registerBulkForParticipant(
-                        principal.participant(),
+                        principal.requireRegistered(),
                         body.getUsers().stream()
                                 .map(ParticipantUserController::toRegistration)
                                 .toList());
@@ -180,8 +180,8 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
         JsonNullable<String> update = participantUserLinkUpdate.getLocalIdentifier_JsonNullable();
         var link =
                 update.isPresent()
-                        ? users.updateLink(principal.participant(), identifier, update.get())
-                        : users.linkFor(principal.participant(), identifier);
+                        ? users.updateLink(principal.requireRegistered(), identifier, update.get())
+                        : users.linkFor(principal.requireRegistered(), identifier);
         return HttpResponse.ok(mapper.toLinkRepresentation(identifier, link));
     }
 
@@ -189,7 +189,7 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
     @Override
     public HttpResponse<Void> unlinkParticipantUser(
             ParticipantPrincipal principal, String identifier) {
-        users.unlink(principal.participant(), identifier);
+        users.unlink(principal.requireRegistered(), identifier);
         return HttpResponse.noContent();
     }
 
