@@ -308,19 +308,27 @@ paths:
 
 
         `results` holds exactly one entry per entry sent, in the order sent, and
-        `summary` counts them by outcome. An entry naming no identifier, or only
-        whitespace, is `REJECTED`; it is the one malformed entry this operation
-        answers per entry rather than refusing the request over, since the
-        batch's remaining entries are unaffected by it.
+        `summary` counts them by outcome. **Unusable data in one entry costs only
+        that entry:** an entry naming no identifier, or only whitespace, and an
+        entry whose `email` is not a valid address are both answered `REJECTED`
+        with a `reason` while the batch's remaining entries land. The same
+        identifier sent twice in one batch is not an error either — the second
+        occurrence simply sees the user the first one created, so it reports
+        `ALREADY_LINKED`.
 
 
         **Two failures are request-level and answered `400`,** because they are
-        facts about the request rather than about one entry: a batch carrying
-        more entries than the deployment permits — the limit is configured, and
-        a batch above it is refused before anything is written — and a batch
-        whose entries violate the published property bounds. A batch carrying no
-        entries at all is not an error: it is answered `207` with an empty
-        `results` and a summary of zeroes.
+        facts about the request rather than about one entry. The first is a
+        batch carrying more entries than the deployment permits; the limit is
+        configured, and a batch above it is refused before anything is written.
+        The second is a batch in which any string exceeds the `maxLength` its
+        property publishes — those bounds guard the stored columns, so they are
+        checked before the batch is applied and **a single over-long value
+        discards the whole batch** without naming the entry at fault. Keep
+        values within the documented lengths; everything else about an entry's
+        content is reported per entry. A batch carrying no entries at all is not
+        an error: it is answered `207` with an empty `results` and a summary of
+        zeroes.
       tags:
         - Participant Users
       security:

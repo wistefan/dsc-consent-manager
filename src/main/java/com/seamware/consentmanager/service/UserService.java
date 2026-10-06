@@ -7,6 +7,7 @@ import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.domain.UserParticipant.UserParticipantId;
 import com.seamware.consentmanager.error.ApiException;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.error.ProblemType;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
@@ -21,6 +22,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +65,21 @@ public class UserService {
     /** Why a bulk entry naming no identifier is refused; published as that entry's reason. */
     private static final String BLANK_IDENTIFIER_DETAIL =
             "A registration must name a non-blank identifier.";
+
+    /**
+     * Why a bulk entry carrying an unusable address is refused; published as that entry's reason.
+     */
+    private static final String MALFORMED_EMAIL_DETAIL =
+            "The email address is not a valid address.";
+
+    /**
+     * The address shape a bulk entry has to satisfy, checked here rather than declared on {@code
+     * BulkUserRegistrationEntry}: a schema constraint cascades into the array and would fail the
+     * whole batch over one dirty address. Deliberately as permissive as bean validation's own
+     * {@code @Email} - a local part, an {@code @}, a domain, no whitespace - since narrowing it
+     * would reject addresses the single-registration route accepts.
+     */
+    private static final Pattern EMAIL_SHAPE = Pattern.compile("[^\\s@]+@[^\\s@]+");
 
     /**
      * Stands in for an unexpected failure of a single bulk entry. The exception's own message may
@@ -357,17 +374,26 @@ public class UserService {
         return registrations.stream().map(entry -> apply(participant, entry)).toList();
     }
 
-    /** One entry, isolated: whatever goes wrong here is reported and never reaches the next one. */
+    /**
+     * One entry, isolated: whatever goes wrong here is reported and never reaches the next one.
+     *
+     * <p>The per-entry shape checks live here rather than on the schema precisely so that one
+     * unusable entry costs only itself; see {@code BulkUserRegistrationEntry.yaml}.
+     */
     private BulkEntryResult apply(Participant participant, UserRegistration registration) {
         String identifier = registration.identifier();
         if (identifier == null || identifier.isBlank()) {
             return BulkEntryResult.rejected(identifier, BLANK_IDENTIFIER_DETAIL);
         }
+        String email = registration.email();
+        if (email != null && !EMAIL_SHAPE.matcher(email).matches()) {
+            return BulkEntryResult.rejected(identifier, MALFORMED_EMAIL_DETAIL);
+        }
         try {
-            return BulkEntryResult.of(
+            return BulkEntryResult.applied(
                     identifier, registerForParticipant(participant, registration).outcome());
         } catch (ApiException e) {
-            return BulkEntryResult.rejected(identifier, e.getMessage());
+            return BulkEntryResult.rejected(identifier, publishable(e));
         } catch (RuntimeException e) {
             LOG.warn(
                     "Entry {} of a bulk registration for participant {} failed",
@@ -376,6 +402,18 @@ public class UserService {
                     e);
             return BulkEntryResult.rejected(identifier, UNREGISTERABLE_ENTRY_DETAIL);
         }
+    }
+
+    /**
+     * An entry's reason, under the same rule {@code ApiExceptionHandler} applies to a problem
+     * detail: a 4xx message reaches the caller verbatim, a 5xx one is logged and replaced.
+     */
+    private static String publishable(ApiException e) {
+        if (e.problemType().status().getCode() >= ProblemType.LOWEST_SERVER_ERROR_STATUS) {
+            LOG.warn("A bulk registration entry failed with a server-error problem type", e);
+            return UNREGISTERABLE_ENTRY_DETAIL;
+        }
+        return e.getMessage();
     }
 
     /**

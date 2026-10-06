@@ -70,10 +70,18 @@ class ParticipantUserBulkRegistrationIT extends KeycloakAndPostgresTestResource 
 
     private static final String REPEATED_USER = "urn:test:user:bulk-repeated";
 
+    /** Named by the entry whose address is unusable, and never written because of it. */
+    private static final String MALFORMED_EMAIL_USER = "urn:test:user:bulk-bad-address";
+
+    /** Named twice by one batch, to pin down what the second occurrence is answered. */
+    private static final String DUPLICATED_USER = "urn:test:user:bulk-duplicated";
+
     /** Identifiers an over-long or malformed batch names, none of which may survive it. */
     private static final String REFUSED_USER_PREFIX = "urn:test:user:bulk-refused-";
 
-    private static final List<String> SEEDED_USERS = List.of(NEW_USER, ADOPTED_USER, REPEATED_USER);
+    /** Every identifier these tests may commit a row under, removed again when they are done. */
+    private static final List<String> SEEDED_USERS =
+            List.of(NEW_USER, ADOPTED_USER, REPEATED_USER, MALFORMED_EMAIL_USER, DUPLICATED_USER);
 
     /**
      * The batch maximum this test's context runs with, small enough that an over-long batch is a
@@ -278,6 +286,47 @@ class ParticipantUserBulkRegistrationIT extends KeycloakAndPostgresTestResource 
         assertThat(users.findByIdentifier(refusedUser(0)))
                 .as("the well-formed entry of a malformed batch is not written either")
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("an unusable address rejects its own entry and no other")
+    void aMalformedAddressCostsOnlyItsOwnEntry() throws IOException {
+        List<Map<String, Object>> batch =
+                List.of(
+                        Map.of("identifier", MALFORMED_EMAIL_USER, "email", "ada@"),
+                        Map.of("identifier", NEW_USER, "email", "ada@example.org"));
+
+        HttpResponse<String> response = post(batch);
+
+        assertThat(response.code()).isEqualTo(HttpStatus.MULTI_STATUS.getCode());
+        assertThat(outcomesOf(response))
+                .as("the address shape is checked per entry, never over the batch")
+                .containsExactly("REJECTED", "CREATED");
+        assertThat(users.findByIdentifier(MALFORMED_EMAIL_USER))
+                .as("a rejected entry writes nothing")
+                .isEmpty();
+        assertThat(linkedParticipantIdsOf(NEW_USER))
+                .as("and the entry sent after it still landed")
+                .containsExactly(participantId(CALLER_PARTICIPANT));
+    }
+
+    @Test
+    @DisplayName("the same identifier twice creates once and repeats as already linked")
+    void aRepeatedIdentifierIsCreatedThenAlreadyLinked() throws IOException {
+        List<Map<String, Object>> batch =
+                List.of(
+                        Map.of("identifier", DUPLICATED_USER),
+                        Map.of("identifier", DUPLICATED_USER));
+
+        HttpResponse<String> response = post(batch);
+
+        assertThat(response.code()).isEqualTo(HttpStatus.MULTI_STATUS.getCode());
+        assertThat(outcomesOf(response))
+                .as("entries are applied in order, so the second sees what the first created")
+                .containsExactly("CREATED", "ALREADY_LINKED");
+        assertThat(linkedParticipantIdsOf(DUPLICATED_USER))
+                .as("one user, one link, however often the batch named it")
+                .containsExactly(participantId(CALLER_PARTICIPANT));
     }
 
     @ParameterizedTest(name = "{0} gets {1}")

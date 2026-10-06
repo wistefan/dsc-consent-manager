@@ -14,11 +14,13 @@ import com.seamware.consentmanager.service.CallerScope;
 import com.seamware.consentmanager.service.RegistrationOutcome;
 import com.seamware.consentmanager.service.RegistrationResult;
 import com.seamware.consentmanager.service.UserService;
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
 import io.micronaut.http.annotation.Controller;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -38,12 +40,10 @@ import java.util.stream.Collectors;
 public class ParticipantUserController extends AbstractParticipantUsersController {
 
     /**
-     * Why {@link RegistrationOutcome#REJECTED} cannot reach the single-registration result: that
-     * path answers a refusal with a problem detail, so the outcome is unrepresentable rather than
-     * merely unused, and the published enum is narrower by three constants to one.
+     * Placeholder for the counts of a summary still being assembled. The generated constructor
+     * demands all five positionally; every one is then set through its named setter.
      */
-    private static final String UNREACHABLE_REJECTION =
-            "registerForParticipant returned %s, which only the bulk path can produce";
+    private static final int UNCOUNTED = 0;
 
     private final UserService users;
 
@@ -101,22 +101,25 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
     }
 
     /**
-     * The published tally. Counts are read by name, never by position, so none can be transposed.
+     * The published tally. Every count goes in through its own named setter, so reordering the
+     * properties of {@code BulkRegistrationSummary.yaml} - and with them the generated
+     * constructor's five same-typed parameters - cannot silently transpose one count onto another.
      */
     private static BulkRegistrationSummary summaryOf(List<BulkEntryResult> results) {
         Map<RegistrationOutcome, Long> counted =
                 results.stream()
-                        .collect(
-                                Collectors.groupingBy(
-                                        BulkEntryResult::outcome, Collectors.counting()));
+                        .map(BulkEntryResult::outcome)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()));
         Function<RegistrationOutcome, Integer> count =
                 outcome -> counted.getOrDefault(outcome, 0L).intValue();
-        return new BulkRegistrationSummary(
-                results.size(),
-                count.apply(RegistrationOutcome.CREATED),
-                count.apply(RegistrationOutcome.LINKED),
-                count.apply(RegistrationOutcome.ALREADY_LINKED),
-                count.apply(RegistrationOutcome.REJECTED));
+        int applied = counted.values().stream().mapToInt(Long::intValue).sum();
+        return new BulkRegistrationSummary(UNCOUNTED, UNCOUNTED, UNCOUNTED, UNCOUNTED, UNCOUNTED)
+                .total(results.size())
+                .created(count.apply(RegistrationOutcome.CREATED))
+                .linked(count.apply(RegistrationOutcome.LINKED))
+                .alreadyLinked(count.apply(RegistrationOutcome.ALREADY_LINKED))
+                .rejected(results.size() - applied);
     }
 
     /** One entry's fate as the API publishes it; {@code reason} is set for rejections alone. */
@@ -127,17 +130,20 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
     }
 
     /**
-     * Exhaustive on purpose: the published bulk enum has to keep pace with {@link
+     * The published outcome of one entry; a null service outcome is the rejection only this path
+     * can report. Exhaustive on purpose: the published enum has to keep pace with {@link
      * RegistrationOutcome}, and a new constant must fail compilation rather than surface as a
      * runtime 500.
      */
     private static BulkRegistrationEntryResult.OutcomeEnum bulkOutcomeOf(
-            RegistrationOutcome outcome) {
+            @Nullable RegistrationOutcome outcome) {
+        if (outcome == null) {
+            return BulkRegistrationEntryResult.OutcomeEnum.REJECTED;
+        }
         return switch (outcome) {
             case CREATED -> BulkRegistrationEntryResult.OutcomeEnum.CREATED;
             case LINKED -> BulkRegistrationEntryResult.OutcomeEnum.LINKED;
             case ALREADY_LINKED -> BulkRegistrationEntryResult.OutcomeEnum.ALREADY_LINKED;
-            case REJECTED -> BulkRegistrationEntryResult.OutcomeEnum.REJECTED;
         };
     }
 
@@ -167,15 +173,13 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
      * The service outcome as the published enum.
      *
      * <p>Exhaustive by constant rather than by name: {@code fromValue} would throw at runtime on a
-     * constant the spec does not carry, and the bulk path is about to add one.
+     * constant the spec does not carry.
      */
     private static UserRegistrationResult.OutcomeEnum outcomeOf(RegistrationOutcome outcome) {
         return switch (outcome) {
             case CREATED -> UserRegistrationResult.OutcomeEnum.CREATED;
             case LINKED -> UserRegistrationResult.OutcomeEnum.LINKED;
             case ALREADY_LINKED -> UserRegistrationResult.OutcomeEnum.ALREADY_LINKED;
-            case REJECTED ->
-                    throw new IllegalStateException(UNREACHABLE_REJECTION.formatted(outcome));
         };
     }
 }

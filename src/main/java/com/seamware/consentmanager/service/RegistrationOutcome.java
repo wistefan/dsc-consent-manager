@@ -3,6 +3,9 @@ package com.seamware.consentmanager.service;
 /**
  * What a registration did with one user, which the API maps onto a status code or a per-entry
  * outcome.
+ *
+ * <p>Every constant is reachable: a registration that cannot be applied is refused rather than
+ * described, so refusal is not modelled here but as a null outcome on {@link BulkEntryResult}.
  */
 public enum RegistrationOutcome {
 
@@ -13,12 +16,5 @@ public enum RegistrationOutcome {
     LINKED,
 
     /** The user was already linked; only {@code localIdentifier} may have changed. */
-    ALREADY_LINKED,
-
-    /**
-     * The registration was not applied. Reachable only through {@link
-     * UserService#registerBulkForParticipant}, which reports a failed entry rather than failing the
-     * batch; {@link UserService#registerForParticipant} throws instead of returning this.
-     */
-    REJECTED
+    ALREADY_LINKED
 }
