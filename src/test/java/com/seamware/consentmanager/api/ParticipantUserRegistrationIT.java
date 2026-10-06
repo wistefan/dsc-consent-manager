@@ -108,8 +108,11 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
                     "firstName", "Alan",
                     "lastName", "Turing");
 
-    /** The {@code maxLength} the schema puts on every property but {@code email}. */
+    /** The {@code maxLength} the schema puts on the human-scale properties. */
     private static final int MAX_FIELD_LENGTH = 255;
+
+    /** The looser bound {@code localIdentifier} carries, so that a DID or a URI fits. */
+    private static final int MAX_LOCAL_IDENTIFIER_LENGTH = 2048;
 
     /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
@@ -261,17 +264,31 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo(EVERY_ATTRIBUTE.get("localIdentifier"));
     }
 
-    @ParameterizedTest(name = "{0} longer than its maximum")
-    @ValueSource(strings = {"identifier", "localIdentifier", "firstName", "lastName"})
+    @ParameterizedTest(name = "{0} longer than its maximum of {1}")
+    @MethodSource("boundedProperties")
     @DisplayName("a property longer than its maximum is refused before anything is written")
-    void anOverlongPropertyIsRefused(String property) {
+    void anOverlongPropertyIsRefused(String property, int maximum) {
         // Written in this order on purpose: `identifier` is one of the properties under test, so
         // the overlong value has to be able to replace the otherwise-valid one.
         Map<String, Object> body = new LinkedHashMap<>(Map.of("identifier", MAPPED_USER));
-        body.put(property, "x".repeat(MAX_FIELD_LENGTH + 1));
+        body.put(property, "x".repeat(maximum + 1));
 
         assertThat(post(body).code()).isEqualTo(HttpStatus.BAD_REQUEST.getCode());
         assertThat(users.findByIdentifier(MAPPED_USER)).isEmpty();
+    }
+
+    /**
+     * Every bounded property with the bound its own schema declares.
+     *
+     * <p>{@code localIdentifier} is deliberately looser than the rest: it may carry a DID or
+     * another URI, which the bound that suits a human-scale name does not accommodate.
+     */
+    static Stream<Arguments> boundedProperties() {
+        return Stream.of(
+                Arguments.of("identifier", MAX_FIELD_LENGTH),
+                Arguments.of("localIdentifier", MAX_LOCAL_IDENTIFIER_LENGTH),
+                Arguments.of("firstName", MAX_FIELD_LENGTH),
+                Arguments.of("lastName", MAX_FIELD_LENGTH));
     }
 
     @ParameterizedTest(name = "participantIdentifier = {0}")

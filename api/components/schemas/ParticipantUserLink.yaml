@@ -22,7 +22,8 @@ properties:
     type: string
     description: >
       The calling participant's own identifier for this user, absent when the
-      participant holds none. A convenience column for reconciling against the
+      participant holds none — which a blank value submitted on registration or
+      update also means. A convenience column for reconciling against the
       participant's internal records — never a lookup key and never part of
       matching.
     example: "patient-10427"

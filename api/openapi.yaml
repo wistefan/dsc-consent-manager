@@ -448,8 +448,14 @@ paths:
       operationId: updateParticipantUserLink
       summary: Update the calling participant's link to a user
       description: >
-        Replaces the `localIdentifier` the calling participant holds for the
-        user the path names, and returns the link as it now stands.
+        Applies the body to the link the calling participant holds for the user
+        the path names, and returns the link as it now stands.
+
+
+        Merge-patch semantics on a single property: sending a `localIdentifier`
+        sets it, sending it as `null` clears it, and omitting it altogether
+        leaves the stored value alone. A blank string is stored as no local
+        identifier, so `null` and `""` settle on one representation.
 
 
         Only the link is touched. The user record itself — `email`, `firstName`,
@@ -525,6 +531,15 @@ paths:
         strand a consent whose participant no longer knows the user. Revoke those
         consents first. A consent in any other status, and a granted consent
         between two other participants, do not block the unlink.
+
+
+        `PENDING` and `DRAFT` deliberately do not block it either: neither
+        authorises a data flow, so neither is worth refusing an unlink over. A
+        consent in one of those statuses that is granted after the unlink is
+        left stranded in the same way a consent granted concurrently with the
+        unlink is — the check is advisory on this side, and the complementary
+        guard belongs on the consent-granting path, which must refuse to grant
+        for a participant holding no link. See `docs/user-identifiers.md`.
 
 
         A caller holding no link to the identifier receives `404 Not Found`, on

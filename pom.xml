@@ -41,6 +41,7 @@
         <!-- OpenAPI Generator and generated-code dependencies -->
         <openapi.generator.version>7.12.0</openapi.generator.version>
         <swagger-annotations.version>2.2.28</swagger-annotations.version>
+        <jackson-databind-nullable.version>0.2.6</jackson-databind-nullable.version>
 
         <!-- Code coverage -->
         <jacoco.version>0.8.15</jacoco.version>
@@ -284,6 +285,17 @@
             <artifactId>swagger-annotations</artifactId>
             <version>${swagger-annotations.version}</version>
             <scope>provided</scope>
+        </dependency>
+
+        <!-- JsonNullable, the tri-state wrapper the generator emits for a property declared
+             `nullable: true` with `x-is-jackson-optional-nullable`. It is what lets a PATCH
+             handler tell "property omitted" from "property explicitly null"; JsonNullableSerde
+             teaches micronaut-serde to read and write it. Runtime scope: generated models
+             carry it in their field types. -->
+        <dependency>
+            <groupId>org.openapitools</groupId>
+            <artifactId>jackson-databind-nullable</artifactId>
+            <version>${jackson-databind-nullable.version}</version>
         </dependency>
 
         <!-- ===== Test Dependencies ===== -->

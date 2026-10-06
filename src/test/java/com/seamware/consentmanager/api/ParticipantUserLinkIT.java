@@ -25,6 +25,7 @@ import io.micronaut.data.model.Pageable;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
+import io.micronaut.http.MediaType;
 import io.micronaut.http.MutableHttpRequest;
 import io.micronaut.http.client.HttpClient;
 import io.micronaut.http.client.annotation.Client;
@@ -92,6 +93,12 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
 
     /** What the update writes in its place, deliberately unlike the seeded one. */
     private static final String NEW_LOCAL_IDENTIFIER = "patient-77012";
+
+    /** A body mentioning no property at all, which must leave the stored link untouched. */
+    private static final String OMITTED = "{}";
+
+    /** The one body that clears a local identifier: the property named and set to null. */
+    private static final String EXPLICIT_NULL = "{\"localIdentifier\":null}";
 
     /** Attributes seeded on the user row, which no link operation may rewrite. */
     private static final String SEEDED_EMAIL = "ada@example.org";
@@ -168,7 +175,7 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
     @Test
     @DisplayName("the update answers with the new local identifier and stores it")
     void theUpdateReportsAndStoresTheNewLocalIdentifier() throws IOException {
-        HttpResponse<String> response = patch(LINKED_USER, NEW_LOCAL_IDENTIFIER);
+        HttpResponse<String> response = patch(LINKED_USER, sets(NEW_LOCAL_IDENTIFIER));
 
         assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
         assertThat(body(response))
@@ -181,9 +188,23 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
     }
 
     @Test
-    @DisplayName("an omitted local identifier clears the stored one")
-    void anOmittedLocalIdentifierClearsTheStoredOne() throws IOException {
-        HttpResponse<String> response = patch(LINKED_USER, null);
+    @DisplayName("an omitted local identifier leaves the stored one alone")
+    void anOmittedLocalIdentifierIsLeftAlone() throws IOException {
+        HttpResponse<String> response = patch(LINKED_USER, OMITTED);
+
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(body(response)).containsEntry("localIdentifier", ORIGINAL_LOCAL_IDENTIFIER);
+        assertThat(localIdentifierOf(LINKED_USER, CALLER_PARTICIPANT))
+                .as("a property the body never mentions is not a cleared value")
+                .isEqualTo(ORIGINAL_LOCAL_IDENTIFIER);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("clearingBodies")
+    @DisplayName("an explicit null and a blank string both clear the stored one")
+    void aClearingBodyRemovesTheLocalIdentifier(String name, String requestBody)
+            throws IOException {
+        HttpResponse<String> response = patch(LINKED_USER, requestBody);
 
         assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
         assertThat(body(response))
@@ -192,10 +213,16 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
         assertThat(localIdentifierOf(LINKED_USER, CALLER_PARTICIPANT)).isNull();
     }
 
+    static Stream<Arguments> clearingBodies() {
+        return Stream.of(
+                Arguments.of("an explicit null", EXPLICIT_NULL),
+                Arguments.of("a blank string", sets("   ")));
+    }
+
     @Test
     @DisplayName("the update reaches the caller's link alone")
     void theUpdateLeavesTheUserAndOtherLinksAlone() {
-        patch(LINKED_USER, NEW_LOCAL_IDENTIFIER);
+        patch(LINKED_USER, sets(NEW_LOCAL_IDENTIFIER));
 
         assertThat(localIdentifierOf(LINKED_USER, FOREIGN_PARTICIPANT))
                 .as("another participant's local identifier is none of the caller's business")
@@ -212,7 +239,7 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
     void anUnheldLinkIsNotFound(String identifier, String method) {
         HttpResponse<String> response =
                 "PATCH".equals(method)
-                        ? patch(identifier, NEW_LOCAL_IDENTIFIER)
+                        ? patch(identifier, sets(NEW_LOCAL_IDENTIFIER))
                         : delete(identifier);
 
         assertThat(response.code()).isEqualTo(HttpStatus.NOT_FOUND.getCode());
@@ -319,7 +346,8 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
         String token = caller == null ? null : KeycloakTestResource.accessToken(caller);
         MutableHttpRequest<?> request =
                 "PATCH".equals(method)
-                        ? HttpRequest.PATCH(path(LINKED_USER), update(NEW_LOCAL_IDENTIFIER))
+                        ? HttpRequest.PATCH(path(LINKED_USER), sets(NEW_LOCAL_IDENTIFIER))
+                                .contentType(MediaType.APPLICATION_JSON)
                         : HttpRequest.DELETE(path(LINKED_USER));
 
         assertThat(exchange(request, token).code()).isEqualTo(expected.getCode());
@@ -346,9 +374,10 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
                                                                 caller.getValue())));
     }
 
-    private HttpResponse<String> patch(String identifier, String localIdentifier) {
+    private HttpResponse<String> patch(String identifier, String requestBody) {
         return exchange(
-                HttpRequest.PATCH(path(identifier), update(localIdentifier)),
+                HttpRequest.PATCH(path(identifier), requestBody)
+                        .contentType(MediaType.APPLICATION_JSON),
                 KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
     }
 
@@ -358,9 +387,11 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
                 KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
     }
 
-    /** The update body; a {@code null} local identifier is sent as an omitted property. */
-    private static Map<String, Object> update(String localIdentifier) {
-        return localIdentifier == null ? Map.of() : Map.of("localIdentifier", localIdentifier);
+    /**
+     * The update body, written out rather than mapped: only raw JSON can carry an explicit null.
+     */
+    private static String sets(String localIdentifier) {
+        return "{\"localIdentifier\":\"" + localIdentifier + "\"}";
     }
 
     private static String path(String identifier) {
