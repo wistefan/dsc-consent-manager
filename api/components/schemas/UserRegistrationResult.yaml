@@ -1,0 +1,37 @@
+# Schema: UserRegistrationResult — referenced from api/openapi.yaml as
+# components.schemas.UserRegistrationResult.
+type: object
+description: >
+  The user a registration resolved to, and what the call had to do to reach it.
+
+
+  `outcome` is carried in the body as well as in the status code because the
+  status distinguishes only creation from everything else, while a participant
+  reconciling its own records needs to tell "I have just adopted a user somebody
+  else registered" from "this user was already mine".
+properties:
+  # A bare `$ref`, deliberately: a sibling `description` would make the generator
+  # fall back to `Object` instead of the generated `User` model. The stored user's
+  # `participants` array is scoped to the caller as everywhere else — a
+  # participant is told about its own link only.
+  user:
+    $ref: "./User.yaml"
+  outcome:
+    type: string
+    description: >
+      What the call did.
+
+      * `CREATED` — no user carried the identifier, so one was created from the
+        supplied attributes and linked. The only outcome answered `201`.
+      * `LINKED` — the user already existed and this call linked it to the
+        calling participant. Its attributes were left as they were.
+      * `ALREADY_LINKED` — the user was already linked to the calling
+        participant; only `localIdentifier` may have changed.
+    enum:
+      - CREATED
+      - LINKED
+      - ALREADY_LINKED
+    example: "CREATED"
+required:
+  - user
+  - outcome
