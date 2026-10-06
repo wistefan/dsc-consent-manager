@@ -41,6 +41,7 @@
         <!-- OpenAPI Generator and generated-code dependencies -->
         <openapi.generator.version>7.12.0</openapi.generator.version>
         <swagger-annotations.version>2.2.28</swagger-annotations.version>
+        <jackson-databind-nullable.version>0.2.6</jackson-databind-nullable.version>
 
         <!-- Code coverage -->
         <jacoco.version>0.8.15</jacoco.version>
@@ -286,6 +287,17 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- JsonNullable, the tri-state wrapper the generator emits for a property declared
+             `nullable: true` with `x-is-jackson-optional-nullable`. It is what lets a PATCH
+             handler tell "property omitted" from "property explicitly null"; JsonNullableSerde
+             teaches micronaut-serde to read and write it. Runtime scope: generated models
+             carry it in their field types. -->
+        <dependency>
+            <groupId>org.openapitools</groupId>
+            <artifactId>jackson-databind-nullable</artifactId>
+            <version>${jackson-databind-nullable.version}</version>
+        </dependency>
+
         <!-- ===== Test Dependencies ===== -->
 
         <!-- Micronaut Test JUnit 5 -->
@@ -381,6 +393,15 @@
                             <output>${project.build.directory}/generated-sources/openapi</output>
                             <apiPackage>com.seamware.consentmanager.api.generated</apiPackage>
                             <modelPackage>com.seamware.consentmanager.api.generated.model</modelPackage>
+                            <!--
+                                Overrides only server/controller.mustache; every other template,
+                                and every partial it references, still resolves against the
+                                generator's embedded java-micronaut templates. The override exists
+                                so a routed method can declare the typed principal parameter that
+                                PrincipalResolutionFilter and PrincipalArgumentBinder both require
+                                — see the comment at the head of the template.
+                            -->
+                            <templateDirectory>${project.basedir}/api/templates</templateDirectory>
                             <configOptions>
                                 <useBeanValidation>true</useBeanValidation>
                                 <useJakartaEe>true</useJakartaEe>
@@ -388,6 +409,13 @@
                                 <generateControllerFromExamples>false</generateControllerFromExamples>
                                 <generateControllerAsAbstract>true</generateControllerAsAbstract>
                                 <reactive>false</reactive>
+                                <!--
+                                    Every handler returns HttpResponse<T> so an operation that
+                                    varies its success status (201 vs 200 on registration, 204,
+                                    207) can set it. Applied generator-wide rather than per
+                                    operation because the generator has no per-operation switch.
+                                -->
+                                <wrapInHttpResponse>true</wrapInHttpResponse>
                             </configOptions>
                             <!-- Suppress generated Application.java and other scaffolding — we manage them ourselves -->
                             <generateSupportingFiles>false</generateSupportingFiles>

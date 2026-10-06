@@ -1,31 +1,20 @@
 package com.seamware.consentmanager.error;
 
 /**
- * Exception indicating that the client request was malformed or invalid (HTTP 400).
+ * The client request was malformed or semantically invalid (HTTP 400).
  *
- * <p>Thrown when request validation fails, required parameters are missing, or the request body
- * cannot be parsed. The {@link GlobalExceptionHandler} maps this exception to an HTTP 400 Bad
- * Request response with a {@link com.seamware.consentmanager.api.generated.model.ProblemDetail}
- * body.
+ * <p>Thrown where request validation that bean validation cannot express fails, or where a required
+ * parameter is missing or unparseable.
  */
-public class BadRequestException extends RuntimeException {
+public class BadRequestException extends ApiException {
 
-    /**
-     * Creates a {@code BadRequestException} with the specified detail message.
-     *
-     * @param message a human-readable description of the validation failure
-     */
+    /** Creates a bad request whose message is published to the caller. */
     public BadRequestException(String message) {
-        super(message);
+        super(ProblemType.BAD_REQUEST, message);
     }
 
-    /**
-     * Creates a {@code BadRequestException} with the specified detail message and cause.
-     *
-     * @param message a human-readable description of the validation failure
-     * @param cause the underlying cause of this exception
-     */
+    /** Creates a bad request from an underlying parse or validation failure. */
     public BadRequestException(String message, Throwable cause) {
-        super(message, cause);
+        super(ProblemType.BAD_REQUEST, message, cause);
     }
 }

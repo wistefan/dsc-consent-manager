@@ -57,12 +57,70 @@ under `https://consent-manager.example/problems/<slug>` and a `correlationId` fi
 
 ## `@Secured` convention
 
-Every operation's `security` requirement in the OpenAPI spec must match the `@Secured` annotation on
-its implementing controller method; `SpecSecurityConsistencyTest` enforces this and fails when an
-operation has no implementation. Public operations declare `security: []` and carry
-`@Secured(SecurityRule.IS_ANONYMOUS)` — currently only `/api-status`, implemented by
-`com.seamware.consentmanager.api.ApiStatusController`. Role-protected operations use
-`@Secured("USER" | "PARTICIPANT" | "CATALOG")`, matching `Role` constant names.
+Access is declared in the specification, not in Java, and a secured operation states it **twice**:
+
+- `security: [{bearerAuth: [ROLE, ...]}]` — the published contract a client reads.
+- `x-roles: [ROLE, ...]` — what the `java-micronaut-server` generator turns into
+  `@Secured("ROLE", ...)` on the routed method. The templates never read an operation's `security`
+  scopes, so `security:` alone emits `@Secured(SecurityRule.IS_AUTHENTICATED)`: a route open to
+  every authenticated caller, whatever roles the contract names.
+
+Role names match `Role` constants (`USER`, `PARTICIPANT`, `CATALOG`). Public operations declare
+`security: []` and no `x-roles`, and carry `@Secured(SecurityRule.IS_ANONYMOUS)`. A secured
+operation also declares `x-principal: <UserPrincipal | ParticipantPrincipal | CatalogPrincipal |
+ConsentManagerPrincipal>`, which `api/templates/server/controller.mustache` turns into the routed
+method's typed caller parameter; without it `PrincipalResolutionFilter` never runs its refusals for
+that route.
+
+Never annotate the concrete controller: the routed method lives on the generated abstract supertype
+and its rule is the one that governs. `SpecSecurityConsistencyTest` fails the build when `@Secured`
+and `x-roles` disagree, when `x-roles` and `security` disagree, when an operation has no
+implementation, when the concrete controller only inherits the generated delegate (whose body
+answers 501), when a secured operation declares no principal parameter or one whose type cannot
+hold a role it admits, and when a path item hides its operations behind a `$ref`.
+
+Implemented operations:
+
+| Operation | Roles | Controller |
+|---|---|---|
+| `GET /api-status` | anonymous | `ApiStatusController` |
+| `POST /users/register` | `USER` | `UserController` |
+| `GET /users/me` | `USER` | `UserController` |
+| `DELETE /users/me` | `USER` | `UserController` |
+| `POST /users/search` | `PARTICIPANT`, `CATALOG` | `UserController` |
+| `GET /users/{identifier}` | `PARTICIPANT`, `CATALOG` | `UserController` |
+| `POST /participants/me/users` | `PARTICIPANT` | `ParticipantUserController` |
+| `POST /participants/me/users/bulk` | `PARTICIPANT` | `ParticipantUserController` |
+| `PATCH /participants/me/users/{identifier}` | `PARTICIPANT` | `ParticipantUserController` |
+| `DELETE /participants/me/users/{identifier}` | `PARTICIPANT` | `ParticipantUserController` |
+
+`EndpointRoleMatrixIT` answers each of these with every role, with a token holding no role of this
+service and with no token at all, against a real Keycloak; it fails when an operation of the
+specification has no row, so the table above cannot quietly fall behind the specification.
+`KeycloakRoleMatrixIT` keeps proving the same of synthetic probe routes, which is where the
+mechanism itself — discovery, signature verification, claim mapping, principal resolution — is
+exercised independently of any published route.
+
+## Erasure verification
+
+`DELETE /users/me` strips the subject's identifier. A record kept for its consents (see
+[ADR 0007](adr/0007-erasure-pseudonymises-the-user-and-retains-the-audit-trail.md)) carries
+`users.erasure_verifier` = `<salt>.<mac>`, where `mac` is
+`base64url(HMAC-SHA256(ERASURE_VERIFICATION_SECRET, salt || identifier))` without padding. It
+confirms a candidate identifier the asker already holds; it reveals none on its own and is not
+computable without the secret.
+
+The secret belongs to the operator — outside the database, never with a participant. Unset (the
+default) means erased records carry no verifier; rotating it retires every verifier written under
+the old one. The service only ever writes the column: there is no query path to it, and adding one
+would turn erasure into a rename. The check is run by hand:
+
+```bash
+VERIFIER=$(psql -Atc "select erasure_verifier from users where identifier = '<pseudonym>'")
+printf '%s' "${VERIFIER%%.*}$IDENTIFIER" \
+  | openssl dgst -sha256 -hmac "$ERASURE_VERIFICATION_SECRET" -binary \
+  | basenc --base64url | tr -d '='   # equals ${VERIFIER#*.} iff that identifier consented
+```
 
 ## Spec layout
 

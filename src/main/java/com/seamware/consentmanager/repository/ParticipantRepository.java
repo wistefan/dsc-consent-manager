@@ -4,6 +4,8 @@ import com.seamware.consentmanager.domain.Participant;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
 import io.micronaut.data.model.query.builder.sql.Dialect;
 import io.micronaut.data.repository.PageableRepository;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -32,4 +34,7 @@ public interface ParticipantRepository extends PageableRepository<Participant, U
      * @return {@code true} if a participant with the identifier exists, {@code false} otherwise
      */
     boolean existsByIdentifier(String identifier);
+
+    /** Loads several participants by primary key, so a link set resolves in one query. */
+    List<Participant> findByIdIn(Collection<UUID> ids);
 }

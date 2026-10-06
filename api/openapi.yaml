@@ -68,6 +68,565 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /users/register:
+    post:
+      operationId: registerUser
+      summary: Register the calling user
+      description: >
+        Registers the natural person the bearer token names and returns their
+        record. The identity is taken entirely from the token — there is no
+        request body, and a caller cannot register anybody but themselves.
+
+
+        The record is keyed on the global user identifier the token asserts, so
+        the operation is idempotent: `201 Created` the first time this service
+        sees the identifier, `200 OK` on every later call, with the same body.
+        Registration is the same code path as the just-in-time provisioning
+        every other authenticated route performs, so a user first seen through
+        another endpoint is already registered and receives `200` here.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [USER]
+      # `security` is the published contract; `x-roles` and `x-principal` are what
+      # the generator reads. `x-roles` becomes the routed method's @Secured rule -
+      # without it the generator emits @Secured(IS_AUTHENTICATED), which would let
+      # any authenticated token through - and `x-principal` adds the typed caller
+      # parameter PrincipalResolutionFilter keys on. Both must agree with
+      # `security`, and SpecSecurityConsistencyTest fails the build when they do
+      # not. Every secured operation below repeats all three.
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      responses:
+        "200":
+          description: The user was already registered; the existing record is returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "201":
+          description: The user was registered by this request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /users/me:
+    get:
+      operationId: getCurrentUser
+      summary: Read the calling user's own record
+      description: >
+        Returns the record of the natural person the bearer token names,
+        including the identifiers of the participants they are linked to. The
+        record is created on first sight, so this operation does not report
+        `404` for an otherwise valid user token.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      responses:
+        "200":
+          description: The caller's own user record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+    delete:
+      operationId: eraseCurrentUser
+      summary: Erase the calling user's record
+      description: >
+        Erases the natural person the bearer token names and reports what that
+        cost. Every participant link is removed, every `GRANTED` consent is
+        revoked and every unanswered one - `PENDING` or `DRAFT` - is
+        `TERMINATED`, each with the matching event appended to its trail.
+
+
+        The consent records and their events are retained as the evidence of
+        what was authorised while it was authorised; what is destroyed is the
+        tie between them and the person. The `users` row is deleted outright
+        when no consent refers to it, and otherwise kept with its attributes
+        cleared under the opaque `pseudonym` this response carries once and
+        never again.
+
+
+        The whole erasure is one transaction. The caller is registered by this
+        route's own authentication, so this operation never reports `404`, and a
+        later token for the same subject provisions a new record rather than
+        resurrecting this one. For why the pseudonym is opaque rather than
+        derived, what a consent naming nobody is still worth, and the keyed
+        verifier a retained record keeps for the operator, see
+        `docs/adr/0007-erasure-pseudonymises-the-user-and-retains-the-audit-trail.md`.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      responses:
+        "200":
+          description: The record was erased. The body reports what that entailed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErasureSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /users/search:
+    post:
+      operationId: searchUsers
+      summary: Search registered users
+      description: >
+        Returns the registered users matching every criterion in the body, as
+        far as the caller is entitled to see them. A `PARTICIPANT` caller sees
+        only users linked to itself — a `participantIdentifier` naming another
+        participant narrows that result rather than widening it — while a
+        `CATALOG` caller reads across the dataspace. A body naming no criterion
+        at all is rejected with `400 Bad Request` rather than listing everybody.
+
+
+        Matching on `email` is exact but case-insensitive, and email is neither
+        unique nor authoritative in this service, so the result may name several
+        users. Matching on `identifier` is exact and case-sensitive, and is the
+        documented way to reach a user that `GET /users/{identifier}` cannot
+        address: one whose identifier contains `/`, or whose identifier is the
+        literal `me`.
+
+
+        The `participants` array of each returned user is scoped the same way the
+        result is: a `PARTICIPANT` caller sees only its own link, a `CATALOG`
+        caller sees every one. A participant does not learn which other
+        participants the user is affiliated with.
+
+
+        The result is capped at `consent-manager.users.search-max-results` users
+        (200 by default) and this operation is not paginated, so a result of
+        exactly that size may have been truncated and the caller should narrow
+        its criteria rather than treat it as the complete answer.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [PARTICIPANT, CATALOG]
+      x-roles: [PARTICIPANT, CATALOG]
+      x-principal: ConsentManagerPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserSearch"
+      responses:
+        "200":
+          description: >
+            The matching users, sorted by identifier so the order is stable
+            between requests and truncation is deterministic. Empty when nothing
+            matches — a search that finds nobody is not a `404`.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /users/{identifier}:
+    get:
+      operationId: getUser
+      summary: Look a user up by their global identifier
+      description: >
+        Returns the user the identifier names, provided the caller is entitled
+        to see them: a `PARTICIPANT` caller may read only users linked to
+        itself, a `CATALOG` caller reads across the dataspace.
+
+
+        A caller not entitled to the user receives `404 Not Found` with the same
+        body as for an identifier naming nobody at all, deliberately — a `403`
+        would confirm that the identifier names a registered user, which is
+        precisely what the caller is not entitled to learn.
+
+
+        `{identifier}` is the URL-encoded global user identifier. A path
+        variable never spans a `/`, and the container percent-decodes before
+        routing, so an identifier containing a slash is not addressable here
+        even when encoded; look it up through `POST /users/search` instead. The
+        literal identifier `me` is likewise unreachable, because `GET /users/me`
+        claims that path for the caller's own record.
+
+
+        The `participants` array of the returned user is scoped to the caller: a
+        `PARTICIPANT` sees only its own link, a `CATALOG` caller sees every one.
+        A participant does not learn which other participants the user is
+        affiliated with.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [PARTICIPANT, CATALOG]
+      x-roles: [PARTICIPANT, CATALOG]
+      x-principal: ConsentManagerPrincipal
+      parameters:
+        - name: identifier
+          in: path
+          required: true
+          description: The URL-encoded global user identifier.
+          schema:
+            type: string
+          example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+      responses:
+        "200":
+          description: The user the identifier names.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /participants/me/users/bulk:
+    post:
+      operationId: registerParticipantUsersBulk
+      summary: Register a batch of users for the calling participant
+      description: >
+        Applies `POST /participants/me/users` to every entry of a batch and
+        reports what each one did. The response is always `207 Multi-Status`
+        when the batch itself was acceptable, never a single status standing for
+        all of them: a batch routinely mixes users this participant has just
+        acquired with users it has registered before, and that is a success, not
+        a partial failure.
+
+
+        **Entries are independent.** They share no transaction, so an entry that
+        cannot be applied neither rolls back the entries before it nor stops the
+        entries after it; it is reported as `REJECTED`, with a `reason`, and the
+        batch continues. The rule each entry follows, and which of `CREATED`,
+        `LINKED` and `ALREADY_LINKED` it reaches, is the one
+        `POST /participants/me/users` documents in full — including that
+        adopting an existing user never rewrites its attributes, and that the
+        participant comes from the token and from nowhere else.
+
+
+        `results` holds exactly one entry per entry sent, in the order sent, and
+        `summary` counts them by outcome. **Unusable data in one entry costs only
+        that entry:** an entry naming no identifier, or only whitespace, and an
+        entry whose `email` is not a valid address are both answered `REJECTED`
+        with a `reason` while the batch's remaining entries land. The same
+        identifier sent twice in one batch is not an error either — the second
+        occurrence simply sees the user the first one created, so it reports
+        `ALREADY_LINKED`.
+
+
+        **Two failures are request-level and answered `400`,** because they are
+        facts about the request rather than about one entry. The first is a
+        batch carrying more entries than the deployment permits; the limit is
+        configured, and a batch above it is refused before anything is written.
+        The second is a batch in which any string exceeds the `maxLength` its
+        property publishes — those bounds guard the stored columns, so they are
+        checked before the batch is applied and **a single over-long value
+        discards the whole batch** without naming the entry at fault. Keep
+        values within the documented lengths; everything else about an entry's
+        content is reported per entry. A batch carrying no entries at all is not
+        an error: it is answered `207` with an empty `results` and a summary of
+        zeroes.
+      tags:
+        - Participant Users
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkUserRegistration"
+      responses:
+        "207":
+          description: >
+            The batch was applied. Every entry carries its own outcome, and an
+            entry may have been rejected while the rest succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkRegistrationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /participants/me/users:
+    post:
+      operationId: registerParticipantUser
+      summary: Register a user for the calling participant
+      description: >
+        Registers the user the body names and links them to the participant the
+        bearer token names, returning the stored record and which of the three
+        outcomes the call reached.
+
+
+        The rule is deterministic and keyed on the global user identifier alone.
+        No user carries it yet: the user is created from the supplied attributes,
+        linked, and the response is `201 Created` with outcome `CREATED`. A user
+        already carries it: that record is adopted and linked as it stands — its
+        `email`, `firstName` and `lastName` are **not** overwritten, because
+        attributes belong to whoever created the record and to the user's own
+        identity provider, never to a later registrant — and the response is
+        `200 OK` with outcome `LINKED`. The link already exists: nothing changes
+        beyond `localIdentifier`, and the response is `200 OK` with outcome
+        `ALREADY_LINKED`. Two records are never merged, and `email` is never
+        matched on: it is neither unique nor authoritative here.
+
+
+        The participant is read from the token and from nowhere else, so a
+        participant can only ever register a user for itself. A
+        `participantIdentifier` property in the body — whether it names the
+        caller, another participant or nobody at all — is ignored rather than
+        rejected, and changes nothing about which participant the user is linked
+        to.
+
+
+        Addressing is by the data space's global identifier alone.
+        `localIdentifier` is a convenience column on the calling participant's
+        own link: invisible to every other participant, never a lookup key, and
+        never part of matching. An identifier containing `/`, and the literal
+        value `me`, cannot be addressed as a path segment on
+        `GET /users/{identifier}` and are reached through `POST /users/search`
+        instead. The rationale in full is `docs/user-identifiers.md` in this
+        service's repository — deliberately named rather than linked, since the
+        published specification serves no path under which that file resolves.
+      tags:
+        - Participant Users
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserRegistration"
+      responses:
+        "200":
+          description: >
+            The user already existed. Outcome `LINKED` when this call linked them
+            to the caller, `ALREADY_LINKED` when the link was already there.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserRegistrationResult"
+        "201":
+          description: The user was created by this request and linked to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserRegistrationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /participants/me/users/{identifier}:
+    patch:
+      operationId: updateParticipantUserLink
+      summary: Update the calling participant's link to a user
+      description: >
+        Applies the body to the link the calling participant holds for the user
+        the path names, and returns the link as it now stands.
+
+
+        Merge-patch semantics on a single property: sending a `localIdentifier`
+        sets it, sending it as `null` clears it, and omitting it altogether
+        leaves the stored value alone. A blank string is stored as no local
+        identifier, so `null` and `""` settle on one representation.
+
+
+        Only the link is touched. The user record itself — `email`, `firstName`,
+        `lastName` and every other participant's link — is out of reach here, by
+        design: attributes belong to whoever created the record and to the user's
+        own identity provider, never to a participant that merely holds a link.
+
+
+        A caller holding no link to the identifier receives `404 Not Found`, with
+        the same body as for an identifier naming nobody at all. A `403` would
+        confirm that the identifier names a registered user, which is precisely
+        what a participant without a link is not entitled to learn.
+
+
+        `{identifier}` is the URL-encoded global user identifier, with the same
+        limits as on `GET /users/{identifier}`: a path variable never spans a
+        `/`, and the container percent-decodes before routing, so an identifier
+        containing a slash is not addressable here even when encoded.
+      tags:
+        - Participant Users
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      parameters:
+        - name: identifier
+          in: path
+          required: true
+          description: The URL-encoded global user identifier.
+          schema:
+            type: string
+          example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParticipantUserLinkUpdate"
+      responses:
+        "200":
+          description: The link as stored after the update.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParticipantUserLink"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+    delete:
+      operationId: unlinkParticipantUser
+      summary: Unlink a user from the calling participant
+      description: >
+        Removes the calling participant's link to the user the path names. The
+        user record itself survives, as do every consent it is party to and
+        every other participant's link: this operation ends an affiliation, it
+        does not erase a person. Erasure is the data subject's own
+        `DELETE /users/me`.
+
+
+        Refused with `409 Conflict` while any consent naming the caller as
+        provider or consumer is still `GRANTED` for that user — unlinking would
+        strand a consent whose participant no longer knows the user. Revoke those
+        consents first. A consent in any other status, and a granted consent
+        between two other participants, do not block the unlink.
+
+
+        `PENDING` and `DRAFT` deliberately do not block it either: neither
+        authorises a data flow, so neither is worth refusing an unlink over. A
+        consent in one of those statuses that is granted after the unlink is
+        left stranded in the same way a consent granted concurrently with the
+        unlink is — the check is advisory on this side, and the complementary
+        guard belongs on the consent-granting path, which must refuse to grant
+        for a participant holding no link. See `docs/user-identifiers.md`.
+
+
+        A caller holding no link to the identifier receives `404 Not Found`, on
+        the same reasoning as the `PATCH` above. The operation is not idempotent
+        in the sense of answering `204` twice: a second call finds no link and
+        answers `404`.
+      tags:
+        - Participant Users
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      parameters:
+        - name: identifier
+          in: path
+          required: true
+          description: The URL-encoded global user identifier.
+          schema:
+            type: string
+          example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+      responses:
+        "204":
+          description: The link was removed. The user and its consents are untouched.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -80,6 +639,76 @@ components:
     ProblemDetail:
       $ref: "./components/schemas/ProblemDetail.yaml"
 
+    User:
+      $ref: "./components/schemas/User.yaml"
+
+    UserSearch:
+      $ref: "./components/schemas/UserSearch.yaml"
+
+    ErasureSummary:
+      $ref: "./components/schemas/ErasureSummary.yaml"
+
+    UserRegistration:
+      $ref: "./components/schemas/UserRegistration.yaml"
+
+    UserRegistrationResult:
+      $ref: "./components/schemas/UserRegistrationResult.yaml"
+
+    ParticipantUserLink:
+      $ref: "./components/schemas/ParticipantUserLink.yaml"
+
+    ParticipantUserLinkUpdate:
+      $ref: "./components/schemas/ParticipantUserLinkUpdate.yaml"
+
+    BulkUserRegistrationEntry:
+      $ref: "./components/schemas/BulkUserRegistrationEntry.yaml"
+
+    BulkRegistrationEntryResult:
+      $ref: "./components/schemas/BulkRegistrationEntryResult.yaml"
+
+    BulkRegistrationSummary:
+      $ref: "./components/schemas/BulkRegistrationSummary.yaml"
+
+    # The two wrappers below are the only schemas written out here rather than
+    # under components/schemas/, and the reason is a generator limitation rather
+    # than a change of convention: a `$ref` under `items` resolves to the named
+    # model only when it is same-document. Written inside an externalised file,
+    # `items: {$ref: "./BulkUserRegistrationEntry.yaml"}` silently degrades to
+    # `List<Object>` and the batch arrives untyped. Both are a thin shell around
+    # one array; the element schemas above carry the documentation.
+    BulkUserRegistration:
+      type: object
+      description: >
+        A batch of users a participant asks to have registered and linked to
+        itself, each entry applied independently of the others.
+      properties:
+        users:
+          type: array
+          description: >
+            The entries, applied in the order given and answered in that same
+            order. An empty array is accepted and does nothing; how many entries
+            one batch may carry is configured per deployment.
+          items:
+            $ref: "#/components/schemas/BulkUserRegistrationEntry"
+      required:
+        - users
+
+    BulkRegistrationResult:
+      type: object
+      description: >
+        What a bulk registration did, entry by entry and in total.
+      properties:
+        results:
+          type: array
+          description: One result per entry sent, in the order the entries were sent.
+          items:
+            $ref: "#/components/schemas/BulkRegistrationEntryResult"
+        summary:
+          $ref: "#/components/schemas/BulkRegistrationSummary"
+      required:
+        - results
+        - summary
+
   responses:
     # Shared error responses referenced by every secured operation. `/api-status`
     # is declared `security: []` and therefore references neither.
@@ -88,3 +717,16 @@ components:
 
     Forbidden:
       $ref: "./components/responses/Forbidden.yaml"
+
+    # Client-error responses an operation references when it can actually produce
+    # them. Unlike the two above these are not enforced for every secured
+    # operation: whether a request body can fail validation, address a missing
+    # resource or conflict with existing state is a fact about the operation.
+    BadRequest:
+      $ref: "./components/responses/BadRequest.yaml"
+
+    NotFound:
+      $ref: "./components/responses/NotFound.yaml"
+
+    Conflict:
+      $ref: "./components/responses/Conflict.yaml"

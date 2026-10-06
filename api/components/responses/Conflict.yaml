@@ -1,0 +1,22 @@
+# Response: 409 Conflict — referenced from api/openapi.yaml as
+# components.responses.Conflict.
+#
+# No operation references it yet; the user-management operations added by the
+# later steps of this ticket do.
+description: >
+  The request is well-formed but conflicts with the state the resource is
+  already in — for instance unlinking a user from a participant while a consent
+  granted to that participant is still in force. Registration itself is
+  idempotent and never produces this: registering an identifier that already
+  exists adopts the existing user, and re-registering a user that is already
+  linked is reported as a no-op outcome with 200.
+content:
+  application/problem+json:
+    schema:
+      $ref: "../schemas/ProblemDetail.yaml"
+    example:
+      type: "https://consent-manager.example/problems/conflict"
+      title: "Conflict"
+      status: 409
+      detail: "The user has a granted consent with this participant; revoke it before unlinking."
+      instance: "/v1/participants/me/users/urn:example:user:42"

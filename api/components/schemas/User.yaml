@@ -1,0 +1,65 @@
+# Schema: User — referenced from api/openapi.yaml as components.schemas.User.
+#
+# No property is declared `nullable`: an attribute this service does not know is
+# simply absent from the representation. Declaring one nullable makes the
+# generator wrap it in JsonNullable, which is a request-side distinction between
+# "omitted" and "explicitly null" that no operation here needs.
+type: object
+description: >
+  A registered natural person, identified across the dataspace by `identifier`.
+  Carries only profile attributes and the participants the user is linked to —
+  never a credential, token or secret of any kind.
+properties:
+  identifier:
+    type: string
+    description: >
+      The globally unique user identifier, read from the `claims.user-identifier`
+      claim of the issuing identity provider. Stable for the life of the record
+      and the value every user-owned record keys on.
+    example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+  email:
+    type: string
+    format: email
+    description: >
+      Contact address, absent when none is known. Written when the record is created and
+      refreshed only from the user's own identity provider — never by a
+      participant registering an already-known user.
+    example: "ada@example.org"
+  firstName:
+    type: string
+    description: Given name, absent when unknown. Same provenance rule as `email`.
+    example: "Ada"
+  lastName:
+    type: string
+    description: Family name, absent when unknown. Same provenance rule as `email`.
+    example: "Lovelace"
+  participants:
+    type: array
+    description: >
+      Identifiers of the participants this user is linked to, sorted so the
+      representation is stable between requests. Empty when the user has
+      registered with the service but not yet with any participant.
+
+
+      Scoped to the reader, never dataspace-wide for everybody: the user's own
+      record (`GET /users/me`) and a `CATALOG` caller see every link, while a
+      `PARTICIPANT` caller sees only its own. Which participants a user is
+      affiliated with is a more sensitive disclosure than whether the identifier
+      exists at all, and the lookup route already answers `404` rather than `403`
+      to withhold the latter — publishing the full list to one participant would
+      tell it that the data subject is also registered with its competitors.
+    items:
+      type: string
+    example:
+      - "urn:example:participant:clinic"
+  createdAt:
+    type: string
+    format: date-time
+    description: When the record was first created.
+  updatedAt:
+    type: string
+    format: date-time
+    description: When the record was last modified.
+required:
+  - identifier
+  - participants

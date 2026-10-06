@@ -1,0 +1,45 @@
+# Schema: BulkRegistrationEntryResult — referenced from api/openapi.yaml as
+# components.schemas.BulkRegistrationEntryResult.
+#
+# The `outcome` enum repeats `UserRegistrationResult`'s three values and adds a
+# fourth rather than referencing it. Widening the shared one would publish
+# `REJECTED` as a possible outcome of `POST /participants/me/users`, where a
+# refused registration is a `400` and never a successful response body.
+type: object
+description: What a bulk registration did with one entry of the batch.
+properties:
+  identifier:
+    type: string
+    description: >
+      The identifier the entry carried, echoed back. Results are returned in
+      request order, so this is a cross-check rather than the way to correlate
+      them; it is absent when the entry named no identifier at all.
+    example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+  outcome:
+    type: string
+    description: >
+      What the entry did.
+
+      * `CREATED` — no user carried the identifier, so one was created from the
+        entry's attributes and linked.
+      * `LINKED` — the user already existed and this entry linked it to the
+        calling participant. Its attributes were left as they were.
+      * `ALREADY_LINKED` — the user was already linked to the calling
+        participant; only `localIdentifier` may have changed.
+      * `REJECTED` — this entry was not applied. Every other entry still was:
+        entries do not share a transaction, so one failure neither rolls back
+        what came before it nor stops what comes after.
+    enum:
+      - CREATED
+      - LINKED
+      - ALREADY_LINKED
+      - REJECTED
+    example: "CREATED"
+  reason:
+    type: string
+    description: >
+      Why a `REJECTED` entry was not applied, in the same voice as a problem
+      detail. Absent for every other outcome.
+    example: "A registration must name a non-blank identifier."
+required:
+  - outcome

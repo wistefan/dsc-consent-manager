@@ -1,0 +1,47 @@
+# Schema: ErasureSummary — referenced from api/openapi.yaml as
+# components.schemas.ErasureSummary.
+#
+# What `DELETE /users/me` did, reported back to the data subject. Every count is
+# always present, zero included; `pseudonym` is absent when the record was
+# deleted rather than kept.
+type: object
+description: >
+  The outcome of an erasure: how much was closed and unlinked, and under which
+  opaque identifier the record was kept, if it was kept at all.
+properties:
+  pseudonym:
+    type: string
+    description: >
+      The opaque identifier that replaced the caller's global identifier, and
+      the only handle left on the retained consent records. It is published
+      here, once; this service never resolves a token back to it. Absent when
+      the record was deleted outright, which is what happens when no consent
+      referred to it.
+    example: "urn:consent-manager:erased:0192f0a3-6b1e-7c4d-8f2a-9b7c1d3e5f60"
+  consentsRevoked:
+    type: integer
+    format: int32
+    minimum: 0
+    description: >
+      Consents that were `GRANTED` and are now `REVOKED`, each with a new
+      `CONSENT_REVOKED` event. The consent records themselves are retained.
+    example: 2
+  consentsTerminated:
+    type: integer
+    format: int32
+    minimum: 0
+    description: >
+      Consents that were still unanswered - `PENDING` or `DRAFT` - and are now
+      `TERMINATED`, each with a new `CONSENT_TERMINATED` event, since an offer
+      cannot be answered once the person it was put to is gone.
+    example: 1
+  linksRemoved:
+    type: integer
+    format: int32
+    minimum: 0
+    description: Participant links that were removed, ending every affiliation.
+    example: 2
+required:
+  - consentsRevoked
+  - consentsTerminated
+  - linksRemoved

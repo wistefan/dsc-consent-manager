@@ -2,7 +2,8 @@ package com.seamware.consentmanager.security;
 
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.repository.ParticipantRepository;
-import com.seamware.consentmanager.service.UserProvisioningService;
+import com.seamware.consentmanager.service.ProvisionedUser;
+import com.seamware.consentmanager.service.UserService;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.core.order.Ordered;
 import io.micronaut.core.type.Argument;
@@ -51,8 +52,8 @@ import reactor.core.scheduler.Schedulers;
  * PARTICIPANT} whose identifier is not registered - participants are created explicitly
  * (TICKET-005), never on the strength of a token.
  *
- * <p>A {@code USER} is the one identity a token does create: {@link UserProvisioningService} gives
- * every {@link UserPrincipal} a persisted row.
+ * <p>A {@code USER} is the one identity a token does create: {@link UserService} gives every {@link
+ * UserPrincipal} a persisted row, plus the signal saying whether this request inserted it.
  */
 @Singleton
 @ServerFilter(ServerFilter.MATCH_ALL_PATTERN)
@@ -89,7 +90,7 @@ public class PrincipalResolutionFilter implements Ordered {
 
     private final ParticipantRepository participants;
 
-    private final UserProvisioningService provisioning;
+    private final UserService userService;
 
     private final Scheduler blocking;
 
@@ -99,7 +100,7 @@ public class PrincipalResolutionFilter implements Ordered {
      * @param registry resolves the verified issuer back to the provider whose claim names apply
      * @param claimMapper reads claims by those configured names
      * @param participants resolves a participant identifier to its registered row
-     * @param provisioning backs a user identifier with the row the principal carries
+     * @param userService backs a user identifier with the row the principal carries
      * @param blockingExecutor carries the JDBC work off the event loop, so a request that takes no
      *     principal pays no thread hop
      */
@@ -107,12 +108,12 @@ public class PrincipalResolutionFilter implements Ordered {
             IdentityProviderRegistry registry,
             ClaimMapper claimMapper,
             ParticipantRepository participants,
-            UserProvisioningService provisioning,
+            UserService userService,
             @Named(TaskExecutors.BLOCKING) ExecutorService blockingExecutor) {
         this.registry = registry;
         this.claimMapper = claimMapper;
         this.participants = participants;
-        this.provisioning = provisioning;
+        this.userService = userService;
         this.blocking = Schedulers.fromExecutorService(blockingExecutor);
     }
 
@@ -273,8 +274,10 @@ public class PrincipalResolutionFilter implements Ordered {
                         claimMapper.findString(claims, NAME_CLAIM).orElse(null),
                         claimMapper.findString(claims, GIVEN_NAME_CLAIM).orElse(null),
                         claimMapper.findString(claims, FAMILY_NAME_CLAIM).orElse(null),
-                        null);
-        return principal.withUser(provisioning.provision(principal));
+                        null,
+                        false);
+        ProvisionedUser provisioned = userService.provisionFromToken(principal);
+        return principal.withUser(provisioned.user(), provisioned.created());
     }
 
     /**

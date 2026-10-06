@@ -17,6 +17,26 @@ micronaut:
         paths: classpath:static
         mapping: /static/**
 
+  serde:
+    serialization:
+      # Default is `non-empty`, which drops an empty collection from a response body
+      # entirely. Arrays the specification marks required - `User.participants`, say -
+      # must still be published as `[]` for a user linked to no participant, or the
+      # response contradicts its own schema. `non-absent` publishes them while still
+      # leaving out an attribute whose value is null, which is how every optional field
+      # under api/components/schemas is documented: unknown means absent, not null.
+      #
+      # Deliberately global, not narrowed per schema, and not to be narrowed back. The
+      # generator emits @Serdeable from the specification and offers no per-schema
+      # inclusion hook, so the alternatives were to make every required array
+      # non-empty by construction - which `User.participants` cannot be - or to keep a
+      # setting that silently contradicts the published schema. The side effect is
+      # accepted: an empty string or empty collection is now published everywhere
+      # rather than hidden, ProblemDetail included, where it is also the more honest
+      # answer. Nulls stay absent, which is what the problem details actually rely on
+      # (see ProblemResponseIT.omitsAnAbsentDetailRatherThanPublishingItEmpty).
+      inclusion: non-absent
+
   security:
     enabled: true
 
@@ -290,6 +310,26 @@ tracing:
 consent-manager:
   url: ${CONSENT_MANAGER_URL:`http://localhost:8080`}
   contract-service-url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
+
+  users:
+    # Most users POST /users/search may return. The operation is not paginated, so a
+    # result of exactly this size may have been truncated; the result is sorted by
+    # identifier first, which makes the truncation deterministic rather than arbitrary.
+    search-max-results: ${USERS_SEARCH_MAX_RESULTS:200}
+
+    # Most entries POST /participants/me/users/bulk may carry. Entries are applied one
+    # at a time and share no transaction, so the cost of a batch is linear in its size;
+    # a larger batch is refused whole with 400 before anything is written.
+    bulk-max-size: ${USERS_BULK_MAX_SIZE:500}
+
+  erasure:
+    # Key of the salted HMAC an erased record keeps instead of its identifier, so
+    # that the operator - and nobody else, since the key is not in the database -
+    # can still confirm that a named person consented. The salt is per record, so
+    # two erased records never carry the same value. Unset (the default) means
+    # erased records carry no verifier and nothing can be confirmed against them,
+    # ever. Rotating the key abandons every verifier written under the previous one.
+    verification-secret: ${ERASURE_VERIFICATION_SECRET:}
 
   # ---------------------------------------------------------------------------
   # Identity provider trust list

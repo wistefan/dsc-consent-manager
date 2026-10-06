@@ -1,0 +1,21 @@
+# Response: 404 Not Found — referenced from api/openapi.yaml as
+# components.responses.NotFound.
+#
+# Referenced by `GET /users/{identifier}`, and by the link operations added by
+# the later steps of this ticket.
+description: >
+  The addressed resource does not exist, or does not exist as far as this caller
+  is concerned. A participant asking about a user it is not linked to receives
+  this and not `403 Forbidden`, deliberately: a 403 would confirm that the
+  identifier names a registered user, which is exactly the fact the caller is not
+  entitled to.
+content:
+  application/problem+json:
+    schema:
+      $ref: "../schemas/ProblemDetail.yaml"
+    example:
+      type: "https://consent-manager.example/problems/not-found"
+      title: "Not Found"
+      status: 404
+      detail: "No user is registered under the supplied identifier."
+      instance: "/v1/users/urn%3Aexample%3Auser-1"

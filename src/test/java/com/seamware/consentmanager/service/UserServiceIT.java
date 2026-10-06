@@ -3,7 +3,11 @@ package com.seamware.consentmanager.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.nimbusds.jwt.JWTClaimsSet;
+import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
+import com.seamware.consentmanager.domain.UserParticipant;
+import com.seamware.consentmanager.repository.ParticipantRepository;
+import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.IdentityProviderConfiguration;
 import com.seamware.consentmanager.security.IdentityProviderRegistry;
@@ -37,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -53,20 +58,27 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * End-to-end check of just-in-time provisioning against real PostgreSQL, where {@code
- * uq_users_identifier} settles the race, and a WireMock provider signing the tokens.
+ * End-to-end check of {@link UserService} against real PostgreSQL, where the unique constraints
+ * rather than any pre-check settle a race, and a WireMock provider signing the tokens.
+ *
+ * <p>Just-in-time provisioning is exercised through a probe route so the filter, the principal and
+ * its create signal are all in the picture; the registration rule is called directly, because no
+ * endpoint exposes it yet.
  *
  * <p>Not transactional, so the rows it commits are cleaned up explicitly.
  */
 @MicronautTest(transactional = false)
-@DisplayName("Just-in-time user provisioning")
-class UserProvisioningIT extends PostgresTestResource {
+@DisplayName("User service")
+class UserServiceIT extends PostgresTestResource {
 
     /** Enables the probe controller, so it exists only for this test. */
     private static final String PROBE_ENABLED = "test.user-provisioning.enabled";
 
     /** Route a user reaches to have themselves provisioned. */
     private static final String PROBE_PATH = "/provisioning-probe";
+
+    /** Separates the row's key from the create signal in the probe's body. */
+    private static final String PROBE_SEPARATOR = ":";
 
     /** Audience the trust list expects, matching {@code application-test.yml}. */
     private static final String AUDIENCE = "consent-manager";
@@ -107,6 +119,12 @@ class UserProvisioningIT extends PostgresTestResource {
     /** How many requests race for the same brand-new identifier in the concurrency test. */
     private static final int CONCURRENT_FIRST_REQUESTS = 16;
 
+    /** Local identifier a registration asks the participant's link to carry. */
+    private static final String LOCAL_IDENTIFIER = "customer-1";
+
+    /** Local identifier a second registration supplies for the same link. */
+    private static final String CHANGED_LOCAL_IDENTIFIER = "customer-2";
+
     /** How long those racing requests are given to all come back. */
     private static final Duration CONCURRENCY_TIMEOUT = Duration.ofSeconds(60);
 
@@ -114,10 +132,20 @@ class UserProvisioningIT extends PostgresTestResource {
     private static final String COUNT_BY_IDENTIFIER =
             "SELECT count(*) FROM users WHERE identifier = ?";
 
+    /**
+     * Counts the links a single identifier has, which the composite key constrains the same way.
+     */
+    private static final String COUNT_LINKS_BY_IDENTIFIER =
+            "SELECT count(*) FROM user_participants l"
+                    + " JOIN users u ON u.id = l.user_id WHERE u.identifier = ?";
+
     private static final OidcDiscoveryStub IDENTITY_PROVIDER = new OidcDiscoveryStub();
 
     /** Identifiers provisioned during the run, removed once it ends. */
     private final List<String> provisioned = new ArrayList<>();
+
+    /** Participants registered during the run, removed once it ends. */
+    private final List<Participant> createdParticipants = new ArrayList<>();
 
     @Inject
     @Client("/")
@@ -126,6 +154,12 @@ class UserProvisioningIT extends PostgresTestResource {
     @Inject IdentityProviderRegistry registry;
 
     @Inject UserRepository users;
+
+    @Inject ParticipantRepository participantRows;
+
+    @Inject UserParticipantRepository links;
+
+    @Inject UserService service;
 
     @Inject DataSource dataSource;
 
@@ -158,8 +192,10 @@ class UserProvisioningIT extends PostgresTestResource {
     /** Removes the rows this test committed, which outlive it without this. */
     @AfterAll
     void removeProvisionedUsers() {
+        // Links go with their user, which user_participants cascades on.
         provisioned.forEach(
                 identifier -> users.findByIdentifier(identifier).ifPresent(users::delete));
+        createdParticipants.forEach(participantRows::delete);
     }
 
     /** Waits for discovery, without which no token would get as far as provisioning. */
@@ -186,7 +222,7 @@ class UserProvisioningIT extends PostgresTestResource {
         assertThat(row.getEmail()).isEqualTo(INITIAL_EMAIL);
         assertThat(row.getFirstName()).isEqualTo(INITIAL_GIVEN_NAME);
         assertThat(row.getLastName()).isEqualTo(INITIAL_FAMILY_NAME);
-        assertThat(response.body()).isEqualTo(row.getId().toString());
+        assertThat(response.body()).isEqualTo(probeBody(row, true));
     }
 
     /** A token carrying only the identifier still provisions; the profile claims are optional. */
@@ -215,7 +251,8 @@ class UserProvisioningIT extends PostgresTestResource {
         HttpResponse<String> second = get(token(claims(identifier)));
 
         assertThat(second.code()).isEqualTo(HttpStatus.OK.getCode());
-        assertThat(second.body()).isEqualTo(first.body());
+        assertThat(provisionedId(second.body())).isEqualTo(provisionedId(first.body()));
+        assertThat(second.body()).isEqualTo(probeBody(row(identifier), false));
         assertThat(countRowsFor(identifier)).isOne();
         assertThat(row(identifier).getCreatedAt()).isEqualTo(createdAt);
     }
@@ -233,7 +270,7 @@ class UserProvisioningIT extends PostgresTestResource {
         HttpResponse<String> second = get(token(claims(identifier, email, givenName, familyName)));
 
         assertThat(second.code()).isEqualTo(HttpStatus.OK.getCode());
-        assertThat(second.body()).isEqualTo(first.body());
+        assertThat(provisionedId(second.body())).isEqualTo(provisionedId(first.body()));
         assertThat(countRowsFor(identifier)).isOne();
         User row = row(identifier);
         assertThat(row.getEmail()).isEqualTo(email);
@@ -321,10 +358,134 @@ class UserProvisioningIT extends PostgresTestResource {
             assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
             bodies.add(response.body());
         }
+        User row = row(identifier);
+        assertThat(bodies).hasSize(CONCURRENT_FIRST_REQUESTS);
+        assertThat(bodies.stream().map(UserServiceIT::provisionedId))
+                .as("every racing request to land on one row")
+                .containsOnly(row.getId().toString());
         assertThat(bodies)
-                .hasSize(CONCURRENT_FIRST_REQUESTS)
-                .containsOnly(row(identifier).getId().toString());
+                .as("exactly one racing request to report it created the row")
+                .filteredOn(probeBody(row, true)::equals)
+                .hasSize(1);
         assertThat(countRowsFor(identifier)).isOne();
+    }
+
+    /** Registering an identifier nothing knows yet creates the user and links it in one call. */
+    @Test
+    @DisplayName("registering an unknown identifier creates the user and the link")
+    void registrationCreatesTheUserAndTheLink() {
+        Participant participant = participant();
+        String identifier = unknownIdentifier();
+
+        RegistrationResult result =
+                service.registerForParticipant(
+                        participant, registration(identifier, LOCAL_IDENTIFIER));
+
+        assertThat(result.outcome()).isEqualTo(RegistrationOutcome.CREATED);
+        assertThat(result.user().getIdentifier()).isEqualTo(identifier);
+        assertThat(countRowsFor(identifier)).isOne();
+        assertThat(countLinksFor(identifier)).isOne();
+        assertThat(service.participantIdentifiersFor(result.user()))
+                .containsExactly(participant.getIdentifier());
+    }
+
+    /**
+     * Repeating a registration never adds a row: the second call adopts the user and its link, and
+     * only the supplied local identifier moves.
+     */
+    @Test
+    @DisplayName("repeating a registration adopts the user and only moves the local identifier")
+    void registrationIsIdempotent() {
+        Participant participant = participant();
+        String identifier = unknownIdentifier();
+        RegistrationResult created =
+                service.registerForParticipant(
+                        participant, registration(identifier, LOCAL_IDENTIFIER));
+
+        RegistrationResult repeated =
+                service.registerForParticipant(
+                        participant, registration(identifier, CHANGED_LOCAL_IDENTIFIER));
+
+        assertThat(repeated.outcome()).isEqualTo(RegistrationOutcome.ALREADY_LINKED);
+        assertThat(repeated.user().getId()).isEqualTo(created.user().getId());
+        assertThat(countRowsFor(identifier)).isOne();
+        assertThat(countLinksFor(identifier)).isOne();
+        assertThat(localIdentifierFor(identifier)).isEqualTo(CHANGED_LOCAL_IDENTIFIER);
+    }
+
+    /**
+     * Registrations racing for one brand-new identifier all come back, one of them having created
+     * the user, and leave exactly one user and one link behind.
+     *
+     * <p>The outcomes are what this asserts, not merely the row counts: a {@code
+     * registerForParticipant} wrapped in a transaction would leave the same single row while the
+     * losing callers failed with "current transaction is aborted".
+     */
+    @Test
+    @DisplayName("concurrent registrations for one identifier settle on one user and one link")
+    void concurrentRegistrationsSettleOnOneRow() throws Exception {
+        Participant participant = participant();
+        String identifier = unknownIdentifier();
+        CountDownLatch start = new CountDownLatch(1);
+        List<Callable<RegistrationResult>> racers = new ArrayList<>();
+        for (int i = 0; i < CONCURRENT_FIRST_REQUESTS; i++) {
+            racers.add(
+                    () -> {
+                        start.await();
+                        return service.registerForParticipant(
+                                participant, registration(identifier, LOCAL_IDENTIFIER));
+                    });
+        }
+
+        List<RegistrationOutcome> outcomes = new ArrayList<>();
+        ExecutorService pool = Executors.newFixedThreadPool(CONCURRENT_FIRST_REQUESTS);
+        try {
+            List<Future<RegistrationResult>> pending = new ArrayList<>();
+            racers.forEach(racer -> pending.add(pool.submit(racer)));
+            start.countDown();
+            pool.shutdown();
+            assertThat(pool.awaitTermination(CONCURRENCY_TIMEOUT.toSeconds(), TimeUnit.SECONDS))
+                    .as("every racing registration to come back")
+                    .isTrue();
+            for (Future<RegistrationResult> result : pending) {
+                outcomes.add(result.get().outcome());
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(outcomes)
+                .as("exactly one caller to have created the user")
+                .filteredOn(RegistrationOutcome.CREATED::equals)
+                .hasSize(1);
+        assertThat(outcomes).hasSize(CONCURRENT_FIRST_REQUESTS).doesNotContainNull();
+        assertThat(countRowsFor(identifier)).isOne();
+        assertThat(countLinksFor(identifier)).isOne();
+    }
+
+    /**
+     * The instant an entity carries in memory after an insert is the instant the stored row
+     * returns.
+     *
+     * <p>{@code timestamptz} keeps microseconds, so a nanosecond-precision stamp would survive only
+     * in memory and every response rendered from the saved entity would differ from the next one
+     * rendered after a read. {@link com.seamware.consentmanager.domain.MicrosecondDateTimeProvider}
+     * exists for this assertion.
+     */
+    @Test
+    @DisplayName("an entity's timestamps are the ones PostgreSQL returns on re-read")
+    void timestampsRoundTripUnchanged() {
+        Participant participant = participant();
+        String identifier = unknownIdentifier();
+
+        User saved =
+                service.registerForParticipant(
+                                participant, registration(identifier, LOCAL_IDENTIFIER))
+                        .user();
+
+        User reread = row(identifier);
+        assertThat(reread.getCreatedAt()).isEqualTo(saved.getCreatedAt());
+        assertThat(reread.getUpdatedAt()).isEqualTo(saved.getUpdatedAt());
     }
 
     /** An identifier no row exists for, remembered so the row it provisions is cleaned up. */
@@ -332,6 +493,49 @@ class UserProvisioningIT extends PostgresTestResource {
         String identifier = "urn:test:user:" + UUID.randomUUID();
         provisioned.add(identifier);
         return identifier;
+    }
+
+    /** A registration for the given identifier, carrying attributes no stored row may take on. */
+    private static UserRegistration registration(String identifier, String localIdentifier) {
+        return new UserRegistration(
+                identifier,
+                localIdentifier,
+                INITIAL_EMAIL,
+                INITIAL_GIVEN_NAME,
+                INITIAL_FAMILY_NAME);
+    }
+
+    /** A committed participant to register users for, removed once the run ends. */
+    private Participant participant() {
+        Participant participant =
+                participantRows.save(
+                        new Participant(
+                                "urn:test:participant:" + UUID.randomUUID(),
+                                "Alpha GmbH",
+                                null,
+                                null,
+                                Map.of(),
+                                null));
+        createdParticipants.add(participant);
+        return participant;
+    }
+
+    /** The local identifier the single link of an identifier carries. */
+    private String localIdentifierFor(String identifier) {
+        User user = row(identifier);
+        List<UserParticipant> rows = links.findByIdUserId(user.getId());
+        assertThat(rows).as("the links of %s", identifier).hasSize(1);
+        return rows.getFirst().getLocalIdentifier();
+    }
+
+    /** The body the probe renders for a row this request did or did not create. */
+    private static String probeBody(User row, boolean created) {
+        return row.getId() + PROBE_SEPARATOR + created;
+    }
+
+    /** The row key half of a probe body, which is the same however the row was reached. */
+    private static String provisionedId(String body) {
+        return body.substring(0, body.indexOf(PROBE_SEPARATOR));
     }
 
     /** Reads the row an identifier provisioned, failing the test when there is none. */
@@ -346,12 +550,22 @@ class UserProvisioningIT extends PostgresTestResource {
      * a duplicate the schema somehow allowed is visible rather than thrown.
      */
     private long countRowsFor(String identifier) {
+        return count(COUNT_BY_IDENTIFIER, identifier);
+    }
+
+    /** Counts an identifier's links the same way, which the composite key allows at most one of. */
+    private long countLinksFor(String identifier) {
+        return count(COUNT_LINKS_BY_IDENTIFIER, identifier);
+    }
+
+    /** Runs a counting query for one identifier outside any transaction. */
+    private long count(String sql, String identifier) {
         // The injected DataSource is Micronaut Data's contextual wrapper, which hands out a
         // connection only inside a transaction this test deliberately does not have; resolving it
         // gets at the plain pool underneath.
         DataSource pool = dataSources.resolve(dataSource);
         try (Connection connection = pool.getConnection();
-                PreparedStatement statement = connection.prepareStatement(COUNT_BY_IDENTIFIER)) {
+                PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, identifier);
             try (ResultSet rows = statement.executeQuery()) {
                 assertThat(rows.next()).isTrue();
@@ -417,11 +631,11 @@ class UserProvisioningIT extends PostgresTestResource {
     @Controller(PROBE_PATH)
     static class ProvisioningProbeController {
 
-        /** Renders the primary key of the row the caller was provisioned to. */
+        /** Renders the key of the row the caller reached, and whether this request created it. */
         @Get
         @Secured("USER")
         String provisionedUser(UserPrincipal principal) {
-            return principal.user().getId().toString();
+            return principal.user().getId() + PROBE_SEPARATOR + principal.created();
         }
     }
 }

@@ -1,0 +1,87 @@
+# Schema: UserRegistration — referenced from api/openapi.yaml as
+# components.schemas.UserRegistration.
+#
+# Deliberately without `additionalProperties: false`. A participant that sends a
+# property this schema does not name — `participantIdentifier` above all, which
+# earlier revisions of the API carried in the body — must have it ignored rather
+# than be refused: the calling participant is taken from the token and from
+# nowhere else, so such a field is meaningless, not erroneous. Forbidding
+# additional properties would turn those requests into `400`.
+#
+# Every property carries a `maxLength`. The backing columns are all `TEXT`, and a
+# participant is the first writer on this API whose values are not derived from a
+# token the service already validated, so the bound is what keeps an arbitrarily
+# large string out of a column that `POST /users/search` then has to compare and
+# sort. The bounds below are the same ones a later revision should apply to the
+# `UserSearch` criteria.
+type: object
+description: >
+  A user a participant asks to have registered and linked to itself.
+
+
+  `identifier` is the data space's **global** user identifier and the only
+  property matching ever looks at: a registration never matches on `email`, and
+  never merges two records. The attributes are written solely on the insert that
+  creates the user, so registering an already-known user leaves their stored
+  attributes untouched.
+
+
+  The participant the user is linked to is the one the bearer token names. The
+  body cannot name it, and a `participantIdentifier` property sent anyway is
+  ignored rather than rejected.
+properties:
+  identifier:
+    type: string
+    minLength: 1
+    # Comfortably above a URN-, URL- or DID-shaped identifier while staying
+    # within what a btree index on the column can hold.
+    maxLength: 255
+    # Rejects a value that is only whitespace, which `minLength` alone would let
+    # through. Bean validation matches the whole value, so this is "contains at
+    # least one non-whitespace character".
+    pattern: '^(?!\s*$).+$'
+    description: >
+      The globally unique user identifier, the same value the user's own token
+      asserts in its `claims.user-identifier` claim. Required, and rejected with
+      `400 Bad Request` when empty or blank.
+    example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+  localIdentifier:
+    type: string
+    # Generous rather than column-shaped, unlike the attributes below: a
+    # participant's own identifier may be a DID or another URI.
+    maxLength: 2048
+    description: >
+      The calling participant's own identifier for this user, stored on that
+      participant's link and visible to nobody else. A convenience column for
+      reconciling against the participant's internal records — never a lookup
+      key, never part of matching, and not readable through any user
+      representation. Unlike the attributes below it is refreshed whenever a
+      later registration supplies one.
+    example: "patient-10427"
+  email:
+    type: string
+    format: email
+    # The longest address RFC 5321 permits: 64-octet local part, `@`, 255-octet
+    # domain minus the two octets the envelope's angle brackets would take.
+    maxLength: 254
+    description: >
+      Contact address, written only when this call creates the user.
+
+
+      Validated as an address here, unlike the `email` criterion of
+      `POST /users/search`: refusing a malformed address on the way in is
+      correct, whereas refusing one on the way out would make users whose
+      identity provider asserted a non-RFC-valid address unsearchable.
+    example: "ada@example.org"
+  firstName:
+    type: string
+    maxLength: 255
+    description: Given name. Same write-on-create rule as `email`.
+    example: "Ada"
+  lastName:
+    type: string
+    maxLength: 255
+    description: Family name. Same write-on-create rule as `email`.
+    example: "Lovelace"
+required:
+  - identifier
