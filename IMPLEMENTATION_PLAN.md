@@ -58,18 +58,31 @@ abstract classes, and a transactional `ParticipantService` holds the behaviour.
   `ParticipantRegistration` and `ParticipantUpdate`, so an identifier in the body is
   ignored rather than rejected.
 - US-PM-002 is documentation only; the validation behaviour stays owned by TICKET-003.
-- One small Flyway migration is needed, in Step 5 only. `V1__initial_schema.sql` already
-  carries `participants` with `endpoints`/`legal_person` JSONB and
-  `uq_participants_identifier`; Step 5 adds a nullable `deregistered_at TIMESTAMPTZ` so a
-  retained row can be marked without being scrubbed. No verifier column is needed — a
-  participant is an organization, not a data subject, so ADR-0007's keyed `erasure_verifier`
-  has no counterpart here.
+- One small Flyway migration is needed, and it lands in **Step 2**, not Step 5.
+  `V1__initial_schema.sql` already carries `participants` with `endpoints`/`legal_person`
+  JSONB and `uq_participants_identifier`; the migration adds a nullable
+  `deregistered_at TIMESTAMPTZ` so a retained row can be marked without being scrubbed. It
+  is scheduled in Step 2 because Steps 2 and 4 already depend on the column — Step 2's
+  `Participant.yaml` exposes `deregisteredAt`, so `ParticipantMapper` must read a domain
+  field that must already exist, and Step 4's listing filters deregistered rows out — and
+  every step has to merge independently with `./mvnw verify` green. The migration is one
+  nullable column plus a partial index and depends on nothing Step 5 adds, so moving it
+  forward costs nothing; Step 5 keeps only the cascade behaviour that writes the column. No
+  verifier column is needed — a participant is an organization, not a data subject, so
+  ADR-0007's keyed `erasure_verifier` has no counterpart here.
 
 ### Constraints every step inherits
 
 - Spec and implementation land in the **same** step. `SpecSecurityConsistencyTest` fails the
   build when a specified operation has no implementing route, so a spec-only step cannot be
   merged.
+- **Every step that adds an operation raises `SPECIFIED_OPERATION_COUNT` in the same commit.**
+  `SpecSecurityConsistencyTest` pins the constant at `10` today and asserts the parsed
+  operation list `hasSize(SPECIFIED_OPERATION_COUNT)`, precisely so that a path item its
+  parser cannot see costs a build rather than silently generating no cases. Each step from 2
+  onward therefore fails `./mvnw verify` until the constant matches: Step 2 `+1` → `11`,
+  Step 3 `+2` → `13`, Step 4 `+2` → `15`, Step 5 `+1` → `16`. The expected end state after
+  Step 5 is **16**; a step that silently loses an operation still costs a build.
 - Every new operation declares `security`, `x-roles` and `x-principal` consistently, and
   `$ref`s the shared `401`/`403` responses plus the inline `default` problem response.
 - Operations are tagged `Participants`, which makes the generator emit
@@ -107,7 +120,12 @@ unreachable: the caller is rejected before `POST /participants` can run.
 - `src/main/java/com/seamware/consentmanager/security/PrincipalResolutionFilter.java` — the
   PARTICIPANT branch keeps the "no participant identifier claim" `403` and replaces the
   "not registered" `403` with `new ParticipantPrincipal(issuer, subject, identifier, null)`.
-  Resolution still runs on `TaskExecutors.BLOCKING`.
+  Resolution still runs on `TaskExecutors.BLOCKING`. Rewrite the `participant(...)` javadoc
+  in the same edit — it is the second place asserting the contract this step makes false
+  ("Builds a `ParticipantPrincipal` from the **registered** participant the token's
+  identifier resolves to", and `@throws AuthorizationException 403 when the identifier is
+  absent or unregistered`). After this step only the *absent* identifier throws, and the two
+  javadocs (here and on `ParticipantPrincipal`) must say the same thing.
 - `src/main/java/com/seamware/consentmanager/api/ParticipantUserController.java` — every
   existing call site that reads `principal.participant()` switches to
   `principal.requireRegistered()`, preserving today's `403` for an unregistered caller.
@@ -163,6 +181,18 @@ to a dataspace-wide scope; `./mvnw verify` green.
 
 Covers US-PM-001, AC 1, AC 2, AC 3.
 
+**Schema** (moved forward from Step 5, which depended on it)
+
+- `src/main/resources/db/migration/V3__participant_deregistration.sql` — add
+  `deregistered_at TIMESTAMPTZ` (nullable) to `participants`, plus a partial index on
+  `deregistered_at IS NULL` for the directory listing's default filter.
+  `domain/Participant` gains the field. It lands here rather than in Step 5 because this
+  step's `Participant.yaml` already exposes `deregisteredAt` and Step 4 already filters on
+  it, and every step must merge independently with `./mvnw verify` green. Step 5 adds only
+  the cascade that *writes* the column.
+- `ParticipantMapper` therefore maps `deregisteredAt` from day one; it is simply `null`
+  until Step 5 can set it.
+
 **Spec** (`api/components/schemas/`, referenced from `openapi.yaml`'s `components`)
 
 - `Participant.yaml` — `identifier` (required), `legalName` (required),
@@ -184,7 +214,8 @@ Covers US-PM-001, AC 1, AC 2, AC 3.
   `Participants`, `security: [bearerAuth: [PARTICIPANT]]`, `x-roles: [PARTICIPANT]`,
   `x-principal: ParticipantPrincipal`; responses `201` (`Participant`), `400`, `401`,
   `403`, `409`, `default`. The description states plainly that the identifier comes from
-  the token and that a body-supplied identifier is ignored.
+  the token and that a body-supplied identifier is ignored. Raise
+  `SpecSecurityConsistencyTest.SPECIFIED_OPERATION_COUNT` from `10` to `11` in this commit.
 
 **Implementation**
 
@@ -207,8 +238,9 @@ Covers US-PM-001, AC 1, AC 2, AC 3.
 - `api/ParticipantMapperTest.java` — unit, round-trips the JSONB-backed nested objects.
 - `api/ParticipantRegistrationIT.java` — registration from a token creates the record with
   the token's identifier; an `identifier` in the body is ignored; a second registration by an
-  already-registered participant returns `409`. Step 5 adds the reactivation case (a
-  deregistered identifier re-registers instead of conflicting) once `deregistered_at` exists.
+  already-registered participant returns `409`; `deregisteredAt` is absent from the response
+  for an active participant. Step 5 adds the reactivation case (a deregistered identifier
+  re-registers instead of conflicting) once its cascade can actually set the column.
 
 **Acceptance criteria:** AC 1, AC 2, AC 3; no response field is a credential (AC 14 for this
 surface); `./mvnw verify` green.
@@ -224,7 +256,8 @@ Covers US-PM-005, US-PM-006, AC 6, AC 7, AC 8.
 - `openapi.yaml` — `/participants/me` `get` (`getCurrentParticipant`) and `put`
   (`updateCurrentParticipant`), both `PARTICIPANT` / `ParticipantPrincipal`, both returning
   `Participant`; `put` also declares `400`. Both declare `403` as the answer for a token
-  whose participant is not registered, and the descriptions say so.
+  whose participant is not registered, and the descriptions say so. Raise
+  `SPECIFIED_OPERATION_COUNT` from `11` to `13` in this commit.
 
 **Implementation**
 
@@ -254,10 +287,12 @@ step introduces the first paged endpoint and the convention for later ones.
 
 **Spec**
 
-- `api/components/schemas/ParticipantPage.yaml` — `content` (array of `Participant`),
-  `page`, `size`, `totalElements`, `totalPages`. Because `items:` must resolve a named model,
-  write this schema **inline** in `openapi.yaml` alongside `BulkUserRegistration`, with a
-  comment naming the reason.
+- **Inline `ParticipantPage` schema in `openapi.yaml`**, alongside `BulkUserRegistration` and
+  with a comment naming the reason — `content` (array of `Participant`), `page`, `size`,
+  `totalElements`, `totalPages`. Do **not** create
+  `api/components/schemas/ParticipantPage.yaml`: a cross-file `$ref` under `items:` degrades
+  to `List<Object>`, so the externalised file would be dead weight and the `$ref` to it
+  would silently lose the element type. Inline is the only form that works.
 - `openapi.yaml` — `GET /participants` (`listParticipants`) with `page` (integer, min 0,
   default 0), `size` (integer, min 1, default matching the configured default) and
   `identifier` (string, optional, exact and case-sensitive) query parameters;
@@ -265,7 +300,8 @@ step introduces the first paged endpoint and the convention for later ones.
   as a path parameter and a `404` response. Both are `bearerAuth: [USER, PARTICIPANT, CATALOG]`,
   `x-roles: [USER, PARTICIPANT, CATALOG]`, `x-principal: ConsentManagerPrincipal` — the
   widest principal type, as `SpecSecurityConsistencyTest` requires the declared principal to
-  hold every admitted role.
+  hold every admitted role. Raise `SPECIFIED_OPERATION_COUNT` from `13` to `15` in this
+  commit.
 - **`size` declares no `maximum`.** A spec-level `maximum` and a runtime clamp are mutually
   exclusive: Bean Validation would reject an over-large `size` with `400` before the handler
   runs, making the clamp dead code, and a YAML literal cannot track a configurable ceiling, so
@@ -287,6 +323,18 @@ step introduces the first paged endpoint and the convention for later ones.
   directory lists who can be transacted with — but remain resolvable by
   `GET /participants/{identifier}` and by the `identifier` filter, carrying `deregisteredAt`,
   so a retained consent's counterparty stays legible (Step 5).
+- **Admitting `USER` means a directory read JIT-provisions a `users` row, and that is
+  intended.** `PrincipalResolutionFilter.user(...)` calls `userService.provisionFromToken`
+  for every USER-role request, so these are the first read-only routes where it fires. That
+  is the repo's settled contract rather than a side effect to design around: `POST /users`'s
+  own description already states that registration "is the same code path as the
+  just-in-time provisioning **every other authenticated route** performs, so a user first
+  seen through another endpoint is already registered". Making the directory the one
+  exception would need a filter carve-out per route and would break that stated idempotence.
+  The ticket mandates USER access, so `USER` stays admitted and provisioning stays on. Step
+  4's IT asserts this deliberately — a USER token previously unseen by this service reads
+  `GET /participants` and is afterwards resolvable through `GET /users/{identifier}` — so
+  the behaviour is pinned rather than discovered.
 
 **Implementation**
 
@@ -300,6 +348,14 @@ step introduces the first paged endpoint and the convention for later ones.
   (already a `PageableRepository`) via `Pageable.from(page, size)`.
   `findByIdentifier(...).orElseThrow(NotFoundException::new)` for the single-record lookup,
   which resolves a deregistered participant too.
+- `repository/ParticipantRepository.java` — today it carries only `findByIdentifier`,
+  `existsByIdentifier` and `findByIdIn`, none of which is deregistration-aware or paged by a
+  filter. Add `Page<Participant> findByDeregisteredAtIsNull(Pageable pageable)` for the
+  default listing and `Page<Participant> findByIdentifierAndDeregisteredAtIsNull(String
+  identifier, Pageable pageable)` for the filtered one, so the exclusion and the exact match
+  are both expressed as derived queries rather than filtered in memory after a full page
+  read. `findByIdentifier` already serves the single-record lookup and must keep resolving
+  deregistered rows.
 - `ParticipantController` — both handlers; the list maps a Micronaut Data `Page` onto
   `ParticipantPage`.
 
@@ -350,12 +406,9 @@ Covers US-PM-007, AC 10, AC 11.
   - and what `deregistered_at` means to readers: excluded from the directory listing, still
     resolvable by identifier, not a soft-deleted record pretending to be erased.
 
-**Schema**
-
-- `src/main/resources/db/migration/V3__participant_deregistration.sql` — add
-  `deregistered_at TIMESTAMPTZ` (nullable) to `participants`, plus a partial index on
-  `deregistered_at IS NULL` for the directory listing's default filter. `domain/Participant`
-  gains the field.
+**Schema** — none. `V3__participant_deregistration.sql` and the `domain/Participant` field
+landed in Step 2, because Steps 2 and 4 already read the column. This step is the first to
+*write* it.
 
 **Spec**
 
@@ -364,7 +417,9 @@ Covers US-PM-007, AC 10, AC 11.
   and consents retained. Mirrors `ErasureSummary`.
 - `openapi.yaml` — `DELETE /participants/me` (`deregisterCurrentParticipant`), `PARTICIPANT` /
   `ParticipantPrincipal`, responses `200` (`DeregistrationSummary`), `401`, `403`, `409`,
-  `default`. The description states the cascade in order and links the ADR.
+  `default`. The description states the cascade in order and links the ADR. Raise
+  `SPECIFIED_OPERATION_COUNT` from `15` to `16` in this commit — `16` is the expected end
+  state for this ticket.
 
 **Implementation**
 
@@ -481,6 +536,10 @@ API description and `docs/security.md`; `./mvnw verify` green (the spec is parse
   `ProvisionedUser`. The line should read `UserService (registration, JIT provisioning,
   search, links, ADR-0007 erasure), ErasureVerifier, CallerScope`.
 - Confirm every new configuration key is in `.env.sample` and `application.yml`.
+- Confirm `SpecSecurityConsistencyTest.SPECIFIED_OPERATION_COUNT` reads `16` and that the
+  parsed operation list actually has that many entries — the constant is only a tripwire if
+  it tracks reality, and a step that dropped an operation while bumping the count would
+  otherwise pass.
 
 **Acceptance criteria:** clean `./mvnw clean verify`; `AGENTS.md` matches the merged state;
 the acceptance-criteria walk is recorded on the ticket.
