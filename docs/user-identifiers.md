@@ -78,3 +78,25 @@ even when encoded. The literal identifier `me` is likewise unreachable, because
 `POST /users/search` with the `identifier` criterion is the documented escape
 hatch for both cases. It matches the same value the same way, with no
 restriction on its shape.
+
+## Unlinking, and the half of the invariant this ticket cannot enforce
+
+`DELETE /participants/me/users/{identifier}` refuses with `409 Conflict` while a
+`GRANTED` consent for that user names the caller as provider or consumer, so
+that no granted consent is left naming a participant that no longer knows the
+subject.
+
+That check is a `SELECT` followed by a `DELETE`, two statements with no
+constraint able to serialise them, so it is advisory rather than a guarantee: a
+consent granted in between still slips through. The same hole is open without
+any race at all for a consent that is `PENDING` or `DRAFT` at unlink time — it
+does not block the unlink, because neither status authorises a data flow, and
+granting it afterwards strands it.
+
+The invariant "no `GRANTED` consent without a link" therefore has to be upheld
+from the other side as well: **the consent-granting path must refuse to grant a
+consent for a participant that holds no link to the subject.** That path does
+not exist yet; it belongs to the consent lifecycle ticket, and `UserService.unlink`
+carries a `TODO(consent-lifecycle)` pointing here. Only the two halves together
+close the gap — widening the unlink check to `PENDING` and `DRAFT` would not,
+since it leaves the race untouched while refusing unlinks that nothing justifies.

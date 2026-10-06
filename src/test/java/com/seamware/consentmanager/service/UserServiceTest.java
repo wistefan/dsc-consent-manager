@@ -4,12 +4,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
+import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentSnapshot;
+import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.domain.UserParticipant.UserParticipantId;
+import com.seamware.consentmanager.domain.UuidGenerator;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
+import com.seamware.consentmanager.error.NotFoundException;
+import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
@@ -92,10 +99,13 @@ class UserServiceTest {
 
     private final StubParticipantRepository participants = new StubParticipantRepository();
 
+    private final StubConsentRepository consents = new StubConsentRepository();
+
     private final ConsentManagerConfiguration.Users limits =
             new ConsentManagerConfiguration.Users();
 
-    private final UserService service = new UserService(users, links, participants, limits);
+    private final UserService service =
+            new UserService(users, links, participants, consents, limits);
 
     /** An identifier no row exists for is inserted from the claims, and reported as created. */
     @Test
@@ -310,6 +320,13 @@ class UserServiceTest {
                         RegistrationOutcome.CREATED,
                         STORED_LOCAL_IDENTIFIER),
                 Arguments.of(
+                        "an unknown identifier with a blank local identifier",
+                        false,
+                        false,
+                        "   ",
+                        RegistrationOutcome.CREATED,
+                        null),
+                Arguments.of(
                         "a known identifier this participant is not linked to",
                         true,
                         false,
@@ -402,6 +419,148 @@ class UserServiceTest {
     @DisplayName("a user with no links has no participant identifiers")
     void participantIdentifiersAreEmptyWithoutLinks() {
         assertThat(service.participantIdentifiersFor(users.put(stored()))).isEmpty();
+    }
+
+    /**
+     * The three bodies a {@code PATCH} can reach the service with. A blank string is stored as no
+     * local identifier at all, so the column never holds two encodings of "this participant holds
+     * none".
+     *
+     * @param description the body, for the test name
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("linkUpdates")
+    @DisplayName("the link update stores what the caller asked for, a blank as nothing")
+    void updatesTheCallersOwnLink(
+            String description,
+            @Nullable String requested,
+            @Nullable String expectedLocalIdentifier) {
+        Participant participant = participants.put(participant());
+        User user = users.put(stored());
+        links.put(new UserParticipant(user.getId(), participant.getId(), STORED_LOCAL_IDENTIFIER));
+
+        UserParticipant updated = service.updateLink(participant, IDENTIFIER, requested);
+
+        assertThat(updated.getLocalIdentifier()).isEqualTo(expectedLocalIdentifier);
+        assertThat(links.find(user.getId(), participant.getId()).getLocalIdentifier())
+                .isEqualTo(expectedLocalIdentifier);
+        assertThat(users.updated).as("the users row is out of reach here").isEmpty();
+    }
+
+    static Stream<Arguments> linkUpdates() {
+        return Stream.of(
+                Arguments.of("a value sets it", CHANGED_LOCAL_IDENTIFIER, CHANGED_LOCAL_IDENTIFIER),
+                Arguments.of("an explicit null clears it", null, null),
+                Arguments.of("a blank string clears it too", "   ", null));
+    }
+
+    /**
+     * Absence is a 404 on every link path, and the two kinds of absence are indistinguishable: a
+     * 403 for the second would confirm that the identifier names somebody.
+     *
+     * @param description the entry state, for the test name
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("missingLinks")
+    @DisplayName("a link the caller does not hold is not found, whatever it is asked to do")
+    void anUnheldLinkIsNotFound(String description, boolean linkedElsewhere) {
+        Participant caller = participants.put(participant());
+        Participant other = participants.put(participant(PARTICIPANT_BETA));
+        if (linkedElsewhere) {
+            links.put(new UserParticipant(users.put(stored()).getId(), other.getId(), null));
+        }
+
+        assertThatThrownBy(() -> service.linkFor(caller, IDENTIFIER))
+                .isInstanceOf(NotFoundException.class);
+        assertThatThrownBy(() -> service.updateLink(caller, IDENTIFIER, CHANGED_LOCAL_IDENTIFIER))
+                .isInstanceOf(NotFoundException.class);
+        assertThatThrownBy(() -> service.unlink(caller, IDENTIFIER))
+                .isInstanceOf(NotFoundException.class);
+    }
+
+    static Stream<Arguments> missingLinks() {
+        return Stream.of(
+                Arguments.of("an identifier naming nobody", false),
+                Arguments.of("a user linked to another participant", true));
+    }
+
+    /** Unlinking removes the caller's link and nothing else - not the user, not another link. */
+    @Test
+    @DisplayName("the unlink reaches the caller's link alone")
+    void unlinkRemovesOnlyTheCallersLink() {
+        Participant caller = participants.put(participant());
+        Participant other = participants.put(participant(PARTICIPANT_BETA));
+        User user = users.put(stored());
+        links.put(new UserParticipant(user.getId(), caller.getId(), STORED_LOCAL_IDENTIFIER));
+        links.put(new UserParticipant(user.getId(), other.getId(), null));
+
+        service.unlink(caller, IDENTIFIER);
+
+        assertThat(links.rows())
+                .containsOnlyKeys(new UserParticipantId(user.getId(), other.getId()));
+        assertThat(users.rows()).hasSize(1);
+    }
+
+    /**
+     * Only a {@code GRANTED} consent naming the caller blocks the unlink. {@code PENDING} and
+     * {@code DRAFT} authorise no data flow, so neither is worth refusing over; a granted consent
+     * between two other participants is none of the caller's business.
+     *
+     * @param description the consent seeded against the user, for the test name
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unlinkBlockers")
+    @DisplayName("a granted consent naming the caller blocks the unlink, nothing else does")
+    void grantedConsentNamingTheCallerBlocksTheUnlink(
+            String description,
+            ConsentStatus status,
+            boolean callerProvides,
+            boolean callerConsumes,
+            boolean blocked) {
+        Participant caller = participants.put(participant());
+        Participant other = participants.put(participant(PARTICIPANT_BETA));
+        User user = users.put(stored());
+        links.put(new UserParticipant(user.getId(), caller.getId(), null));
+        consents.put(
+                consent(
+                        user,
+                        status,
+                        callerProvides ? caller : other,
+                        callerConsumes ? caller : other));
+
+        if (blocked) {
+            assertThatThrownBy(() -> service.unlink(caller, IDENTIFIER))
+                    .isInstanceOf(ConflictException.class);
+            assertThat(links.rows()).as("a refused unlink writes nothing").hasSize(1);
+        } else {
+            service.unlink(caller, IDENTIFIER);
+            assertThat(links.rows()).isEmpty();
+        }
+    }
+
+    static Stream<Arguments> unlinkBlockers() {
+        return Stream.of(
+                Arguments.of("granted, caller provides", ConsentStatus.GRANTED, true, false, true),
+                Arguments.of("granted, caller consumes", ConsentStatus.GRANTED, false, true, true),
+                Arguments.of(
+                        "granted between two others", ConsentStatus.GRANTED, false, false, false),
+                Arguments.of("revoked, caller provides", ConsentStatus.REVOKED, true, false, false),
+                Arguments.of("pending, caller provides", ConsentStatus.PENDING, true, false, false),
+                Arguments.of("draft, caller provides", ConsentStatus.DRAFT, true, false, false));
+    }
+
+    /** A consent of the given status between two participants, with no notice behind it. */
+    private static Consent consent(
+            User user, ConsentStatus status, Participant provider, Participant consumer) {
+        return Consent.withStatus(
+                status,
+                user.getId(),
+                UuidGenerator.uuidV7(),
+                provider.getId(),
+                consumer.getId(),
+                null,
+                null,
+                new ConsentSnapshot(null, null, null, null, null));
     }
 
     /** A search naming nothing is refused outright rather than answered with the whole table. */
@@ -788,7 +947,7 @@ class UserServiceTest {
 
         @Override
         public void deleteByIdUserIdAndIdParticipantId(UUID userId, UUID participantId) {
-            throw unsupported();
+            rows().remove(new UserParticipantId(userId, participantId));
         }
     }
 
@@ -850,6 +1009,86 @@ class UserServiceTest {
 
         @Override
         public List<Participant> findAll(Sort sort) {
+            throw unsupported();
+        }
+    }
+
+    /**
+     * A {@link ConsentRepository} serving the one query {@code unlink} issues; every other method
+     * is out of reach from here.
+     */
+    private static final class StubConsentRepository extends StubRepository<UUID, Consent>
+            implements ConsentRepository {
+
+        @Override
+        UUID keyOf(Consent row) {
+            return row.getId();
+        }
+
+        @Override
+        public List<Consent> findByUserIdAndStatus(UUID userId, ConsentStatus status) {
+            return rows().values().stream()
+                    .filter(c -> c.getUserId().equals(userId) && c.getStatus() == status)
+                    .toList();
+        }
+
+        @Override
+        public Page<Consent> findByUserId(UUID userId, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findByProviderId(UUID providerId, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findByConsumerId(UUID consumerId, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findByPrivacyNoticeId(UUID privacyNoticeId) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findByParentConsentId(UUID parentConsentId) {
+            throw unsupported();
+        }
+
+        @Override
+        public <S extends Consent> S save(S entity) {
+            throw unsupported();
+        }
+
+        @Override
+        public <S extends Consent> S update(S entity) {
+            throw unsupported();
+        }
+
+        @Override
+        public Optional<Consent> findById(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
+        public boolean existsById(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
+        public void deleteById(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findAll(Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findAll(Sort sort) {
             throw unsupported();
         }
     }

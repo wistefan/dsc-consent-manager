@@ -6,6 +6,8 @@ import com.seamware.consentmanager.api.generated.model.BulkRegistrationResult;
 import com.seamware.consentmanager.api.generated.model.BulkRegistrationSummary;
 import com.seamware.consentmanager.api.generated.model.BulkUserRegistration;
 import com.seamware.consentmanager.api.generated.model.BulkUserRegistrationEntry;
+import com.seamware.consentmanager.api.generated.model.ParticipantUserLink;
+import com.seamware.consentmanager.api.generated.model.ParticipantUserLinkUpdate;
 import com.seamware.consentmanager.api.generated.model.UserRegistration;
 import com.seamware.consentmanager.api.generated.model.UserRegistrationResult;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
@@ -23,6 +25,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.openapitools.jackson.nullable.JsonNullable;
 
 /**
  * Serves the {@code /participants/me/users} operations: the registration surface a participant uses
@@ -156,6 +159,38 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
                 entry.getEmail(),
                 entry.getFirstName(),
                 entry.getLastName());
+    }
+
+    /**
+     * Applies the body to the caller's own link and returns the link as re-read.
+     *
+     * <p>Three cases, which the {@link JsonNullable} wrapper is here to keep apart: a mentioned
+     * value is written, an explicit {@code null} clears the stored one, and a property the body
+     * never mentions leaves it alone - so a later property added to this schema cannot silently
+     * wipe a local identifier its client never named.
+     *
+     * <p>{@code 404} for a link the caller does not hold, deliberately indistinguishable from an
+     * identifier naming nobody; the service decides that.
+     */
+    @Override
+    public HttpResponse<ParticipantUserLink> updateParticipantUserLink(
+            ParticipantPrincipal principal,
+            String identifier,
+            ParticipantUserLinkUpdate participantUserLinkUpdate) {
+        JsonNullable<String> update = participantUserLinkUpdate.getLocalIdentifier_JsonNullable();
+        var link =
+                update.isPresent()
+                        ? users.updateLink(principal.participant(), identifier, update.get())
+                        : users.linkFor(principal.participant(), identifier);
+        return HttpResponse.ok(mapper.toLinkRepresentation(identifier, link));
+    }
+
+    /** Ends the caller's affiliation with a user; {@code 409} while a granted consent needs it. */
+    @Override
+    public HttpResponse<Void> unlinkParticipantUser(
+            ParticipantPrincipal principal, String identifier) {
+        users.unlink(principal.participant(), identifier);
+        return HttpResponse.noContent();
     }
 
     /** The body as the service's registration; the participant is supplied separately. */

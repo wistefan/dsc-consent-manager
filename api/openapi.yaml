@@ -443,6 +443,141 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /participants/me/users/{identifier}:
+    patch:
+      operationId: updateParticipantUserLink
+      summary: Update the calling participant's link to a user
+      description: >
+        Applies the body to the link the calling participant holds for the user
+        the path names, and returns the link as it now stands.
+
+
+        Merge-patch semantics on a single property: sending a `localIdentifier`
+        sets it, sending it as `null` clears it, and omitting it altogether
+        leaves the stored value alone. A blank string is stored as no local
+        identifier, so `null` and `""` settle on one representation.
+
+
+        Only the link is touched. The user record itself — `email`, `firstName`,
+        `lastName` and every other participant's link — is out of reach here, by
+        design: attributes belong to whoever created the record and to the user's
+        own identity provider, never to a participant that merely holds a link.
+
+
+        A caller holding no link to the identifier receives `404 Not Found`, with
+        the same body as for an identifier naming nobody at all. A `403` would
+        confirm that the identifier names a registered user, which is precisely
+        what a participant without a link is not entitled to learn.
+
+
+        `{identifier}` is the URL-encoded global user identifier, with the same
+        limits as on `GET /users/{identifier}`: a path variable never spans a
+        `/`, and the container percent-decodes before routing, so an identifier
+        containing a slash is not addressable here even when encoded.
+      tags:
+        - Participant Users
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      parameters:
+        - name: identifier
+          in: path
+          required: true
+          description: The URL-encoded global user identifier.
+          schema:
+            type: string
+          example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParticipantUserLinkUpdate"
+      responses:
+        "200":
+          description: The link as stored after the update.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParticipantUserLink"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+    delete:
+      operationId: unlinkParticipantUser
+      summary: Unlink a user from the calling participant
+      description: >
+        Removes the calling participant's link to the user the path names. The
+        user record itself survives, as do every consent it is party to and
+        every other participant's link: this operation ends an affiliation, it
+        does not erase a person. Erasure is the data subject's own
+        `DELETE /users/me`.
+
+
+        Refused with `409 Conflict` while any consent naming the caller as
+        provider or consumer is still `GRANTED` for that user — unlinking would
+        strand a consent whose participant no longer knows the user. Revoke those
+        consents first. A consent in any other status, and a granted consent
+        between two other participants, do not block the unlink.
+
+
+        `PENDING` and `DRAFT` deliberately do not block it either: neither
+        authorises a data flow, so neither is worth refusing an unlink over. A
+        consent in one of those statuses that is granted after the unlink is
+        left stranded in the same way a consent granted concurrently with the
+        unlink is — the check is advisory on this side, and the complementary
+        guard belongs on the consent-granting path, which must refuse to grant
+        for a participant holding no link. See `docs/user-identifiers.md`.
+
+
+        A caller holding no link to the identifier receives `404 Not Found`, on
+        the same reasoning as the `PATCH` above. The operation is not idempotent
+        in the sense of answering `204` twice: a second call finds no link and
+        answers `404`.
+      tags:
+        - Participant Users
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      parameters:
+        - name: identifier
+          in: path
+          required: true
+          description: The URL-encoded global user identifier.
+          schema:
+            type: string
+          example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+      responses:
+        "204":
+          description: The link was removed. The user and its consents are untouched.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -466,6 +601,12 @@ components:
 
     UserRegistrationResult:
       $ref: "./components/schemas/UserRegistrationResult.yaml"
+
+    ParticipantUserLink:
+      $ref: "./components/schemas/ParticipantUserLink.yaml"
+
+    ParticipantUserLinkUpdate:
+      $ref: "./components/schemas/ParticipantUserLinkUpdate.yaml"
 
     BulkUserRegistrationEntry:
       $ref: "./components/schemas/BulkUserRegistrationEntry.yaml"

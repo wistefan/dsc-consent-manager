@@ -1,0 +1,46 @@
+# Schema: ParticipantUserLinkUpdate — referenced from api/openapi.yaml as
+# components.schemas.ParticipantUserLinkUpdate.
+#
+# Deliberately not `UserRegistration`, whose `identifier` is required and whose
+# attributes belong to the user rather than to the link: the only thing a
+# participant may change about an existing link is its own local identifier.
+#
+# Deliberately without `additionalProperties: false`, as elsewhere on this API —
+# a property this schema does not name is ignored rather than refused.
+#
+# `localIdentifier` is declared `nullable: true` with
+# `x-is-jackson-optional-nullable`, so the generator emits `JsonNullable<String>`
+# and the handler can tell an omitted property from an explicit `null`. That is
+# what keeps merge-patch semantics available as the schema grows: a property a
+# future client never mentions is left alone rather than wiped.
+type: object
+description: >
+  The new state of the calling participant's link to a user. Merge-patch
+  semantics: a property the body mentions is applied, a property it omits is
+  left as it stands.
+
+
+  `localIdentifier` is therefore tri-state. A string sets it, an explicit `null`
+  clears it — the only way to remove one once written — and omitting the
+  property entirely leaves the stored value alone. A blank or whitespace-only
+  string is treated as `null`, so "this participant holds no local identifier"
+  has exactly one stored representation.
+properties:
+  localIdentifier:
+    type: string
+    nullable: true
+    # Binds to JsonNullable<String> rather than to a plain String, so the handler
+    # can tell an omitted property from an explicit `null`. See the note at the
+    # head of this file.
+    x-is-jackson-optional-nullable: true
+    # Generous rather than column-shaped: a participant's own identifier may be a
+    # DID or another URI, which the 255 that suits a human-scale label does not
+    # accommodate. The backing column is TEXT; the bound is only here to stop an
+    # unbounded body.
+    maxLength: 2048
+    description: >
+      The calling participant's own identifier for this user, stored on that
+      participant's link and visible to nobody else. Send `null` to clear the one
+      currently stored; omit the property to leave it untouched. A blank string
+      is stored as no local identifier at all.
+    example: "patient-10427"

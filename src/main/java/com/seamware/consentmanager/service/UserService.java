@@ -1,13 +1,18 @@
 package com.seamware.consentmanager.service;
 
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
+import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.domain.UserParticipant.UserParticipantId;
 import com.seamware.consentmanager.error.ApiException;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.error.ConflictException;
+import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.error.ProblemType;
+import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
@@ -92,11 +97,26 @@ public class UserService {
     private static final String OVERSIZED_BATCH_DETAIL =
             "A bulk registration carried %d entries, more than the %d this deployment permits.";
 
+    /**
+     * Published for a link the caller does not hold and for an identifier naming nobody alike. A
+     * {@code 403} telling the two apart would confirm that the identifier names a registered user,
+     * which a participant without a link is not entitled to learn.
+     */
+    private static final String NO_LINK_DETAIL =
+            "This participant holds no link to a user under this identifier.";
+
+    /** Why an unlink is refused while the caller is still party to a granted consent. */
+    private static final String ACTIVE_CONSENT_DETAIL =
+            "This participant is still party to %d granted consent(s) for this user. "
+                    + "Revoke them before unlinking.";
+
     private final UserRepository users;
 
     private final UserParticipantRepository links;
 
     private final ParticipantRepository participants;
+
+    private final ConsentRepository consents;
 
     private final ConsentManagerConfiguration.Users configuration;
 
@@ -104,10 +124,12 @@ public class UserService {
             UserRepository users,
             UserParticipantRepository links,
             ParticipantRepository participants,
+            ConsentRepository consents,
             ConsentManagerConfiguration.Users configuration) {
         this.users = users;
         this.links = links;
         this.participants = participants;
+        this.consents = consents;
         this.configuration = configuration;
     }
 
@@ -375,6 +397,85 @@ public class UserService {
     }
 
     /**
+     * Writes the local identifier the caller asked for onto its own link and returns it as re-read.
+     *
+     * <p>A {@code null} clears the stored value: this is the explicit-null arm of the {@code PATCH}
+     * body's tri-state, and the only way to remove a local identifier once written. A property the
+     * caller omitted never reaches this method - the handler reads the link through {@link
+     * #linkFor} instead, so an unmentioned property is left alone, as a merge-patch client expects.
+     *
+     * <p>Returning the re-read entity rather than the object just mutated is deliberate: the
+     * response then reports what the database holds, including anything a concurrent write settled
+     * differently, instead of echoing an optimistic in-memory copy back to the caller.
+     *
+     * <p>The {@code users} row is out of reach here by design; attributes belong to whoever created
+     * the record and to the user's own identity provider.
+     */
+    public UserParticipant updateLink(
+            Participant participant, String identifier, @Nullable String localIdentifier) {
+        UserParticipant link = linkFor(participant, identifier);
+        link.setLocalIdentifier(blankToNull(localIdentifier));
+        links.update(link);
+        return links.findById(link.getId())
+                .orElseThrow(() -> new NotFoundException(NO_LINK_DETAIL));
+    }
+
+    /**
+     * Removes the caller's link to a user, leaving the user row, its consents and every other
+     * participant's link in place.
+     *
+     * <p>Refused with a {@link ConflictException} while any consent for that user is {@code
+     * GRANTED} and names the caller as provider or consumer: unlinking would strand a consent whose
+     * participant no longer knows the user. A granted consent between two other participants does
+     * not block it, and neither does one in any other status - {@code PENDING} and {@code DRAFT}
+     * included, deliberately: neither authorises any data flow today, so neither is worth refusing
+     * an unlink over.
+     *
+     * <p>The check is therefore advisory in both directions, and cannot be made otherwise from this
+     * side: a consent granted - or a pending one approved - between the select and the delete slips
+     * through, since the two are separate statements and {@code consents} has no constraint that
+     * could serialise them. TODO(consent-lifecycle): the complementary half belongs on the
+     * consent-creation path, which must refuse to grant a consent for a participant holding no link
+     * to the subject. Only the two together uphold "no granted consent without a link"; see
+     * docs/user-identifiers.md.
+     *
+     * <p>Erasure is the data subject's own concern and goes through a different path; this
+     * operation never touches {@link UserRepository}.
+     */
+    public void unlink(Participant participant, String identifier) {
+        UserParticipant link = linkFor(participant, identifier);
+        long blocking =
+                consents.findByUserIdAndStatus(link.getUserId(), ConsentStatus.GRANTED).stream()
+                        .filter(consent -> isParty(consent, participant))
+                        .count();
+        if (blocking > 0) {
+            throw new ConflictException(ACTIVE_CONSENT_DETAIL.formatted(blocking));
+        }
+        links.deleteByIdUserIdAndIdParticipantId(link.getUserId(), participant.getId());
+    }
+
+    /**
+     * The caller's own link to the user an identifier names; absence either way is a 404.
+     *
+     * <p>Public because a {@code PATCH} that mentions no property still has to answer with the link
+     * - and still has to 404 when the caller holds none - without writing anything.
+     */
+    public UserParticipant linkFor(Participant participant, String identifier) {
+        return users.findByIdentifier(identifier)
+                .flatMap(
+                        user ->
+                                links.findById(
+                                        new UserParticipantId(user.getId(), participant.getId())))
+                .orElseThrow(() -> new NotFoundException(NO_LINK_DETAIL));
+    }
+
+    /** Whether the participant is named on either side of the consent. */
+    private static boolean isParty(Consent consent, Participant participant) {
+        return participant.getId().equals(consent.getProviderId())
+                || participant.getId().equals(consent.getConsumerId());
+    }
+
+    /**
      * One entry, isolated: whatever goes wrong here is reported and never reaches the next one.
      *
      * <p>The per-entry shape checks live here rather than on the schema precisely so that one
@@ -450,7 +551,8 @@ public class UserService {
      * <p>{@code pk_user_participants} settles a concurrent duplicate the same way the user insert
      * does: the loser re-reads and reports an existing link.
      */
-    private boolean link(User user, Participant participant, @Nullable String localIdentifier) {
+    private boolean link(User user, Participant participant, @Nullable String supplied) {
+        String localIdentifier = blankToNull(supplied);
         UserParticipantId id = new UserParticipantId(user.getId(), participant.getId());
         Optional<UserParticipant> existing = links.findById(id);
         if (existing.isPresent()) {
@@ -469,6 +571,18 @@ public class UserService {
                             })
                     .orElseThrow(() -> e);
         }
+    }
+
+    /**
+     * A blank local identifier is no local identifier: it is stored as {@code null}.
+     *
+     * <p>Without this the column would hold two encodings of "this participant has none" - SQL
+     * {@code NULL} and the empty string - which no read path distinguishes and every one has to
+     * handle.
+     */
+    @Nullable
+    private static String blankToNull(@Nullable String localIdentifier) {
+        return localIdentifier == null || localIdentifier.isBlank() ? null : localIdentifier;
     }
 
     /** Writes a supplied local identifier that differs; an omitted one is not a cleared value. */

@@ -1,6 +1,8 @@
 package com.seamware.consentmanager.api;
 
+import com.seamware.consentmanager.api.generated.model.ParticipantUserLink;
 import com.seamware.consentmanager.api.generated.model.User;
+import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.service.CallerScope;
 import com.seamware.consentmanager.service.UserService;
 import jakarta.inject.Singleton;
@@ -37,6 +39,17 @@ public class UserMapper {
     public User toRepresentation(
             com.seamware.consentmanager.domain.User stored, CallerScope scope) {
         return toRepresentation(stored, users.participantIdentifiersFor(stored, scope));
+    }
+
+    /**
+     * The representation of one participant's link to a user.
+     *
+     * <p>The identifier is taken from the request rather than re-read, because the link is keyed on
+     * the user row that identifier resolved to and a global identifier never changes.
+     */
+    public ParticipantUserLink toLinkRepresentation(String identifier, UserParticipant link) {
+        return new ParticipantUserLink(identifier, atUtc(link.getCreatedAt()))
+                .localIdentifier(link.getLocalIdentifier());
     }
 
     private User toRepresentation(
