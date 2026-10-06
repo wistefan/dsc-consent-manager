@@ -13,6 +13,7 @@ import io.micronaut.context.annotation.ConfigurationProperties;
  * <ul>
  *   <li>{@code CONSENT_MANAGER_URL} &rarr; {@link #getUrl()}
  *   <li>{@code CONTRACT_SERVICE_URL} &rarr; {@link #getContractServiceUrl()}
+ *   <li>{@code USERS_SEARCH_MAX_RESULTS} &rarr; {@link Users#getSearchMaxResults()}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut
@@ -64,5 +65,30 @@ public class ConsentManagerConfiguration {
      */
     public void setContractServiceUrl(String contractServiceUrl) {
         this.contractServiceUrl = contractServiceUrl;
+    }
+
+    /** Limits on the user directory, bound under {@code consent-manager.users}. */
+    @ConfigurationProperties("users")
+    public static class Users {
+
+        /** Cap applied when none is configured; neither search nor lookup is paginated. */
+        public static final int DEFAULT_SEARCH_MAX_RESULTS = 200;
+
+        private int searchMaxResults = DEFAULT_SEARCH_MAX_RESULTS;
+
+        /**
+         * Most users one search may return, bound to {@code USERS_SEARCH_MAX_RESULTS}.
+         *
+         * <p>The result is sorted by identifier before the cap applies, so truncation is
+         * deterministic rather than whatever the database happened to return first.
+         */
+        public int getSearchMaxResults() {
+            return searchMaxResults;
+        }
+
+        /** Sets the cap; a value below one would make every search answer empty. */
+        public void setSearchMaxResults(int searchMaxResults) {
+            this.searchMaxResults = searchMaxResults;
+        }
     }
 }

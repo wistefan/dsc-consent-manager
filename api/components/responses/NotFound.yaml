@@ -1,8 +1,8 @@
 # Response: 404 Not Found — referenced from api/openapi.yaml as
 # components.responses.NotFound.
 #
-# No operation references it yet; the user-management operations added by the
-# later steps of this ticket do.
+# Referenced by `GET /users/{identifier}`, and by the link operations added by
+# the later steps of this ticket.
 description: >
   The addressed resource does not exist, or does not exist as far as this caller
   is concerned. A participant asking about a user it is not linked to receives

@@ -3,13 +3,17 @@ package com.seamware.consentmanager.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.domain.UserParticipant.UserParticipantId;
+import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
+import com.seamware.consentmanager.security.Role;
 import com.seamware.consentmanager.security.UserPrincipal;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
@@ -20,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -64,13 +69,33 @@ class UserServiceTest {
     /** Local identifier a later registration supplies instead. */
     private static final String CHANGED_LOCAL_IDENTIFIER = "customer-2";
 
+    /** A cap below the number of users the seeded directory matches, so truncation shows. */
+    private static final int SEARCH_CAP = 2;
+
+    private static final String PARTICIPANT_ALPHA = "urn:test:participant:alpha";
+
+    private static final String PARTICIPANT_BETA = "urn:test:participant:beta";
+
+    /** Seeded user identifiers, chosen so their natural order is a, b, c. */
+    private static final String USER_ON_ALPHA = "urn:test:user:a";
+
+    private static final String USER_ON_BOTH = "urn:test:user:b";
+
+    private static final String USER_ON_BETA = "urn:test:user:c";
+
+    /** A caller reading across participants; it carries no participant row of its own. */
+    private static final CallerScope CATALOG = new CallerScope(Role.CATALOG, null);
+
     private final StubUserRepository users = new StubUserRepository();
 
     private final StubUserParticipantRepository links = new StubUserParticipantRepository();
 
     private final StubParticipantRepository participants = new StubParticipantRepository();
 
-    private final UserService service = new UserService(users, links, participants);
+    private final ConsentManagerConfiguration.Users limits =
+            new ConsentManagerConfiguration.Users();
+
+    private final UserService service = new UserService(users, links, participants, limits);
 
     /** An identifier no row exists for is inserted from the claims, and reported as created. */
     @Test
@@ -363,13 +388,13 @@ class UserServiceTest {
     @DisplayName("a user's participant identifiers come back sorted")
     void participantIdentifiersAreSorted() {
         User user = users.put(stored());
-        Participant beta = participants.put(participant("urn:test:participant:beta"));
-        Participant alpha = participants.put(participant("urn:test:participant:alpha"));
+        Participant beta = participants.put(participant(PARTICIPANT_BETA));
+        Participant alpha = participants.put(participant(PARTICIPANT_ALPHA));
         links.put(new UserParticipant(user.getId(), beta.getId(), null));
         links.put(new UserParticipant(user.getId(), alpha.getId(), null));
 
         assertThat(service.participantIdentifiersFor(user))
-                .containsExactly("urn:test:participant:alpha", "urn:test:participant:beta");
+                .containsExactly(PARTICIPANT_ALPHA, PARTICIPANT_BETA);
     }
 
     /** A user with no links needs no participant query at all. */
@@ -377,6 +402,215 @@ class UserServiceTest {
     @DisplayName("a user with no links has no participant identifiers")
     void participantIdentifiersAreEmptyWithoutLinks() {
         assertThat(service.participantIdentifiersFor(users.put(stored()))).isEmpty();
+    }
+
+    /** A search naming nothing is refused outright rather than answered with the whole table. */
+    @ParameterizedTest(name = "criteria {0} are no criteria at all")
+    @MethodSource("emptyCriteria")
+    @DisplayName("a search naming no criterion is rejected")
+    void rejectsASearchNamingNothing(UserSearchCriteria criteria) {
+        assertThatThrownBy(() -> service.search(criteria, CATALOG))
+                .isInstanceOf(BadRequestException.class);
+    }
+
+    /** Email matching is case-insensitive and may name several users; scope decides which. */
+    @ParameterizedTest(name = "{0} searching the shared address sees {1}")
+    @MethodSource("emailSearches")
+    @DisplayName("an email search is case-insensitive and confined to the caller's scope")
+    void emailSearchIsScoped(Caller caller, List<String> expected) {
+        Directory directory = directory();
+
+        assertThat(identifiers(service.search(byEmail(), caller.scope(directory))))
+                .containsExactlyElementsOf(expected);
+    }
+
+    /**
+     * A participant naming somebody else's participant intersects rather than replaces its scope.
+     */
+    @ParameterizedTest(name = "{0} naming beta sees {1}")
+    @MethodSource("participantSearches")
+    @DisplayName("a participant criterion narrows the caller's scope, never widens it")
+    void participantCriterionOnlyNarrows(Caller caller, List<String> expected) {
+        Directory directory = directory();
+        UserSearchCriteria criteria = new UserSearchCriteria(null, null, PARTICIPANT_BETA);
+
+        assertThat(identifiers(service.search(criteria, caller.scope(directory))))
+                .containsExactlyElementsOf(expected);
+    }
+
+    /**
+     * Criteria combine conjunctively, which only a case naming two of them at once can prove.
+     *
+     * <p>{@code identifier} short-circuits the candidate query, so a regression that dropped the
+     * email filter afterwards would still satisfy every single-criterion case.
+     */
+    @ParameterizedTest(name = "{0} together with {1} finds {2}")
+    @MethodSource("conjunctiveSearches")
+    @DisplayName("criteria narrow one another rather than being taken in turn")
+    void criteriaCombineConjunctively(
+            @Nullable String identifier,
+            @Nullable String email,
+            @Nullable String participantIdentifier,
+            List<String> expected) {
+        Directory directory = directory();
+        UserSearchCriteria criteria =
+                new UserSearchCriteria(identifier, email, participantIdentifier);
+
+        assertThat(identifiers(service.search(criteria, Caller.ALPHA.scope(directory))))
+                .containsExactlyElementsOf(expected);
+    }
+
+    /** The cap is what keeps an unpaginated listing from serialising a whole user base. */
+    @Test
+    @DisplayName("a search returns at most the configured number of users, lowest identifier first")
+    void aSearchIsCappedAtTheConfiguredMaximum() {
+        directory();
+        limits.setSearchMaxResults(SEARCH_CAP);
+
+        assertThat(identifiers(service.search(byEmail(), CATALOG)))
+                .containsExactly(USER_ON_ALPHA, USER_ON_BOTH);
+    }
+
+    /**
+     * A participant learns about its own link and no other, so a search cannot be used to discover
+     * which competitors a data subject is also registered with.
+     */
+    @ParameterizedTest(name = "{0} reading the shared user sees {1}")
+    @MethodSource("disclosedLinks")
+    @DisplayName("the participant links a caller is told about are scoped to that caller")
+    void participantLinksAreScopedToTheCaller(Caller caller, List<String> expected) {
+        Directory directory = directory();
+        User onBoth = users.findByIdentifier(USER_ON_BOTH).orElseThrow();
+
+        assertThat(service.participantIdentifiersFor(onBoth, caller.scope(directory)))
+                .containsExactlyElementsOf(expected);
+    }
+
+    static Stream<Arguments> conjunctiveSearches() {
+        return Stream.of(
+                Arguments.of(USER_ON_ALPHA, STORED_EMAIL, null, List.of(USER_ON_ALPHA)),
+                Arguments.of(USER_ON_ALPHA, REGISTERED_EMAIL, null, List.of()),
+                Arguments.of(USER_ON_ALPHA, null, PARTICIPANT_BETA, List.of()),
+                Arguments.of(USER_ON_BOTH, STORED_EMAIL, PARTICIPANT_BETA, List.of(USER_ON_BOTH)),
+                Arguments.of(null, STORED_EMAIL, PARTICIPANT_BETA, List.of(USER_ON_BOTH)));
+    }
+
+    static Stream<Arguments> disclosedLinks() {
+        return Stream.of(
+                Arguments.of(Caller.ALPHA, List.of(PARTICIPANT_ALPHA)),
+                Arguments.of(Caller.CATALOG, List.of(PARTICIPANT_ALPHA, PARTICIPANT_BETA)));
+    }
+
+    /** Whether an identifier names a registered participant is not a search's to reveal. */
+    @Test
+    @DisplayName("a search for an unregistered participant finds nobody rather than failing")
+    void anUnregisteredParticipantFindsNobody() {
+        directory();
+        UserSearchCriteria criteria =
+                new UserSearchCriteria(null, null, "urn:test:participant:unregistered");
+
+        assertThat(service.search(criteria, CATALOG)).isEmpty();
+    }
+
+    /** Lookup answers empty for an unscoped user exactly as for an absent one. */
+    @ParameterizedTest(name = "{0} looking up {1} finds it: {2}")
+    @MethodSource("lookups")
+    @DisplayName("a lookup sees only what its caller is entitled to")
+    void lookupIsScoped(Caller caller, String identifier, boolean found) {
+        Directory directory = directory();
+
+        assertThat(service.lookup(identifier, caller.scope(directory)).isPresent())
+                .isEqualTo(found);
+    }
+
+    /** The scoped reads are closed to the {@code USER} role even if a route were widened to it. */
+    @Test
+    @DisplayName("a USER principal has no search scope at all")
+    void aUserPrincipalHasNoScope() {
+        assertThatThrownBy(() -> CallerScope.of(principal(STORED_EMAIL, "Ada", "Lovelace")))
+                .isInstanceOf(ForbiddenException.class);
+    }
+
+    static Stream<Arguments> emptyCriteria() {
+        return Stream.of(
+                Arguments.of(new UserSearchCriteria(null, null, null)),
+                Arguments.of(new UserSearchCriteria(" ", "", "\t")));
+    }
+
+    static Stream<Arguments> emailSearches() {
+        return Stream.of(
+                Arguments.of(Caller.ALPHA, List.of(USER_ON_ALPHA, USER_ON_BOTH)),
+                Arguments.of(Caller.CATALOG, List.of(USER_ON_ALPHA, USER_ON_BOTH, USER_ON_BETA)));
+    }
+
+    static Stream<Arguments> participantSearches() {
+        return Stream.of(
+                Arguments.of(Caller.ALPHA, List.of(USER_ON_BOTH)),
+                Arguments.of(Caller.CATALOG, List.of(USER_ON_BOTH, USER_ON_BETA)));
+    }
+
+    static Stream<Arguments> lookups() {
+        return Stream.of(
+                Arguments.of(Caller.ALPHA, USER_ON_ALPHA, true),
+                Arguments.of(Caller.ALPHA, USER_ON_BOTH, true),
+                Arguments.of(Caller.ALPHA, USER_ON_BETA, false),
+                Arguments.of(Caller.ALPHA, "urn:test:user:absent", false),
+                Arguments.of(Caller.CATALOG, USER_ON_BETA, true),
+                Arguments.of(Caller.CATALOG, "urn:test:user:absent", false));
+    }
+
+    /** Who is reading, resolved against the seeded directory because scope carries a row. */
+    enum Caller {
+        /** Acts as the participant the shared user is also linked to. */
+        ALPHA {
+            @Override
+            CallerScope scope(Directory directory) {
+                return new CallerScope(Role.PARTICIPANT, directory.alpha());
+            }
+        },
+
+        /** Reads across participants. */
+        CATALOG {
+            @Override
+            CallerScope scope(Directory directory) {
+                return UserServiceTest.CATALOG;
+            }
+        };
+
+        abstract CallerScope scope(Directory directory);
+    }
+
+    /** The participants a seeded directory holds; the users are addressed by identifier. */
+    private record Directory(Participant alpha, Participant beta) {}
+
+    /**
+     * Two participants and three users: one linked to each alone and one linked to both, their
+     * addresses differing in case so a match proves the comparison ignores it.
+     */
+    private Directory directory() {
+        Participant alpha = participants.put(participant(PARTICIPANT_ALPHA));
+        Participant beta = participants.put(participant(PARTICIPANT_BETA));
+        link(users.put(new User(USER_ON_ALPHA, STORED_EMAIL, null, null)), alpha);
+        User onBoth =
+                users.put(
+                        new User(USER_ON_BOTH, STORED_EMAIL.toUpperCase(Locale.ROOT), null, null));
+        link(onBoth, alpha);
+        link(onBoth, beta);
+        link(users.put(new User(USER_ON_BETA, STORED_EMAIL, null, null)), beta);
+        return new Directory(alpha, beta);
+    }
+
+    private void link(User user, Participant participant) {
+        links.put(new UserParticipant(user.getId(), participant.getId(), null));
+    }
+
+    /** The shared address, written in a case no stored row holds. */
+    private static UserSearchCriteria byEmail() {
+        return new UserSearchCriteria(null, STORED_EMAIL.toUpperCase(Locale.ROOT), null);
+    }
+
+    private static List<String> identifiers(List<User> found) {
+        return found.stream().map(User::getIdentifier).toList();
     }
 
     /** A {@code USER} principal carrying the given display claims. */
@@ -412,7 +646,7 @@ class UserServiceTest {
 
     /** The participant a registration is made for. */
     private static Participant participant() {
-        return participant("urn:test:participant:alpha");
+        return participant(PARTICIPANT_ALPHA);
     }
 
     private static Participant participant(String identifier) {
@@ -457,8 +691,15 @@ class UserServiceTest {
         }
 
         @Override
-        public Optional<User> findByEmailIgnoreCase(String email) {
-            throw unsupported();
+        public List<User> findAllByEmailIgnoreCase(String email) {
+            return rows().values().stream()
+                    .filter(u -> u.getEmail() != null && u.getEmail().equalsIgnoreCase(email))
+                    .toList();
+        }
+
+        @Override
+        public List<User> findByIdIn(Collection<UUID> ids) {
+            return rows().values().stream().filter(u -> ids.contains(u.getId())).toList();
         }
 
         @Override
@@ -535,12 +776,14 @@ class UserServiceTest {
 
         @Override
         public List<UserParticipant> findByIdParticipantId(UUID participantId) {
-            throw unsupported();
+            return rows().values().stream()
+                    .filter(l -> l.getParticipantId().equals(participantId))
+                    .toList();
         }
 
         @Override
         public boolean existsByIdUserIdAndIdParticipantId(UUID userId, UUID participantId) {
-            throw unsupported();
+            return rows().containsKey(new UserParticipantId(userId, participantId));
         }
 
         @Override
@@ -570,7 +813,9 @@ class UserServiceTest {
 
         @Override
         public Optional<Participant> findByIdentifier(String identifier) {
-            throw unsupported();
+            return rows().values().stream()
+                    .filter(p -> p.getIdentifier().equals(identifier))
+                    .findFirst();
         }
 
         @Override

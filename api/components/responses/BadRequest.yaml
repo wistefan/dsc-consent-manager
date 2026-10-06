@@ -1,8 +1,8 @@
 # Response: 400 Bad Request — referenced from api/openapi.yaml as
 # components.responses.BadRequest.
 #
-# No operation references it yet; the user-management operations added by the
-# later steps of this ticket do. Unlike Unauthorized and Forbidden, this response
+# Referenced by `POST /users/search`, and by the registration operations added
+# by the later steps of this ticket. Unlike Unauthorized and Forbidden, this response
 # is not enforced by SpecSecurityConsistencyTest: an operation advertises it when
 # it can actually reject a request body or parameter, which is a per-operation
 # fact rather than a consequence of being secured.

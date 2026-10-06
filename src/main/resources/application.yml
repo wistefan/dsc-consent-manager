@@ -311,6 +311,12 @@ consent-manager:
   url: ${CONSENT_MANAGER_URL:`http://localhost:8080`}
   contract-service-url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
 
+  users:
+    # Most users POST /users/search may return. The operation is not paginated, so a
+    # result of exactly this size may have been truncated; the result is sorted by
+    # identifier first, which makes the truncation deterministic rather than arbitrary.
+    search-max-results: ${USERS_SEARCH_MAX_RESULTS:200}
+
   # ---------------------------------------------------------------------------
   # Identity provider trust list
   # ---------------------------------------------------------------------------
