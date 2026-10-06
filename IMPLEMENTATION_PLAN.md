@@ -32,7 +32,10 @@ abstract classes, and a transactional `ParticipantService` holds the behaviour.
    `SpecSecurityConsistencyTest` keeps its rule that a secured operation declares a
    `ConsentManagerPrincipal` parameter.
 3. **US-PM-008 / AC 12 (`GET /.well-known/jwks.json`) is out of scope** and deferred
-   entirely to TICKET-011, which owns the key material.
+   entirely to TICKET-011 — the route as well as the key material, not just the keys. Raised
+   on PR #1 because it closes this ticket with a listed AC unmet, and confirmed there by the
+   ticket owner (@wistefan, "Yes, agreed."). AC 12 is therefore struck from ticket #69 rather
+   than left outstanding, and Step 8 records it as struck-by-agreement.
 
 ### Scope notes
 
@@ -89,7 +92,26 @@ unreachable: the caller is rejected before `POST /participants` can run.
 - `src/main/java/com/seamware/consentmanager/api/ParticipantUserController.java` — every
   existing call site that reads `principal.participant()` switches to
   `principal.requireRegistered()`, preserving today's `403` for an unregistered caller.
-  Sweep for any other `participant()` reader before finishing.
+  Today that is lines 72, 95, 183, 184 and 192.
+- `src/main/java/com/seamware/consentmanager/service/CallerScope.java` — **the other
+  `participant()` reader, and the one that fails open.** `CallerScope.of()` currently does
+  `case ParticipantPrincipal caller -> new CallerScope(Role.PARTICIPANT, caller.participant())`,
+  and in `CallerScope` a `null` participant is not "unknown", it is the encoding for *reads
+  dataspace-wide*. Once the component is nullable, an unregistered participant would be
+  **widened** rather than refused: `UserService.requiredParticipants()` (line 275) guards with
+  `if (scope.participant() != null)` and so adds no participant constraint, and
+  `UserService.participantIdentifiersFor(user, scope)` (line 367) falls through to the user's
+  full affiliation list — exactly the disclosure `api/openapi.yaml` promises never happens ("A
+  participant does not learn which other participants the user is affiliated with"). The
+  reachable routes are `POST /users/search` and `GET /users/{identifier}`
+  (`x-roles: [PARTICIPANT, CATALOG]`, `x-principal: ConsentManagerPrincipal`), which call
+  `CallerScope.of(principal)` from `UserController` lines 88 and 99; today the filter's `403`
+  makes the null case unreachable, and Step 1 removes that guarantee. So `CallerScope.of()`
+  must call `caller.requireRegistered()`, keeping the `403` at the scoping boundary. Update the
+  record's javadoc to say that `null` means `CATALOG` reads dataspace-wide and never a
+  participant.
+- After the two files above, grep `\.participant()` across `src/main/java` and confirm every
+  remaining hit is inside `CallerScope`/`UserService`'s dataspace-wide branch.
 
 **Tests**
 
@@ -98,10 +120,16 @@ unreachable: the caller is rejected before `POST /participants` can run.
   resolves a principal with the identifier set and the row absent, rather than `403`.
 - `src/test/java/com/seamware/consentmanager/api/EndpointRoleMatrixIT.java` — assert the
   existing `/participants/{identifier}/users...` routes still answer `403` for an
-  unregistered participant token.
+  unregistered participant token, **and** that `POST /users/search` and
+  `GET /users/{identifier}` do too. The latter two are the routes Step 1 actually puts at
+  risk: they take the widest principal type and reach `CallerScope.of()`, so without a case
+  pinning them the scope widening above would land green. Assert the status, not just the
+  absence of rows, so a future change that returns an empty page instead of refusing still
+  fails.
 
 **Acceptance criteria:** unregistered `PARTICIPANT` tokens reach their route; every
-pre-existing participant-scoped route still refuses them with `403`; `./mvnw verify` green.
+pre-existing participant-scoped route still refuses them with `403`, and none of them widens
+to a dataspace-wide scope; `./mvnw verify` green.
 
 ### Step 2: Participant representation schemas, mapper and `POST /participants`
 
@@ -172,7 +200,7 @@ Covers US-PM-005, US-PM-006, AC 6, AC 7, AC 8.
 - `ParticipantService.update(Participant current, ParticipantUpdate body)` — `@Transactional`.
   Writes the mutable columns, leaves `identifier` untouched, and **re-reads the row** before
   returning it, so the response is the persisted state and not the in-memory object
-  (original bug 05-PM-12.5).
+  (original bug 05-PM-12.2, "update `save()` not awaited").
 - `ParticipantController` — both handlers resolve the row via
   `principal.requireRegistered()`.
 
@@ -321,8 +349,9 @@ Documentation only — no code. The validation behaviour stays owned by TICKET-0
   `POST /participants` call is the whole onboarding.
 - `docs/security.md` — the same contract in prose, with the configurable claim name and a
   pointer to ADR-0006.
-- State explicitly that `GET /.well-known/jwks.json` (US-PM-008) is owned by TICKET-011 and
-  not served yet, so no reader expects it from this module.
+- State explicitly that `GET /.well-known/jwks.json` (US-PM-008) is owned end-to-end by
+  TICKET-011 — route and key material both — and not served yet, so no reader expects it
+  from this module.
 
 **Acceptance criteria:** the token contract and a worked example are published in both the
 API description and `docs/security.md`; `./mvnw verify` green (the spec is parsed by
@@ -333,9 +362,15 @@ API description and `docs/security.md`; `./mvnw verify` green (the spec is parse
 - Run `./mvnw clean verify` from a clean target and confirm unit tests, integration tests,
   Spotless and the JaCoCo gate all pass.
 - Walk the 15 acceptance criteria and record, for each, the test that pins it — AC 12
-  recorded as deferred to TICKET-011.
+  recorded as struck by owner agreement on PR #1 and owned end-to-end (route and keys) by
+  TICKET-011, not merely deferred.
 - Update `AGENTS.md`: the participant module's files, the pagination convention introduced
-  in Step 4, the nullable-row `ParticipantPrincipal` contract from Step 1, and ADR-0008.
+  in Step 4, the nullable-row `ParticipantPrincipal` contract from Step 1 (including
+  `CallerScope.of()` refusing an unregistered participant), and ADR-0008. Also carry over the
+  correction raised on PR #1: the `service/` line still names `UserProvisioningService`,
+  which does not exist — JIT provisioning lives in `UserService` and returns a
+  `ProvisionedUser`. The line should read `UserService (registration, JIT provisioning,
+  search, links, ADR-0007 erasure), ErasureVerifier, CallerScope`.
 - Confirm every new configuration key is in `.env.sample` and `application.yml`.
 
 **Acceptance criteria:** clean `./mvnw clean verify`; `AGENTS.md` matches the merged state;
