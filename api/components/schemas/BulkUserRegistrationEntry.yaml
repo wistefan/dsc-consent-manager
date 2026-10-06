@@ -1,0 +1,67 @@
+# Schema: BulkUserRegistrationEntry — referenced from api/openapi.yaml as
+# components.schemas.BulkUserRegistrationEntry.
+#
+# `UserRegistration` with every constraint about one entry's *meaning* taken
+# off: `required`, `minLength` and the non-blank `pattern` on `identifier`, and
+# `format: email` on `email`. The omissions are deliberate. Bean validation
+# cascades into an array of models, so any constraint declared here is checked
+# before the handler runs and fails the **whole** batch with `400`, naming no
+# entry — which is precisely what partial success exists to avoid. A missing
+# identifier and a malformed address are alike well formed as a request and
+# unregisterable as an instruction, so `UserService` reports them per entry as
+# `REJECTED` and every other entry of the batch still lands.
+#
+# Only the `maxLength` bounds are kept, because they are not about an entry's
+# meaning: they guard the `TEXT` columns and the indexes every entry is about to
+# be written into, so a batch violating them is refused whole with `400` exactly
+# as a batch above the size limit is — a trade-off the operation description
+# states. They are the same bounds `UserRegistration.yaml` declares and have to
+# be changed in both places at once.
+#
+# Also without `additionalProperties: false`, for the reason given there.
+type: object
+description: >
+  One user of a bulk registration, applied independently of every other entry.
+
+
+  Carries the same properties as `UserRegistration` and follows the same rule:
+  matching looks at `identifier` alone, records are never merged, and the
+  attributes are written solely on the insert that creates the user. An entry
+  that names no identifier, or only whitespace, and an entry whose `email` is not
+  a valid address, are reported as `REJECTED` rather than refusing the batch.
+properties:
+  identifier:
+    type: string
+    maxLength: 255
+    description: >
+      The globally unique user identifier. Required in substance though not by
+      this schema: an entry whose identifier is absent or blank is answered with
+      outcome `REJECTED` instead of failing the request.
+    example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
+  localIdentifier:
+    type: string
+    maxLength: 255
+    description: >
+      The calling participant's own identifier for this user, stored on that
+      participant's link and visible to nobody else. Refreshed whenever a later
+      registration supplies one.
+    example: "patient-10427"
+  email:
+    type: string
+    maxLength: 254
+    description: >
+      Contact address, written only when this entry creates the user. Must be a
+      valid address, though not by this schema: unlike `UserRegistration.email`
+      the shape is checked per entry, so a malformed address rejects its own
+      entry instead of the batch.
+    example: "ada@example.org"
+  firstName:
+    type: string
+    maxLength: 255
+    description: Given name. Same write-on-create rule as `email`.
+    example: "Ada"
+  lastName:
+    type: string
+    maxLength: 255
+    description: Family name. Same write-on-create rule as `email`.
+    example: "Lovelace"

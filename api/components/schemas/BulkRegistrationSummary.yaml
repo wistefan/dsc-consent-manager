@@ -1,0 +1,46 @@
+# Schema: BulkRegistrationSummary — referenced from api/openapi.yaml as
+# components.schemas.BulkRegistrationSummary.
+#
+# Every count is always present, zero included, so a caller can read a tally
+# without having to tell "none" from "not reported".
+type: object
+description: >
+  How the batch came out, counted by outcome. `total` equals the number of
+  entries sent, and the four counts below always sum to it.
+properties:
+  total:
+    type: integer
+    format: int32
+    minimum: 0
+    description: Entries the request carried, and results it was answered with.
+    example: 4
+  created:
+    type: integer
+    format: int32
+    minimum: 0
+    description: Entries whose outcome was `CREATED`.
+    example: 2
+  linked:
+    type: integer
+    format: int32
+    minimum: 0
+    description: Entries whose outcome was `LINKED`.
+    example: 1
+  alreadyLinked:
+    type: integer
+    format: int32
+    minimum: 0
+    description: Entries whose outcome was `ALREADY_LINKED`.
+    example: 0
+  rejected:
+    type: integer
+    format: int32
+    minimum: 0
+    description: Entries whose outcome was `REJECTED`.
+    example: 1
+required:
+  - total
+  - created
+  - linked
+  - alreadyLinked
+  - rejected

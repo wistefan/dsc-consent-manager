@@ -1,15 +1,28 @@
 package com.seamware.consentmanager.api;
 
 import com.seamware.consentmanager.api.generated.AbstractParticipantUsersController;
+import com.seamware.consentmanager.api.generated.model.BulkRegistrationEntryResult;
+import com.seamware.consentmanager.api.generated.model.BulkRegistrationResult;
+import com.seamware.consentmanager.api.generated.model.BulkRegistrationSummary;
+import com.seamware.consentmanager.api.generated.model.BulkUserRegistration;
+import com.seamware.consentmanager.api.generated.model.BulkUserRegistrationEntry;
 import com.seamware.consentmanager.api.generated.model.UserRegistration;
 import com.seamware.consentmanager.api.generated.model.UserRegistrationResult;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
+import com.seamware.consentmanager.service.BulkEntryResult;
 import com.seamware.consentmanager.service.CallerScope;
 import com.seamware.consentmanager.service.RegistrationOutcome;
 import com.seamware.consentmanager.service.RegistrationResult;
 import com.seamware.consentmanager.service.UserService;
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.http.HttpResponse;
+import io.micronaut.http.HttpStatus;
 import io.micronaut.http.annotation.Controller;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Serves the {@code /participants/me/users} operations: the registration surface a participant uses
@@ -25,6 +38,12 @@ import io.micronaut.http.annotation.Controller;
  */
 @Controller
 public class ParticipantUserController extends AbstractParticipantUsersController {
+
+    /**
+     * Placeholder for the counts of a summary still being assembled. The generated constructor
+     * demands all five positionally; every one is then set through its named setter.
+     */
+    private static final int UNCOUNTED = 0;
 
     private final UserService users;
 
@@ -57,6 +76,88 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
                 : HttpResponse.ok(payload);
     }
 
+    /**
+     * Always {@code 207}: a batch mixing users this participant has just acquired with users it
+     * registered long ago is a success, and no single status says that.
+     *
+     * <p>Results are one per entry in request order, so a caller correlates by position; each
+     * entry's {@code identifier} is echoed as a cross-check. A rejected entry stops neither the
+     * entries after it nor the ones already applied.
+     */
+    @Override
+    public HttpResponse<BulkRegistrationResult> registerParticipantUsersBulk(
+            ParticipantPrincipal principal, BulkUserRegistration body) {
+        List<BulkEntryResult> results =
+                users.registerBulkForParticipant(
+                        principal.participant(),
+                        body.getUsers().stream()
+                                .map(ParticipantUserController::toRegistration)
+                                .toList());
+        BulkRegistrationResult payload =
+                new BulkRegistrationResult(
+                        results.stream().map(ParticipantUserController::toEntryResult).toList(),
+                        summaryOf(results));
+        return HttpResponse.status(HttpStatus.MULTI_STATUS).body(payload);
+    }
+
+    /**
+     * The published tally. Every count goes in through its own named setter, so reordering the
+     * properties of {@code BulkRegistrationSummary.yaml} - and with them the generated
+     * constructor's five same-typed parameters - cannot silently transpose one count onto another.
+     */
+    private static BulkRegistrationSummary summaryOf(List<BulkEntryResult> results) {
+        Map<RegistrationOutcome, Long> counted =
+                results.stream()
+                        .map(BulkEntryResult::outcome)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()));
+        Function<RegistrationOutcome, Integer> count =
+                outcome -> counted.getOrDefault(outcome, 0L).intValue();
+        int applied = counted.values().stream().mapToInt(Long::intValue).sum();
+        return new BulkRegistrationSummary(UNCOUNTED, UNCOUNTED, UNCOUNTED, UNCOUNTED, UNCOUNTED)
+                .total(results.size())
+                .created(count.apply(RegistrationOutcome.CREATED))
+                .linked(count.apply(RegistrationOutcome.LINKED))
+                .alreadyLinked(count.apply(RegistrationOutcome.ALREADY_LINKED))
+                .rejected(results.size() - applied);
+    }
+
+    /** One entry's fate as the API publishes it; {@code reason} is set for rejections alone. */
+    private static BulkRegistrationEntryResult toEntryResult(BulkEntryResult result) {
+        return new BulkRegistrationEntryResult(bulkOutcomeOf(result.outcome()))
+                .identifier(result.identifier())
+                .reason(result.reason());
+    }
+
+    /**
+     * The published outcome of one entry; a null service outcome is the rejection only this path
+     * can report. Exhaustive on purpose: the published enum has to keep pace with {@link
+     * RegistrationOutcome}, and a new constant must fail compilation rather than surface as a
+     * runtime 500.
+     */
+    private static BulkRegistrationEntryResult.OutcomeEnum bulkOutcomeOf(
+            @Nullable RegistrationOutcome outcome) {
+        if (outcome == null) {
+            return BulkRegistrationEntryResult.OutcomeEnum.REJECTED;
+        }
+        return switch (outcome) {
+            case CREATED -> BulkRegistrationEntryResult.OutcomeEnum.CREATED;
+            case LINKED -> BulkRegistrationEntryResult.OutcomeEnum.LINKED;
+            case ALREADY_LINKED -> BulkRegistrationEntryResult.OutcomeEnum.ALREADY_LINKED;
+        };
+    }
+
+    /** A batch entry as the service's registration; the entry schema declares no identifier. */
+    private static com.seamware.consentmanager.service.UserRegistration toRegistration(
+            BulkUserRegistrationEntry entry) {
+        return new com.seamware.consentmanager.service.UserRegistration(
+                entry.getIdentifier(),
+                entry.getLocalIdentifier(),
+                entry.getEmail(),
+                entry.getFirstName(),
+                entry.getLastName());
+    }
+
     /** The body as the service's registration; the participant is supplied separately. */
     private static com.seamware.consentmanager.service.UserRegistration toRegistration(
             UserRegistration body) {
@@ -72,7 +173,7 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
      * The service outcome as the published enum.
      *
      * <p>Exhaustive by constant rather than by name: {@code fromValue} would throw at runtime on a
-     * constant the spec does not carry, and the bulk path is about to add one.
+     * constant the spec does not carry.
      */
     private static UserRegistrationResult.OutcomeEnum outcomeOf(RegistrationOutcome outcome) {
         return switch (outcome) {

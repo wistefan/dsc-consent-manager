@@ -5,7 +5,9 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.domain.UserParticipant.UserParticipantId;
+import com.seamware.consentmanager.error.ApiException;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.error.ProblemType;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
@@ -20,6 +22,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,6 +61,36 @@ public class UserService {
      */
     private static final String EMPTY_SEARCH_DETAIL =
             "A user search must name at least one of identifier, email or participantIdentifier.";
+
+    /** Why a bulk entry naming no identifier is refused; published as that entry's reason. */
+    private static final String BLANK_IDENTIFIER_DETAIL =
+            "A registration must name a non-blank identifier.";
+
+    /**
+     * Why a bulk entry carrying an unusable address is refused; published as that entry's reason.
+     */
+    private static final String MALFORMED_EMAIL_DETAIL =
+            "The email address is not a valid address.";
+
+    /**
+     * The address shape a bulk entry has to satisfy, checked here rather than declared on {@code
+     * BulkUserRegistrationEntry}: a schema constraint cascades into the array and would fail the
+     * whole batch over one dirty address. Deliberately as permissive as bean validation's own
+     * {@code @Email} - a local part, an {@code @}, a domain, no whitespace - since narrowing it
+     * would reject addresses the single-registration route accepts.
+     */
+    private static final Pattern EMAIL_SHAPE = Pattern.compile("[^\\s@]+@[^\\s@]+");
+
+    /**
+     * Stands in for an unexpected failure of a single bulk entry. The exception's own message may
+     * name a column or a constraint, which no caller is entitled to see.
+     */
+    private static final String UNREGISTERABLE_ENTRY_DETAIL =
+            "The entry could not be registered. Retrying it on its own will report why.";
+
+    /** Why an over-long batch is refused whole; formatted with the sent size and the maximum. */
+    private static final String OVERSIZED_BATCH_DETAIL =
+            "A bulk registration carried %d entries, more than the %d this deployment permits.";
 
     private final UserRepository users;
 
@@ -308,6 +341,79 @@ public class UserService {
             outcome = RegistrationOutcome.ALREADY_LINKED;
         }
         return new RegistrationResult(resolved.user(), outcome);
+    }
+
+    /**
+     * Applies {@link #registerForParticipant} to every entry of a batch, independently.
+     *
+     * <p>Results come back one per entry, in the order the entries were given. An entry that cannot
+     * be applied is reported as {@link RegistrationOutcome#REJECTED} with a reason instead of
+     * failing the batch, which is the whole point of the operation: a batch routinely mixes users
+     * the participant has just acquired with users it registered long ago, and one unusable entry
+     * is no reason to discard the rest.
+     *
+     * <p>A batch larger than {@code consent-manager.users.bulk-max-size} is a {@link
+     * BadRequestException} and writes nothing. That is a fact about the request rather than about
+     * an entry, so it is not an outcome.
+     *
+     * <p>Deliberately not transactional, and the isolation between entries rests on exactly that.
+     * Wrapping an entry in a transaction of its own - a {@code REQUIRES_NEW} collaborator, a
+     * programmatic {@code executeWrite} - would put {@link #registerForParticipant} inside one and
+     * break the re-read in its catch block, so an entry that merely lost the race on an identifier
+     * would be reported {@code REJECTED} where it belongs {@code LINKED}. With no ambient
+     * transaction every repository call autocommits, which is what keeps one entry's constraint
+     * violation out of the next entry.
+     */
+    public List<BulkEntryResult> registerBulkForParticipant(
+            Participant participant, List<UserRegistration> registrations) {
+        int maximum = configuration.getBulkMaxSize();
+        if (registrations.size() > maximum) {
+            throw new BadRequestException(
+                    OVERSIZED_BATCH_DETAIL.formatted(registrations.size(), maximum));
+        }
+        return registrations.stream().map(entry -> apply(participant, entry)).toList();
+    }
+
+    /**
+     * One entry, isolated: whatever goes wrong here is reported and never reaches the next one.
+     *
+     * <p>The per-entry shape checks live here rather than on the schema precisely so that one
+     * unusable entry costs only itself; see {@code BulkUserRegistrationEntry.yaml}.
+     */
+    private BulkEntryResult apply(Participant participant, UserRegistration registration) {
+        String identifier = registration.identifier();
+        if (identifier == null || identifier.isBlank()) {
+            return BulkEntryResult.rejected(identifier, BLANK_IDENTIFIER_DETAIL);
+        }
+        String email = registration.email();
+        if (email != null && !EMAIL_SHAPE.matcher(email).matches()) {
+            return BulkEntryResult.rejected(identifier, MALFORMED_EMAIL_DETAIL);
+        }
+        try {
+            return BulkEntryResult.applied(
+                    identifier, registerForParticipant(participant, registration).outcome());
+        } catch (ApiException e) {
+            return BulkEntryResult.rejected(identifier, publishable(e));
+        } catch (RuntimeException e) {
+            LOG.warn(
+                    "Entry {} of a bulk registration for participant {} failed",
+                    identifier,
+                    participant.getIdentifier(),
+                    e);
+            return BulkEntryResult.rejected(identifier, UNREGISTERABLE_ENTRY_DETAIL);
+        }
+    }
+
+    /**
+     * An entry's reason, under the same rule {@code ApiExceptionHandler} applies to a problem
+     * detail: a 4xx message reaches the caller verbatim, a 5xx one is logged and replaced.
+     */
+    private static String publishable(ApiException e) {
+        if (e.problemType().status().getCode() >= ProblemType.LOWEST_SERVER_ERROR_STATUS) {
+            LOG.warn("A bulk registration entry failed with a server-error problem type", e);
+            return UNREGISTERABLE_ENTRY_DETAIL;
+        }
+        return e.getMessage();
     }
 
     /**

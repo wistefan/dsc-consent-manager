@@ -317,6 +317,11 @@ consent-manager:
     # identifier first, which makes the truncation deterministic rather than arbitrary.
     search-max-results: ${USERS_SEARCH_MAX_RESULTS:200}
 
+    # Most entries POST /participants/me/users/bulk may carry. Entries are applied one
+    # at a time and share no transaction, so the cost of a batch is linear in its size;
+    # a larger batch is refused whole with 400 before anything is written.
+    bulk-max-size: ${USERS_BULK_MAX_SIZE:500}
+
   # ---------------------------------------------------------------------------
   # Identity provider trust list
   # ---------------------------------------------------------------------------
