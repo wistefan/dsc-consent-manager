@@ -2,16 +2,20 @@ package com.seamware.consentmanager.service;
 
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentEvent;
+import com.seamware.consentmanager.domain.ConsentEventState;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.domain.UserParticipant.UserParticipantId;
+import com.seamware.consentmanager.domain.UuidGenerator;
 import com.seamware.consentmanager.error.ApiException;
 import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.error.ProblemType;
+import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
@@ -20,9 +24,12 @@ import com.seamware.consentmanager.security.UserPrincipal;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
+import jakarta.transaction.Transactional;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -39,13 +46,13 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Users only - participants are registered explicitly (TICKET-005).
  *
- * <p>Nothing here is {@code @Transactional}, and that is load-bearing rather than an oversight.
- * Both writes resolve a concurrent first caller by letting the unique constraint reject the
- * duplicate and then re-reading the winner's row, which PostgreSQL permits only outside a
+ * <p>No registration path here is {@code @Transactional}, and that is load-bearing rather than an
+ * oversight. Both writes resolve a concurrent first caller by letting the unique constraint reject
+ * the duplicate and then re-reading the winner's row, which PostgreSQL permits only outside a
  * transaction: inside one the violation aborts the transaction and the re-read fails with "current
  * transaction is aborted" instead. Each repository call is therefore its own transaction, and
  * {@link #registerForParticipant} is written to be safe when re-entered rather than atomic across
- * the two tables.
+ * the two tables. {@link #erase} is the one exception and explains itself there.
  *
  * <p>The cost of that is an orphan: <em>any</em> failure of the link insert - not only a lost race,
  * but a connection loss, a timeout or a deleted participant - leaves behind the {@code users} row
@@ -110,6 +117,40 @@ public class UserService {
             "This participant is still party to %d granted consent(s) for this user. "
                     + "Revoke them before unlinking.";
 
+    /**
+     * Reserved prefix of the opaque identifier an erased record carries.
+     *
+     * <p>The suffix is a fresh UUIDv7, not a hash of the original identifier: a hash over the space
+     * of email addresses and subject identifiers is reversible by enumeration, which would defeat
+     * the erasure.
+     */
+    private static final String ERASED_IDENTIFIER_PREFIX = "urn:consent-manager:erased:";
+
+    /**
+     * Statuses an erasure terminates rather than revokes: offers that were never answered and now
+     * never can be, because the person they were put to is gone.
+     */
+    private static final Set<ConsentStatus> UNANSWERED_STATUSES =
+            Set.of(ConsentStatus.PENDING, ConsentStatus.DRAFT);
+
+    /** Attributed to the service rather than to a person, who no longer exists by then. */
+    private static final String ERASURE_ACTOR = "consent-manager";
+
+    /**
+     * Marks the trail entries an erasure appends as automated.
+     *
+     * <p>Not {@link ConsentEvent#DEFAULT_EVENT_TYPE}: the subject asked to be erased, but no one
+     * answered the consent itself - least of all the {@code PENDING} offers this closes unanswered
+     * - so attributing the entry to the service and typing it {@code explicit} would contradict
+     * each other.
+     */
+    private static final String ERASURE_EVENT_TYPE = "system";
+
+    /** Says, in the retained audit trail, why a consent was revoked without naming anyone. */
+    private static final String ERASURE_DETAIL_KEY = "reason";
+
+    private static final String ERASURE_DETAIL_REASON = "erasure-requested-by-data-subject";
+
     private final UserRepository users;
 
     private final UserParticipantRepository links;
@@ -118,6 +159,10 @@ public class UserService {
 
     private final ConsentRepository consents;
 
+    private final ConsentEventRepository consentEvents;
+
+    private final ErasureVerifier erasureVerifier;
+
     private final ConsentManagerConfiguration.Users configuration;
 
     public UserService(
@@ -125,11 +170,15 @@ public class UserService {
             UserParticipantRepository links,
             ParticipantRepository participants,
             ConsentRepository consents,
+            ConsentEventRepository consentEvents,
+            ErasureVerifier erasureVerifier,
             ConsentManagerConfiguration.Users configuration) {
         this.users = users;
         this.links = links;
         this.participants = participants;
         this.consents = consents;
+        this.consentEvents = consentEvents;
+        this.erasureVerifier = erasureVerifier;
         this.configuration = configuration;
     }
 
@@ -452,6 +501,132 @@ public class UserService {
             throw new ConflictException(ACTIVE_CONSENT_DETAIL.formatted(blocking));
         }
         links.deleteByIdUserIdAndIdParticipantId(link.getUserId(), participant.getId());
+    }
+
+    /**
+     * Erases the data subject and reports what that cost, in one all-or-nothing transaction.
+     *
+     * <p>Every consent still open is closed - {@code GRANTED} ones are revoked, the unanswered
+     * {@code PENDING} and {@code DRAFT} ones are terminated - each with the matching event appended
+     * to its trail, and every participant link is removed. The {@code users} row then goes one of
+     * two ways. A row no consent refers to is deleted outright: nothing is being retained that
+     * would need it, and leaving a renamed husk behind would accumulate rows no later call can ever
+     * remove. A row consents still name survives with its display attributes cleared and its global
+     * identifier replaced by a fresh opaque pseudonym, because those consents are the evidence of
+     * what was authorised while it was authorised and {@code consents.user_id} is {@code ON DELETE
+     * RESTRICT}. Either way what dies is the tie between the records and the person.
+     *
+     * <p>{@code @Transactional} is right here and nowhere else in this class. Erasure must be
+     * atomic - a half-erased subject is worse than an un-erased one - and unlike the registration
+     * writes it contains no insert-and-catch to recover from: the pseudonym is a fresh UUIDv7 that
+     * will not collide, so no constraint violation is expected to be caught inside the transaction.
+     *
+     * <p>A retained row carries a keyed verifier of the identifier it lost; see {@link
+     * ErasureVerifier}.
+     *
+     * <p>The {@code user} argument is mutated in place when the record is pseudonymised, so a
+     * caller holding the pre-erasure row - the request's own {@code UserPrincipal} - sees the
+     * erased state afterwards.
+     */
+    @Transactional
+    public ErasureResult erase(User user) {
+        UUID userId = user.getId();
+        int revoked =
+                close(
+                        userId,
+                        Set.of(ConsentStatus.GRANTED),
+                        ConsentStatus.REVOKED,
+                        ConsentEventState.CONSENT_REVOKED);
+        int terminated =
+                close(
+                        userId,
+                        UNANSWERED_STATUSES,
+                        ConsentStatus.TERMINATED,
+                        ConsentEventState.CONSENT_TERMINATED);
+        long linksRemoved = links.deleteByIdUserId(userId);
+        String pseudonym = pseudonymiseOrDelete(user);
+
+        LOG.info(
+                "Erased user {}: revoked {}, terminated {}, unlinked {}, record {}",
+                userId,
+                revoked,
+                terminated,
+                linksRemoved,
+                pseudonym == null ? "deleted" : "pseudonymised");
+        return new ErasureResult(pseudonym, revoked, terminated, Math.toIntExact(linksRemoved));
+    }
+
+    /**
+     * Moves every consent of the user in {@code from} to {@code to}, appending {@code event} to
+     * each trail, and reports how many moved.
+     *
+     * <p>Batched rather than updated row by row: an erasure costs two statements however long the
+     * subject has been a member.
+     */
+    private int close(
+            UUID userId, Set<ConsentStatus> from, ConsentStatus to, ConsentEventState event) {
+        List<Consent> closed =
+                consents.findByUserIdAndStatusIn(userId, from).stream()
+                        .map(consent -> withStatus(consent, to))
+                        .toList();
+        if (closed.isEmpty()) {
+            return 0;
+        }
+        consents.updateAll(closed);
+        consentEvents.saveAll(
+                closed.stream().map(consent -> erasureEvent(consent, event)).toList());
+        return closed.size();
+    }
+
+    /** The same consent, moved to the given status. */
+    private static Consent withStatus(Consent consent, ConsentStatus status) {
+        consent.updateStatus(status);
+        return consent;
+    }
+
+    /**
+     * The trail entry saying an erasure closed this consent, naming the service rather than one.
+     */
+    private static ConsentEvent erasureEvent(Consent consent, ConsentEventState state) {
+        return new ConsentEvent(
+                consent.getId(),
+                state,
+                ERASURE_EVENT_TYPE,
+                ERASURE_ACTOR,
+                Instant.now(),
+                Map.of(ERASURE_DETAIL_KEY, ERASURE_DETAIL_REASON));
+    }
+
+    /**
+     * Deletes the record, or pseudonymises it and returns the pseudonym when consents still name
+     * it.
+     *
+     * <p>Deleting is the default because it is the more complete erasure; the row survives only to
+     * satisfy the {@code ON DELETE RESTRICT} that protects the retained audit trail. Keeping one
+     * regardless would be unbounded: the route's own authentication registers an unknown subject
+     * before the handler runs, so a token replayed against it would mint a consent-free husk per
+     * request, and nothing in this service ever deletes those.
+     *
+     * <p>A retained row also keeps the {@link ErasureVerifier} value for the identifier it is
+     * losing, so the operator can still confirm that a named person consented. It is salted per
+     * record, so it links no two erasures, and it is written here and read nowhere: provisioning
+     * matches on {@code identifier} alone, so a returning subject is a stranger rather than a
+     * recognised one.
+     */
+    @Nullable
+    private String pseudonymiseOrDelete(User user) {
+        if (!consents.existsByUserId(user.getId())) {
+            users.delete(user);
+            return null;
+        }
+        String pseudonym = ERASED_IDENTIFIER_PREFIX + UuidGenerator.uuidV7();
+        user.setErasureVerifier(erasureVerifier.verifierFor(user.getIdentifier()));
+        user.setIdentifier(pseudonym);
+        user.setEmail(null);
+        user.setFirstName(null);
+        user.setLastName(null);
+        users.update(user);
+        return pseudonym;
     }
 
     /**

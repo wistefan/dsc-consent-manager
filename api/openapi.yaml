@@ -154,6 +154,55 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+    delete:
+      operationId: eraseCurrentUser
+      summary: Erase the calling user's record
+      description: >
+        Erases the natural person the bearer token names and reports what that
+        cost. Every participant link is removed, every `GRANTED` consent is
+        revoked and every unanswered one - `PENDING` or `DRAFT` - is
+        `TERMINATED`, each with the matching event appended to its trail.
+
+
+        The consent records and their events are retained as the evidence of
+        what was authorised while it was authorised; what is destroyed is the
+        tie between them and the person. The `users` row is deleted outright
+        when no consent refers to it, and otherwise kept with its attributes
+        cleared under the opaque `pseudonym` this response carries once and
+        never again.
+
+
+        The whole erasure is one transaction. The caller is registered by this
+        route's own authentication, so this operation never reports `404`, and a
+        later token for the same subject provisions a new record rather than
+        resurrecting this one. For why the pseudonym is opaque rather than
+        derived, what a consent naming nobody is still worth, and the keyed
+        verifier a retained record keeps for the operator, see
+        `docs/adr/0007-erasure-pseudonymises-the-user-and-retains-the-audit-trail.md`.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      responses:
+        "200":
+          description: The record was erased. The body reports what that entailed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErasureSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
   /users/search:
     post:
       operationId: searchUsers
@@ -595,6 +644,9 @@ components:
 
     UserSearch:
       $ref: "./components/schemas/UserSearch.yaml"
+
+    ErasureSummary:
+      $ref: "./components/schemas/ErasureSummary.yaml"
 
     UserRegistration:
       $ref: "./components/schemas/UserRegistration.yaml"

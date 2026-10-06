@@ -75,6 +75,11 @@ logger:
 # every test context must fill those blanks in place. A differently-named entry here
 # would leave `primary` blank and fail validation for every full-context test.
 consent-manager:
+  # Production leaves this unset; the tests configure a key so that the verifier an
+  # erased record keeps is exercised rather than silently skipped.
+  erasure:
+    verification-secret: test-erasure-verification-secret
+
   identity-providers:
     primary:
       issuer: http://localhost:1/realms/test

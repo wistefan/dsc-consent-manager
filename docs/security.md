@@ -82,6 +82,27 @@ hold a role it admits, and when a path item hides its operations behind a `$ref`
 Implemented operations: `/api-status` (anonymous, `ApiStatusController`), `POST /users/register`
 and `GET /users/me` (`USER`, `UserController`).
 
+## Erasure verification
+
+`DELETE /users/me` strips the subject's identifier. A record kept for its consents (see
+[ADR 0007](adr/0007-erasure-pseudonymises-the-user-and-retains-the-audit-trail.md)) carries
+`users.erasure_verifier` = `<salt>.<mac>`, where `mac` is
+`base64url(HMAC-SHA256(ERASURE_VERIFICATION_SECRET, salt || identifier))` without padding. It
+confirms a candidate identifier the asker already holds; it reveals none on its own and is not
+computable without the secret.
+
+The secret belongs to the operator — outside the database, never with a participant. Unset (the
+default) means erased records carry no verifier; rotating it retires every verifier written under
+the old one. The service only ever writes the column: there is no query path to it, and adding one
+would turn erasure into a rename. The check is run by hand:
+
+```bash
+VERIFIER=$(psql -Atc "select erasure_verifier from users where identifier = '<pseudonym>'")
+printf '%s' "${VERIFIER%%.*}$IDENTIFIER" \
+  | openssl dgst -sha256 -hmac "$ERASURE_VERIFICATION_SECRET" -binary \
+  | basenc --base64url | tr -d '='   # equals ${VERIFIER#*.} iff that identifier consented
+```
+
 ## Spec layout
 
 `api/openapi.yaml` is the root document and `$ref`s into `api/components/`:

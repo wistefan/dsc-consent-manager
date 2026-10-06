@@ -1,0 +1,19 @@
+-- V2__user_erasure_verifier.sql
+-- Adds the keyed verifier an erased user record carries.
+--
+-- Erasure replaces the global identifier with an opaque pseudonym that is no
+-- function of it, so the row names nobody. This column keeps a keyed HMAC of
+-- the original identifier so that the operator - and only the operator, since
+-- the key lives outside the database - can still confirm that a *named* person
+-- consented. It answers yes/no to a candidate identifier; it yields no
+-- identifier on its own. The value is <salt>.<mac> with a fresh random salt per
+-- record, so two erasures of the same person do not share a value and nobody
+-- can link the rows by reading the column.
+--
+-- Null for every live record, for a record erased while no verification secret
+-- was configured, and after a key rotation that abandons the old secret.
+-- Deliberately unindexed and never queried by the service: verification is a
+-- rare operator-run check, never a lookup path, and in particular never a way
+-- to recognise a returning subject.
+-- See docs/adr/0007-erasure-pseudonymises-the-user-and-retains-the-audit-trail.md
+ALTER TABLE users ADD COLUMN erasure_verifier TEXT;

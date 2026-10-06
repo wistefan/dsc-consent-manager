@@ -7,6 +7,7 @@ import io.micronaut.data.model.Page;
 import io.micronaut.data.model.Pageable;
 import io.micronaut.data.model.query.builder.sql.Dialect;
 import io.micronaut.data.repository.PageableRepository;
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -40,6 +41,30 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
      * @return a list of consents matching the user and status criteria
      */
     List<Consent> findByUserIdAndStatus(UUID userId, ConsentStatus status);
+
+    /**
+     * Finds all consents for the given user in any of the given statuses.
+     *
+     * <p>The erasure path uses this to sweep every consent still open - granted ones and unanswered
+     * ones alike - in a single statement.
+     *
+     * @param userId the UUID of the user
+     * @param statuses the consent statuses to filter by
+     * @return a list of consents matching the user and any of the statuses
+     */
+    List<Consent> findByUserIdAndStatusIn(UUID userId, Collection<ConsentStatus> statuses);
+
+    /**
+     * Checks whether any consent at all refers to the given user.
+     *
+     * <p>This is what decides whether the {@code users} row has to survive an erasure: the row is
+     * kept only because {@code consents.user_id} is {@code ON DELETE RESTRICT}, so a user no
+     * consent names can be deleted outright.
+     *
+     * @param userId the UUID of the user
+     * @return {@code true} if at least one consent references the user
+     */
+    boolean existsByUserId(UUID userId);
 
     /**
      * Finds all consents for the given data provider, paginated.

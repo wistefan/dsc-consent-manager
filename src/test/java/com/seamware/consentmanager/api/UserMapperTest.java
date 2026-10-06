@@ -39,7 +39,7 @@ class UserMapperTest {
     /** A stub whose two link reads answer differently, so which one the mapper used is visible. */
     private static UserMapper mapperLinkedTo(List<String> all, List<String> scoped) {
         return new UserMapper(
-                new UserService(null, null, null, null, null) {
+                new UserService(null, null, null, null, null, null, null) {
                     @Override
                     public List<String> participantIdentifiersFor(User user) {
                         return all;
