@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentEvent;
+import com.seamware.consentmanager.domain.ConsentEventState;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
@@ -16,6 +18,7 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
+import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
@@ -90,6 +93,9 @@ class UserServiceTest {
 
     private static final String USER_ON_BETA = "urn:test:user:c";
 
+    /** The reserved prefix every erased identifier carries; mirrors the service's own constant. */
+    private static final String ERASED_PREFIX = "urn:consent-manager:erased:";
+
     /** A caller reading across participants; it carries no participant row of its own. */
     private static final CallerScope CATALOG = new CallerScope(Role.CATALOG, null);
 
@@ -101,11 +107,13 @@ class UserServiceTest {
 
     private final StubConsentRepository consents = new StubConsentRepository();
 
+    private final StubConsentEventRepository consentEvents = new StubConsentEventRepository();
+
     private final ConsentManagerConfiguration.Users limits =
             new ConsentManagerConfiguration.Users();
 
     private final UserService service =
-            new UserService(users, links, participants, consents, limits);
+            new UserService(users, links, participants, consents, consentEvents, limits);
 
     /** An identifier no row exists for is inserted from the claims, and reported as created. */
     @Test
@@ -549,6 +557,73 @@ class UserServiceTest {
                 Arguments.of("draft, caller provides", ConsentStatus.DRAFT, true, false, false));
     }
 
+    /**
+     * Erasure revokes what was granted, unlinks everything, clears the attributes and renames the
+     * row - while leaving the consent and event rows themselves in place.
+     */
+    @Test
+    @DisplayName("erasure revokes, unlinks and pseudonymises, and keeps the audit trail")
+    void erasureRevokesUnlinksAndPseudonymises() {
+        Participant alpha = participants.put(participant());
+        Participant beta = participants.put(participant(PARTICIPANT_BETA));
+        User user = users.put(stored());
+        links.put(new UserParticipant(user.getId(), alpha.getId(), STORED_LOCAL_IDENTIFIER));
+        links.put(new UserParticipant(user.getId(), beta.getId(), null));
+        Consent granted = consents.put(consent(user, ConsentStatus.GRANTED, alpha, beta));
+        Consent revoked = consents.put(consent(user, ConsentStatus.REVOKED, beta, alpha));
+
+        ErasureResult result = service.erase(user);
+
+        assertThat(result.consentsRevoked()).isEqualTo(1);
+        assertThat(result.linksRemoved()).isEqualTo(2);
+        assertThat(result.pseudonym()).startsWith(ERASED_PREFIX).isNotEqualTo(IDENTIFIER);
+
+        assertThat(links.rows()).isEmpty();
+        assertThat(user.getIdentifier()).isEqualTo(result.pseudonym());
+        assertThat(user.getEmail()).isNull();
+        assertThat(user.getFirstName()).isNull();
+        assertThat(user.getLastName()).isNull();
+
+        assertThat(consents.rows()).containsOnlyKeys(granted.getId(), revoked.getId());
+        assertThat(granted.getStatus()).isEqualTo(ConsentStatus.REVOKED);
+        assertThat(granted.isConsented()).isFalse();
+        assertThat(consentEvents.appendedFor(granted.getId()))
+                .singleElement()
+                .extracting(ConsentEvent::getEventState)
+                .isEqualTo(ConsentEventState.CONSENT_REVOKED);
+        assertThat(consentEvents.appendedFor(revoked.getId()))
+                .as("a consent that was not granted is not re-revoked")
+                .isEmpty();
+    }
+
+    /**
+     * Two erasures must not produce the same pseudonym, or they would be linkable to each other.
+     */
+    @Test
+    @DisplayName("each erasure mints its own pseudonym")
+    void erasureMintsAFreshPseudonymEveryTime() {
+        User first = users.put(stored());
+        User second = users.put(new User(USER_ON_BETA, null, null, null));
+
+        String one = service.erase(first).pseudonym();
+        String other = service.erase(second).pseudonym();
+
+        assertThat(one).isNotEqualTo(other);
+    }
+
+    /** Nothing to revoke and nothing to unlink still erases the record and reports zeroes. */
+    @Test
+    @DisplayName("erasing a user with no consents and no links reports zeroes")
+    void erasureOfABareUserReportsZeroes() {
+        User user = users.put(stored());
+
+        ErasureResult result = service.erase(user);
+
+        assertThat(result.consentsRevoked()).isZero();
+        assertThat(result.linksRemoved()).isZero();
+        assertThat(result.pseudonym()).startsWith(ERASED_PREFIX);
+    }
+
     /** A consent of the given status between two participants, with no notice behind it. */
     private static Consent consent(
             User user, ConsentStatus status, Participant provider, Participant consumer) {
@@ -949,6 +1024,17 @@ class UserServiceTest {
         public void deleteByIdUserIdAndIdParticipantId(UUID userId, UUID participantId) {
             rows().remove(new UserParticipantId(userId, participantId));
         }
+
+        @Override
+        public long deleteByIdUserId(UUID userId) {
+            List<UserParticipantId> doomed =
+                    rows().entrySet().stream()
+                            .filter(e -> e.getValue().getUserId().equals(userId))
+                            .map(Map.Entry::getKey)
+                            .toList();
+            doomed.forEach(rows()::remove);
+            return doomed.size();
+        }
     }
 
     /** An in-memory {@link ParticipantRepository}; registration only ever reads from it. */
@@ -1064,7 +1150,8 @@ class UserServiceTest {
 
         @Override
         public <S extends Consent> S update(S entity) {
-            throw unsupported();
+            put(entity);
+            return entity;
         }
 
         @Override
@@ -1089,6 +1176,60 @@ class UserServiceTest {
 
         @Override
         public List<Consent> findAll(Sort sort) {
+            throw unsupported();
+        }
+    }
+
+    /** An in-memory {@link ConsentEventRepository}; erasure only ever appends to it. */
+    private static final class StubConsentEventRepository extends StubRepository<UUID, ConsentEvent>
+            implements ConsentEventRepository {
+
+        @Override
+        UUID keyOf(ConsentEvent row) {
+            return row.getId();
+        }
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public <S extends ConsentEvent> S save(S entity) {
+            put(entity);
+            return entity;
+        }
+
+        /** The events appended against one consent, in the order they were appended. */
+        List<ConsentEvent> appendedFor(UUID consentId) {
+            return rows().values().stream()
+                    .filter(e -> e.getConsentId().equals(consentId))
+                    .toList();
+        }
+
+        @Override
+        public List<ConsentEvent> findByConsentIdOrderByOccurredAtAsc(UUID consentId) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<ConsentEvent> findByConsentId(UUID consentId, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public <S extends ConsentEvent> S update(S entity) {
+            throw unsupported();
+        }
+
+        @Override
+        public Optional<ConsentEvent> findById(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
+        public boolean existsById(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
+        public void deleteById(UUID id) {
             throw unsupported();
         }
     }

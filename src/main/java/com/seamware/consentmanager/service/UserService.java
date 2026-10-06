@@ -2,16 +2,20 @@ package com.seamware.consentmanager.service;
 
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentEvent;
+import com.seamware.consentmanager.domain.ConsentEventState;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.domain.UserParticipant.UserParticipantId;
+import com.seamware.consentmanager.domain.UuidGenerator;
 import com.seamware.consentmanager.error.ApiException;
 import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.error.ProblemType;
+import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
@@ -20,9 +24,11 @@ import com.seamware.consentmanager.security.UserPrincipal;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
+import jakarta.transaction.Transactional;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -39,13 +45,13 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Users only - participants are registered explicitly (TICKET-005).
  *
- * <p>Nothing here is {@code @Transactional}, and that is load-bearing rather than an oversight.
- * Both writes resolve a concurrent first caller by letting the unique constraint reject the
- * duplicate and then re-reading the winner's row, which PostgreSQL permits only outside a
+ * <p>No registration path here is {@code @Transactional}, and that is load-bearing rather than an
+ * oversight. Both writes resolve a concurrent first caller by letting the unique constraint reject
+ * the duplicate and then re-reading the winner's row, which PostgreSQL permits only outside a
  * transaction: inside one the violation aborts the transaction and the re-read fails with "current
  * transaction is aborted" instead. Each repository call is therefore its own transaction, and
  * {@link #registerForParticipant} is written to be safe when re-entered rather than atomic across
- * the two tables.
+ * the two tables. {@link #erase} is the one exception and explains itself there.
  *
  * <p>The cost of that is an orphan: <em>any</em> failure of the link insert - not only a lost race,
  * but a connection loss, a timeout or a deleted participant - leaves behind the {@code users} row
@@ -110,6 +116,23 @@ public class UserService {
             "This participant is still party to %d granted consent(s) for this user. "
                     + "Revoke them before unlinking.";
 
+    /**
+     * Reserved prefix of the opaque identifier an erased record carries.
+     *
+     * <p>The suffix is a fresh UUIDv7, not a hash of the original identifier: a hash over the space
+     * of email addresses and subject identifiers is reversible by enumeration, which would defeat
+     * the erasure.
+     */
+    private static final String ERASED_IDENTIFIER_PREFIX = "urn:consent-manager:erased:";
+
+    /** Attributed to the service rather than to a person, who no longer exists by then. */
+    private static final String ERASURE_ACTOR = "consent-manager";
+
+    /** Says, in the retained audit trail, why a consent was revoked without naming anyone. */
+    private static final String ERASURE_DETAIL_KEY = "reason";
+
+    private static final String ERASURE_DETAIL_REASON = "erasure-requested-by-data-subject";
+
     private final UserRepository users;
 
     private final UserParticipantRepository links;
@@ -118,6 +141,8 @@ public class UserService {
 
     private final ConsentRepository consents;
 
+    private final ConsentEventRepository consentEvents;
+
     private final ConsentManagerConfiguration.Users configuration;
 
     public UserService(
@@ -125,11 +150,13 @@ public class UserService {
             UserParticipantRepository links,
             ParticipantRepository participants,
             ConsentRepository consents,
+            ConsentEventRepository consentEvents,
             ConsentManagerConfiguration.Users configuration) {
         this.users = users;
         this.links = links;
         this.participants = participants;
         this.consents = consents;
+        this.consentEvents = consentEvents;
         this.configuration = configuration;
     }
 
@@ -452,6 +479,55 @@ public class UserService {
             throw new ConflictException(ACTIVE_CONSENT_DETAIL.formatted(blocking));
         }
         links.deleteByIdUserIdAndIdParticipantId(link.getUserId(), participant.getId());
+    }
+
+    /**
+     * Erases the data subject and reports what that cost, in one all-or-nothing transaction.
+     *
+     * <p>Every {@code GRANTED} consent is revoked with a {@code CONSENT_REVOKED} event appended,
+     * every participant link is removed, the display attributes are cleared, and the global
+     * identifier is replaced by a fresh opaque pseudonym. The consent and event rows themselves
+     * survive: they are the evidence of what was authorised while it was authorised, which is why
+     * {@code consents.user_id} is {@code ON DELETE RESTRICT}. What dies is the link between those
+     * rows and the person.
+     *
+     * <p>{@code @Transactional} is right here and nowhere else in this class. Erasure must be
+     * atomic - a half-erased subject is worse than an un-erased one - and unlike the registration
+     * writes it contains no insert-and-catch to recover from: the pseudonym is a fresh UUIDv7 that
+     * will not collide, so no constraint violation is expected to be caught inside the transaction.
+     *
+     * <p>The returned {@link User} instance is mutated in place; callers holding the pre-erasure
+     * row see the erased state afterwards.
+     */
+    @Transactional
+    public ErasureResult erase(User user) {
+        UUID userId = user.getId();
+        List<Consent> granted = consents.findByUserIdAndStatus(userId, ConsentStatus.GRANTED);
+        for (Consent consent : granted) {
+            consent.updateStatus(ConsentStatus.REVOKED);
+            consents.update(consent);
+            consentEvents.save(
+                    new ConsentEvent(
+                            consent.getId(),
+                            ConsentEventState.CONSENT_REVOKED,
+                            ERASURE_ACTOR,
+                            Map.of(ERASURE_DETAIL_KEY, ERASURE_DETAIL_REASON)));
+        }
+        long linksRemoved = links.deleteByIdUserId(userId);
+
+        String pseudonym = ERASED_IDENTIFIER_PREFIX + UuidGenerator.uuidV7();
+        user.setIdentifier(pseudonym);
+        user.setEmail(null);
+        user.setFirstName(null);
+        user.setLastName(null);
+        users.update(user);
+
+        LOG.info(
+                "Erased user {}: revoked {} consent(s), removed {} link(s)",
+                userId,
+                granted.size(),
+                linksRemoved);
+        return new ErasureResult(pseudonym, granted.size(), Math.toIntExact(linksRemoved));
     }
 
     /**

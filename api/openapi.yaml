@@ -154,6 +154,62 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+    delete:
+      operationId: eraseCurrentUser
+      summary: Erase the calling user's record
+      description: >
+        Erases the natural person the bearer token names, and answers with what
+        that cost. The `users` row survives under a freshly generated opaque
+        pseudonym with its `email`, `firstName` and `lastName` cleared, every
+        participant link is removed, and every consent still `GRANTED` is
+        revoked with a `CONSENT_REVOKED` event appended to its audit trail.
+
+
+        The consent records and their events are **retained**, deliberately:
+        they are the evidence of what was authorised while it was authorised,
+        and destroying them would destroy the point of the service. What is
+        destroyed is the link between those records and the person — after this
+        call nothing in them names the data subject, and the pseudonym returned
+        here is the only handle onto them that ever existed outside the
+        participants' own systems. It is published once and never again.
+
+
+        The pseudonym is a fresh value under a reserved prefix, not a hash of
+        the original identifier: a hash over a space of subject identifiers and
+        email addresses is reversible by enumeration. See
+        `docs/adr/0007-erasure-pseudonymises-the-user-and-retains-the-audit-trail.md`.
+
+
+        The whole erasure is one transaction: either all of it happened or none
+        of it did. A user this service has not seen before is registered by its
+        own authentication and erased in the same request, so this operation
+        does not report `404`. A later token for the same subject is a new
+        person to this service: it provisions a new record rather than
+        resurrecting the erased one.
+      tags:
+        - Users
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      responses:
+        "200":
+          description: The record was erased. The body reports what that entailed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErasureSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
   /users/search:
     post:
       operationId: searchUsers
@@ -595,6 +651,9 @@ components:
 
     UserSearch:
       $ref: "./components/schemas/UserSearch.yaml"
+
+    ErasureSummary:
+      $ref: "./components/schemas/ErasureSummary.yaml"
 
     UserRegistration:
       $ref: "./components/schemas/UserRegistration.yaml"

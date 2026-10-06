@@ -53,4 +53,15 @@ public interface UserParticipantRepository
      * @param participantId the UUID of the participant
      */
     void deleteByIdUserIdAndIdParticipantId(UUID userId, UUID participantId);
+
+    /**
+     * Removes every association the given user has, in one statement.
+     *
+     * <p>The erasure path uses this: it ends all affiliations at once and needs the count it
+     * removed to report back to the data subject.
+     *
+     * @param userId the UUID of the user
+     * @return how many associations were removed
+     */
+    long deleteByIdUserId(UUID userId);
 }
