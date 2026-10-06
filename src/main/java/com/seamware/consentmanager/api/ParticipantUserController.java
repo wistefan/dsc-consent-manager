@@ -68,8 +68,17 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
                 body.getLastName());
     }
 
-    /** The service outcome as the published enum, which shares its constant names by contract. */
+    /**
+     * The service outcome as the published enum.
+     *
+     * <p>Exhaustive by constant rather than by name: {@code fromValue} would throw at runtime on a
+     * constant the spec does not carry, and the bulk path is about to add one.
+     */
     private static UserRegistrationResult.OutcomeEnum outcomeOf(RegistrationOutcome outcome) {
-        return UserRegistrationResult.OutcomeEnum.fromValue(outcome.name());
+        return switch (outcome) {
+            case CREATED -> UserRegistrationResult.OutcomeEnum.CREATED;
+            case LINKED -> UserRegistrationResult.OutcomeEnum.LINKED;
+            case ALREADY_LINKED -> UserRegistrationResult.OutcomeEnum.ALREADY_LINKED;
+        };
     }
 }

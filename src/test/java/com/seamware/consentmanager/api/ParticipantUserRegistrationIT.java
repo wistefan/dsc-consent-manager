@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
@@ -76,8 +77,16 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
 
     private static final String SMUGGLED_USER = "urn:test:user:registration-smuggled";
 
+    private static final String MAPPED_USER = "urn:test:user:registration-mapped";
+
     private static final List<String> SEEDED_USERS =
-            List.of(NEW_USER, EXISTING_USER, ADOPTED_USER, REPEATED_USER, SMUGGLED_USER);
+            List.of(
+                    NEW_USER,
+                    EXISTING_USER,
+                    ADOPTED_USER,
+                    REPEATED_USER,
+                    SMUGGLED_USER,
+                    MAPPED_USER);
 
     /** Attributes an earlier registrant recorded, which a later one must not be able to rewrite. */
     private static final Map<String, Object> ORIGINAL_ATTRIBUTES =
@@ -86,6 +95,21 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     /** Attributes a second registrant supplies, every one of them different from the above. */
     private static final Map<String, Object> OVERWRITING_ATTRIBUTES =
             Map.of("email", "grace@example.org", "firstName", "Grace", "lastName", "Hopper");
+
+    /**
+     * Every optional property, each with a value no other property could be mistaken for, so that a
+     * transposed or dropped argument in the controller's mapping shows up as a wrong column rather
+     * than as a passing assertion.
+     */
+    private static final Map<String, Object> EVERY_ATTRIBUTE =
+            Map.of(
+                    "localIdentifier", "local-10427",
+                    "email", "alan@example.org",
+                    "firstName", "Alan",
+                    "lastName", "Turing");
+
+    /** The {@code maxLength} the schema puts on every property but {@code email}. */
+    private static final int MAX_FIELD_LENGTH = 255;
 
     /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
@@ -220,6 +244,36 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
                 .containsExactly(CALLER_PARTICIPANT);
     }
 
+    @Test
+    @DisplayName("every optional property of the body reaches the column it names")
+    void everyOptionalPropertyIsStoredWhereItBelongs() throws IOException {
+        HttpResponse<String> response = post(registration(MAPPED_USER, EVERY_ATTRIBUTE));
+
+        assertThat(response.code()).isEqualTo(HttpStatus.CREATED.getCode());
+        assertThat(storedAttributesOf(MAPPED_USER))
+                .as("the attributes are mapped onto the user row, none transposed")
+                .containsOnly(
+                        entry("email", EVERY_ATTRIBUTE.get("email")),
+                        entry("firstName", EVERY_ATTRIBUTE.get("firstName")),
+                        entry("lastName", EVERY_ATTRIBUTE.get("lastName")));
+        assertThat(localIdentifierOf(MAPPED_USER))
+                .as("localIdentifier belongs on the caller's link, and has no read path yet")
+                .isEqualTo(EVERY_ATTRIBUTE.get("localIdentifier"));
+    }
+
+    @ParameterizedTest(name = "{0} longer than its maximum")
+    @ValueSource(strings = {"identifier", "localIdentifier", "firstName", "lastName"})
+    @DisplayName("a property longer than its maximum is refused before anything is written")
+    void anOverlongPropertyIsRefused(String property) {
+        // Written in this order on purpose: `identifier` is one of the properties under test, so
+        // the overlong value has to be able to replace the otherwise-valid one.
+        Map<String, Object> body = new LinkedHashMap<>(Map.of("identifier", MAPPED_USER));
+        body.put(property, "x".repeat(MAX_FIELD_LENGTH + 1));
+
+        assertThat(post(body).code()).isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+        assertThat(users.findByIdentifier(MAPPED_USER)).isEmpty();
+    }
+
     @ParameterizedTest(name = "participantIdentifier = {0}")
     @ValueSource(strings = {FOREIGN_PARTICIPANT, UNKNOWN_PARTICIPANT, CALLER_PARTICIPANT})
     @DisplayName("a participantIdentifier in the body is ignored rather than rejected")
@@ -230,8 +284,8 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
         HttpResponse<String> response = post(body);
 
         assertThat(response.code())
-                .as("an unknown property is ignored, so this is never a 400")
-                .isIn(HttpStatus.CREATED.getCode(), HttpStatus.OK.getCode());
+                .as("an unknown property is ignored, so a 400 here is a rejection of it")
+                .isEqualTo(HttpStatus.CREATED.getCode());
         assertThat(participantsOf(userOf(response)))
                 .as("the link follows the token, never the body")
                 .containsExactly(CALLER_PARTICIPANT);
@@ -308,6 +362,18 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
                 "email", stored.getEmail(),
                 "firstName", stored.getFirstName(),
                 "lastName", stored.getLastName());
+    }
+
+    /** The {@code local_identifier} the caller's own link carries, which no route reads yet. */
+    private String localIdentifierOf(String identifier) {
+        UUID caller = participantId(CALLER_PARTICIPANT);
+        return links
+                .findByIdUserId(users.findByIdentifier(identifier).orElseThrow().getId())
+                .stream()
+                .filter(link -> caller.equals(link.getId().getParticipantId()))
+                .map(UserParticipant::getLocalIdentifier)
+                .findFirst()
+                .orElseThrow();
     }
 
     private List<UUID> linkedParticipantIdsOf(String identifier) {

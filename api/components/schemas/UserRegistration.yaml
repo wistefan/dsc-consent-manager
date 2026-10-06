@@ -7,6 +7,13 @@
 # than be refused: the calling participant is taken from the token and from
 # nowhere else, so such a field is meaningless, not erroneous. Forbidding
 # additional properties would turn those requests into `400`.
+#
+# Every property carries a `maxLength`. The backing columns are all `TEXT`, and a
+# participant is the first writer on this API whose values are not derived from a
+# token the service already validated, so the bound is what keeps an arbitrarily
+# large string out of a column that `POST /users/search` then has to compare and
+# sort. The bounds below are the same ones a later revision should apply to the
+# `UserSearch` criteria.
 type: object
 description: >
   A user a participant asks to have registered and linked to itself.
@@ -26,6 +33,9 @@ properties:
   identifier:
     type: string
     minLength: 1
+    # Comfortably above a URN-, URL- or DID-shaped identifier while staying
+    # within what a btree index on the column can hold.
+    maxLength: 255
     # Rejects a value that is only whitespace, which `minLength` alone would let
     # through. Bean validation matches the whole value, so this is "contains at
     # least one non-whitespace character".
@@ -37,6 +47,7 @@ properties:
     example: "0c6e4d18-9b1c-4b6f-9f6d-2f4b1b0f1d3a"
   localIdentifier:
     type: string
+    maxLength: 255
     description: >
       The calling participant's own identifier for this user, stored on that
       participant's link and visible to nobody else. A convenience column for
@@ -48,6 +59,9 @@ properties:
   email:
     type: string
     format: email
+    # The longest address RFC 5321 permits: 64-octet local part, `@`, 255-octet
+    # domain minus the two octets the envelope's angle brackets would take.
+    maxLength: 254
     description: >
       Contact address, written only when this call creates the user.
 
@@ -59,10 +73,12 @@ properties:
     example: "ada@example.org"
   firstName:
     type: string
+    maxLength: 255
     description: Given name. Same write-on-create rule as `email`.
     example: "Ada"
   lastName:
     type: string
+    maxLength: 255
     description: Family name. Same write-on-create rule as `email`.
     example: "Lovelace"
 required:

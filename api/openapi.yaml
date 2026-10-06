@@ -315,9 +315,15 @@ paths:
         to.
 
 
-        Addressing is by the data space's global identifier; `localIdentifier` is
-        a convenience column on the caller's own link. See
-        [Identifiers in the user directory](../docs/user-identifiers.md).
+        Addressing is by the data space's global identifier alone.
+        `localIdentifier` is a convenience column on the calling participant's
+        own link: invisible to every other participant, never a lookup key, and
+        never part of matching. An identifier containing `/`, and the literal
+        value `me`, cannot be addressed as a path segment on
+        `GET /users/{identifier}` and are reached through `POST /users/search`
+        instead. The rationale in full is `docs/user-identifiers.md` in this
+        service's repository — deliberately named rather than linked, since the
+        published specification serves no path under which that file resolves.
       tags:
         - Participant Users
       security:
