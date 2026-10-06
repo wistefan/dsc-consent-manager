@@ -284,6 +284,77 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /participants/me/users/bulk:
+    post:
+      operationId: registerParticipantUsersBulk
+      summary: Register a batch of users for the calling participant
+      description: >
+        Applies `POST /participants/me/users` to every entry of a batch and
+        reports what each one did. The response is always `207 Multi-Status`
+        when the batch itself was acceptable, never a single status standing for
+        all of them: a batch routinely mixes users this participant has just
+        acquired with users it has registered before, and that is a success, not
+        a partial failure.
+
+
+        **Entries are independent.** They share no transaction, so an entry that
+        cannot be applied neither rolls back the entries before it nor stops the
+        entries after it; it is reported as `REJECTED`, with a `reason`, and the
+        batch continues. The rule each entry follows, and which of `CREATED`,
+        `LINKED` and `ALREADY_LINKED` it reaches, is the one
+        `POST /participants/me/users` documents in full — including that
+        adopting an existing user never rewrites its attributes, and that the
+        participant comes from the token and from nowhere else.
+
+
+        `results` holds exactly one entry per entry sent, in the order sent, and
+        `summary` counts them by outcome. An entry naming no identifier, or only
+        whitespace, is `REJECTED`; it is the one malformed entry this operation
+        answers per entry rather than refusing the request over, since the
+        batch's remaining entries are unaffected by it.
+
+
+        **Two failures are request-level and answered `400`,** because they are
+        facts about the request rather than about one entry: a batch carrying
+        more entries than the deployment permits — the limit is configured, and
+        a batch above it is refused before anything is written — and a batch
+        whose entries violate the published property bounds. A batch carrying no
+        entries at all is not an error: it is answered `207` with an empty
+        `results` and a summary of zeroes.
+      tags:
+        - Participant Users
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkUserRegistration"
+      responses:
+        "207":
+          description: >
+            The batch was applied. Every entry carries its own outcome, and an
+            entry may have been rejected while the rest succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkRegistrationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
   /participants/me/users:
     post:
       operationId: registerParticipantUser
@@ -387,6 +458,55 @@ components:
 
     UserRegistrationResult:
       $ref: "./components/schemas/UserRegistrationResult.yaml"
+
+    BulkUserRegistrationEntry:
+      $ref: "./components/schemas/BulkUserRegistrationEntry.yaml"
+
+    BulkRegistrationEntryResult:
+      $ref: "./components/schemas/BulkRegistrationEntryResult.yaml"
+
+    BulkRegistrationSummary:
+      $ref: "./components/schemas/BulkRegistrationSummary.yaml"
+
+    # The two wrappers below are the only schemas written out here rather than
+    # under components/schemas/, and the reason is a generator limitation rather
+    # than a change of convention: a `$ref` under `items` resolves to the named
+    # model only when it is same-document. Written inside an externalised file,
+    # `items: {$ref: "./BulkUserRegistrationEntry.yaml"}` silently degrades to
+    # `List<Object>` and the batch arrives untyped. Both are a thin shell around
+    # one array; the element schemas above carry the documentation.
+    BulkUserRegistration:
+      type: object
+      description: >
+        A batch of users a participant asks to have registered and linked to
+        itself, each entry applied independently of the others.
+      properties:
+        users:
+          type: array
+          description: >
+            The entries, applied in the order given and answered in that same
+            order. An empty array is accepted and does nothing; how many entries
+            one batch may carry is configured per deployment.
+          items:
+            $ref: "#/components/schemas/BulkUserRegistrationEntry"
+      required:
+        - users
+
+    BulkRegistrationResult:
+      type: object
+      description: >
+        What a bulk registration did, entry by entry and in total.
+      properties:
+        results:
+          type: array
+          description: One result per entry sent, in the order the entries were sent.
+          items:
+            $ref: "#/components/schemas/BulkRegistrationEntryResult"
+        summary:
+          $ref: "#/components/schemas/BulkRegistrationSummary"
+      required:
+        - results
+        - summary
 
   responses:
     # Shared error responses referenced by every secured operation. `/api-status`
