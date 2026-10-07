@@ -84,9 +84,9 @@ public class ParticipantController extends AbstractParticipantsController {
         return HttpResponse.ok(
                 new DeregistrationSummary(
                                 result.consentsTerminated(),
-                                Math.toIntExact(result.consentsRetained()),
+                                result.consentsRetained(),
                                 result.noticesArchived(),
-                                Math.toIntExact(result.linksRemoved()))
+                                result.linksRemoved())
                         .deregisteredAt(ParticipantMapper.atUtc(result.deregisteredAt())));
     }
 

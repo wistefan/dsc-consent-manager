@@ -248,10 +248,7 @@ class ParticipantDeregistrationIT extends PostgresTestResource {
         DeregistrationResult result = service.deregister(subject);
 
         Participant stored = participants.findById(subject.getId()).orElseThrow();
-        assertThat(stored.getDeregisteredAt())
-                .isNotNull()
-                .isEqualTo(result.deregisteredAt())
-                .isEqualTo(subject.getDeregisteredAt());
+        assertThat(stored.getDeregisteredAt()).isNotNull().isEqualTo(result.deregisteredAt());
         assertThat(stored.getIdentifier()).isEqualTo(subject.getIdentifier());
         assertThat(stored.getLegalName()).isEqualTo(LEGAL_NAME);
         assertThat(stored.getSelfDescriptionUri()).isEqualTo(SELF_DESCRIPTION_URI);
@@ -323,6 +320,45 @@ class ParticipantDeregistrationIT extends PostgresTestResource {
                                                 null)))
                 .isInstanceOf(ConflictException.class)
                 .hasMessageContaining(subject.getIdentifier());
+    }
+
+    @Test
+    @DisplayName("refuses a second deregistration rather than moving the recorded departure")
+    void refusesASecondDeregistration() {
+        Participant subject = registerThroughTheService();
+        seedNotice(subject, seedParticipant(), Side.PROVIDER, null);
+        Instant departedAt = service.deregister(subject).deregisteredAt();
+
+        assertThatThrownBy(() -> service.deregister(subject))
+                .isInstanceOf(ConflictException.class)
+                .hasMessageContaining(subject.getIdentifier());
+
+        assertThat(participants.findById(subject.getId()).orElseThrow().getDeregisteredAt())
+                .isEqualTo(departedAt);
+    }
+
+    /**
+     * The caller hands in the row as it stood when the request was authenticated. Writing that
+     * snapshot back would revert anything committed since, so the cascade re-reads under a lock.
+     */
+    @Test
+    @DisplayName("writes the row as it stands, not the stale snapshot it was handed")
+    void doesNotRevertAnUpdateCommittedSinceAuthentication() {
+        Participant snapshot = registerThroughTheService();
+        seedNotice(snapshot, seedParticipant(), Side.PROVIDER, null);
+        service.update(
+                snapshot,
+                new ParticipantUpdate(
+                        REREGISTERED_LEGAL_NAME,
+                        SELF_DESCRIPTION_URI,
+                        CONTACT_EMAIL,
+                        ENDPOINTS,
+                        LEGAL_PERSON));
+
+        service.deregister(snapshot);
+
+        assertThat(participants.findById(snapshot.getId()).orElseThrow().getLegalName())
+                .isEqualTo(REREGISTERED_LEGAL_NAME);
     }
 
     /** Which side of a consent or privacy notice the departing participant stands on. */

@@ -8,11 +8,13 @@ import java.time.Instant;
  * and archived on the way there.
  *
  * <p>{@code deregisteredAt} is null when the record was deleted outright rather than retained,
- * which happens only for a participant no consent and no privacy notice ever named.
+ * which happens only for a participant no consent and no privacy notice ever named. The counts are
+ * {@code int} throughout because {@code DeregistrationSummary} publishes them as {@code int32}, so
+ * narrowing happens at the repository rather than on the way out.
  */
 public record DeregistrationResult(
         @Nullable Instant deregisteredAt,
         int consentsTerminated,
-        long consentsRetained,
+        int consentsRetained,
         int noticesArchived,
-        long linksRemoved) {}
+        int linksRemoved) {}

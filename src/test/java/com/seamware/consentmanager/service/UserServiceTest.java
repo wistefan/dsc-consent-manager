@@ -1076,7 +1076,7 @@ class UserServiceTest {
         }
 
         @Override
-        public long deleteByIdParticipantId(UUID participantId) {
+        public int deleteByIdParticipantId(UUID participantId) {
             throw unsupported();
         }
 
@@ -1290,7 +1290,18 @@ class UserServiceTest {
         }
 
         @Override
-        public long countByParticipant(UUID participantId) {
+        public int countByParticipantAndStatus(UUID participantId, ConsentStatus status) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<UUID> findIdsByParticipantAndStatus(
+                UUID participantId, ConsentStatus status, int limit) {
+            throw unsupported();
+        }
+
+        @Override
+        public int countByParticipant(UUID participantId) {
             throw unsupported();
         }
 

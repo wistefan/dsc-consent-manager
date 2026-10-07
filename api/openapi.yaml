@@ -623,6 +623,13 @@ paths:
         reactivates that record rather than conflicting with it.
 
 
+        A repeated call on an already-deregistered record is a `409 Conflict`
+        rather than a second cascade, so the recorded departure time cannot be
+        moved. After a deregistration the same token still reads its own record,
+        but no longer writes: the `/participants/me/users` operations answer
+        `403 Forbidden` until the participant registers again.
+
+
         For why a granted consent blocks the exit while a draft does not, why an
         organization is not pseudonymised the way an erased user is, and what
         `deregisteredAt` does and does not mean, see

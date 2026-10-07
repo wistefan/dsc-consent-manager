@@ -122,10 +122,32 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
      *
      * <p>Deregistration needs this twice over: it is the retained-consent tally reported back, and
      * a non-zero count is what forces the record to be kept, since both participant foreign keys on
-     * {@code consents} are {@code ON DELETE RESTRICT}.
+     * {@code consents} are {@code ON DELETE RESTRICT}. Counted as an {@code int} because the tally
+     * is published through an {@code int32} field and could never have carried more.
      */
     @Query(
             "SELECT COUNT(*) FROM consents"
                     + " WHERE provider_id = :participantId OR consumer_id = :participantId")
-    long countByParticipant(UUID participantId);
+    int countByParticipant(UUID participantId);
+
+    /** How many consents in the given status name the participant on either side. */
+    @Query(
+            "SELECT COUNT(*) FROM consents"
+                    + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
+                    + " AND status = :status")
+    int countByParticipantAndStatus(UUID participantId, ConsentStatus status);
+
+    /**
+     * The first {@code limit} consent ids in the given status naming the participant, in id order.
+     *
+     * <p>Deregistration's refusal names the consents blocking it and reports the rest as a count,
+     * so only as many ids as it prints are ever read; a long-lived participant would otherwise
+     * materialise its whole granted history to produce one problem detail. The order is the id
+     * order the detail prints in, so the listed ids are stable across retries.
+     */
+    @Query(
+            "SELECT id FROM consents"
+                    + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
+                    + " AND status = :status ORDER BY id LIMIT :limit")
+    List<UUID> findIdsByParticipantAndStatus(UUID participantId, ConsentStatus status, int limit);
 }

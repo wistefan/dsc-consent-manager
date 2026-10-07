@@ -118,8 +118,13 @@ is honoured literally exactly where the schema permits it, and nowhere else.
 ### What `deregistered_at` means to a reader
 
 It means the organization has left: the record is excluded from `GET /participants`, and every
-participant-scoped write route refuses a token whose row carries it. It is still resolvable by
-`GET /participants/{identifier}`, and by the directory listing's exact-identifier filter, because a
+participant-scoped write route refuses a token whose row carries it. The routes that act in the
+dataspace in the participant's name — the `/participants/me/users` writes — refuse with `403`
+through `ParticipantPrincipal.requireActive()`, because the caller is no longer a participant that
+may act; `PUT /participants/me` and a repeated `DELETE /participants/me` refuse with `409`, because
+there the departed record *is* the resource and the request is a conflict with its state. Reading
+stays open throughout: `GET /participants/me` still answers, and the record is still resolvable by
+`GET /participants/{identifier}` and by the directory listing's exact-identifier filter, because a
 retained consent naming it has to stay readable.
 
 It is **not** a soft delete pretending to be an erasure. Nothing about the row is hidden from a

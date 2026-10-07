@@ -23,7 +23,6 @@ import jakarta.inject.Singleton;
 import jakarta.transaction.Transactional;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -115,6 +114,15 @@ public class ParticipantService {
      */
     private static final String DEREGISTERED_DETAIL =
             "Participant '%s' is deregistered. Its registration can no longer be updated.";
+
+    /**
+     * Why a second deregistration is refused; published as the problem detail. Re-running the
+     * cascade would move the recorded departure time of a record that already left, and the row
+     * being gone altogether means the same thing to the caller.
+     */
+    private static final String DEREGISTERED_ALREADY_DETAIL =
+            "Participant '%s' is already deregistered. Register it again with POST /participants"
+                    + " before deregistering it anew.";
 
     /** Why an identifier naming nobody is a {@code 404}; published as the problem detail. */
     private static final String UNKNOWN_DETAIL = "No participant is registered as '%s'.";
@@ -238,6 +246,12 @@ public class ParticipantService {
      * Brings a deregistered record back under the body it was re-registered with, mutable fields
      * and all.
      *
+     * <p>Written back whole without the row lock {@link #update} and {@link #deregister} take, and
+     * deliberately so: {@code stored} was read by {@link #register} one statement earlier rather
+     * than carried in from authentication, and every mutable column here comes from the request
+     * body, so there is no stale value to lose. A re-registration racing another write is simply
+     * the later writer of a full replacement, which is what {@code POST /participants} promises.
+     *
      * @throws ConflictException {@code 409} when the record is active, which is a plain re-register
      */
     private Participant reactivate(Participant stored, ParticipantRegistration registration) {
@@ -312,20 +326,25 @@ public class ParticipantService {
      * unlinked but still advertising endpoints, or archived but still answerable - is worse than an
      * undeparted one, and nothing here inserts-and-catches.
      *
-     * <p>The {@code participant} argument is mutated in place on the retain branch, so a caller
-     * holding the pre-deregistration row sees the marked state afterwards.
+     * <p>The row is re-read and locked rather than written back from {@code current}, for the
+     * reason {@link #update} does it: that snapshot is the row as it stood when the request was
+     * authenticated, so persisting it whole would revert a {@code PUT} that committed since. The
+     * lock also serializes two concurrent deregistrations, which is what makes the
+     * already-deregistered refusal below reliable rather than a race.
      *
-     * @throws ConflictException {@code 409} while any consent naming the participant is granted
+     * @throws ConflictException {@code 409} while any consent naming the participant is granted,
+     *     and when the record is already deregistered or was removed under the call
      */
     @Transactional
-    public DeregistrationResult deregister(Participant participant) {
+    public DeregistrationResult deregister(Participant current) {
+        Participant participant = lockActive(current);
         UUID participantId = participant.getId();
         refuseWhileGranted(participant, participantId);
 
         int consentsTerminated = terminateUnanswered(participantId);
-        long linksRemoved = links.deleteByIdParticipantId(participantId);
+        int linksRemoved = links.deleteByIdParticipantId(participantId);
         int noticesArchived = archiveNotices(participantId);
-        long consentsRetained = consents.countByParticipant(participantId);
+        int consentsRetained = consents.countByParticipant(participantId);
         Instant deregisteredAt = deleteOrRetain(participant, consentsRetained);
 
         LOG.info(
@@ -345,13 +364,42 @@ public class ParticipantService {
                 linksRemoved);
     }
 
-    /** Refuses the deregistration, naming the consents, while any of them is still granted. */
+    /**
+     * The caller's row as it stands now, locked for the rest of the transaction.
+     *
+     * @throws ConflictException {@code 409} when the record is already deregistered, so a repeated
+     *     call cannot move the recorded departure time, or when the row is gone altogether
+     */
+    private Participant lockActive(Participant current) {
+        Participant stored =
+                participants
+                        .findByIdForUpdate(current.getId())
+                        .orElseThrow(
+                                () ->
+                                        conflict(
+                                                DEREGISTERED_ALREADY_DETAIL,
+                                                current.getIdentifier()));
+        if (stored.getDeregisteredAt() != null) {
+            throw conflict(DEREGISTERED_ALREADY_DETAIL, stored.getIdentifier());
+        }
+        return stored;
+    }
+
+    /**
+     * Refuses the deregistration, naming the consents, while any of them is still granted.
+     *
+     * <p>Counted first and then listed up to the cap the detail prints, rather than materialised in
+     * full: the refusal reads a fixed number of rows however long the participant has been trading.
+     */
     private void refuseWhileGranted(Participant participant, UUID participantId) {
-        List<Consent> granted = naming(participantId, Set.of(ConsentStatus.GRANTED));
-        if (!granted.isEmpty()) {
+        int blocking = consents.countByParticipantAndStatus(participantId, ConsentStatus.GRANTED);
+        if (blocking > 0) {
+            List<UUID> listed =
+                    consents.findIdsByParticipantAndStatus(
+                            participantId, ConsentStatus.GRANTED, MAX_REPORTED_BLOCKING_CONSENTS);
             throw new ConflictException(
                     GRANTED_CONSENTS_DETAIL.formatted(
-                            participant.getIdentifier(), blockingConsents(granted)));
+                            participant.getIdentifier(), blockingConsents(listed, blocking)));
         }
     }
 
@@ -376,19 +424,16 @@ public class ParticipantService {
         return List.copyOf(byId.values());
     }
 
-    /** The blocking consent ids, in a bounded, readable list. */
-    private static String blockingConsents(List<Consent> granted) {
-        String listed =
-                granted.stream()
-                        .map(Consent::getId)
-                        .sorted(Comparator.comparing(UUID::toString))
-                        .limit(MAX_REPORTED_BLOCKING_CONSENTS)
+    /** The blocking consent ids, in a bounded, readable list, summarising the ones not listed. */
+    private static String blockingConsents(List<UUID> listed, int blocking) {
+        String names =
+                listed.stream()
                         .map(UUID::toString)
                         .collect(Collectors.joining(BLOCKING_CONSENT_SEPARATOR));
-        int omitted = granted.size() - MAX_REPORTED_BLOCKING_CONSENTS;
+        int omitted = blocking - listed.size();
         return omitted <= 0
-                ? listed
-                : listed + BLOCKING_CONSENT_SEPARATOR + MORE_BLOCKING_CONSENTS.formatted(omitted);
+                ? names
+                : names + BLOCKING_CONSENT_SEPARATOR + MORE_BLOCKING_CONSENTS.formatted(omitted);
     }
 
     /**
@@ -463,7 +508,7 @@ public class ParticipantService {
      * participant must not keep advertising a callback.
      */
     @Nullable
-    private Instant deleteOrRetain(Participant participant, long consentsRetained) {
+    private Instant deleteOrRetain(Participant participant, int consentsRetained) {
         UUID participantId = participant.getId();
         if (consentsRetained == 0 && notices.countByParticipant(participantId) == 0) {
             participants.delete(participant);

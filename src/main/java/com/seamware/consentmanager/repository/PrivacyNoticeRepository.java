@@ -73,5 +73,5 @@ public interface PrivacyNoticeRepository extends PageableRepository<PrivacyNotic
     @Query(
             "SELECT COUNT(*) FROM privacy_notices"
                     + " WHERE provider_id = :participantId OR consumer_id = :participantId")
-    long countByParticipant(UUID participantId);
+    int countByParticipant(UUID participantId);
 }
