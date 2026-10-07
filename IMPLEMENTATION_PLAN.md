@@ -103,7 +103,9 @@ These are not in the ticket text. Each is called out so a reviewer can overrule 
    document this service does not own. The ticket's "Files to Create" lists only
    `ContractServiceClient`, so `client/SelfDescriptionClient.java` is an addition. It fetches an
    absolute URL through the low-level `HttpClient`, with the same timeouts and its own Caffeine
-   cache.
+   cache — read through an injected `SyncCache` and written only on a successful parse, for the
+   reason decision 13 gives, which binds harder here because this client's empty result can mean
+   a transient failure rather than "unknown".
 
    **Two hops, because a contract names offerings and not resources.** The payload's `data[].uri`
    holds *service-offering* URIs — that is all a contract carries. The data resources are one hop
@@ -205,9 +207,14 @@ These are not in the ticket text. Each is called out so a reviewer can overrule 
 - Operations are tagged `Privacy Notices`, which makes the generator emit
   `AbstractPrivacyNoticesController`.
 - **A schema whose `items:` `$ref`s another named model must be written inline in
-  `openapi.yaml`** — a cross-file `$ref` under `items` degrades to `List<Object>`. Object items
-  declared inline *within* a single component file are unaffected, and that is the form
-  `PrivacyNotice.yaml` uses for its `recipients` and `data` arrays.
+  `openapi.yaml`** — a cross-file `$ref` under `items` degrades to `List<Object>`. Whether
+  object items declared inline *within* a single component file escape that is **unverified**:
+  no schema under `api/components/schemas/` declares one today, and the only form this repo has
+  proven is `BulkUserRegistration`/`ParticipantPage` — the wrapper inline in `openapi.yaml`, its
+  `items` an internal `#/components/schemas/...` ref. `PrivacyNotice.yaml`'s `recipients` and
+  `data` would be the first to try the inline form, so Step 3 **probes the generated field types
+  before committing to it** and falls back to the proven form if either degrades; Step 6's
+  parity test then holds the outcome.
 - **No response property is `nullable`** — a nullable response property forces `JsonNullable`
   onto the model. Optional means absent.
 - `./mvnw spotless:apply` before every commit; `./mvnw verify` must pass.
@@ -571,10 +578,19 @@ end state.
 **Implementation**
 
 - `client/SelfDescriptionClient.java` — decision 8. `@Singleton` over the low-level
-  `HttpClient`: `Optional<SelfDescription> fetch(String url)`, `@Cacheable("self-descriptions")`,
-  the contract-service timeouts, and the scheme/host/address guard. It returns
-  `Optional.empty()` on **every** failure — refusal, timeout, non-2xx, unparseable body — and
-  never throws, because a thrown exception here is exactly the `5xx` AC 9 forbids.
+  `HttpClient`: `Optional<SelfDescription> fetch(String url)`, the contract-service timeouts,
+  and the scheme/host/address guard. It returns `Optional.empty()` on **every** failure —
+  refusal, timeout, non-2xx, unparseable body — and never throws, because a thrown exception
+  here is exactly the `5xx` AC 9 forbids.
+
+  **It caches the same way `ContractGateway` does, and for a stronger reason: the injected
+  `self-descriptions` `SyncCache` read through on every call, `put` only after a successful
+  parse.** `@Cacheable` would be wrong here for exactly decision 13's reason — the annotation has
+  no `unless`, so it would store the `Optional.empty()` this method returns on *every* failure.
+  For the gateway an empty at least means "unknown"; here it can equally mean "the network
+  blipped", so the annotation would pin a momentarily unreachable document to `UNAVAILABLE` for
+  the whole `cache-ttl`. A refusal by the guard is not cached either — it is a configuration
+  decision, not a fetch result, and re-evaluating it costs nothing.
 - `config/ConsentManagerConfiguration` — a nested
   `@ConfigurationProperties("self-description")` class with `allowedHosts` (empty = any public
   host; **an entry here also waives the private-address refusal for that host**, decision 8),
@@ -585,7 +601,11 @@ end state.
 - `service/PrivacyNoticeResolver.java` — `@Singleton`. Given a `PrivacyNotice` it produces the
   four-valued resolution block and an enriched payload view:
   - `contract` — re-fetch through `ContractGateway` for the live title and terms. Unreachable
-    or unknown → `UNAVAILABLE`, and the stored payload is served as-is.
+    or unknown → `UNAVAILABLE`, and the stored payload is served as-is. **The resolver catches
+    `UpstreamServiceException`**, which Step 1's gateway raises on a transport failure or an
+    exhausted retry; letting it propagate would turn a GET against an unreachable Contract
+    Service into the `502` AC 9 forbids. `SelfDescriptionClient` never throws, so the obligation
+    is one-sided: the gateway is the only resolution dependency that can.
   - `dataResources` — two hops (decision 8): fetch each `data[].uri`, which is a *service
     offering* self-description, then fetch each `dataResources[]` URL it names and fill that
     resource's `title` and `description`. The offering's own name and description fill the
@@ -594,7 +614,10 @@ end state.
     `RESOLVED` would misreport itself — and an offering that resolved while its resources did
     not is exactly that case, not a success.
   - `purposes` — resolved from the contract when the contract resolved, otherwise the stored
-    text with `UNAVAILABLE`.
+    text with `UNAVAILABLE`. **`purposes` is therefore dependent on `contract` by construction:
+    a failed contract fetch degrades both sections, and no input degrades `purposes` alone.**
+    That is reported rather than hidden — serving the stored text while claiming `RESOLVED`
+    would make the section say the live contract was consulted when it was not.
   - `recipients` — resolved from the local `participants` rows by identifier (decision 1);
     any identifier with no row marks the section `UNAVAILABLE` and that recipient keeps its
     bare identifier.
@@ -617,9 +640,14 @@ end state.
 - `api/PrivacyNoticePartialResolutionIT.java` — parameterized over which external document
   fails and how (`500`, timeout, connection refused, malformed body, a second-hop resource
   document failing while its offering resolves, and for recipients a party with no local row):
-  each yields `200` with that one section `UNAVAILABLE`, the other three `RESOLVED`, and the
-  notice body still present (AC 9). A case asserts that a *partially* resolved `data` list
-  reports `UNAVAILABLE`, not `RESOLVED`.
+  each yields `200` with the notice body still present and only the affected sections degraded
+  (AC 9). The expectation is **not** uniformly "one section": a contract-failure case reports
+  `contract` **and** `purposes` `UNAVAILABLE` with the other two `RESOLVED`, because `purposes`
+  resolves from the contract by construction; every other case degrades exactly one section.
+  A case asserts that a *partially* resolved `data` list reports `UNAVAILABLE`, not `RESOLVED`.
+  **Connection-refused against the Contract Service is one of the contract cases**, and it is
+  what pins the `UpstreamServiceException` catch above — without it that case is a `502`, not a
+  `200`.
 
   **The contract cases need a cold cache, and will silently pass without one.** `ContractGateway`
   caches on `contractUri`, so a case that generates the notice through `POST /privacy-notices`
@@ -715,10 +743,12 @@ anything else found stale while editing is in scope.
    an empty `Optional` and never a retry; caching happens in `ContractGateway` and not on the
    `@Client` interface, and it uses `SyncCache` explicitly rather than `@Cacheable` because
    `@Cacheable` has no `unless` and would cache an empty result, freezing an unknown contract
-   for the whole TTL. Only a hit is stored.
+   for the whole TTL. Only a hit is stored. `SelfDescriptionClient` caches the same way and for
+   the same reason.
 5. **Partial resolution** — `RESOLVED` / `UNAVAILABLE` / `NOT_REQUESTED`; resolution never fails
-   a request and never writes back; generation is the single place a Contract Service outage is
-   a `502`.
+   a request and never writes back; the resolver catches the gateway's `UpstreamServiceException`
+   so that generation stays the single place a Contract Service outage is a `502`. Record that
+   `purposes` resolves from the contract, so a failed contract fetch degrades both sections.
 6. **`SpecSecurityConsistencyTest.SPECIFIED_OPERATION_COUNT` is now `19`**, and the two new
    build-failing unit tests `PrivacyNoticeSpecParityTest` and `PrivacyNoticeNoBase64Test`.
 7. **No Flyway migration was added** by this ticket; `V3` is still the latest. Record that
