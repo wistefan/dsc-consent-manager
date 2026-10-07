@@ -64,6 +64,9 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
 
     private static final String EMAIL = "data-protection@clinic.example.org";
 
+    /** Local part and separator every generated address starts from; the padding goes after it. */
+    private static final String EMAIL_PREFIX = "data-protection@";
+
     private static final String CONSENT_NOTIFICATION = "https://clinic.example.org/notify";
 
     private static final String REGISTRATION_NUMBER = "DE123456789";
@@ -84,6 +87,14 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
     private static final int MAX_ADDRESS_LENGTH = 1024;
 
     private static final int MAX_ORGANIZATION_LENGTH = 2048;
+
+    /** The schemas' {@code email} bound, which both derive from RFC 5321's path length. */
+    private static final int MAX_EMAIL_LENGTH = 254;
+
+    /** Longest label a hostname admits, so a padded domain stays a resolvable-looking one. */
+    private static final int MAX_DOMAIN_LABEL_LENGTH = 63;
+
+    private static final String DOMAIN_LABEL_SEPARATOR = ".";
 
     /** Media type every refusal carries, per RFC 7807. */
     private static final String PROBLEM_JSON = "application/problem+json";
@@ -194,8 +205,8 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
     /**
      * Every payload the schemas must refuse.
      *
-     * <p>The three URL properties are checked against the same four failures — plaintext, relative,
-     * whitespace and over-long — because they carry the same pattern and the same bound, and a
+     * <p>Both URL properties are checked against the same four failures — plaintext, relative,
+     * malformed and over-long — because they carry the same pattern and the same bound, and a
      * property that silently lost one of them would otherwise still pass the others.
      */
     static Stream<Rejected> rejectedBodies() {
@@ -214,6 +225,10 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
                 rejectedUrl("selfDescriptionUri", "over-long", uriOfLength(MAX_URI_LENGTH + 1)),
                 new Rejected(
                         "a malformed email", "email", valid(Map.of("email", "not-an-address"))),
+                new Rejected(
+                        "an over-long email",
+                        "email",
+                        valid(Map.of("email", emailOfLength(MAX_EMAIL_LENGTH + 1)))),
                 rejectedEndpoint("plaintext", "http://clinic.example.org/notify"),
                 rejectedEndpoint("relative", "/notify"),
                 rejectedEndpoint("malformed", "https://clinic example.org/notify"),
@@ -252,6 +267,9 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
                 Arguments.of(
                         "a self-description URL at its length bound",
                         valid(Map.of("selfDescriptionUri", uriOfLength(MAX_URI_LENGTH)))),
+                Arguments.of(
+                        "an email at its length bound",
+                        valid(Map.of("email", emailOfLength(MAX_EMAIL_LENGTH)))),
                 Arguments.of(
                         "a notification endpoint at its length bound",
                         valid(
@@ -319,6 +337,25 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
     /** An {@code https} URL of exactly {@code length} characters. */
     private static String uriOfLength(int length) {
         return URI_PREFIX + "x".repeat(length - URI_PREFIX.length());
+    }
+
+    /**
+     * A syntactically valid address of exactly {@code length} characters.
+     *
+     * <p>The padding goes into the domain, in labels of the longest a hostname admits, because RFC
+     * 5321 caps the local part at 64 octets - far below the bound this exercises - so padding there
+     * would make the address invalid for a reason the case is not about.
+     */
+    private static String emailOfLength(int length) {
+        StringBuilder address = new StringBuilder(EMAIL_PREFIX);
+        while (address.length() < length) {
+            address.append(
+                    "x".repeat(Math.min(MAX_DOMAIN_LABEL_LENGTH, length - address.length())));
+            if (address.length() < length) {
+                address.append(DOMAIN_LABEL_SEPARATOR);
+            }
+        }
+        return address.toString();
     }
 
     /**

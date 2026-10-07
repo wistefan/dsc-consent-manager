@@ -569,8 +569,15 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
      * participant in a slot the caller fills in, so there is no handler that could compare an
      * addressed participant against the token and no comparison that could be forgotten. Two things
      * make that true and both are asserted: no write templates the segment that names a
-     * participant, and no write accepts a parameter that is not one of its own path segments, which
-     * rules out a query parameter steering it.
+     * participant, and no write declares a parameter that is not one of its own path segments,
+     * which rules out a query parameter steering it. This case inspects parameters only; the body
+     * half of the guarantee - that neither write body carries an {@code identifier} property - is
+     * pinned by {@link ParticipantSchemaParityTest#neitherAcceptsAnIdentifier()}, which matters
+     * because {@code POST /users/search} is a write steered entirely by its body.
+     *
+     * <p>The converse is asserted too: every templated segment resolves back to a declared
+     * parameter. A parameter list the specification parser cannot see would otherwise leave the
+     * check above matching over nothing and passing in silence rather than failing.
      */
     @Test
     @DisplayName("no route that changes a record lets the caller name which record")
@@ -589,14 +596,23 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 + " record it does not hold")
                 .noneMatch(EndpointRoleMatrixIT::addressesAParticipant);
         writes.forEach(
-                write ->
-                        assertThat(write.parameterNames())
-                                .as(
-                                        "%s accepts an input that is not one of its own path"
-                                                + " segments, which could redirect the write away"
-                                                + " from the token",
-                                        write)
-                                .allMatch(name -> write.path().contains(template(name))));
+                write -> {
+                    assertThat(write.parameterNames())
+                            .as(
+                                    "%s declares a parameter that is not one of its own path"
+                                            + " segments, which could redirect the write away from"
+                                            + " the token",
+                                    write)
+                            .allMatch(name -> write.path().contains(template(name)));
+                    assertThat(write.parameterNames())
+                            .as(
+                                    "%s templates a path segment it declares no parameter for, so"
+                                            + " the parameter list read off the specification is"
+                                            + " not the one it carries and the check above matched"
+                                            + " over less than it claims to",
+                                    write)
+                            .containsAll(templatedNamesOf(write.path()));
+                });
     }
 
     /**
@@ -636,6 +652,21 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         return collection >= 0
                 && collection + 1 < segments.size()
                 && segments.get(collection + 1).startsWith(PATH_TEMPLATE_MARKER);
+    }
+
+    /** The parameter names a path templates, in path order. */
+    private static List<String> templatedNamesOf(String path) {
+        return Stream.of(path.split("/"))
+                .filter(
+                        segment ->
+                                segment.startsWith(PATH_TEMPLATE_MARKER)
+                                        && segment.endsWith(PATH_TEMPLATE_END))
+                .map(
+                        segment ->
+                                segment.substring(
+                                        PATH_TEMPLATE_MARKER.length(),
+                                        segment.length() - PATH_TEMPLATE_END.length()))
+                .toList();
     }
 
     /** The path segment that would supply a parameter of the given name. */

@@ -28,12 +28,16 @@ import org.junit.jupiter.params.provider.MethodSource;
  * handler, so it is asserted against the models the generator actually emitted - a property added
  * to a schema reaches a wire format here whether or not a handler ever reads it.
  *
- * <p>The models are reached by walking {@link ParticipantController}'s signatures rather than by
- * matching class names, so a model introduced later is covered by having been wired into the API at
- * all, and a nested one is covered through the property that holds it.
+ * <p>The models are reached by walking the signatures of every controller serving a participant
+ * path rather than by matching class names, so a model introduced later is covered by having been
+ * wired into the API at all, and a nested one is covered through the property that holds it.
  */
 @DisplayName("Participant API models")
 class ParticipantCredentialAbsenceTest {
+
+    /** Controllers serving a participant path; AC 14 covers every model any of them publishes. */
+    private static final List<Class<?>> PARTICIPANT_CONTROLLERS =
+            List.of(ParticipantController.class, ParticipantUserController.class);
 
     /** Package the generator writes its models into; the walk stops at its boundary. */
     private static final String MODEL_PACKAGE = "com.seamware.consentmanager.api.generated.model";
@@ -62,7 +66,17 @@ class ParticipantCredentialAbsenceTest {
                     "ParticipantPage",
                     "ParticipantEndpoints",
                     "ParticipantLegalPerson",
-                    "DeregistrationSummary");
+                    "DeregistrationSummary",
+                    "ParticipantUserLink",
+                    "ParticipantUserLinkUpdate",
+                    "User",
+                    "UserRegistration",
+                    "UserRegistrationResult",
+                    "BulkUserRegistration",
+                    "BulkUserRegistrationEntry",
+                    "BulkRegistrationResult",
+                    "BulkRegistrationEntryResult",
+                    "BulkRegistrationSummary");
 
     @ParameterizedTest(name = "{0} publishes no credential")
     @MethodSource("participantModels")
@@ -85,17 +99,24 @@ class ParticipantCredentialAbsenceTest {
     }
 
     @Test
-    @DisplayName("are all reached from the controller's signatures")
+    @DisplayName("are all reached from the controllers' signatures")
     void areAllReachedFromTheControllersSignatures() {
         assertThat(participantModels().map(model -> model.get()[0])).containsAll(REACHED_MODELS);
     }
 
-    /** Every generated model the participant API accepts, returns, or nests inside one of those. */
+    /**
+     * Every generated model the participant API accepts, returns, or nests inside one of those.
+     *
+     * <p>Generated enums are skipped: they publish values rather than properties, so one would
+     * contribute a case with nothing left to assert.
+     */
     static Stream<Arguments> participantModels() {
         Deque<Type> pending = new ArrayDeque<>();
-        for (Method method : ParticipantController.class.getDeclaredMethods()) {
-            pending.add(method.getGenericReturnType());
-            pending.addAll(List.of(method.getGenericParameterTypes()));
+        for (Class<?> controller : PARTICIPANT_CONTROLLERS) {
+            for (Method method : controller.getDeclaredMethods()) {
+                pending.add(method.getGenericReturnType());
+                pending.addAll(List.of(method.getGenericParameterTypes()));
+            }
         }
         Set<Class<?>> models = new LinkedHashSet<>();
         while (!pending.isEmpty()) {
@@ -105,6 +126,7 @@ class ParticipantCredentialAbsenceTest {
                 pending.addAll(List.of(parameterized.getActualTypeArguments()));
             } else if (type instanceof Class<?> candidate
                     && MODEL_PACKAGE.equals(candidate.getPackageName())
+                    && !candidate.isEnum()
                     && models.add(candidate)) {
                 Stream.of(candidate.getDeclaredFields())
                         .filter(field -> !Modifier.isStatic(field.getModifiers()))
