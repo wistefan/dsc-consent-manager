@@ -456,9 +456,9 @@ paths:
 
 
         Concurrent updates are last-writer-wins: each replaces the whole
-        self-description, and neither sees the other. An update that races a
-        `DELETE /participants/me` and finds the registration gone is answered
-        `409 Conflict` and applies nothing.
+        self-description, and the later one wins outright. An update that finds
+        the registration deregistered, or no longer there at all, applies
+        nothing and is answered `409 Conflict`.
       tags:
         - Participants
       security:

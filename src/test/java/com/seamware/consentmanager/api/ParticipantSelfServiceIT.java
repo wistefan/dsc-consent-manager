@@ -22,6 +22,7 @@ import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.io.IOException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -101,6 +102,9 @@ class ParticipantSelfServiceIT extends KeycloakAndPostgresTestResource {
                     "endpoints",
                     "createdAt",
                     "updatedAt");
+
+    /** The media type every refusal is rendered as. */
+    private static final String PROBLEM_JSON = "application/problem+json";
 
     /** The {@code maxLength} the update schema puts on a legal name. */
     private static final int MAX_LEGAL_NAME_LENGTH = 255;
@@ -212,6 +216,30 @@ class ParticipantSelfServiceIT extends KeycloakAndPostgresTestResource {
         assertThat(body(response))
                 .containsEntry("legalName", REPLACED_LEGAL_NAME)
                 .doesNotContainKeys("selfDescriptionUri", "email", "legalPerson", "endpoints");
+    }
+
+    /**
+     * The {@code 409} the operation declares, reached end to end. A deregistered row is retained
+     * only so the consents naming it stay legible, and the principal's snapshot of it predates the
+     * deregistration, so an applied update would publish the participant as active again.
+     */
+    @Test
+    @DisplayName("an update to a deregistered registration is a conflict, not a resurrection")
+    void anUpdateToADeregisteredRegistrationIsAConflict() {
+        Participant registered = participants.findByIdentifier(CALLER_PARTICIPANT).orElseThrow();
+        registered.setDeregisteredAt(Instant.now());
+        participants.update(registered);
+
+        HttpResponse<String> response = exchange(HttpRequest.PUT(PATH, EVERY_PROPERTY));
+
+        assertThat(response.code()).isEqualTo(HttpStatus.CONFLICT.getCode());
+        assertThat(response.getContentType().orElseThrow().toString()).isEqualTo(PROBLEM_JSON);
+
+        Participant stored = participants.findByIdentifier(CALLER_PARTICIPANT).orElseThrow();
+        assertThat(stored.getDeregisteredAt())
+                .as("the refused update must leave the deregistration standing")
+                .isNotNull();
+        assertThat(stored.getLegalName()).isEqualTo(REGISTERED_LEGAL_NAME);
     }
 
     static Stream<Arguments> invalidBodies() {

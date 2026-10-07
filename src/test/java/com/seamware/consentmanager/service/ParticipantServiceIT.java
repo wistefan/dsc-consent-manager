@@ -1,13 +1,17 @@
 package com.seamware.consentmanager.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.seamware.consentmanager.domain.Participant;
+import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.support.PostgresTestResource;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
+import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
@@ -182,6 +186,43 @@ class ParticipantServiceIT extends PostgresTestResource {
                                 stored -> assertThat(stored.getEndpoints()).isEmpty()));
     }
 
+    /**
+     * The row travels in from the principal, which read it when the request was authenticated, so
+     * persisting it whole would write {@code deregistered_at} back from that stale snapshot and
+     * lift a deregistered participant into the directory again. The refusal is what keeps the
+     * deregistration standing.
+     */
+    @Test
+    @DisplayName("refuses an update to a deregistered participant and leaves it deregistered")
+    void refusesAnUpdateToADeregisteredParticipant() {
+        Participant registered = register();
+        Instant deregisteredAt = deregister(registered.getId());
+
+        assertThatThrownBy(() -> participants.update(registered, EVERY_FIELD))
+                .isInstanceOf(ConflictException.class)
+                .hasMessageContaining(IDENTIFIER);
+
+        Participant stored = repository.findById(registered.getId()).orElseThrow();
+        assertThat(stored.getDeregisteredAt())
+                .as("an update must not resurrect a row deregistration retained")
+                .isEqualTo(deregisteredAt);
+        assertThat(stored.getLegalName()).isEqualTo(ORIGINAL_LEGAL_NAME);
+    }
+
+    /**
+     * A row that vanished under the update is a conflict, not the {@code 500} a raw empty read is.
+     */
+    @Test
+    @DisplayName("refuses an update whose row vanished under it")
+    void refusesAnUpdateWhoseRowVanished() {
+        Participant registered = register();
+        repository.deleteById(registered.getId());
+
+        assertThatThrownBy(() -> participants.update(registered, EVERY_FIELD))
+                .isInstanceOf(ConflictException.class)
+                .hasMessageContaining(IDENTIFIER);
+    }
+
     @Test
     @DisplayName("leaves no second row behind")
     void leavesNoSecondRowBehind() {
@@ -190,6 +231,14 @@ class ParticipantServiceIT extends PostgresTestResource {
         assertThat(repository.findAll())
                 .filteredOn(stored -> IDENTIFIER.equals(stored.getIdentifier()))
                 .hasSize(1);
+    }
+
+    /** Marks the stored row deregistered behind the caller's snapshot, as Step 5's cascade will. */
+    private Instant deregister(UUID id) {
+        Participant stored = repository.findById(id).orElseThrow();
+        stored.setDeregisteredAt(Instant.now());
+        repository.update(stored);
+        return repository.findById(id).orElseThrow().getDeregisteredAt();
     }
 
     private Participant register() {
