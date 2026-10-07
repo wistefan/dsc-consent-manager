@@ -288,11 +288,14 @@ paths:
 
 
         `{identifier}` is the URL-encoded global user identifier. A path
-        variable never spans a `/`, and the container percent-decodes before
-        routing, so an identifier containing a slash is not addressable here
-        even when encoded; look it up through `POST /users/search` instead. The
-        literal identifier `me` is likewise unreachable, because `GET /users/me`
-        claims that path for the caller's own record.
+        variable never spans a `/`, so an identifier containing one reaches this
+        route only percent-encoded, and whether an encoded slash survives is a
+        property of the deployment rather than of this service: an intermediary
+        that refuses or decodes `%2F` ahead of routing leaves such an identifier
+        unaddressable here. `POST /users/search` with the `identifier` criterion
+        matches the value whole and is dependable for that case. The literal
+        identifier `me` is unreachable here in every deployment, because
+        `GET /users/me` claims that path for the caller's own record.
 
 
         The `participants` array of the returned user is scoped to the caller: a
@@ -349,8 +352,19 @@ paths:
         implied by an absence.
 
 
-        Records are ordered by `identifier`, which is unique, so paging through
-        the directory never shows a record twice nor skips one.
+        Records are ordered by `identifier`, which is unique, so a record never
+        moves between pages while the directory itself does not change. The
+        count and the page are two separate statements over a directory anyone
+        may register in, so a registration or deregistration committed between
+        them - or between two page requests - can still shift a record across a
+        boundary or leave `totalElements` disagreeing with what `content`
+        carries. Nothing here is served from a snapshot.
+
+
+        Each entry is the participant record in full, the same representation
+        `GET /participants/{identifier}` returns. Nothing a participant records
+        about itself is a credential, so a listing has nothing to leave out that
+        a lookup would hand to the same caller anyway.
 
 
         Neither the default page size nor the largest one accepted is written in
@@ -765,9 +779,10 @@ paths:
 
 
         `{identifier}` is the URL-encoded global user identifier, with the same
-        limits as on `GET /users/{identifier}`: a path variable never spans a
-        `/`, and the container percent-decodes before routing, so an identifier
-        containing a slash is not addressable here even when encoded.
+        limit as on `GET /users/{identifier}`: a path variable never spans a
+        `/`, so an identifier containing one reaches this route only
+        percent-encoded, and whether an encoded slash survives is a property of
+        the deployment rather than of this service.
       tags:
         - Participant Users
       security:

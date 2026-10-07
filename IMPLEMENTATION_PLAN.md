@@ -328,9 +328,12 @@ step introduces the first paged endpoint and the convention for later ones.
   unchanged, so the filter stays and the operation description now says "dependable" instead of
   "only"; what changed is that the specification no longer states a falsehood, and the IT
   asserts what the filter guarantees rather than what the path route happens to do here.
-  `docs/user-identifiers.md` makes the same too-strong claim about `GET /users/{identifier}`
-  (lines 72-74), as does `/users/{identifier}`'s own description. It is left alone here because
-  it is another ticket's surface; flagged for the reviewer.
+  `docs/user-identifiers.md` and the `/users/{identifier}` and
+  `/participants/me/users/{identifier}` descriptions made the same too-strong claim. They were
+  corrected in the same wording on review of PR #5 rather than deferred: the repo would otherwise
+  say two different things about one routing mechanism, and the user-side behaviour did not
+  change - only the sentence describing it. `POST /users/search` remains the documented escape
+  hatch.
 - **Deregistered participants are excluded from `GET /participants` by default** — the
   directory lists who can be transacted with — but remain resolvable by
   `GET /participants/{identifier}` and by the `identifier` filter, carrying `deregisteredAt`,

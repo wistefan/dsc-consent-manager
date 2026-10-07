@@ -53,8 +53,10 @@ public class ParticipantService {
     private static final String UNKNOWN_DETAIL = "No participant is registered as '%s'.";
 
     /**
-     * Column the directory is ordered by. Unique, so paging never shows a record twice nor skips
-     * one, which an order on a non-unique column could not promise.
+     * Column the directory is ordered by. Unique, so a record keeps its place across page requests
+     * while the directory itself does not change - an order on a non-unique column could not
+     * promise even that. Concurrent registrations still move records across boundaries; the listing
+     * is not served from a snapshot.
      */
     private static final String DIRECTORY_ORDER_PROPERTY = "identifier";
 

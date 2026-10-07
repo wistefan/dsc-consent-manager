@@ -46,9 +46,9 @@ import org.junit.jupiter.params.provider.MethodSource;
  *
  * <p>What is under test is the read surface of the directory: what a page publishes, where its
  * boundaries fall, which sizes are clamped rather than refused, and which records a listing hides
- * but a lookup still resolves. The suite owns the whole {@code participants} table while it runs,
- * because a page boundary and a total can only be asserted over a directory whose every row is
- * known.
+ * but a lookup still resolves. A page boundary and a total can only be asserted over a directory
+ * whose every row is known, so the suite needs the {@code participants} table to itself while it
+ * runs - it seeds it, asserts it found nothing else there, and removes only the rows it seeded.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant directory")
@@ -69,15 +69,25 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
 
     private static final String THIRD_DID = "urn:test:participant:directory-c";
 
-    /** Active participants in directory order, which is what an unfiltered listing must page. */
+    private static final String FOURTH_DID = "urn:test:participant:directory-e";
+
+    /**
+     * Active participants in directory order, which is what an unfiltered listing must page. Five
+     * of them, an odd number, so neither page size exercised below divides the directory evenly and
+     * an expectation that only happened to match a whole number of pages would fail.
+     */
     private static final List<String> ACTIVE =
-            List.of(URI_SHAPED, FIRST_DID, SECOND_DID, THIRD_DID);
+            List.of(URI_SHAPED, FIRST_DID, SECOND_DID, THIRD_DID, FOURTH_DID);
 
     /** Deregistered, so the listing hides it while a lookup still resolves it. */
     private static final String DEREGISTERED = "urn:test:participant:directory-d";
 
     /** Named by nobody, so a lookup for it is the 404 case. */
     private static final String UNKNOWN = "urn:test:participant:directory-absent";
+
+    /** Every identifier this suite seeds, and the only rows it may remove. */
+    private static final List<String> SEEDED =
+            Stream.concat(ACTIVE.stream(), Stream.of(DEREGISTERED)).toList();
 
     private static final String LEGAL_NAME_PREFIX = "Directory Clinic ";
 
@@ -88,8 +98,11 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
     /** Page size that fits the whole seeded directory, so totals are read in one request. */
     private static final int WHOLE_DIRECTORY_SIZE = 10;
 
-    /** Page size that splits the four active participants into two full pages. */
+    /** Page size that leaves the last of the five active participants on a page of its own. */
     private static final int SPLIT_SIZE = 2;
+
+    /** A second size, dividing the directory differently, so no boundary is a coincidence. */
+    private static final int WIDER_SPLIT_SIZE = 3;
 
     /** The media type every refusal is rendered as. */
     private static final String PROBLEM_JSON = "application/problem+json";
@@ -124,6 +137,13 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
         userIdentifier = KeycloakTestResource.subject(token(RealmPrincipal.USER));
         removeCommittedRows();
+        assertThat(participants.count())
+                .as(
+                        "this suite asserts page boundaries and totals over the whole directory, so"
+                                + " it needs the table to itself; a row another suite left behind has to"
+                                + " be removed there, since consents and privacy notices restrict the"
+                                + " deletion of a participant they name")
+                .isZero();
         ACTIVE.forEach(identifier -> participants.save(participant(identifier)));
         Participant deregistered = participant(DEREGISTERED);
         deregistered.setDeregisteredAt(Instant.now());
@@ -131,9 +151,9 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
-     * Rows committed by these tests outlive the transaction, so they are removed by hand - and the
-     * whole table with them, since a row another suite failed to clean up would shift every total
-     * asserted here.
+     * Rows committed by these tests outlive the transaction, so they are removed by hand - only the
+     * ones seeded here, because a participant another suite committed may be named by a consent or
+     * a privacy notice, whose foreign keys restrict its deletion.
      */
     @AfterAll
     void removeCommittedRows() {
@@ -143,7 +163,9 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
                             links.findByIdUserId(user.getId()).forEach(links::delete);
                             users.delete(user);
                         });
-        participants.deleteAll();
+        SEEDED.forEach(
+                identifier ->
+                        participants.findByIdentifier(identifier).ifPresent(participants::delete));
     }
 
     @Test
@@ -173,7 +195,7 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
         assertThat(number(page, "page")).isEqualTo(number);
         assertThat(number(page, "size")).isEqualTo(size);
         assertThat(number(page, "totalElements")).isEqualTo(ACTIVE.size());
-        assertThat(number(page, "totalPages")).isEqualTo(ACTIVE.size() / SPLIT_SIZE);
+        assertThat(number(page, "totalPages")).isEqualTo(Math.ceilDiv(ACTIVE.size(), size));
         assertThat(identifiers(page)).containsExactlyElementsOf(expected);
     }
 
@@ -181,9 +203,14 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
         return Stream.of(
                 Arguments.of(0, SPLIT_SIZE, List.of(URI_SHAPED, FIRST_DID)),
                 Arguments.of(1, SPLIT_SIZE, List.of(SECOND_DID, THIRD_DID)),
+                // The directory does not fill its last page, which is where an expectation
+                // computed by truncating division would be one page short.
+                Arguments.of(2, SPLIT_SIZE, List.of(FOURTH_DID)),
+                Arguments.of(0, WIDER_SPLIT_SIZE, List.of(URI_SHAPED, FIRST_DID, SECOND_DID)),
+                Arguments.of(1, WIDER_SPLIT_SIZE, List.of(THIRD_DID, FOURTH_DID)),
                 // Past the end is an empty page rather than a 404: the page is a view of a
                 // collection, not a record that does or does not exist.
-                Arguments.of(2, SPLIT_SIZE, List.of()));
+                Arguments.of(3, SPLIT_SIZE, List.of()));
     }
 
     @Test
@@ -242,15 +269,37 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
      * slash survives routing is a property of the deployment rather than of this service - an
      * intermediary that rejects or decodes {@code %2F} first leaves the path route unable to
      * address it. The filter matches the identifier whole either way, which is the reason it
-     * exists, so that is what is asserted.
+     * exists, so the contract asserted here is the filter's: it answers about exactly the record
+     * named, deregistered or absent, and never refuses.
      */
-    @Test
-    @DisplayName("an identifier containing a slash is resolved through the filter")
-    void aSlashBearingIdentifierIsReachedThroughTheFilter() throws IOException {
-        Map<String, Object> filtered = body(get(PATH + "?identifier=" + encoded(URI_SHAPED)));
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("filteredLookups")
+    @DisplayName("the identifier filter answers about exactly the record it names")
+    void theFilterAnswersAboutTheRecordItNames(
+            String description, String identifier, List<String> expected) throws IOException {
+        HttpResponse<String> response = get(PATH + "?identifier=" + encoded(identifier));
 
-        assertThat(number(filtered, "totalElements")).isEqualTo(1);
-        assertThat(identifiers(filtered)).containsExactly(URI_SHAPED);
+        assertThat(response.code())
+                .as("the filter is a view of the directory, so a miss is an empty page, not a 404")
+                .isEqualTo(HttpStatus.OK.getCode());
+
+        Map<String, Object> page = body(response);
+        assertThat(identifiers(page)).containsExactlyElementsOf(expected);
+        assertThat(number(page, "totalElements")).isEqualTo(expected.size());
+        assertThat(number(page, "totalPages")).isEqualTo(expected.isEmpty() ? 0 : 1);
+    }
+
+    static Stream<Arguments> filteredLookups() {
+        return Stream.of(
+                Arguments.of(
+                        "an identifier containing a slash is matched whole",
+                        URI_SHAPED,
+                        List.of(URI_SHAPED)),
+                Arguments.of(
+                        "a deregistered participant the listing hides still resolves",
+                        DEREGISTERED,
+                        List.of(DEREGISTERED)),
+                Arguments.of("an identifier naming nobody matches nothing", UNKNOWN, List.of()));
     }
 
     @Test
@@ -265,11 +314,6 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
                 .as("a consent retained past deregistration still names this participant")
                 .containsEntry("identifier", DEREGISTERED)
                 .hasEntrySatisfying("deregisteredAt", at -> assertThat(at).isNotNull());
-
-        Map<String, Object> filtered = body(get(PATH + "?identifier=" + encoded(DEREGISTERED)));
-        assertThat(identifiers(filtered))
-                .as("the filter names one record, so it answers about that record")
-                .containsExactly(DEREGISTERED);
     }
 
     @ParameterizedTest(name = "{0} reads the directory")

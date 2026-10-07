@@ -67,17 +67,21 @@ participant recorded, still less what the data subject's identity provider
 asserts. Send attributes as a best-effort seed for a user nobody has registered
 yet, and do not rely on them to correct an existing record.
 
-## Identifiers a path segment cannot carry
+## Identifiers a path segment carries only encoded
 
-Micronaut path variables do not match `/`, and the container decodes percent
-escapes before routing, so an identifier containing a slash — a URI- or DID-
-shaped one, for instance — is not addressable through `GET /users/{identifier}`
-even when encoded. The literal identifier `me` is likewise unreachable, because
-`GET /users/me` is the user's own self-service route.
+Micronaut path variables do not match `/`, so an identifier containing a slash —
+a URI-shaped one, for instance — reaches `GET /users/{identifier}` only
+percent-encoded. Whether an encoded slash survives is a property of the
+deployment rather than of this service: this stack happens to route `%2F`
+through, because the path variable is decoded after the route is matched, but an
+intermediary that refuses or decodes `%2F` first leaves such an identifier
+unaddressable. The literal identifier `me` is unreachable in every deployment,
+because `GET /users/me` is the user's own self-service route.
 
 `POST /users/search` with the `identifier` criterion is the documented escape
 hatch for both cases. It matches the same value the same way, with no
-restriction on its shape.
+restriction on its shape, and is the dependable route for a slash-bearing
+identifier.
 
 ## Unlinking, and the half of the invariant this ticket cannot enforce
 
