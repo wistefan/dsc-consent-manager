@@ -544,21 +544,49 @@ API description and `docs/security.md`; `./mvnw verify` green (the spec is parse
 - Walk the 15 acceptance criteria and record, for each, the test that pins it — AC 12
   recorded as struck by owner agreement on PR #1 and owned end-to-end (route and keys) by
   TICKET-011, not merely deferred.
-- Update `AGENTS.md`: the participant module's files, the pagination convention introduced
-  in Step 4 (configurable clamp, no spec-level `maximum`, and the `identifier` query filter as
-  the escape hatch for slash-bearing identifiers), the nullable-row `ParticipantPrincipal`
-  contract from Step 1 (including `CallerScope.of()` refusing an unregistered participant),
-  the new `V3__participant_deregistration.sql` migration and the `deregistered_at` semantics,
-  and ADR-0008. Also carry over the
-  correction raised on PR #1: the `service/` line still names `UserProvisioningService`,
-  which does not exist — JIT provisioning lives in `UserService` and returns a
-  `ProvisionedUser`. The line should read `UserService (registration, JIT provisioning,
-  search, links, ADR-0007 erasure), ErasureVerifier, CallerScope`.
+- The `AGENTS.md` refresh is **not** performed here. A step agent is forbidden by its
+  operating rules from editing `AGENTS.md`: the file is appended to the agent system prompt,
+  so any edit invalidates the cached prompt prefix for every later session. The refresh is
+  carved out into Step 9, which a plan-mode agent performs; Step 9 specifies the content.
 - Confirm every new configuration key is in `.env.sample` and `application.yml`.
 - Confirm `SpecSecurityConsistencyTest.SPECIFIED_OPERATION_COUNT` reads `16` and that the
   parsed operation list actually has that many entries — the constant is only a tripwire if
   it tracks reality, and a step that dropped an operation while bumping the count would
   otherwise pass.
 
-**Acceptance criteria:** clean `./mvnw clean verify`; `AGENTS.md` matches the merged state;
-the acceptance-criteria walk is recorded on the ticket.
+**Acceptance criteria:** clean `./mvnw clean verify`; the acceptance-criteria walk is
+recorded on the ticket. `AGENTS.md` moves to Step 9.
+
+### Step 9: Refresh `AGENTS.md` (plan-mode agent)
+
+Owned by a **plan-mode** agent rather than a step agent, because `AGENTS.md` is appended to
+the agent system prompt and a step agent may not edit it. Documentation only: one file, no
+code, spec, test or configuration change.
+
+`AGENTS.md` is stale against the merged state of ticket #69 in six places.
+
+1. The `service/` line names `UserProvisioningService`, which does not exist — JIT
+   provisioning lives in `UserService` and returns a `ProvisionedUser`. Raised on PR #1. It
+   should read `UserService (registration, JIT provisioning, search, links, ADR-0007
+   erasure), ParticipantService (registration, self-service, ADR-0008 deregistration),
+   ErasureVerifier, CallerScope`.
+2. The participant module's files are unlisted: `ParticipantRegistration`,
+   `ParticipantUpdate` and `DeregistrationResult` under `service/`, and `ParticipantMapper`
+   plus `ParticipantController` under `api/`.
+3. The pagination convention from Step 4 is undocumented: `GET /participants` clamps an
+   oversized `size` to `consent-manager.participants.page-max-size` and answers `200` rather
+   than refusing, the spec carries no `maximum` because the ceiling is per deployment, the
+   response reports the size it actually applied, and the `identifier` query filter is the
+   escape hatch for identifiers containing a slash, which no path segment can carry.
+4. The nullable-row `ParticipantPrincipal` contract from Step 1 is undocumented:
+   `ParticipantPrincipal` may carry an identifier whose `participants` row is absent, which is
+   what makes self-registration reachable; `POST /participants` is the only route accepting
+   that shape, and `CallerScope.of()` calls `requireRegistered()`, so every other
+   participant-scoped route fails closed.
+5. `V3__participant_deregistration.sql` is missing from the migration list, as are the
+   `deregistered_at` semantics: nullable, null for every active participant, set only on the
+   retain branch, with a partial index keeping the directory listing to active rows.
+6. The ADR range reads `0001-0007` and should read `0001-0008`.
+
+**Acceptance criteria:** `AGENTS.md` matches the merged state on all six points; no other
+file changes.
