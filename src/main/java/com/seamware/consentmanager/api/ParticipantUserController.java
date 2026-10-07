@@ -31,10 +31,11 @@ import org.openapitools.jackson.nullable.JsonNullable;
  * Serves the {@code /participants/me/users} operations: the registration surface a participant uses
  * to put its own users into the directory.
  *
- * <p>The participant is {@link ParticipantPrincipal#participant()} and nothing else. The body
- * deliberately cannot name one, and a {@code participantIdentifier} property sent anyway is ignored
- * rather than refused - the generated model does not forbid unknown properties, so such a request
- * succeeds and still links the user to the caller.
+ * <p>The participant is {@link ParticipantPrincipal#requireRegistered()} and nothing else, so an
+ * identifier with no row behind it is refused here rather than served. The body deliberately cannot
+ * name one, and a {@code participantIdentifier} property sent anyway is ignored rather than refused
+ * - the generated model does not forbid unknown properties, so such a request succeeds and still
+ * links the user to the caller.
  *
  * <p>{@code UserRegistration} here is the generated API model; the service's record of the same
  * name is written out in full to keep the two apart.

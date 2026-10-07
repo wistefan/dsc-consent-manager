@@ -9,6 +9,7 @@ import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.IdentityProviderRegistry;
+import com.seamware.consentmanager.security.Role;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
@@ -26,6 +27,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -82,6 +84,14 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     private static final String PATH_PARTICIPANT_USERS = "/participants/me/users";
 
     private static final String PATH_BULK = PATH_PARTICIPANT_USERS + "/bulk";
+
+    /**
+     * The one {@code PARTICIPANT} operation an unregistered identifier may reach, named as {@link
+     * Endpoint#toString()} names it. It is what creates the row every other route demands, so it is
+     * excluded from {@link #participantScopedEndpoints()}; it is specified from step 2 onward and
+     * until then matches nothing, which is harmless.
+     */
+    private static final String SELF_REGISTRATION = "post /participants";
 
     /** Body of a request to an operation that specifies none; the route ignores it. */
     private static final String NO_BODY = "";
@@ -307,21 +317,39 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
-     * The published routes a {@code PARTICIPANT} may only reach once its identifier is registered.
+     * The published routes a {@code PARTICIPANT} may only reach once its identifier is registered:
+     * every operation admitting the role, less the registration that creates the row.
      *
-     * <p>Every route under {@code /participants/me/users} is one, and so are {@code POST
-     * /users/search} and {@code GET /users/{identifier}}: those two admit the widest principal type
-     * and derive their scope from the caller's participant row, where an absent row would read as
-     * "dataspace-wide" rather than "unknown".
+     * <p>Derived from the specification rather than listed, for the same reason {@link
+     * #everySpecifiedOperationIsCovered()} exists - a participant route added later and forgotten
+     * here would silently skip the very check this case makes.
      */
     static Stream<Arguments> participantScopedEndpoints() {
-        return Stream.of(
-                Arguments.of(Endpoint.SEARCH_USERS),
-                Arguments.of(Endpoint.LOOKUP_USER),
-                Arguments.of(Endpoint.REGISTER_PARTICIPANT_USER),
-                Arguments.of(Endpoint.BULK_REGISTER_PARTICIPANT_USERS),
-                Arguments.of(Endpoint.UPDATE_LINK),
-                Arguments.of(Endpoint.UNLINK));
+        Map<String, Endpoint> rows =
+                Stream.of(Endpoint.values())
+                        .collect(Collectors.toMap(Endpoint::toString, endpoint -> endpoint));
+        List<Arguments> cases =
+                SpecSecurityConsistencyTest.specOperations()
+                        .filter(operation -> operation.roles().contains(Role.PARTICIPANT.name()))
+                        .map(operation -> operation.httpMethod() + " " + operation.path())
+                        .filter(specification -> !SELF_REGISTRATION.equals(specification))
+                        .map(specification -> Arguments.of(rowFor(rows, specification)))
+                        .toList();
+
+        assertThat(cases)
+                .as("the specification admits PARTICIPANT somewhere, or this case tests nothing")
+                .isNotEmpty();
+        return cases.stream();
+    }
+
+    /**
+     * The matrix row for a specified operation, which {@code everySpecifiedOperationIsCovered}
+     * keeps total.
+     */
+    private static Endpoint rowFor(Map<String, Endpoint> rows, String specification) {
+        Endpoint endpoint = rows.get(specification);
+        assertThat(endpoint).as("no matrix row for %s", specification).isNotNull();
+        return endpoint;
     }
 
     /**

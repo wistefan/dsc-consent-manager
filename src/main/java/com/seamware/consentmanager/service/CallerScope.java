@@ -17,10 +17,25 @@ import io.micronaut.core.annotation.Nullable;
  *
  * @param role the role the caller acts as on this operation
  * @param participant the participant whose links bound the result, {@code null} only for a {@code
- *     CATALOG} caller, which reads dataspace-wide. A {@code PARTICIPANT} always carries its row, so
- *     {@code null} never stands for "participant unknown".
+ *     CATALOG} caller, which reads dataspace-wide. The constructor enforces that, so {@code null}
+ *     never stands for "participant unknown".
  */
 public record CallerScope(Role role, @Nullable Participant participant) {
+
+    /**
+     * Rejects a {@code PARTICIPANT} scope with no row.
+     *
+     * <p>Downstream a {@code null} participant means "read dataspace-wide", so that combination
+     * would widen an unregistered caller rather than bound it. Structural, because the shape is now
+     * constructible: {@link ParticipantPrincipal#participant()} is nullable.
+     */
+    public CallerScope {
+        if (role == Role.PARTICIPANT && participant == null) {
+            throw new IllegalArgumentException(
+                    "A PARTICIPANT scope must carry the participant whose links bound it;"
+                            + " a null participant reads as dataspace-wide.");
+        }
+    }
 
     /**
      * The scope a resolved principal grants.

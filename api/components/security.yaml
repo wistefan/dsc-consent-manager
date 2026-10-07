@@ -168,6 +168,11 @@ securitySchemes:
       A request that authenticates successfully but lacks the role required by the
       operation receives `403 Forbidden`. A token whose roles claim is absent, or
       whose roles are all unmappable, authenticates with zero roles and therefore
-      also receives `403` on any secured operation, as does a participant token
-      whose identifier is not registered with this service. The `403` body does
-      not say which of these applies.
+      also receives `403` on any secured operation. So does a participant token
+      whose identifier is not registered with this service, on every operation
+      that acts on the participant's own record or on the users it has linked;
+      an unregistered identifier still authenticates and still resolves a
+      caller, so that it can reach the operation that registers it.
+
+      The `403` body names the unregistered-participant case, whose remedy is
+      the caller's own. The other causes are not told apart from one another.

@@ -535,7 +535,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
     }
 
     /**
-     * A reachability probe stays reachable even for a caller whose token names nobody.
+     * A reachability probe stays reachable whatever token the caller happens to be holding.
      *
      * <p>A browser or a monitoring agent sends whatever token it is holding on every request, and a
      * route the specification declares {@code security: []} must not start answering {@code 403}
@@ -543,11 +543,11 @@ class PrincipalResolutionIT extends PostgresTestResource {
      * principal parameter, which this one does not.
      *
      * @param description the case name
-     * @param claims a claim set that would be refused on a route taking a principal
+     * @param claims a claim set an anonymous route must answer without inspecting
      */
     @ParameterizedTest(name = "{0}")
     @MethodSource("tokensNamingNoCaller")
-    @DisplayName("an anonymous route is reachable with a token that names no usable caller")
+    @DisplayName("an anonymous route is reachable whatever a token carries")
     void anonymousRouteIgnoresAnUnusableToken(String description, JWTClaimsSet claims) {
         assertThat(get(ANONYMOUS_ROUTE, token(claims)).code())
                 .as("%s", description)
@@ -556,6 +556,10 @@ class PrincipalResolutionIT extends PostgresTestResource {
 
     /**
      * Tokens that authenticate and then carry nothing an anonymous route needs to look at.
+     *
+     * <p>Neither is necessarily refused elsewhere - an unregistered participant identifier now
+     * resolves a principal, and {@link #unregisteredParticipantResolvesWithoutItsRow()} covers
+     * that. What these pin is narrower and survives it: the route never looks.
      *
      * @return one case per way
      */
