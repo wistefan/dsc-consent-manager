@@ -81,17 +81,18 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_SEARCH = PATH_USERS + "/search";
 
-    private static final String PATH_PARTICIPANT_USERS = "/participants/me/users";
+    private static final String PATH_PARTICIPANTS = "/participants";
+
+    private static final String PATH_PARTICIPANT_USERS = PATH_PARTICIPANTS + "/me/users";
 
     private static final String PATH_BULK = PATH_PARTICIPANT_USERS + "/bulk";
 
     /**
      * The one {@code PARTICIPANT} operation an unregistered identifier may reach, named as {@link
      * Endpoint#toString()} names it. It is what creates the row every other route demands, so it is
-     * excluded from {@link #participantScopedEndpoints()}; it is specified from step 2 onward and
-     * until then matches nothing, which is harmless.
+     * excluded from {@link #participantScopedEndpoints()}.
      */
-    private static final String SELF_REGISTRATION = "post /participants";
+    private static final String SELF_REGISTRATION = "post " + PATH_PARTICIPANTS;
 
     /** Body of a request to an operation that specifies none; the route ignores it. */
     private static final String NO_BODY = "";
@@ -181,7 +182,12 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 Map.of("localIdentifier", LOCAL_IDENTIFIER))),
         UNLINK(
                 "delete " + PATH_PARTICIPANT_USERS + "/{identifier}",
-                () -> HttpRequest.DELETE(PATH_PARTICIPANT_USERS + "/" + LINKED_USER));
+                () -> HttpRequest.DELETE(PATH_PARTICIPANT_USERS + "/" + LINKED_USER)),
+        SELF_REGISTER_PARTICIPANT(
+                SELF_REGISTRATION,
+                () ->
+                        HttpRequest.POST(
+                                PATH_PARTICIPANTS, Map.of("legalName", PARTICIPANT_LEGAL_NAME)));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -215,6 +221,7 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         HttpStatus created = HttpStatus.CREATED;
         HttpStatus perEntry = HttpStatus.MULTI_STATUS;
         HttpStatus emptied = HttpStatus.NO_CONTENT;
+        HttpStatus alreadyRegistered = HttpStatus.CONFLICT;
         HttpStatus denied = HttpStatus.FORBIDDEN;
         HttpStatus challenged = HttpStatus.UNAUTHORIZED;
         return Stream.of(
@@ -239,7 +246,17 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 denied,
                                 challenged),
                         row(Endpoint.UPDATE_LINK, denied, ok, denied, denied, challenged),
-                        row(Endpoint.UNLINK, denied, emptied, denied, denied, challenged))
+                        row(Endpoint.UNLINK, denied, emptied, denied, denied, challenged),
+                        // The fixture registers the caller before every case, so the one caller
+                        // this route admits lands on the conflict rather than on a second
+                        // registration. That it gets there at all is what the matrix asserts.
+                        row(
+                                Endpoint.SELF_REGISTER_PARTICIPANT,
+                                denied,
+                                alreadyRegistered,
+                                denied,
+                                denied,
+                                challenged))
                 .flatMap(row -> row);
     }
 
