@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -87,6 +88,9 @@ class SpecSecurityConsistencyTest {
 
     /** Path item key that would hide every operation beneath it from this test. */
     private static final String REF_KEY = "$ref";
+
+    /** Key holding the parameter list, declarable on a path item as well as on an operation. */
+    private static final String PARAMETERS_KEY = "parameters";
 
     /** The URI an unparameterised Micronaut routing annotation carries. */
     private static final String DEFAULT_URI = "/";
@@ -146,6 +150,8 @@ class SpecSecurityConsistencyTest {
      *
      * @param roles the scopes the operation's security requirements name, which are the role names
      *     its route must enforce; empty when it is anonymous or names none
+     * @param parameterNames every parameter the operation accepts, the path item's shared ones
+     *     merged in, since those apply to each operation beneath it
      * @param responseRefs {@code $ref} target per documented status code, for codes that are a bare
      *     reference; a response written out inline contributes no entry
      */
@@ -156,6 +162,7 @@ class SpecSecurityConsistencyTest {
             boolean anonymous,
             List<String> schemes,
             List<String> roles,
+            List<String> parameterNames,
             Map<String, String> responseRefs) {
 
         @Override
@@ -171,19 +178,21 @@ class SpecSecurityConsistencyTest {
         Map<String, Object> paths = asMap(spec.get("paths"));
         List<SpecOperation> operations = new ArrayList<>();
         paths.forEach(
-                (path, item) ->
-                        asMap(item)
-                                .forEach(
-                                        (key, value) -> {
-                                            if (OPERATION_KEYS.contains(key)) {
-                                                operations.add(
-                                                        operationOf(
-                                                                path,
-                                                                key,
-                                                                asMap(value),
-                                                                globalSecurity));
-                                            }
-                                        }));
+                (path, item) -> {
+                    Map<String, Object> pathItem = asMap(item);
+                    pathItem.forEach(
+                            (key, value) -> {
+                                if (OPERATION_KEYS.contains(key)) {
+                                    operations.add(
+                                            operationOf(
+                                                    path,
+                                                    pathItem,
+                                                    key,
+                                                    asMap(value),
+                                                    globalSecurity));
+                                }
+                            });
+                });
         assertThat(operations)
                 .as(
                         "every case below is generated from this list, so an operation missing from"
@@ -246,7 +255,11 @@ class SpecSecurityConsistencyTest {
                             false),
                     Arguments.of(
                             "an externalised path item carrying metadata too",
-                            Map.of(REF_KEY, "./paths/users.yaml#/~1users", "parameters", List.of()),
+                            Map.of(
+                                    REF_KEY,
+                                    "./paths/users.yaml#/~1users",
+                                    PARAMETERS_KEY,
+                                    List.of()),
                             false),
                     Arguments.of(
                             "path-level metadata only", Map.of("parameters", List.of()), false),
@@ -470,7 +483,11 @@ class SpecSecurityConsistencyTest {
 
     /** Builds the operation record for one path item entry. */
     private static SpecOperation operationOf(
-            String path, String httpMethod, Map<String, Object> operation, List<?> globalSecurity) {
+            String path,
+            Map<String, Object> pathItem,
+            String httpMethod,
+            Map<String, Object> operation,
+            List<?> globalSecurity) {
         Object operationId = operation.get("operationId");
         assertThat(operationId)
                 .as(
@@ -498,7 +515,46 @@ class SpecSecurityConsistencyTest {
                 effective.isEmpty(),
                 List.copyOf(schemes),
                 List.copyOf(roles),
+                parameterNamesOf(path, httpMethod, pathItem, operation),
                 responseRefsOf(operation));
+    }
+
+    /**
+     * The names of the path and query parameters an operation accepts, in declaration order.
+     *
+     * <p>OpenAPI lets a path item declare parameters shared by every operation beneath it, which an
+     * operation then overrides by redeclaring the same name. Reading the operation alone would miss
+     * a query parameter declared one level up and silently empty every assertion built on this
+     * list, so both levels are merged; a name declared twice collapses to one entry, which is what
+     * the override rule means for a list of names.
+     */
+    private static List<String> parameterNamesOf(
+            String path,
+            String httpMethod,
+            Map<String, Object> pathItem,
+            Map<String, Object> operation) {
+        Set<String> names = new LinkedHashSet<>();
+        Stream.of(pathItem.get(PARAMETERS_KEY), operation.get(PARAMETERS_KEY))
+                .flatMap(declared -> asList(declared).stream())
+                .forEach(parameter -> names.add(parameterNameOf(path, httpMethod, parameter)));
+        return List.copyOf(names);
+    }
+
+    /** One parameter's name, refusing a {@code $ref} this test cannot resolve. */
+    private static String parameterNameOf(String path, String httpMethod, Object parameter) {
+        Map<String, Object> declared = asMap(parameter);
+        assertThat(declared.keySet())
+                .as(
+                        "%s %s declares a parameter behind a $ref; nothing here resolves one, so"
+                                + " its name would be read as absent and every check built on the"
+                                + " parameter list would pass without seeing it. Write it inline,"
+                                + " as the path items are",
+                        httpMethod, path)
+                .doesNotContain(REF_KEY);
+        assertThat(declared.get("name"))
+                .as("%s %s declares a parameter with no name", httpMethod, path)
+                .isInstanceOf(String.class);
+        return (String) declared.get("name");
     }
 
     /** The {@code $ref} each documented status code resolves to, skipping inline responses. */

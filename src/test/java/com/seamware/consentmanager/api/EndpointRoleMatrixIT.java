@@ -26,6 +26,7 @@ import jakarta.inject.Inject;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -35,6 +36,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
@@ -59,6 +61,13 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     private static final String CALLER_PARTICIPANT = KeycloakTestResource.PARTICIPANT_IDENTIFIER;
 
     private static final String PARTICIPANT_LEGAL_NAME = "Role Matrix Participant Ltd";
+
+    /**
+     * A second participant, present only so that every case has a record it is entitled to none of.
+     */
+    private static final String OTHER_PARTICIPANT = "urn:test:participant:role-matrix-bystander";
+
+    private static final String OTHER_LEGAL_NAME = "Role Matrix Bystander Ltd";
 
     /**
      * User seeded and linked to the caller participant, so every read route has something to
@@ -95,6 +104,28 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
      * excluded from {@link #participantScopedEndpoints()}.
      */
     private static final String SELF_REGISTRATION = "post " + PATH_PARTICIPANTS;
+
+    /** HTTP methods that change a record, spelled as the specification spells them. */
+    private static final Set<String> MUTATING_METHODS = Set.of("post", "put", "patch", "delete");
+
+    /**
+     * Marks a path segment the caller fills in, which is what a self-scoped route must not have.
+     */
+    private static final String PATH_TEMPLATE_MARKER = "{";
+
+    /**
+     * Closes a path template, so a parameter can be matched against the segment that declares it.
+     */
+    private static final String PATH_TEMPLATE_END = "}";
+
+    /** Collection segment a participant-identifying template would directly follow. */
+    private static final String PARTICIPANTS_SEGMENT = "participants";
+
+    /** Legal name a foreign write would leave behind, so a write that lands is unmistakable. */
+    private static final String HIJACKED_LEGAL_NAME = "Hijacked Ltd";
+
+    /** Last status code that still reports success; a route that serves nothing stays above it. */
+    private static final int HIGHEST_SUCCESS_CODE = 299;
 
     /** Body of a request to an operation that specifies none; the route ignores it. */
     private static final String NO_BODY = "";
@@ -226,6 +257,65 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
+     * The ways a {@code PARTICIPANT} token could reach a record that is not its own: the
+     * self-scoped writes, which take their target from the token, and the directly addressed ones,
+     * for which the specification publishes no route at all.
+     *
+     * <p>Both are run as the caller participant against a seeded bystander, because the two ways
+     * fail differently - the self-scoped write succeeds but on the wrong row, the addressed one is
+     * refused by routing - and only the bystander's own state tells them apart.
+     */
+    enum ForeignWrite {
+        UPDATE_SELF(
+                "put " + PATH_CURRENT_PARTICIPANT,
+                true,
+                () ->
+                        HttpRequest.PUT(
+                                PATH_CURRENT_PARTICIPANT,
+                                Map.of("legalName", HIJACKED_LEGAL_NAME))),
+        DEREGISTER_SELF(
+                "delete " + PATH_CURRENT_PARTICIPANT,
+                true,
+                () -> HttpRequest.DELETE(PATH_CURRENT_PARTICIPANT)),
+        UPDATE_OTHER(
+                "put " + PATH_PARTICIPANTS + "/" + OTHER_PARTICIPANT,
+                false,
+                () ->
+                        HttpRequest.PUT(
+                                PATH_PARTICIPANTS + "/" + OTHER_PARTICIPANT,
+                                Map.of("legalName", HIJACKED_LEGAL_NAME))),
+        DEREGISTER_OTHER(
+                "delete " + PATH_PARTICIPANTS + "/" + OTHER_PARTICIPANT,
+                false,
+                () -> HttpRequest.DELETE(PATH_PARTICIPANTS + "/" + OTHER_PARTICIPANT));
+
+        private final String specification;
+        private final boolean served;
+        private final Supplier<MutableHttpRequest<?>> factory;
+
+        ForeignWrite(
+                String specification, boolean served, Supplier<MutableHttpRequest<?>> factory) {
+            this.specification = specification;
+            this.served = served;
+            this.factory = factory;
+        }
+
+        /** Whether the specification publishes this request, which decides what status it earns. */
+        boolean served() {
+            return served;
+        }
+
+        MutableHttpRequest<?> request() {
+            return factory.get();
+        }
+
+        @Override
+        public String toString() {
+            return specification;
+        }
+    }
+
+    /**
      * The matrix itself: one row per operation, one column per caller.
      *
      * <p>A caller holding no role of this service is {@code 403} rather than {@code 401}: its
@@ -339,6 +429,18 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                                         null)));
         User linked = users.save(new User(LINKED_USER, null, null, null));
         links.save(new UserParticipant(linked.getId(), caller.getId(), LOCAL_IDENTIFIER));
+        participants
+                .findByIdentifier(OTHER_PARTICIPANT)
+                .orElseGet(
+                        () ->
+                                participants.save(
+                                        new Participant(
+                                                OTHER_PARTICIPANT,
+                                                OTHER_LEGAL_NAME,
+                                                null,
+                                                null,
+                                                Map.of(),
+                                                null)));
     }
 
     /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
@@ -354,7 +456,12 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                                             .forEach(links::delete);
                                                     users.delete(user);
                                                 }));
-        participants.findByIdentifier(CALLER_PARTICIPANT).ifPresent(participants::delete);
+        Stream.of(CALLER_PARTICIPANT, OTHER_PARTICIPANT)
+                .forEach(
+                        identifier ->
+                                participants
+                                        .findByIdentifier(identifier)
+                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest(name = "{1} on {0} is {2}")
@@ -453,6 +560,118 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                         "an operation with no row here has no end-to-end authorization assertion at"
                                 + " all, which is the failure this suite exists to make impossible")
                 .containsExactlyInAnyOrderElementsOf(specified);
+    }
+
+    /**
+     * AC 9 read off the specification: a participant may modify its own record and no other.
+     *
+     * <p>The guarantee is positional rather than procedural - no published write ever puts a
+     * participant in a slot the caller fills in, so there is no handler that could compare an
+     * addressed participant against the token and no comparison that could be forgotten. Two things
+     * make that true and both are asserted: no write templates the segment that names a
+     * participant, and no write declares a parameter that is not one of its own path segments,
+     * which rules out a query parameter steering it. This case inspects parameters only; the body
+     * half of the guarantee - that neither write body carries an {@code identifier} property - is
+     * pinned by {@link ParticipantSchemaParityTest#neitherAcceptsAnIdentifier()}, which matters
+     * because {@code POST /users/search} is a write steered entirely by its body.
+     *
+     * <p>The converse is asserted too: every templated segment resolves back to a declared
+     * parameter. A parameter list the specification parser cannot see would otherwise leave the
+     * check above matching over nothing and passing in silence rather than failing.
+     */
+    @Test
+    @DisplayName("no route that changes a record lets the caller name which record")
+    void noWriteRouteLetsTheCallerNameTheRecord() {
+        List<SpecSecurityConsistencyTest.SpecOperation> writes =
+                SpecSecurityConsistencyTest.specOperations()
+                        .filter(operation -> MUTATING_METHODS.contains(operation.httpMethod()))
+                        .toList();
+
+        assertThat(writes)
+                .as("the specification publishes writes, or this case tests nothing")
+                .isNotEmpty();
+        assertThat(writes)
+                .as(
+                        "a write addressing a participant positionally would let a token act on a"
+                                + " record it does not hold")
+                .noneMatch(EndpointRoleMatrixIT::addressesAParticipant);
+        writes.forEach(
+                write -> {
+                    assertThat(write.parameterNames())
+                            .as(
+                                    "%s declares a parameter that is not one of its own path"
+                                            + " segments, which could redirect the write away from"
+                                            + " the token",
+                                    write)
+                            .allMatch(name -> write.path().contains(template(name)));
+                    assertThat(write.parameterNames())
+                            .as(
+                                    "%s templates a path segment it declares no parameter for, so"
+                                            + " the parameter list read off the specification is"
+                                            + " not the one it carries and the check above matched"
+                                            + " over less than it claims to",
+                                    write)
+                            .containsAll(templatedNamesOf(write.path()));
+                });
+    }
+
+    /**
+     * A participant token sent at another participant's record, both ways round: the self-scoped
+     * write, which resolves to the caller, and the addressed one, which no route serves.
+     */
+    @ParameterizedTest(name = "{0} leaves another participant untouched")
+    @EnumSource(ForeignWrite.class)
+    @DisplayName("a participant token never reaches a record other than its own")
+    void aParticipantTokenNeverReachesAnotherRecord(ForeignWrite attempt) {
+        HttpResponse<String> response = exchange(attempt.request(), Caller.PARTICIPANT.token());
+
+        if (!attempt.served()) {
+            assertThat(response.code())
+                    .as("%s is not a published route and must not behave like one", attempt)
+                    .isGreaterThan(HIGHEST_SUCCESS_CODE);
+        }
+        Participant bystander =
+                participants
+                        .findByIdentifier(OTHER_PARTICIPANT)
+                        .orElseThrow(
+                                () ->
+                                        new AssertionError(
+                                                attempt + " removed a record it does not hold"));
+        assertThat(bystander.getLegalName()).isEqualTo(OTHER_LEGAL_NAME);
+        assertThat(bystander.getDeregisteredAt())
+                .as("%s deregistered a record it does not hold", attempt)
+                .isNull();
+    }
+
+    /**
+     * Whether a path names a participant positionally: a template directly under the collection.
+     */
+    private static boolean addressesAParticipant(SpecSecurityConsistencyTest.SpecOperation write) {
+        List<String> segments = List.of(write.path().split("/"));
+        int collection = segments.indexOf(PARTICIPANTS_SEGMENT);
+        return collection >= 0
+                && collection + 1 < segments.size()
+                && segments.get(collection + 1).startsWith(PATH_TEMPLATE_MARKER);
+    }
+
+    /** The parameter names a path templates, in path order. */
+    private static List<String> templatedNamesOf(String path) {
+        return Stream.of(path.split("/"))
+                .filter(
+                        segment ->
+                                segment.startsWith(PATH_TEMPLATE_MARKER)
+                                        && segment.endsWith(PATH_TEMPLATE_END))
+                .map(
+                        segment ->
+                                segment.substring(
+                                        PATH_TEMPLATE_MARKER.length(),
+                                        segment.length() - PATH_TEMPLATE_END.length()))
+                .toList();
+    }
+
+    /** The path segment that would supply a parameter of the given name. */
+    private static String template(String parameterName) {
+        return PATH_TEMPLATE_MARKER + parameterName + PATH_TEMPLATE_END;
     }
 
     /** Issues the request, returning a refusal rather than throwing it. */
