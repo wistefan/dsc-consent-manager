@@ -1,0 +1,64 @@
+# Schema: ParticipantRegistration — referenced from api/openapi.yaml as
+# components.schemas.ParticipantRegistration.
+#
+# **There is deliberately no `identifier` property.** The registering
+# participant is the one its bearer token names, and leaving the property out of
+# the schema is what makes that structural rather than a rule a handler has to
+# remember to enforce.
+#
+# Deliberately without `additionalProperties: false`, as UserRegistration.yaml
+# is: an `identifier` sent anyway — the property earlier revisions of this API
+# carried — must be ignored rather than refused, because it is meaningless, not
+# erroneous. Forbidding additional properties would turn those requests into
+# `400`.
+#
+# Every property carries a `maxLength`: the backing columns are all `TEXT`, and
+# none of these values is derived from a token the service already validated.
+type: object
+description: >
+  What an organization tells the Consent Manager about itself when it registers.
+
+
+  The participant identifier is taken from the access token's
+  `claims.participant-identifier` claim and from nowhere else; an `identifier`
+  property sent in the body is ignored rather than rejected. No credential is
+  accepted here and none is stored: registration records a self-description, it
+  does not establish a login.
+properties:
+  legalName:
+    type: string
+    minLength: 1
+    maxLength: 255
+    # Rejects a value that is only whitespace, which `minLength` alone would let
+    # through. Bean validation matches the whole value, so this is "contains at
+    # least one non-whitespace character".
+    pattern: '^(?!\s*$).+$'
+    description: >
+      Official legal name of the organization. Required, and rejected with
+      `400 Bad Request` when empty or blank.
+    example: "Example Clinic Ltd"
+  selfDescriptionUri:
+    type: string
+    maxLength: 2048
+    # Absolute and `https` only, like the endpoints: a self-description is
+    # fetched over the network by whoever reads the directory.
+    pattern: '^https://[^\s]+$'
+    description: >
+      Absolute `https` URL of the participant's self-description document.
+      Optional, and rejected with `400 Bad Request` when it is not an absolute
+      `https` URL.
+    example: "https://clinic.example.org/.well-known/self-description.json"
+  email:
+    type: string
+    format: email
+    # The longest address RFC 5321 permits: 64-octet local part, `@`, 255-octet
+    # domain minus the two octets the envelope's angle brackets would take.
+    maxLength: 254
+    description: Contact address for the organization. Optional.
+    example: "data-protection@clinic.example.org"
+  legalPerson:
+    $ref: "./ParticipantLegalPerson.yaml"
+  endpoints:
+    $ref: "./ParticipantEndpoints.yaml"
+required:
+  - legalName

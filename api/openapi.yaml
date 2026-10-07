@@ -333,6 +333,66 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /participants:
+    post:
+      operationId: registerParticipant
+      summary: Register the calling participant
+      description: >
+        Registers the organization the bearer token names and returns its record.
+
+
+        The participant identifier is taken entirely from the token's
+        `claims.participant-identifier` claim: it is not a property of the
+        request body, and an `identifier` sent anyway is ignored rather than
+        rejected. A caller therefore cannot register anybody but itself, and
+        cannot rename an existing registration by re-registering under a
+        different identifier.
+
+
+        Unlike `POST /users/register` this is **not** idempotent: an identifier
+        this service already knows is answered with `409 Conflict`, because a
+        second registration carries a full self-description that would otherwise
+        silently either overwrite the stored one or be discarded. Updating a
+        registration is `PUT /participants/me`.
+
+
+        No credential is accepted and none is stored. Registration records what
+        the organization says about itself; authentication stays entirely with
+        the identity provider that issued the token.
+      tags:
+        - Participants
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParticipantRegistration"
+      responses:
+        "201":
+          description: The participant was registered by this request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
   /participants/me/users/bulk:
     post:
       operationId: registerParticipantUsersBulk
@@ -653,6 +713,18 @@ components:
 
     UserRegistrationResult:
       $ref: "./components/schemas/UserRegistrationResult.yaml"
+
+    Participant:
+      $ref: "./components/schemas/Participant.yaml"
+
+    ParticipantLegalPerson:
+      $ref: "./components/schemas/ParticipantLegalPerson.yaml"
+
+    ParticipantEndpoints:
+      $ref: "./components/schemas/ParticipantEndpoints.yaml"
+
+    ParticipantRegistration:
+      $ref: "./components/schemas/ParticipantRegistration.yaml"
 
     ParticipantUserLink:
       $ref: "./components/schemas/ParticipantUserLink.yaml"
