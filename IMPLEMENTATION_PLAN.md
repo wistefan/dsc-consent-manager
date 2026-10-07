@@ -98,16 +98,32 @@ These are not in the ticket text. Each is called out so a reviewer can overrule 
    documents. This is also what makes AC 9 reachable at all: an unavailable external document
    can only degrade a response if the response is where it was going to be used.
 
-8. **Resolving catalog documents needs a second client, and it needs an SSRF guard.** AC 8
-   requires `dataResources` to resolve, and a data resource is an absolute URL taken from a
+8. **Resolving catalog documents needs a second client, two hops, and a relaxable SSRF guard.**
+   AC 8 requires `dataResources` to resolve, and a data resource is an absolute URL taken from a
    document this service does not own. The ticket's "Files to Create" lists only
-   `ContractServiceClient`, so `client/SelfDescriptionClient.java` is an addition. It fetches
-   an absolute URL through the low-level `HttpClient`, with the same timeouts, its own Caffeine
-   cache, and a guard: the scheme must be `https` (`http` additionally allowed only when
-   explicitly configured, for local development), the host must match the configured allow-list
-   when one is set, and a literal loopback, link-local or private address is refused. It never
-   throws out of the service: every failure, refusal included, becomes `Optional.empty()` and
-   therefore an `UNAVAILABLE` section.
+   `ContractServiceClient`, so `client/SelfDescriptionClient.java` is an addition. It fetches an
+   absolute URL through the low-level `HttpClient`, with the same timeouts and its own Caffeine
+   cache.
+
+   **Two hops, because a contract names offerings and not resources.** The payload's `data[].uri`
+   holds *service-offering* URIs — that is all a contract carries. The data resources are one hop
+   further: the offering's self-description → its `dataResources[]` → each resource's own
+   self-description, which is where a resource title and description actually live. Resolution
+   walks both hops. Stopping at the offering and reporting `RESOLVED` would claim AC 8 while
+   serving offering-level text, so the section reports `RESOLVED` only when both hops completed
+   for every entry.
+
+   **The guard, and the single way it can be relaxed.** The scheme must be `https` (`http` only
+   when `allow-plaintext-http` is set), the host must match `allowed-hosts` when that list is
+   non-empty, and a loopback, link-local or private-range address is refused **unless the host
+   appears verbatim in `allowed-hosts`** — an explicit allow-list entry is an operator decision
+   and outranks the address heuristic. That exception is not a convenience. The only stub
+   mechanism in this repo is WireMock, which binds on `127.0.0.1`, so without it every
+   resolution test in Step 5 would be asserting the guard rather than the feature, and the
+   contradiction would only surface at the end of the step. A deployment that leaves
+   `allowed-hosts` empty still refuses every private address. The client never throws out of the
+   service: every failure, refusal included, becomes `Optional.empty()` and therefore an
+   `UNAVAILABLE` section.
 
 9. **`PrivacyNoticePayload` is renamed to the ticket's vocabulary, and that costs nothing.**
    The record TICKET-002 landed uses `dataCategories`, `controllerName`/`controllerContact` and
@@ -119,8 +135,12 @@ These are not in the ticket text. Each is called out so a reviewer can overrule 
    disagree on field names, and TICKET-008's `ConsentSnapshot` would then have to pick one.
    Align now: rename the three components, add `data`, and fold `controllerName`/
    `controllerContact` into a nested `ControllerDetails` record so the provider's name and
-   contact travel together. The five test files that construct a `PrivacyNoticePayload`
-   positionally are updated in the same commit.
+   contact travel together. **`piiPrincipalRights` also changes type**, `List<String>` →
+   `String`: its only source in either contract shape is `termsAndConditions`, one block of free
+   text, and splitting that into a singleton list would dress a paragraph up as an enumeration
+   that no caller can rely on. It therefore matches `withdrawalOfConsent`, which is a `String`
+   already and comes from the same field. The **six** test files that construct a
+   `PrivacyNoticePayload` positionally are updated in the same commit.
 
 10. **The `/for/{participantIdentifier}` client methods are not declared.** The ticket's
     snippet lists `fetchContractsFor` and `fetchBilateralsFor`, but none of this ticket's three
@@ -138,6 +158,33 @@ These are not in the ticket text. Each is called out so a reviewer can overrule 
     acts in the dataspace in the participant's name, which is the condition
     `ParticipantUserController` already uses `requireActive()` for; a deregistered participant
     must not be able to mint new notices. Retrieval reads, and needs no row at all.
+
+13. **A negative contract lookup is never cached, which rules `@Cacheable` out of the gateway.**
+    Micronaut's `@Cacheable` has no `unless`/`condition` attribute, so it would store a returned
+    `Optional.empty()` like any other value: a contract created upstream one second after a
+    `404` would stay invisible for the whole `cache-ttl`, and nothing in the service could tell
+    the difference between "unknown" and "unknown an hour ago". `ContractGateway` therefore uses
+    the injected `SyncCache` directly — read through on every call, `put` **only** on a hit —
+    and neither an empty result nor a failure is written. The cache annotation stays off the
+    `@Client` interface for the separate reason given in Step 1. `ContractCacheIT` asserts the
+    two cases apart: a hit is served from the cache, and a `404` followed by an upstream create
+    is visible on the very next call.
+
+14. **One active notice per `(contractUri, provider)` is the schema's guarantee, and the parties
+    are validated against the contract.** `uq_privacy_notices_active_contract` is keyed on
+    `(contract_uri, provider_id)` and nothing else, so the table cannot hold two active notices
+    for one contract and provider even when they name different consumers. Generation therefore
+    also **verifies that both declared parties are named in the fetched contract** (Step 3,
+    point 3, the membership check) — without it the request body could name any consumer, and the
+    stored notice would misname a party in a published legal document. With the check in place,
+    a `consumerId` change can only come from the contract itself changing, which is exactly the
+    archive-and-recreate AC 5 asks for. The one residual case is an ecosystem contract naming
+    more than one possible consumer against the same provider: a notice for consumer B
+    supersedes the one for consumer A, and two consumers regenerating in turn would archive each
+    other. That is a property of the index this ticket inherits, not of the comparison, and
+    widening it to `(contract_uri, provider_id, consumer_id)` is a migration against TICKET-002's
+    schema; it is named here rather than silently absorbed, and Step 3's IT pins the behaviour
+    so a later ticket can change it deliberately.
 
 ### Repo-specific constraints every step inherits
 
@@ -224,17 +271,20 @@ Covers AC 12 and AC 13 at the client level. No API surface changes, so
   `HttpClientException` caused by a connect or read timeout, and **return false for every 4xx**.
   A `404` already became an empty `Optional` and never reaches the predicate; a `400` or `403`
   is a defect that retrying cannot fix and would only triple the upstream load.
-- `client/ContractGateway.java` — `@Singleton`, the bean the services actually depend on.
-  `@Cacheable("contracts")` lives **here**, not on the `@Client` interface: `@Cacheable` is
-  around-advice and `@Client` is introduction advice, and stacking the two on one interface
+- `client/ContractGateway.java` — `@Singleton`, the bean the services actually depend on, and
+  the only place caching happens. The cache is **not** on the `@Client` interface: `@Cacheable`
+  is around-advice and `@Client` is introduction advice, and stacking the two on one interface
   makes the applied order an implementation detail rather than something this repo states.
-  A separate bean also puts the cache in front of the *whole* ecosystem-then-bilateral
+  Caching in a separate bean also puts it in front of the *whole* ecosystem-then-bilateral
   resolution, so AC 12's "a repeated generation makes no second upstream call" holds for the
-  fallback path too. The gateway derives the contract id from the `contractUri` (last path
-  segment, or the whole value when it carries no `/`), tries `fetchContract`, falls back to
-  `fetchBilateralContract`, returns `Optional.empty()` when both are empty, and translates a
-  transport failure or an exhausted retry into `UpstreamServiceException` naming the upstream
-  and the URI. A failure is **not** cached.
+  fallback path too. It is **not** `@Cacheable` either — see decision 13: the annotation has no
+  `unless`, so it would cache `Optional.empty()` and freeze an unknown contract for the whole
+  `cache-ttl`. The gateway injects the `contracts` `SyncCache` and uses it explicitly: look up
+  the `contractUri` key, and on a miss derive the contract id (last path segment, or the whole
+  value when it carries no `/`), try `fetchContract`, fall back to `fetchBilateralContract`, and
+  `put` **only** when a contract came back. An empty result is returned uncached; a transport
+  failure or an exhausted retry becomes an `UpstreamServiceException` naming the upstream and
+  the URI, also uncached.
 
 **Tests**
 
@@ -246,8 +296,11 @@ Covers AC 12 and AC 13 at the client level. No API surface changes, so
   paths yields an empty `Optional` with no retry; a `500` followed by a `200` succeeds within
   the budget.
 - `client/ContractCacheIT.java` — two gateway calls for the same `contractUri` produce exactly
-  one upstream request; two different URIs produce two; a failed fetch is not cached, so a
-  retry after the stub recovers does reach upstream.
+  one upstream request; two different URIs produce two. The two negative cases are asserted
+  **apart**, because "a failed fetch is not cached" does not distinguish them (decision 13):
+  after a `404` on both paths, a second call with the stub now returning the contract gets the
+  contract, not a cached empty; after an exhausted retry, a second call with the stub recovered
+  reaches upstream and succeeds.
 - `client/ContractResponseTest.java` — parameterized deserialization over a bilateral body, an
   ecosystem body, a body carrying `_id` instead of `uid`, and a body carrying an unknown
   top-level property; each asserts `contractId()` and `shape()`.
@@ -266,14 +319,19 @@ Covers AC 15. Still no API surface change, so `SPECIFIED_OPERATION_COUNT` stays 
   `withdrawalMethod` → `withdrawalOfConsent`; replace `controllerName` + `controllerContact`
   with a nested `@Nullable ControllerDetails` record (`name`, `contact`, `identifier`,
   `selfDescriptionUri`); add `@Nullable List<DataReference> data`, where `DataReference` is a
-  nested record of `uri` plus the optional `title`/`description` that resolution fills in. Every
-  component stays `@Nullable` and the record stays `@Serdeable`. See decision 9 for why this is
-  free: nothing writes the table yet.
-- The five test files constructing the record positionally —
+  nested record of `uri` plus the optional `title`/`description` that resolution fills in; and
+  change `piiPrincipalRights` from `List<String>` to `String`, because its only source is the
+  single free-text `termsAndConditions` block (decision 9). Every component stays `@Nullable`
+  and the record stays `@Serdeable`. See decision 9 for why this is free: nothing writes the
+  table yet.
+- The **six** test files constructing the record positionally —
   `api/ParticipantUserLinkIT`, `api/UserErasureIT`, `api/ParticipantDeregistrationSurfaceIT`,
-  `service/ParticipantDeregistrationAtomicityIT`, `service/ParticipantDeregistrationIT` — are
-  updated in the same commit. They only seed fixtures, so the edits are mechanical, but the
-  build will not compile until all five are done.
+  `service/ParticipantDeregistrationAtomicityIT`, `service/ParticipantDeregistrationIT`,
+  `service/UserErasureAtomicityIT` — are updated in the same commit. They only seed fixtures, so
+  the edits are mechanical, but every one of them breaks: merging `controllerName` and
+  `controllerContact` into `ControllerDetails` and adding `data` leaves the arity at nine while
+  changing the order and two component types, so a positional call that still compiles would be
+  worse than one that does not. The build stays red until all six are done.
 - `domain/ConsentSnapshot.java` is **not** touched. It is TICKET-008's model, it is not written
   by anything yet either, and widening this step to cover it would couple two tickets.
 
@@ -289,12 +347,12 @@ Covers AC 15. Still no API surface change, so `SPECIFIED_OPERATION_COUNT` stays 
   | `title` (column, not payload) | `ecosystem`, else `uid`/`_id` | `serviceOffering`, else `uid`/`_id` |
   | `purposes` | `purpose[].purpose` (else `.uid`); when absent, `serviceOfferings[].policies[].description` | `purpose[].purpose` (else `.uid`); when absent, `policy[].description` |
   | `categoriesOfData` | distinct `purpose[].piiCategory` | distinct `purpose[].piiCategory` (declared as an array here, as a scalar in the ecosystem shape — both are accepted) |
-  | `data` | distinct `serviceOfferings[].serviceOffering` URIs, titles unresolved | the single `serviceOffering` URI, title unresolved |
+  | `data` | distinct `serviceOfferings[].serviceOffering` URIs — service *offerings*, which is all a contract names; the resources behind them are resolution's two hops (decision 8) | the single `serviceOffering` URI, title unresolved |
   | `recipients` | `members[].participant`, `revokedMembers` excluded | `dataProvider` and `dataConsumer` |
   | `controllerDetails` | the provider `Participant` row (`legalName`, `email`, `identifier`, `selfDescriptionUri`) | same |
   | `retentionPeriod` | `purpose[].termination` when all entries agree | `terminationAndValidity.terminationPeriod` |
   | `internationalTransfers` | `purpose[]` entries with `thirdPartyDisclosure` true, named by `thirdPartyName` | same |
-  | `piiPrincipalRights` | **absent** — no source | `termsAndConditions` when present, else absent |
+  | `piiPrincipalRights` (a `String`, decision 9) | **absent** — no source | `termsAndConditions` when present, else absent |
   | `withdrawalOfConsent` | **absent** — no source | `termsAndConditions` when present, else absent |
 
   Every "absent" is a real absence: no `""`, no `[]`, no configured placeholder (decision 4).
@@ -336,8 +394,18 @@ Covers AC 1, AC 2, AC 3, AC 4, AC 5, AC 6, AC 10. Raises `SPECIFIED_OPERATION_CO
   `dataConsumer`, `purposes`, `categoriesOfData`, `data`, `recipients`, `controllerDetails`,
   `retentionPeriod`, `piiPrincipalRights`, `internationalTransfers`, `withdrawalOfConsent`,
   `createdAt`, `updatedAt`, `archivedAt`, and the `resolution` block Step 5 fills in. `data`
-  and `recipients` are arrays whose object items are declared **inline in this file** — see the
-  `items: $ref` gotcha above. No property is `nullable`; optional means absent, which is how
+  and `recipients` are arrays of objects. A cross-file `items: $ref` degrades to `List<Object>`,
+  and whether inline object items *within* a component file escape that is **unverified** — no
+  schema in `api/components/schemas/` declares one today. So this step **probes it first**: write
+  the two arrays with inline object items, run `./mvnw generate-sources`, and read the generated
+  `PrivacyNotice`'s field types. If they are `List<DataReference>` / `List<Recipient>`, keep the
+  form; if either is `List<Object>`, fall back to the only form this repo has proven — named
+  `DataReference` and `Recipient` schemas with the wrapper declared inline in `openapi.yaml`
+  using internal `#/components/schemas/...` refs, exactly as `BulkUserRegistration` and
+  `ParticipantPage` do. Either way the outcome is locked by an assertion in
+  `PrivacyNoticeSpecParityTest` (Step 6) that the generated accessors return the element type and
+  not `Object`, so a later spec edit that degrades them fails the build instead of silently
+  serving untyped arrays. No property is `nullable`; optional means absent, which is how
   `archivedAt` reports "not archived".
 - `api/components/schemas/PrivacyNoticeResolution.yaml` — `contract`, `dataResources`,
   `purposes` and `recipients`, each an enum of `RESOLVED`, `UNAVAILABLE` and `NOT_REQUESTED`.
@@ -364,6 +432,14 @@ Covers AC 1, AC 2, AC 3, AC 4, AC 5, AC 6, AC 10. Raises `SPECIFIED_OPERATION_CO
      notice (decision 12).
   3. `ContractGateway.fetch(contractUri)`; empty → `NotFoundException`; unreachable →
      `UpstreamServiceException` → `502` (AC 10), which the gateway already raises.
+     Then the **membership check**: `BadRequestException` unless both declared parties are
+     named in the fetched contract (bilateral: `dataProvider`/`dataConsumer`; ecosystem:
+     `members[].participant` minus `revokedMembers`, the provider also appearing in
+     `serviceOfferings[].participant`). Without it the request body could name any consumer at
+     all and the stored notice would misname a party in a published legal document — and it is
+     what makes the `consumerId` comparison in point 5 meaningful (decision 14).
+     `ContractPartyResolver` (Step 4) derives the same sets, so Step 4 moves this check into it
+     rather than duplicating it.
   4. Extract the payload and title.
   5. `findByContractUriAndProviderIdAndArchivedAtIsNull(contractUri, provider.getId())`. When a
      notice exists and its `(title, consumerId, payload)` **equals** the freshly extracted
@@ -374,6 +450,13 @@ Covers AC 1, AC 2, AC 3, AC 4, AC 5, AC 6, AC 10. Raises `SPECIFIED_OPERATION_CO
   upstream edit that does not change the notice — a `signatures[]` entry, an `updatedAt` bump —
   must not archive a notice that consents already point at. It also needs no new column and
   therefore no migration. Step 2's ordering test is what makes the comparison stable.
+
+  `consumerId` stays in the comparison, and with the membership check in place a mismatch means
+  the contract changed party — an archive-and-recreate, which is AC 5. The residual case that
+  decision 14 names is an ecosystem contract admitting two consumers against one provider: the
+  index holds one active notice per `(contractUri, provider)`, so the second consumer's notice
+  supersedes the first and two consumers regenerating in turn would archive each other. That is the inherited index's
+  shape rather than the comparison's, and it is pinned by a test rather than left to be found.
 - `service/PrivacyNoticeWriter.java` — `@Singleton` holding the one `@Transactional` method,
   `archiveAndCreate(...)`, so that archival and creation are atomic. It is a **separate bean on
   purpose**: Micronaut AOP does not apply to self-invocation, so a `@Transactional` method
@@ -406,7 +489,11 @@ Covers AC 1, AC 2, AC 3, AC 4, AC 5, AC 6, AC 10. Raises `SPECIFIED_OPERATION_CO
   generating after the contract changes returns `201` with a new `id`, and the old row carries
   `archivedAt` (AC 5); an upstream edit that does not alter the extracted payload returns `200`
   and does **not** archive; an unreachable Contract Service returns `502` with
-  `application/problem+json` (AC 10); an unknown contract returns `404`, not `502`.
+  `application/problem+json` (AC 10); an unknown contract returns `404`, not `502`; a request
+  naming a consumer the fetched contract does not name returns `400` and writes nothing
+  (point 3's membership check); and, for an ecosystem contract admitting two consumers against
+  one provider, generating for the second consumer archives the first and returns `201` — the
+  residual case of decision 14, asserted so it is recorded rather than a surprise.
 - `service/PrivacyNoticeConcurrencyIT.java` — N threads generate for the same
   `(contractUri, provider)` at once; afterwards exactly one row has `archived_at IS NULL`, every
   caller got a `2xx`, and every response names that same `id` (AC 6). Assert the row count at
@@ -441,6 +528,9 @@ Covers AC 7. Raises `SPECIFIED_OPERATION_COUNT` from `17` to `18`.
   guessing would be worse than refusing. Deriving the provider from who actually offers the
   service needs no role vocabulary and no configuration, which is why it is preferred to
   matching `members[].role` against a configured list.
+- `ContractPartyResolver` also exposes the membership predicate Step 3's point 3 introduced —
+  "is this identifier a party to this contract" — so the explicit and derived forms share one
+  definition of who a contract's parties are instead of drifting apart.
 - `PrivacyNoticeService.generateByContract(caller, contractUri)` — fetches, resolves the
   parties, then delegates to exactly the same path as Step 3 so that the duplicate, archival,
   `403`-for-a-non-party and race handling cannot drift between the two operations. The caller
@@ -487,16 +577,22 @@ end state.
   never throws, because a thrown exception here is exactly the `5xx` AC 9 forbids.
 - `config/ConsentManagerConfiguration` — a nested
   `@ConfigurationProperties("self-description")` class with `allowedHosts` (empty = any public
-  host), `allowPlaintextHttp` (default `false`) and `cacheTtl`; `application.yml`,
-  `micronaut.caches.self-descriptions` and `.env.sample` updated.
+  host; **an entry here also waives the private-address refusal for that host**, decision 8),
+  `allowPlaintextHttp` (default `false`) and `cacheTtl`; `application.yml`,
+  `micronaut.caches.self-descriptions` and `.env.sample` updated. `application-test.yml` sets
+  `allowed-hosts: [localhost, 127.0.0.1]` and `allow-plaintext-http: true`, which is what lets a
+  WireMock-stubbed self-description be fetched at all.
 - `service/PrivacyNoticeResolver.java` — `@Singleton`. Given a `PrivacyNotice` it produces the
   four-valued resolution block and an enriched payload view:
   - `contract` — re-fetch through `ContractGateway` for the live title and terms. Unreachable
     or unknown → `UNAVAILABLE`, and the stored payload is served as-is.
-  - `dataResources` — fetch each `data[].uri` through `SelfDescriptionClient` and fill `title`
-    and `description`. **Any** entry failing marks the section `UNAVAILABLE` while still
-    returning whatever did resolve, because a partially-filled list that claims `RESOLVED`
-    would misreport itself.
+  - `dataResources` — two hops (decision 8): fetch each `data[].uri`, which is a *service
+    offering* self-description, then fetch each `dataResources[]` URL it names and fill that
+    resource's `title` and `description`. The offering's own name and description fill the
+    `data[]` entry itself. **Any** failure at **either** hop marks the section `UNAVAILABLE`
+    while still returning whatever did resolve, because a partially-filled list that claims
+    `RESOLVED` would misreport itself — and an offering that resolved while its resources did
+    not is exactly that case, not a success.
   - `purposes` — resolved from the contract when the contract resolved, otherwise the stored
     text with `UNAVAILABLE`.
   - `recipients` — resolved from the local `participants` rows by identifier (decision 1);
@@ -512,21 +608,38 @@ end state.
 
 **Tests**
 
-- `api/PrivacyNoticeRetrievalIT.java` — `resolve=true` fills contract title and terms, data
-  resource descriptions, purposes and recipient details, and reports all four `RESOLVED`
-  (AC 8); `resolve=false` makes **zero** upstream requests (assert at the WireMock stub) and
-  reports four `NOT_REQUESTED`; an unknown id is `404`.
+- `api/PrivacyNoticeRetrievalIT.java` — `resolve=true` fills contract title and terms, the
+  offering descriptions **and the data-resource descriptions behind them** (assert a field that
+  only exists in the second-hop document, so one-hop resolution cannot pass), purposes and
+  recipient details, and reports all four `RESOLVED` (AC 8); `resolve=false` makes **zero**
+  upstream requests (assert at the WireMock stub) and reports four `NOT_REQUESTED`; an unknown
+  id is `404`.
 - `api/PrivacyNoticePartialResolutionIT.java` — parameterized over which external document
-  fails and how (`500`, timeout, connection refused, malformed body, and for recipients a
-  party with no local row): each yields `200` with that one section `UNAVAILABLE`, the other
-  three `RESOLVED`, and the notice body still present (AC 9). A case asserts that a
-  *partially* resolved `data` list reports `UNAVAILABLE`, not `RESOLVED`.
+  fails and how (`500`, timeout, connection refused, malformed body, a second-hop resource
+  document failing while its offering resolves, and for recipients a party with no local row):
+  each yields `200` with that one section `UNAVAILABLE`, the other three `RESOLVED`, and the
+  notice body still present (AC 9). A case asserts that a *partially* resolved `data` list
+  reports `UNAVAILABLE`, not `RESOLVED`.
+
+  **The contract cases need a cold cache, and will silently pass without one.** `ContractGateway`
+  caches on `contractUri`, so a case that generates the notice through `POST /privacy-notices`
+  and then reconfigures the stub to fail never reaches the stub: the resolver is served from the
+  cache and reports `RESOLVED` whatever the stub does. This IT therefore (a) uses a **distinct
+  `contractUri` per case**, so no two cases share a key, and (b) seeds the `privacy_notices` row
+  **directly through `PrivacyNoticeRepository`** rather than generating it through the API, so
+  nothing warms the cache before the GET. A test that asserts a cache miss reached the stub —
+  `verify(exactly(1), ...)` on the failing stub — is part of each contract case, so a future
+  change that re-warms the cache fails the test instead of hollowing it out.
 - `api/PrivacyNoticeArchivedRetrievalIT.java` — a notice archived by a regeneration is still
   `200` by id, carries `archivedAt`, and resolves (AC 11).
-- `client/SelfDescriptionGuardTest.java` — parameterized over `http://` with plaintext
-  disallowed, a loopback host, a private-range literal, a host outside a configured allow-list,
-  and a well-formed allowed URL; the first four are `Optional.empty()` with no request reaching
-  the stub, the last succeeds.
+- `client/SelfDescriptionGuardTest.java` — parameterized, with `allowed-hosts` set explicitly
+  per case rather than inherited from the test profile: `http://` with `allow-plaintext-http`
+  false; a loopback host **not** in `allowed-hosts`; a private-range literal not in
+  `allowed-hosts`; a host outside a non-empty `allowed-hosts` — all four `Optional.empty()` with
+  no request reaching the stub. Then the two that must succeed: a well-formed `https` host inside
+  `allowed-hosts`, and the loopback WireMock URL **with `127.0.0.1` in `allowed-hosts`**, which
+  pins decision 8's one relaxation and is the configuration every other resolution test runs
+  under.
 
 **Acceptance criteria:** AC 8, AC 9, AC 11.
 
@@ -543,9 +656,11 @@ Covers AC 14 across the module and closes the matrix the earlier steps only touc
 - `api/PrivacyNoticeSpecParityTest.java` — a plain surefire unit test, in the style of
   `ParticipantSchemaParityTest`: `GeneratePrivacyNotice` and `GenerateByContract` agree on
   `contractUri`'s constraints, `PrivacyNotice`'s fields are exactly the extractor's payload
-  components plus the entity's own columns and the resolution block, and no `PrivacyNotice`
-  property is `nullable`. A spec edit that drifts from the payload then costs a build rather
-  than a silent hole in a served notice.
+  components plus the entity's own columns and the resolution block, no `PrivacyNotice` property
+  is `nullable`, and the generated `data` and `recipients` accessors return their **element
+  type** and not `Object` — the assertion Step 3's inline-items probe leaves behind, so a
+  degraded `List<Object>` is a build failure rather than a silently untyped array. A spec edit
+  that drifts from the payload then costs a build rather than a silent hole in a served notice.
 - `api/PrivacyNoticeNoBase64Test.java` — AC 2 as a standing guard: grep the authored spec and
   the privacy-notice sources for `base64`, `Base64` and the pre-revision `SD64` parameter
   convention, and fail on a hit. The pre-revision API is what this ticket exists to replace, and
@@ -597,8 +712,10 @@ anything else found stale while editing is in scope.
    title is derived by a documented precedence. A future agent that assumes `title` exists will
    otherwise write a null-pointer.
 4. **The retry and cache contract** — retry on 5xx and timeouts only, never on 4xx; a `404` is
-   an empty `Optional` and never a retry; `@Cacheable` sits on `ContractGateway` and not on the
-   `@Client` interface, and why.
+   an empty `Optional` and never a retry; caching happens in `ContractGateway` and not on the
+   `@Client` interface, and it uses `SyncCache` explicitly rather than `@Cacheable` because
+   `@Cacheable` has no `unless` and would cache an empty result, freezing an unknown contract
+   for the whole TTL. Only a hit is stored.
 5. **Partial resolution** — `RESOLVED` / `UNAVAILABLE` / `NOT_REQUESTED`; resolution never fails
    a request and never writes back; generation is the single place a Contract Service outage is
    a `502`.
@@ -608,8 +725,14 @@ anything else found stale while editing is in scope.
    `privacy_notices` predates its first writer and that `uq_privacy_notices_active_contract` is
    what makes concurrent generation safe, so an application-level check is not the guarantee.
 8. **The renamed `PrivacyNoticePayload` vocabulary** — `categoriesOfData`, `controllerDetails`,
-   `withdrawalOfConsent`, `data` — and that `ConsentSnapshot` still carries the *old* names and
-   is TICKET-008's to align.
+   `withdrawalOfConsent`, `data`, and `piiPrincipalRights` now a `String` — and that
+   `ConsentSnapshot` still carries the *old* names and is TICKET-008's to align.
+   - **The self-description guard** — https-only unless `allow-plaintext-http`, host allow-list,
+     private/loopback refused **unless the host is in `allowed-hosts`**, which is both the
+     operator escape hatch and what makes WireMock-stubbed resolution testable.
+   - **The inline-`items` question, settled by Step 3's probe.** Replace the "unverified" wording
+     this plan's refresh put in the `items: $ref` gotcha with whichever answer the probe
+     produced, and name the parity-test assertion that now holds it.
 
 **Already applied by this plan agent — verify, do not redo.** Ticket #69's Step 10 deferred its
 `AGENTS.md` refresh to a plan-mode agent and no such agent ever ran, so the file every step

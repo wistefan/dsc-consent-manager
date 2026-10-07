@@ -30,6 +30,8 @@ api/
                                    # DeregistrationSummary, ParticipantUserLink(+Update),
                                    # BulkUserRegistrationEntry, BulkRegistrationEntryResult,
                                    # BulkRegistrationSummary
+  components/responses/            # BadRequest, Unauthorized, Forbidden, NotFound, Conflict
+                                   # — every operation $refs the shared 401/403 from here
   templates/server/controller.mustache   # Only override: emits the x-principal parameter
                                    # first, fully qualified, with no binding annotation
 src/main/java/com/seamware/consentmanager/
@@ -96,8 +98,12 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   the route 404s). The abstract class is named from the operation's `tags` value. Generated
   code lands in `target/generated-sources/openapi/` and is never committed.
 - **Gotcha:** a schema whose `items:` `$ref`s another named model must be written *inline* in
-  `openapi.yaml` — a cross-file `$ref` under `items` degrades to `List<Object>`. Object items
-  declared inline *within* a single component file are unaffected.
+  `openapi.yaml` — a cross-file `$ref` under `items` degrades to `List<Object>`. The only form
+  proven in this repo is the one `BulkUserRegistration` and `ParticipantPage` use: the wrapper
+  declared inline in `openapi.yaml`, its `items` an internal `#/components/schemas/...` ref.
+  Whether object items declared inline *within* a single component file survive is **unverified**
+  — no schema under `api/components/schemas/` declares one today. Assert the generated field type
+  before building a schema on it; a degraded `List<Object>` fails silently.
 - **Gotcha:** a `nullable: true` response property forces `JsonNullable` on the model, so
   response schemas declare no nullable properties — optional means absent. The PATCH tri-state
   pattern (`nullable: true` + `x-is-jackson-optional-nullable: true`) is used only on update
