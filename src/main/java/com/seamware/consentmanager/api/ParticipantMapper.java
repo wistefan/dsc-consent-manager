@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -43,6 +44,17 @@ public class ParticipantMapper {
 
     /** JSONB key of {@code legalPerson.subOrganization}. */
     private static final String SUB_ORGANIZATION_KEY = "subOrganization";
+
+    /**
+     * Every {@code legal_person} key this revision publishes, used to detect a column with none.
+     */
+    private static final List<String> LEGAL_PERSON_KEYS =
+            List.of(
+                    REGISTRATION_NUMBER_KEY,
+                    HEADQUARTERS_ADDRESS_KEY,
+                    LEGAL_ADDRESS_KEY,
+                    PARENT_ORGANIZATION_KEY,
+                    SUB_ORGANIZATION_KEY);
 
     /**
      * The representation of a stored participant. Carries no credential, because none is stored.
@@ -94,8 +106,12 @@ public class ParticipantMapper {
                 : new ParticipantEndpoints().consentNotification(consentNotification);
     }
 
+    /**
+     * A legal person none of whose properties is publishable reads back as absent, the same as an
+     * endpoints object does - an empty object would claim a legal person with no attributes.
+     */
     private static ParticipantLegalPerson toLegalPerson(Map<String, Object> column) {
-        if (column == null || column.isEmpty()) {
+        if (LEGAL_PERSON_KEYS.stream().allMatch(key -> string(column, key) == null)) {
             return null;
         }
         return new ParticipantLegalPerson()

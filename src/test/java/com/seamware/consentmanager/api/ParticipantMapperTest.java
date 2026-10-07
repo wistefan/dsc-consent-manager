@@ -52,6 +52,9 @@ class ParticipantMapperTest {
     /** The one endpoint key the representation does name, used to plant a non-string value. */
     private static final String CONSENT_NOTIFICATION_KEY = "consentNotification";
 
+    /** A legal-person key the representation does name, used to plant a non-string value. */
+    private static final String REGISTRATION_NUMBER_KEY = "registrationNumber";
+
     private final ParticipantMapper mapper = new ParticipantMapper();
 
     private static com.seamware.consentmanager.domain.Participant stored(
@@ -129,25 +132,41 @@ class ParticipantMapperTest {
         assertThat(mapper.toLegalPersonColumn(new ParticipantLegalPerson())).isNull();
     }
 
-    static Stream<Arguments> unpublishableColumns() {
+    static Stream<Arguments> unpublishableEndpointColumns() {
         return Stream.of(
                 Arguments.of("a key this revision does not name", Map.of(UNPUBLISHED_KEY, "x")),
                 Arguments.of("a value that is not a string", Map.of(CONSENT_NOTIFICATION_KEY, 42)));
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("unpublishableColumns")
+    @MethodSource("unpublishableEndpointColumns")
     @DisplayName("an endpoint this revision cannot publish reads back as absent")
     void unpublishableEndpointsReadAsAbsent(String name, Map<String, Object> column) {
         assertThat(mapper.toRepresentation(stored(column, null)).getEndpoints()).isNull();
     }
 
+    /** The non-string case names a legal-person key, so this path's own guard is exercised. */
+    static Stream<Arguments> unpublishableLegalPersonColumns() {
+        return Stream.of(
+                Arguments.of("a key this revision does not name", Map.of(UNPUBLISHED_KEY, "x")),
+                Arguments.of("a value that is not a string", Map.of(REGISTRATION_NUMBER_KEY, 42)));
+    }
+
     @ParameterizedTest(name = "{0}")
-    @MethodSource("unpublishableColumns")
-    @DisplayName("a legal-person property this revision cannot publish reads back as absent")
+    @MethodSource("unpublishableLegalPersonColumns")
+    @DisplayName("a legal person this revision cannot publish reads back as absent")
     void unpublishableLegalPersonPropertiesReadAsAbsent(String name, Map<String, Object> column) {
+        assertThat(mapper.toRepresentation(stored(Map.of(), column)).getLegalPerson()).isNull();
+    }
+
+    /** A column that names one property this revision knows still publishes that one. */
+    @Test
+    @DisplayName("publishes the known properties of a column that also carries unknown ones")
+    void publishesTheKnownPropertiesOfAMixedColumn() {
+        var column = Map.<String, Object>of(UNPUBLISHED_KEY, "x", REGISTRATION_NUMBER_KEY, "DE1");
+
         assertThat(mapper.toRepresentation(stored(Map.of(), column)).getLegalPerson())
-                .isEqualTo(new ParticipantLegalPerson());
+                .isEqualTo(new ParticipantLegalPerson().registrationNumber("DE1"));
     }
 
     @Test
