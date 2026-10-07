@@ -45,8 +45,9 @@ info:
     no approval workflow, no pending state and no administrator in the loop: the
     response is the registration. Until that call succeeds the token still
     authenticates, but every operation acting on the participant's own record
-    answers `403` — only `POST /participants` accepts a caller whose identifier
-    this service does not yet know.
+    answers `403`; `POST /participants` is the only operation acting on the
+    caller's own record that accepts an identifier this service does not yet
+    know. The participant directory is readable either way.
 
     The identifier is always taken from the token claim, never from the body, the
     path or a query parameter, so a participant can only ever register, read,

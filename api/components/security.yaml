@@ -105,10 +105,11 @@ securitySchemes:
       Host: idp.example
       Content-Type: application/x-www-form-urlencoded
 
-      grant_type=client_credentials
-      &client_id=acme-logistics
-      &client_secret=<client secret>
+      grant_type=client_credentials&client_id=acme-logistics&client_secret=<client secret>
       ```
+
+      The form body is one line — in an `application/x-www-form-urlencoded`
+      request a newline is a body byte, not a separator. The provider answers:
 
       ```json
       {
@@ -145,9 +146,13 @@ securitySchemes:
       A `client_credentials` token is short-lived and is not refreshed; the client
       requests a new one when it expires. No part of it is stored by this service.
 
-      **This service publishes no key material.** It verifies tokens against the
-      issuer's JWKS, so there is no `GET /.well-known/jwks.json` here and no
-      endpoint from which to fetch one.
+      #### Key material
+
+      **No key material is published here yet.** Tokens are verified against each
+      issuer's JWKS, and this service holds no signing key of its own today.
+      `GET /.well-known/jwks.json` (US-PM-008), which lets a participant verify the
+      signature on a consent receipt, is owned end-to-end by TICKET-011 — the route
+      and the key material both — and is not served by this module.
 
       ### Catalog Token
 

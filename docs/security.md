@@ -135,11 +135,11 @@ that is its only role, and authenticates but answers `403` on participant-scoped
 also grants another role whose identifier it does carry — the identifier is required of the *acting*
 role, see [ADR 0006](adr/0006-identifier-claim-is-required-of-the-acting-role.md).
 
-**No JWKS endpoint is served here.** The Consent Manager is a resource server: it verifies tokens
-against each issuer's published key set and holds no signing key of its own. `GET
-/.well-known/jwks.json` (US-PM-008) is owned end-to-end by TICKET-011 — the route and the key
-material both — and is deliberately not part of this module, so nothing should expect to fetch keys
-from this service.
+**No JWKS endpoint is served here yet.** The Consent Manager is a resource server: it verifies
+tokens against each issuer's published key set and holds no signing key of its own today. Receipt
+signing and the key set arrive with TICKET-011, which owns `GET /.well-known/jwks.json`
+(US-PM-008) end-to-end — the route and the key material both — so nothing should expect to fetch
+keys from this module in the meantime.
 
 ## Erasure verification
 
