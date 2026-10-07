@@ -547,7 +547,7 @@ API description and `docs/security.md`; `./mvnw verify` green (the spec is parse
 - The `AGENTS.md` refresh is **not** performed here. A step agent is forbidden by its
   operating rules from editing `AGENTS.md`: the file is appended to the agent system prompt,
   so any edit invalidates the cached prompt prefix for every later session. The refresh is
-  carved out into Step 9, which a plan-mode agent performs; Step 9 specifies the content.
+  carved out into Step 10, which a plan-mode agent performs; Step 10 specifies the content.
 - Confirm every new configuration key is in `.env.sample` and `application.yml`.
 - Confirm `SpecSecurityConsistencyTest.SPECIFIED_OPERATION_COUNT` reads `16` and that the
   parsed operation list actually has that many entries — the constant is only a tripwire if
@@ -555,14 +555,34 @@ API description and `docs/security.md`; `./mvnw verify` green (the spec is parse
   otherwise pass.
 
 **Acceptance criteria:** clean `./mvnw clean verify`; the acceptance-criteria walk is
-recorded on the ticket. `AGENTS.md` moves to Step 9.
+recorded on the ticket. `AGENTS.md` moves to Step 10.
 
-### Step 9: Refresh `AGENTS.md` (plan-mode agent)
+### Step 9: Correct the `-DskipUTs` claim in `docs/security.md`
+
+Carved out of the former Step 9 so that the part a **step** agent may do lands without
+waiting on the part it may not. `docs/security.md`'s closing line on integration tests
+documented `./mvnw verify -DskipUTs` as an integration-only run. It is not one: `skipUTs` is
+defined nowhere in `pom.xml` or `.mvn/` — Surefire and Failsafe are both declared with no
+`<configuration>` at all — and nowhere in the inherited `micronaut-parent` /
+`micronaut-platform` 5.2.0 poms either. Maven silently ignores an undefined `-D`, so the
+documented command ran the whole suite.
+
+Corrected to what is true rather than by substituting another flag: `./mvnw verify` runs both
+suites, `./mvnw test` runs the unit tests alone, and there is no integration-only flag because
+Surefire and Failsafe share the `skipTests` property and no property separating them is wired
+in `pom.xml`. Wiring one is a build change, and therefore a step of its own rather than part
+of a documentation pass.
+
+**Acceptance criteria:** `docs/security.md` no longer documents a flag the build does not
+define. No other file changes. No build run — Spotless is configured for `<java>` only, so a
+Markdown-only change cannot affect it.
+
+### Step 10: Refresh `AGENTS.md` (plan-mode agent)
 
 Owned by a **plan-mode** agent rather than a step agent, because `AGENTS.md` is appended to
-the agent system prompt and a step agent may not edit it. Documentation only: `AGENTS.md`
-plus the one `docs/security.md` line named in point 12, no code, spec, test or
-configuration change.
+the agent system prompt and a step agent may not edit it. That restriction is the whole
+reason this step exists separately, and it is why Step 9 was split off ahead of it.
+Documentation only: `AGENTS.md` alone, no code, spec, test or configuration change.
 
 Points 1-9 are `AGENTS.md`'s staleness against the merged state of ticket #69; points 10-12
 are pre-existing staleness that predates this ticket, folded in because the file is being
@@ -641,13 +661,13 @@ a cap — anything else found stale while editing is in scope.
     `micronaut-parent` 5.2.0 or `micronaut-platform` 5.2.0 poms either (both fetched and
     grepped; neither wires a surefire skip to such a property, and `micronaut-platform` has
     no further parent). Maven silently ignores an undefined `-D`, so the documented command
-    runs the whole suite. The claim appears twice and both must be corrected: `AGENTS.md`'s
-    Build & Test block and `docs/security.md`'s closing line on integration tests. Correct
-    them to what is true — `./mvnw verify` runs both suites and `./mvnw test` runs unit tests
-    only — rather than substituting another flag: Surefire and Failsafe share the `skipTests`
+    runs the whole suite. The claim appeared twice; Step 9 already corrected the
+    `docs/security.md` occurrence, leaving `AGENTS.md`'s Build & Test block, whose
+    `./mvnw verify -DskipUTs  # integration tests only` line is still wrong. Correct it to
+    what is true — `./mvnw verify` runs both suites, `./mvnw test` runs unit tests only —
+    rather than substituting another flag: Surefire and Failsafe share the `skipTests`
     property, so an integration-only run needs a property wired in `pom.xml` that does not
-    exist today. Wiring one is a build change and therefore a separate step, not Step 9's.
+    exist today. Wiring one is a build change and therefore a separate step.
 
-**Acceptance criteria:** `AGENTS.md` matches the merged state on every point above, and the
-`docs/security.md` line in point 12 is corrected; the enumeration is a floor, not a cap. No
-other file changes.
+**Acceptance criteria:** `AGENTS.md` matches the merged state on every point above; the
+enumeration is a floor, not a cap. No other file changes.
