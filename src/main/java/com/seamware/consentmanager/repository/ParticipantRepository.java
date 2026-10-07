@@ -3,6 +3,8 @@ package com.seamware.consentmanager.repository;
 import com.seamware.consentmanager.domain.Participant;
 import io.micronaut.data.annotation.Query;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
+import io.micronaut.data.model.Page;
+import io.micronaut.data.model.Pageable;
 import io.micronaut.data.model.query.builder.sql.Dialect;
 import io.micronaut.data.repository.PageableRepository;
 import java.util.Collection;
@@ -45,6 +47,21 @@ public interface ParticipantRepository extends PageableRepository<Participant, U
      */
     @Query("SELECT * FROM participants WHERE id = :id FOR UPDATE")
     Optional<Participant> findByIdForUpdate(UUID id);
+
+    /**
+     * One page of the active directory: deregistered rows are excluded by the query rather than
+     * filtered out of a page already read, which would make the page sizes ragged.
+     */
+    Page<Participant> findByDeregisteredAtIsNull(Pageable pageable);
+
+    /**
+     * The same page narrowed to one exact, case-sensitive identifier, so the directory's filter is
+     * a query rather than a scan. The dependable way to reach an identifier containing a {@code /},
+     * which a path segment carries only percent-encoded, so unlike the unfiltered listing it
+     * resolves a deregistered row too - a caller naming one asks about that record, not about who
+     * may be transacted with.
+     */
+    Page<Participant> findByIdentifier(String identifier, Pageable pageable);
 
     /** Loads several participants by primary key, so a link set resolves in one query. */
     List<Participant> findByIdIn(Collection<UUID> ids);

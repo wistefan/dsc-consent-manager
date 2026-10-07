@@ -2,10 +2,13 @@ package com.seamware.consentmanager.api;
 
 import com.seamware.consentmanager.api.generated.AbstractParticipantsController;
 import com.seamware.consentmanager.api.generated.model.Participant;
+import com.seamware.consentmanager.api.generated.model.ParticipantPage;
 import com.seamware.consentmanager.api.generated.model.ParticipantRegistration;
 import com.seamware.consentmanager.api.generated.model.ParticipantUpdate;
+import com.seamware.consentmanager.security.ConsentManagerPrincipal;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
 import com.seamware.consentmanager.service.ParticipantService;
+import io.micronaut.data.model.Page;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
 
@@ -64,6 +67,34 @@ public class ParticipantController extends AbstractParticipantsController {
         return HttpResponse.ok(
                 mapper.toRepresentation(
                         participants.update(principal.requireRegistered(), toUpdate(body))));
+    }
+
+    /**
+     * One page of the directory, for a caller discovering who it may transact with.
+     *
+     * <p>Readable by every role, and by a participant whose own row is still absent, because
+     * reading the directory is how an organization finds out who is in it.
+     */
+    @Override
+    public HttpResponse<ParticipantPage> listParticipants(
+            ConsentManagerPrincipal principal, Integer page, Integer size, String identifier) {
+        return HttpResponse.ok(toPage(participants.list(page, size, identifier)));
+    }
+
+    /** Resolves one participant by its global identifier, deregistered ones included. */
+    @Override
+    public HttpResponse<Participant> getParticipantByIdentifier(
+            ConsentManagerPrincipal principal, String identifier) {
+        return HttpResponse.ok(mapper.toRepresentation(participants.find(identifier)));
+    }
+
+    private ParticipantPage toPage(Page<com.seamware.consentmanager.domain.Participant> page) {
+        return new ParticipantPage(
+                page.getContent().stream().map(mapper::toRepresentation).toList(),
+                page.getPageNumber(),
+                page.getSize(),
+                page.getTotalSize(),
+                page.getTotalPages());
     }
 
     private com.seamware.consentmanager.service.ParticipantUpdate toUpdate(ParticipantUpdate body) {

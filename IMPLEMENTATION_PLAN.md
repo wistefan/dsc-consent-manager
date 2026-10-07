@@ -309,8 +309,8 @@ step introduces the first paged endpoint and the convention for later ones.
   clamp wins; the operation description states that a `size` above the configured ceiling is
   clamped rather than rejected, and that the response's `size` field reports the applied value.
   `page`'s `minimum: 0` and `size`'s `minimum: 1` stay in the spec — those bounds are fixed.
-- **`GET /participants/{identifier}` cannot address a slash-bearing identifier, and the
-  `identifier` query filter is the escape hatch.** This repo already settled the same question
+- **`GET /participants/{identifier}` cannot dependably address a slash-bearing identifier, and
+  the `identifier` query filter is the escape hatch.** This repo already settled the same question
   for users: `api/openapi.yaml`'s `/users/{identifier}` description (lines 291-292, 524-525)
   and `docs/user-identifiers.md` both state that a path variable never spans a `/` and the
   container percent-decodes before routing, so an encoded slash is still unaddressable, and
@@ -319,6 +319,21 @@ step introduces the first paged endpoint and the convention for later ones.
   without a fallback AC 5 would hold only for slash-free identifiers. The `identifier` query
   parameter on `GET /participants` is that fallback, and the `{identifier}` operation
   description carries the same limitation note and points at it.
+
+  Step 4 implemented this and found the premise too strong: asserted end to end, this stack
+  *does* resolve `GET /participants/<percent-encoded URI>` with a `200`, because Netty matches
+  the route before the path variable is decoded. Whether an encoded `/` survives is therefore a
+  property of the deployment - an intermediary that refuses or decodes `%2F` ahead of routing
+  still leaves such an identifier unaddressable - rather than of this service. The conclusion is
+  unchanged, so the filter stays and the operation description now says "dependable" instead of
+  "only"; what changed is that the specification no longer states a falsehood, and the IT
+  asserts what the filter guarantees rather than what the path route happens to do here.
+  `docs/user-identifiers.md` and the `/users/{identifier}` and
+  `/participants/me/users/{identifier}` descriptions made the same too-strong claim. They were
+  corrected in the same wording on review of PR #5 rather than deferred: the repo would otherwise
+  say two different things about one routing mechanism, and the user-side behaviour did not
+  change - only the sentence describing it. `POST /users/search` remains the documented escape
+  hatch.
 - **Deregistered participants are excluded from `GET /participants` by default** — the
   directory lists who can be transacted with — but remain resolvable by
   `GET /participants/{identifier}` and by the `identifier` filter, carrying `deregisteredAt`,
@@ -351,11 +366,16 @@ step introduces the first paged endpoint and the convention for later ones.
 - `repository/ParticipantRepository.java` — today it carries only `findByIdentifier`,
   `existsByIdentifier` and `findByIdIn`, none of which is deregistration-aware or paged by a
   filter. Add `Page<Participant> findByDeregisteredAtIsNull(Pageable pageable)` for the
-  default listing and `Page<Participant> findByIdentifierAndDeregisteredAtIsNull(String
-  identifier, Pageable pageable)` for the filtered one, so the exclusion and the exact match
-  are both expressed as derived queries rather than filtered in memory after a full page
-  read. `findByIdentifier` already serves the single-record lookup and must keep resolving
-  deregistered rows.
+  default listing and `Page<Participant> findByIdentifier(String identifier, Pageable
+  pageable)` for the filtered one, so the exclusion and the exact match are both expressed as
+  derived queries rather than filtered in memory after a full page read. The filtered query
+  deliberately does **not** also exclude deregistered rows, which an earlier draft of this
+  step had it do: the spec section above makes the `identifier` filter the escape hatch for
+  an identifier containing a `/`, so excluding deregistered rows there would leave a
+  retained consent's URI-shaped counterparty unreachable on every route - the one case the
+  escape hatch exists for. A caller naming one identifier asks about that record, not about
+  who may be transacted with. The single-argument `findByIdentifier` already serves the
+  single-record lookup and must keep resolving deregistered rows.
 - `ParticipantController` — both handlers; the list maps a Micronaut Data `Page` onto
   `ParticipantPage`.
 
@@ -367,8 +387,7 @@ step introduces the first paged endpoint and the convention for later ones.
   the status explicitly — "the clamp behaves" and "`400`" are different tests, and this one
   pins which of the two the spec chose), while `size: 0` and `page: -1` are `400` from the
   declared minima; lookup by identifier resolves a DID and `404`s on an unknown one; a
-  URI-shaped identifier containing a `/` is **not** reachable through the path route and is
-  resolved through `GET /participants?identifier=...` instead; a deregistered participant is
+  URI-shaped identifier containing a `/` is resolved through `GET /participants?identifier=...`; a deregistered participant is
   absent from the unfiltered listing but still resolvable by identifier with `deregisteredAt`
   set; all three roles can read, and an unregistered participant token can read too (the route
   needs no row).
