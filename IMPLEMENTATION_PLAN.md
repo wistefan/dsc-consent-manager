@@ -544,21 +544,110 @@ API description and `docs/security.md`; `./mvnw verify` green (the spec is parse
 - Walk the 15 acceptance criteria and record, for each, the test that pins it — AC 12
   recorded as struck by owner agreement on PR #1 and owned end-to-end (route and keys) by
   TICKET-011, not merely deferred.
-- Update `AGENTS.md`: the participant module's files, the pagination convention introduced
-  in Step 4 (configurable clamp, no spec-level `maximum`, and the `identifier` query filter as
-  the escape hatch for slash-bearing identifiers), the nullable-row `ParticipantPrincipal`
-  contract from Step 1 (including `CallerScope.of()` refusing an unregistered participant),
-  the new `V3__participant_deregistration.sql` migration and the `deregistered_at` semantics,
-  and ADR-0008. Also carry over the
-  correction raised on PR #1: the `service/` line still names `UserProvisioningService`,
-  which does not exist — JIT provisioning lives in `UserService` and returns a
-  `ProvisionedUser`. The line should read `UserService (registration, JIT provisioning,
-  search, links, ADR-0007 erasure), ErasureVerifier, CallerScope`.
+- The `AGENTS.md` refresh is **not** performed here. A step agent is forbidden by its
+  operating rules from editing `AGENTS.md`: the file is appended to the agent system prompt,
+  so any edit invalidates the cached prompt prefix for every later session. The refresh is
+  carved out into Step 9, which a plan-mode agent performs; Step 9 specifies the content.
 - Confirm every new configuration key is in `.env.sample` and `application.yml`.
 - Confirm `SpecSecurityConsistencyTest.SPECIFIED_OPERATION_COUNT` reads `16` and that the
   parsed operation list actually has that many entries — the constant is only a tripwire if
   it tracks reality, and a step that dropped an operation while bumping the count would
   otherwise pass.
 
-**Acceptance criteria:** clean `./mvnw clean verify`; `AGENTS.md` matches the merged state;
-the acceptance-criteria walk is recorded on the ticket.
+**Acceptance criteria:** clean `./mvnw clean verify`; the acceptance-criteria walk is
+recorded on the ticket. `AGENTS.md` moves to Step 9.
+
+### Step 9: Refresh `AGENTS.md` (plan-mode agent)
+
+Owned by a **plan-mode** agent rather than a step agent, because `AGENTS.md` is appended to
+the agent system prompt and a step agent may not edit it. Documentation only: `AGENTS.md`
+plus the one `docs/security.md` line named in point 12, no code, spec, test or
+configuration change.
+
+Points 1-9 are `AGENTS.md`'s staleness against the merged state of ticket #69; points 10-12
+are pre-existing staleness that predates this ticket, folded in because the file is being
+edited anyway and each is a statement a future agent would otherwise act on. The list is not
+a cap — anything else found stale while editing is in scope.
+
+**Stale against ticket #69**
+
+1. The `service/` line names `UserProvisioningService`, which does not exist — JIT
+   provisioning lives in `UserService` and returns a `ProvisionedUser`. Raised on PR #1. It
+   should read `UserService (registration, JIT provisioning, search, links, ADR-0007
+   erasure), ParticipantService (registration, self-service, ADR-0008 deregistration),
+   ErasureVerifier, CallerScope`.
+2. The participant module's files are unlisted: `ParticipantRegistration`,
+   `ParticipantUpdate` and `DeregistrationResult` under `service/`, and `ParticipantMapper`
+   plus `ParticipantController` under `api/`.
+3. The pagination convention from Step 4 is undocumented: `GET /participants` clamps an
+   oversized `size` to `consent-manager.participants.page-max-size` and answers `200` rather
+   than refusing, the spec carries no `maximum` because the ceiling is per deployment, and
+   the response reports the size it actually applied.
+4. Neither documented limitation of `GET /participants/{identifier}` is recorded, and the
+   wording must match what the merged tree already says rather than restating the
+   too-strong premise PR #5 removed from the spec. `api/openapi.yaml` and
+   `docs/user-identifiers.md` both say a path variable never spans a `/`, so a URI-shaped
+   identifier reaches the route **only percent-encoded**, and whether an encoded slash
+   survives is a property of the deployment rather than of this service — this stack happens
+   to route `%2F` through because the path variable is decoded after the route is matched.
+   The `identifier` query filter on `GET /participants` is therefore the *dependable* way to
+   reach such a record, not the only one. `AGENTS.md` must not say "no path segment can
+   carry a slash": that would contradict the spec and `docs/user-identifiers.md` and seed
+   the contradiction in the file every later agent loads as system prompt. The second
+   limitation belongs in the same sentence: the literal identifier `me` is unreachable on
+   that route in **every** deployment, because `GET /participants/me` claims the path.
+5. The nullable-row `ParticipantPrincipal` contract from Step 1 is undocumented:
+   `ParticipantPrincipal` may carry an identifier whose `participants` row is absent, which is
+   what makes self-registration reachable, and `POST /participants` is the only route
+   accepting that shape.
+6. `ParticipantPrincipal`'s two accessors are a **three**-state contract, and the third state
+   is the one a reader is least likely to infer. `requireRegistered()` admits any registered
+   row and is what a route merely reading or writing the caller's own record uses
+   (`ParticipantController`, and `CallerScope.of()`, which is why every participant-scoped
+   read fails closed for an unregistered token). `requireActive()` is stricter by one
+   condition — it also refuses a row carrying `deregistered_at` — and is what every route
+   acting in the dataspace in the participant's name uses (`ParticipantUserController`),
+   because letting a departed participant's token keep writing would let it re-create the
+   very affiliations deregistration removed, while read-back of its own record stays open.
+   This is what makes Step 5's retain branch safe.
+7. `V3__participant_deregistration.sql` is missing from the migration list, as are the
+   `deregistered_at` semantics: nullable, null for every active participant, set only on the
+   retain branch, with a partial index keeping the directory listing to active rows.
+8. The `api/components/schemas/` listing omits the six schemas this ticket added —
+   `Participant.yaml`, `ParticipantEndpoints.yaml`, `ParticipantLegalPerson.yaml`,
+   `ParticipantRegistration.yaml`, `ParticipantUpdate.yaml`, `DeregistrationSummary.yaml`.
+   In an API-first repo this is the more load-bearing half of point 2. The
+   `config/ConsentManagerConfiguration.java` line still reads "nested Erasure / Users
+   classes"; Step 4 added a third, `@ConfigurationProperties("participants")`. And the ADR
+   range reads `0001-0007`; it should read `0001-0008`.
+9. `SpecSecurityConsistencyTest` is named as the only build-failing spec test. This ticket
+   added two more plain surefire unit tests that fail the build on a bad spec edit and that a
+   future agent should know about before touching the participant schemas:
+   `ParticipantSchemaParityTest` (registration/update parity) and
+   `ParticipantCredentialAbsenceTest` (AC 14).
+
+**Pre-existing staleness, folded in**
+
+10. Package listings are incomplete. `error/` omits `ApiExceptionHandler.java`,
+    `ConstraintViolationProblemHandler.java` and `ProblemType.java`; `domain/` omits
+    `PrivacyNoticePayload.java`; `src/main/resources/` omits
+    `static/swagger-ui/index.html`, which is what makes the Swagger UI story in "Important
+    Files" work.
+11. `SpecReferenceResolutionTest` is a second build-failing spec test not called out: it
+    asserts every relative `$ref` resolves in both the authored `api/` tree and the
+    `target/classes/static/` copy Swagger UI loads, and that no path item is externalised.
+12. **`./mvnw verify -DskipUTs` does not skip unit tests — confirmed, not assumed.**
+    `skipUTs` appears nowhere in `pom.xml` or `.mvn/`, and not in the inherited
+    `micronaut-parent` 5.2.0 or `micronaut-platform` 5.2.0 poms either (both fetched and
+    grepped; neither wires a surefire skip to such a property, and `micronaut-platform` has
+    no further parent). Maven silently ignores an undefined `-D`, so the documented command
+    runs the whole suite. The claim appears twice and both must be corrected: `AGENTS.md`'s
+    Build & Test block and `docs/security.md`'s closing line on integration tests. Correct
+    them to what is true — `./mvnw verify` runs both suites and `./mvnw test` runs unit tests
+    only — rather than substituting another flag: Surefire and Failsafe share the `skipTests`
+    property, so an integration-only run needs a property wired in `pom.xml` that does not
+    exist today. Wiring one is a build change and therefore a separate step, not Step 9's.
+
+**Acceptance criteria:** `AGENTS.md` matches the merged state on every point above, and the
+`docs/security.md` line in point 12 is corrected; the enumeration is a floor, not a cap. No
+other file changes.
