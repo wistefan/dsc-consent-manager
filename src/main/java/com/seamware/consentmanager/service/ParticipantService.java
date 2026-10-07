@@ -5,6 +5,7 @@ import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
+import jakarta.transaction.Transactional;
 
 /**
  * The participant directory: what an organization may record about itself and what others may read
@@ -60,5 +61,24 @@ public class ParticipantService {
             }
             throw e;
         }
+    }
+
+    /**
+     * Replaces a registered participant's self-description, leaving its identifier alone.
+     *
+     * <p>A {@code PUT}, so an optional field the body omits is cleared rather than kept. The row is
+     * read back inside the transaction instead of the written entity being returned, so the caller
+     * sees what was persisted - notably the {@code updatedAt} the database assigned, which the
+     * in-memory object would otherwise report stale.
+     */
+    @Transactional
+    public Participant update(Participant current, ParticipantUpdate update) {
+        current.setLegalName(update.legalName());
+        current.setSelfDescriptionUri(update.selfDescriptionUri());
+        current.setEmail(update.email());
+        current.setEndpoints(update.endpoints());
+        current.setLegalPerson(update.legalPerson());
+        participants.update(current);
+        return participants.findById(current.getId()).orElseThrow();
     }
 }

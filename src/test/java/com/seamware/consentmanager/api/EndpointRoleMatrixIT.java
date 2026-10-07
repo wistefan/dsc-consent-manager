@@ -83,7 +83,9 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_PARTICIPANTS = "/participants";
 
-    private static final String PATH_PARTICIPANT_USERS = PATH_PARTICIPANTS + "/me/users";
+    private static final String PATH_CURRENT_PARTICIPANT = PATH_PARTICIPANTS + "/me";
+
+    private static final String PATH_PARTICIPANT_USERS = PATH_CURRENT_PARTICIPANT + "/users";
 
     private static final String PATH_BULK = PATH_PARTICIPANT_USERS + "/bulk";
 
@@ -187,7 +189,15 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 SELF_REGISTRATION,
                 () ->
                         HttpRequest.POST(
-                                PATH_PARTICIPANTS, Map.of("legalName", PARTICIPANT_LEGAL_NAME)));
+                                PATH_PARTICIPANTS, Map.of("legalName", PARTICIPANT_LEGAL_NAME))),
+        CURRENT_PARTICIPANT(
+                "get " + PATH_CURRENT_PARTICIPANT, () -> HttpRequest.GET(PATH_CURRENT_PARTICIPANT)),
+        UPDATE_CURRENT_PARTICIPANT(
+                "put " + PATH_CURRENT_PARTICIPANT,
+                () ->
+                        HttpRequest.PUT(
+                                PATH_CURRENT_PARTICIPANT,
+                                Map.of("legalName", PARTICIPANT_LEGAL_NAME)));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -254,6 +264,14 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 Endpoint.SELF_REGISTER_PARTICIPANT,
                                 denied,
                                 alreadyRegistered,
+                                denied,
+                                denied,
+                                challenged),
+                        row(Endpoint.CURRENT_PARTICIPANT, denied, ok, denied, denied, challenged),
+                        row(
+                                Endpoint.UPDATE_CURRENT_PARTICIPANT,
+                                denied,
+                                ok,
                                 denied,
                                 denied,
                                 challenged))
