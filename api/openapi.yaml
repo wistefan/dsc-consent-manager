@@ -453,6 +453,12 @@ paths:
         `403 Forbidden` rather than `404 Not Found`, exactly as the `get` is: an
         update does not double as a registration, which is
         `POST /participants`.
+
+
+        Concurrent updates are last-writer-wins: each replaces the whole
+        self-description, and neither sees the other. An update that races a
+        `DELETE /participants/me` and finds the registration gone is answered
+        `409 Conflict` and applies nothing.
       tags:
         - Participants
       security:
@@ -478,6 +484,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
         default:
           description: Unexpected error
           content:

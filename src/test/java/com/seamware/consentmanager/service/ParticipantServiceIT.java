@@ -89,18 +89,36 @@ class ParticipantServiceIT extends PostgresTestResource {
         assertThat(updated.getLegalPerson()).isEqualTo(REPLACED_LEGAL_PERSON);
     }
 
+    /**
+     * Field equality cannot tell the two apart: {@code updatedAt} is stamped in this JVM by {@code
+     * MicrosecondDateTimeProvider}, which exists precisely so the written object and the stored row
+     * carry the same value, and every other field was just written from the body. Object identity
+     * is what "re-read" means here, so that is what this pins.
+     */
     @Test
-    @DisplayName("returns the stored row, timestamp included, rather than the object written")
+    @DisplayName("returns the stored row rather than the object that was written")
     void returnsTheStoredRow() {
         Participant registered = register();
 
         Participant updated = participants.update(registered, EVERY_FIELD);
+
+        assertThat(updated)
+                .as("returning the written entity would hand back the argument itself")
+                .isNotSameAs(registered);
+
+        registered.setLegalName(ORIGINAL_LEGAL_NAME);
+        assertThat(updated.getLegalName())
+                .as("a row read back from the database cannot track later in-memory edits")
+                .isEqualTo(REPLACED_LEGAL_NAME);
+    }
+
+    @Test
+    @DisplayName("the returned row carries what the database stored")
+    void theReturnedRowCarriesWhatTheDatabaseStored() {
+        Participant updated = participants.update(register(), EVERY_FIELD);
         Participant reread = repository.findById(updated.getId()).orElseThrow();
 
-        assertThat(updated.getUpdatedAt())
-                .as("a stale updatedAt is the symptom of returning the written object")
-                .isEqualTo(reread.getUpdatedAt())
-                .isAfterOrEqualTo(registered.getCreatedAt());
+        assertThat(updated.getUpdatedAt()).isEqualTo(reread.getUpdatedAt());
         assertThat(updated.getLegalName()).isEqualTo(reread.getLegalName());
         assertThat(updated.getSelfDescriptionUri()).isEqualTo(reread.getSelfDescriptionUri());
         assertThat(updated.getEmail()).isEqualTo(reread.getEmail());

@@ -26,6 +26,15 @@ public class ParticipantService {
             "Participant '%s' is already registered. Update its registration with"
                     + " PUT /participants/me.";
 
+    /**
+     * Why an update that wrote nothing is a conflict rather than a {@code 500}; published as the
+     * problem detail. The row is read back after the write, so a vanished row surfaces here, and
+     * deregistration is the only thing that removes one.
+     */
+    private static final String DEREGISTERED_CONCURRENTLY_DETAIL =
+            "Participant '%s' was deregistered while its registration was being updated. The update"
+                    + " was not applied.";
+
     private final ParticipantRepository participants;
 
     public ParticipantService(ParticipantRepository participants) {
@@ -66,10 +75,15 @@ public class ParticipantService {
     /**
      * Replaces a registered participant's self-description, leaving its identifier alone.
      *
-     * <p>A {@code PUT}, so an optional field the body omits is cleared rather than kept. The row is
-     * read back inside the transaction instead of the written entity being returned, so the caller
-     * sees what was persisted - notably the {@code updatedAt} the database assigned, which the
-     * in-memory object would otherwise report stale.
+     * <p>A {@code PUT}, so an optional field the body omits is cleared rather than kept. It is also
+     * last-writer-wins: {@code current} is the row as it stood when the request was authenticated,
+     * and two concurrent updates do not see each other. The row is read back inside the transaction
+     * instead of the written entity being returned, so the response is the stored row by
+     * construction and a column the database rather than the application owns is never reported
+     * stale.
+     *
+     * @throws ConflictException {@code 409} when the row vanished under the update, which only a
+     *     concurrent deregistration does
      */
     @Transactional
     public Participant update(Participant current, ParticipantUpdate update) {
@@ -79,6 +93,12 @@ public class ParticipantService {
         current.setEndpoints(update.endpoints());
         current.setLegalPerson(update.legalPerson());
         participants.update(current);
-        return participants.findById(current.getId()).orElseThrow();
+        return participants
+                .findById(current.getId())
+                .orElseThrow(
+                        () ->
+                                new ConflictException(
+                                        DEREGISTERED_CONCURRENTLY_DETAIL.formatted(
+                                                current.getIdentifier())));
     }
 }

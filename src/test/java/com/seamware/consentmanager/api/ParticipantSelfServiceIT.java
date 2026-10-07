@@ -231,7 +231,18 @@ class ParticipantSelfServiceIT extends KeycloakAndPostgresTestResource {
                                 "http://clinic.example.org/sd.json")),
                 Arguments.of(
                         "a malformed email",
-                        Map.of("legalName", REPLACED_LEGAL_NAME, "email", "not-an-address")));
+                        Map.of("legalName", REPLACED_LEGAL_NAME, "email", "not-an-address")),
+                // The update body deserializes into its own generated model, so that validation
+                // cascades into the nested endpoints object is not inherited from the registration.
+                Arguments.of(
+                        "a plaintext notification endpoint",
+                        Map.of(
+                                "legalName",
+                                REPLACED_LEGAL_NAME,
+                                "endpoints",
+                                Map.of(
+                                        "consentNotification",
+                                        "http://clinic.example.org/notify"))));
     }
 
     @ParameterizedTest(name = "{0} is refused")
