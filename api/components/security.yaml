@@ -93,6 +93,62 @@ securitySchemes:
       | `azp` | no | Authorized party — the client the token was issued to. |
       | `client_id` | no | Client identifier, where the provider emits it instead of `azp`. |
 
+      #### Obtaining one
+
+      The Consent Manager has no login endpoint and issues nothing. A participant
+      obtains its token from the identity provider directly, with the OAuth2
+      client-credentials grant, using the client the provider's operator issued to
+      it:
+
+      ```http
+      POST /realms/consent-manager/protocol/openid-connect/token HTTP/1.1
+      Host: idp.example
+      Content-Type: application/x-www-form-urlencoded
+
+      grant_type=client_credentials
+      &client_id=acme-logistics
+      &client_secret=<client secret>
+      ```
+
+      ```json
+      {
+        "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6Ii4uLiJ9...",
+        "token_type": "Bearer",
+        "expires_in": 300
+      }
+      ```
+
+      How the audience is requested is the provider's business — some read a
+      `scope` or `resource` parameter, some attach it to the client — but the
+      issued token must carry the audience this service is configured to expect,
+      or it is rejected with `401`.
+
+      The provider must also be configured to put two things in that token: the
+      participant-identifier claim (default `participant_id`, configured per
+      provider) carrying the opaque identifier that names the organisation, and a
+      role that the provider's role mapping translates to `PARTICIPANT` (default
+      `consent-participant`). A token carrying the role but no identifier claim is
+      refused — with `401` when `PARTICIPANT` is the only role it grants, since it
+      then carries the identifier of no granted role at all, and otherwise with
+      `403` on the participant-scoped operations; see *Tokens granting more than
+      one role* below. A token carrying the identifier but no mappable role
+      authenticates with zero roles and is refused with `403` throughout.
+
+      The resulting `access_token` is presented verbatim on each request:
+
+      ```http
+      GET /v1/participants/me HTTP/1.1
+      Host: consent-manager.example
+      Authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6Ii4uLiJ9...
+      ```
+
+      A `client_credentials` token is short-lived and is not refreshed; the client
+      requests a new one when it expires. No part of it is stored by this service.
+
+      **This service publishes no key material.** It verifies tokens against the
+      issuer's JWKS, so there is no `GET /.well-known/jwks.json` here and no
+      endpoint from which to fetch one.
+
       ### Catalog Token
 
       A Catalog Token is issued to the dataspace catalog service so it can read

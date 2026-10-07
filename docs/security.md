@@ -89,6 +89,12 @@ Implemented operations:
 | `DELETE /users/me` | `USER` | `UserController` |
 | `POST /users/search` | `PARTICIPANT`, `CATALOG` | `UserController` |
 | `GET /users/{identifier}` | `PARTICIPANT`, `CATALOG` | `UserController` |
+| `POST /participants` | `PARTICIPANT` | `ParticipantController` |
+| `GET /participants` | `USER`, `PARTICIPANT`, `CATALOG` | `ParticipantController` |
+| `GET /participants/{identifier}` | `USER`, `PARTICIPANT`, `CATALOG` | `ParticipantController` |
+| `GET /participants/me` | `PARTICIPANT` | `ParticipantController` |
+| `PUT /participants/me` | `PARTICIPANT` | `ParticipantController` |
+| `DELETE /participants/me` | `PARTICIPANT` | `ParticipantController` |
 | `POST /participants/me/users` | `PARTICIPANT` | `ParticipantUserController` |
 | `POST /participants/me/users/bulk` | `PARTICIPANT` | `ParticipantUserController` |
 | `PATCH /participants/me/users/{identifier}` | `PARTICIPANT` | `ParticipantUserController` |
@@ -100,6 +106,40 @@ specification has no row, so the table above cannot quietly fall behind the spec
 `KeycloakRoleMatrixIT` keeps proving the same of synthetic probe routes, which is where the
 mechanism itself — discovery, signature verification, claim mapping, principal resolution — is
 exercised independently of any published route.
+
+## Participant onboarding
+
+A participant is onboarded by its identity provider, not by this service. The provider's operator
+issues the organisation an OAuth2 client and configures two things onto the tokens it mints: the
+participant-identifier claim — `claims.participant-identifier`, `IDP_CLAIM_PARTICIPANT_IDENTIFIER`,
+default `participant_id` — carrying the opaque identifier that names the organisation, and a
+provider-side role that `role-mapping.participant` (`IDP_ROLE_PARTICIPANT`, default
+`consent-participant`) translates to `PARTICIPANT`. Nothing here is negotiated with the Consent
+Manager: there is no login endpoint, no credential is accepted and none is stored.
+
+The client then fetches a token with the client-credentials grant and presents it as
+`Authorization: Bearer <token>`. The worked request and response live on the `bearerAuth` scheme in
+[`api/components/security.yaml`](../api/components/security.yaml), which is the published contract.
+
+Registration is the first call that token makes: `POST /participants` with the organisation's
+self-description. There is no approval workflow and no pending state. Until it succeeds the token
+authenticates normally — `PrincipalResolutionFilter` resolves a `ParticipantPrincipal` whose
+`participants` row is absent — but every other participant-scoped operation reads the row through
+`ParticipantPrincipal.requireRegistered()` (or `requireActive()`, which also refuses a deregistered
+one) and so answers `403` naming the unregistered-participant case; `CallerScope.of()` refuses it
+on the user-search routes for the same reason. Reaching `POST /participants` is the single reason
+the row-absent shape is resolved at all rather than rejected in the filter.
+
+A token granting `PARTICIPANT` but carrying no participant identifier is rejected with `401` when
+that is its only role, and authenticates but answers `403` on participant-scoped operations when it
+also grants another role whose identifier it does carry — the identifier is required of the *acting*
+role, see [ADR 0006](adr/0006-identifier-claim-is-required-of-the-acting-role.md).
+
+**No JWKS endpoint is served here.** The Consent Manager is a resource server: it verifies tokens
+against each issuer's published key set and holds no signing key of its own. `GET
+/.well-known/jwks.json` (US-PM-008) is owned end-to-end by TICKET-011 — the route and the key
+material both — and is deliberately not part of this module, so nothing should expect to fetch keys
+from this service.
 
 ## Erasure verification
 

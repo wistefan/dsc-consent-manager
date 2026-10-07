@@ -29,6 +29,28 @@ info:
     (missing, malformed, expired, incorrectly signed or untrusted token, with the
     body revealing nothing about which), while a request that authenticates but
     lacks the role required by the operation receives `403 Forbidden`.
+
+    ## Participant onboarding
+
+    **The identity provider is the gatekeeper.** A participant becomes able to
+    call this API the moment one of the trusted providers will issue it a token
+    carrying the `PARTICIPANT` role and a participant-identifier claim — which is
+    a matter between the organisation and that provider's operator, and happens
+    entirely outside this service. There is no login endpoint, no credential is
+    accepted and none is stored; the worked `client_credentials` example is on the
+    `bearerAuth` security scheme.
+
+    **Onboarding is one call.** Holding such a token, the organisation
+    `POST`s `/participants` with its self-description and is registered. There is
+    no approval workflow, no pending state and no administrator in the loop: the
+    response is the registration. Until that call succeeds the token still
+    authenticates, but every operation acting on the participant's own record
+    answers `403` — only `POST /participants` accepts a caller whose identifier
+    this service does not yet know.
+
+    The identifier is always taken from the token claim, never from the body, the
+    path or a query parameter, so a participant can only ever register, read,
+    update or deregister itself. `DELETE /participants/me` reverses onboarding.
   version: "0.1.0"
   contact:
     name: Seamware
