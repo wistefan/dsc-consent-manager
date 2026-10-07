@@ -2,6 +2,7 @@ package com.seamware.consentmanager.repository;
 
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentStatus;
+import io.micronaut.data.annotation.Query;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
 import io.micronaut.data.model.Page;
 import io.micronaut.data.model.Pageable;
@@ -103,4 +104,28 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
      * @return a list of child consents referencing the specified parent
      */
     List<Consent> findByParentConsentId(UUID parentConsentId);
+
+    /**
+     * Consents in any of the given statuses where the participant is the provider.
+     *
+     * <p>Deregistration reads the two sides separately rather than through one {@code OR} query
+     * because a derived query binds the status enums for us; a consent naming the participant on
+     * both sides comes back from both calls and is de-duplicated by id.
+     */
+    List<Consent> findByProviderIdAndStatusIn(UUID providerId, Collection<ConsentStatus> statuses);
+
+    /** Consents in any of the given statuses where the participant is the consumer. */
+    List<Consent> findByConsumerIdAndStatusIn(UUID consumerId, Collection<ConsentStatus> statuses);
+
+    /**
+     * How many consents name the participant on either side, counting a self-dealing consent once.
+     *
+     * <p>Deregistration needs this twice over: it is the retained-consent tally reported back, and
+     * a non-zero count is what forces the record to be kept, since both participant foreign keys on
+     * {@code consents} are {@code ON DELETE RESTRICT}.
+     */
+    @Query(
+            "SELECT COUNT(*) FROM consents"
+                    + " WHERE provider_id = :participantId OR consumer_id = :participantId")
+    long countByParticipant(UUID participantId);
 }

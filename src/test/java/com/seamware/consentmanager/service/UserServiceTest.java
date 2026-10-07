@@ -1076,6 +1076,11 @@ class UserServiceTest {
         }
 
         @Override
+        public long deleteByIdParticipantId(UUID participantId) {
+            throw unsupported();
+        }
+
+        @Override
         @SuppressWarnings("unchecked")
         public <S extends UserParticipant> S save(S entity) {
             failIfTold();
@@ -1269,6 +1274,23 @@ class UserServiceTest {
 
         @Override
         public List<Consent> findByParentConsentId(UUID parentConsentId) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findByProviderIdAndStatusIn(
+                UUID providerId, Collection<ConsentStatus> statuses) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findByConsumerIdAndStatusIn(
+                UUID consumerId, Collection<ConsentStatus> statuses) {
+            throw unsupported();
+        }
+
+        @Override
+        public long countByParticipant(UUID participantId) {
             throw unsupported();
         }
 

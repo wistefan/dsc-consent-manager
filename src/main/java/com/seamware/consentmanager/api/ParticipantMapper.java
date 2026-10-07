@@ -134,8 +134,11 @@ public class ParticipantMapper {
         }
     }
 
-    /** Timestamps are stored as instants and published at UTC, never at the server's zone. */
-    private static OffsetDateTime atUtc(Instant instant) {
+    /**
+     * Timestamps are stored as instants and published at UTC, never at the server's zone. Shared
+     * with {@link ParticipantController}, which renders the deregistration stamp the same way.
+     */
+    static OffsetDateTime atUtc(Instant instant) {
         return instant == null ? null : instant.atOffset(ZoneOffset.UTC);
     }
 }

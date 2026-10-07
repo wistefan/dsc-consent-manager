@@ -1,12 +1,14 @@
 package com.seamware.consentmanager.api;
 
 import com.seamware.consentmanager.api.generated.AbstractParticipantsController;
+import com.seamware.consentmanager.api.generated.model.DeregistrationSummary;
 import com.seamware.consentmanager.api.generated.model.Participant;
 import com.seamware.consentmanager.api.generated.model.ParticipantPage;
 import com.seamware.consentmanager.api.generated.model.ParticipantRegistration;
 import com.seamware.consentmanager.api.generated.model.ParticipantUpdate;
 import com.seamware.consentmanager.security.ConsentManagerPrincipal;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
+import com.seamware.consentmanager.service.DeregistrationResult;
 import com.seamware.consentmanager.service.ParticipantService;
 import io.micronaut.data.model.Page;
 import io.micronaut.http.HttpResponse;
@@ -67,6 +69,25 @@ public class ParticipantController extends AbstractParticipantsController {
         return HttpResponse.ok(
                 mapper.toRepresentation(
                         participants.update(principal.requireRegistered(), toUpdate(body))));
+    }
+
+    /**
+     * Deregisters the caller's own organization and reports what the cascade closed.
+     *
+     * <p>A {@code 200} with a summary rather than a {@code 204}: the caller has to be able to see
+     * that its record was retained rather than deleted, and what was terminated on the way out.
+     */
+    @Override
+    public HttpResponse<DeregistrationSummary> deregisterCurrentParticipant(
+            ParticipantPrincipal principal) {
+        DeregistrationResult result = participants.deregister(principal.requireRegistered());
+        return HttpResponse.ok(
+                new DeregistrationSummary(
+                                result.consentsTerminated(),
+                                Math.toIntExact(result.consentsRetained()),
+                                result.noticesArchived(),
+                                Math.toIntExact(result.linksRemoved()))
+                        .deregisteredAt(ParticipantMapper.atUtc(result.deregisteredAt())));
     }
 
     /**

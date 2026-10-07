@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.repository;
 
 import com.seamware.consentmanager.domain.PrivacyNotice;
+import io.micronaut.data.annotation.Query;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
 import io.micronaut.data.model.Page;
 import io.micronaut.data.model.Pageable;
@@ -53,4 +54,24 @@ public interface PrivacyNoticeRepository extends PageableRepository<PrivacyNotic
      * @return a page of active privacy notices matching the criteria
      */
     Page<PrivacyNotice> findByProviderIdAndArchivedAtIsNull(UUID providerId, Pageable pageable);
+
+    /**
+     * Active (non-archived) privacy notices where the participant is the consumer.
+     *
+     * <p>The provider-side counterpart above was all this service needed until deregistration,
+     * which archives a departing participant's notices from whichever side it stands on.
+     */
+    List<PrivacyNotice> findByConsumerIdAndArchivedAtIsNull(UUID consumerId);
+
+    /**
+     * How many privacy notices name the participant on either side, archived ones included.
+     *
+     * <p>Both participant foreign keys here are {@code ON DELETE RESTRICT}, so a non-zero count is
+     * what forces deregistration to retain the record rather than delete it. Archiving a notice
+     * does not release the reference, which is why this counts them too.
+     */
+    @Query(
+            "SELECT COUNT(*) FROM privacy_notices"
+                    + " WHERE provider_id = :participantId OR consumer_id = :participantId")
+    long countByParticipant(UUID participantId);
 }
