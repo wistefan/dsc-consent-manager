@@ -9,6 +9,7 @@ import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.IdentityProviderRegistry;
+import com.seamware.consentmanager.security.Role;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
@@ -26,6 +27,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -82,6 +84,14 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     private static final String PATH_PARTICIPANT_USERS = "/participants/me/users";
 
     private static final String PATH_BULK = PATH_PARTICIPANT_USERS + "/bulk";
+
+    /**
+     * The one {@code PARTICIPANT} operation an unregistered identifier may reach, named as {@link
+     * Endpoint#toString()} names it. It is what creates the row every other route demands, so it is
+     * excluded from {@link #participantScopedEndpoints()}; it is specified from step 2 onward and
+     * until then matches nothing, which is harmless.
+     */
+    private static final String SELF_REGISTRATION = "post /participants";
 
     /** Body of a request to an operation that specifies none; the route ignores it. */
     private static final String NO_BODY = "";
@@ -304,6 +314,68 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                     .hasValueSatisfying(
                             type -> assertThat(type.toString()).startsWith(PROBLEM_JSON));
         }
+    }
+
+    /**
+     * The published routes a {@code PARTICIPANT} may only reach once its identifier is registered:
+     * every operation admitting the role, less the registration that creates the row.
+     *
+     * <p>Derived from the specification rather than listed, for the same reason {@link
+     * #everySpecifiedOperationIsCovered()} exists - a participant route added later and forgotten
+     * here would silently skip the very check this case makes.
+     */
+    static Stream<Arguments> participantScopedEndpoints() {
+        Map<String, Endpoint> rows =
+                Stream.of(Endpoint.values())
+                        .collect(Collectors.toMap(Endpoint::toString, endpoint -> endpoint));
+        List<Arguments> cases =
+                SpecSecurityConsistencyTest.specOperations()
+                        .filter(operation -> operation.roles().contains(Role.PARTICIPANT.name()))
+                        .map(operation -> operation.httpMethod() + " " + operation.path())
+                        .filter(specification -> !SELF_REGISTRATION.equals(specification))
+                        .map(specification -> Arguments.of(rowFor(rows, specification)))
+                        .toList();
+
+        assertThat(cases)
+                .as("the specification admits PARTICIPANT somewhere, or this case tests nothing")
+                .isNotEmpty();
+        return cases.stream();
+    }
+
+    /**
+     * The matrix row for a specified operation, which {@code everySpecifiedOperationIsCovered}
+     * keeps total.
+     */
+    private static Endpoint rowFor(Map<String, Endpoint> rows, String specification) {
+        Endpoint endpoint = rows.get(specification);
+        assertThat(endpoint).as("no matrix row for %s", specification).isNotNull();
+        return endpoint;
+    }
+
+    /**
+     * An unregistered identifier now resolves a principal instead of being refused by the filter,
+     * so each of these routes has to do the refusing itself.
+     *
+     * <p>The assertion is on the status rather than on an empty result, so a later change that
+     * answers an unregistered participant with an empty page - which would still be the scope
+     * widening this guards against, merely with nothing to disclose yet - fails here.
+     */
+    @ParameterizedTest(name = "{0} refuses an unregistered participant")
+    @MethodSource("participantScopedEndpoints")
+    @DisplayName("an unregistered participant is refused by every route but its own registration")
+    void unregisteredParticipantIsRefused(Endpoint endpoint) {
+        deregisterTheCallerParticipant();
+
+        HttpResponse<String> response = exchange(endpoint.request(), Caller.PARTICIPANT.token());
+
+        assertThat(response.code()).isEqualTo(HttpStatus.FORBIDDEN.getCode());
+    }
+
+    /** Drops the caller's {@code participants} row, leaving its token valid but unregistered. */
+    private void deregisterTheCallerParticipant() {
+        users.findByIdentifier(LINKED_USER)
+                .ifPresent(user -> links.findByIdUserId(user.getId()).forEach(links::delete));
+        participants.findByIdentifier(CALLER_PARTICIPANT).ifPresent(participants::delete);
     }
 
     @Test

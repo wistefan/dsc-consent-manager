@@ -334,13 +334,17 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
         /**
          * Serves participants only.
          *
+         * <p>Reads the row through {@code requireRegistered()}: this matrix only ever mints tokens
+         * for the seeded participant, so an absent row is a failure of that seeding and should
+         * surface as a clean {@code 403} rather than a {@code NullPointerException}.
+         *
          * @param participant the resolved caller
          * @return the participant's identifier and legal name
          */
         @Get("/participant")
         @Secured("PARTICIPANT")
         String participant(ParticipantPrincipal participant) {
-            return participant.identifier() + " " + participant.participant().getLegalName();
+            return participant.identifier() + " " + participant.requireRegistered().getLegalName();
         }
 
         /**

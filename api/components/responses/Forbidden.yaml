@@ -11,8 +11,13 @@ description: >
   permitted to perform this operation. That covers a token that grants no role
   permitted here, a token whose roles claim is absent or wholly unmappable (it
   authenticates with zero roles), and a participant token whose identifier is
-  not registered with this service. The body deliberately does not say which of
-  these applies.
+  not registered with this service, on any operation acting on the participant's
+  own record or on the users it has linked.
+
+  The body names the unregistered-participant case, because its remedy —
+  registering — is the caller's own to apply and the identifier it echoes is the
+  caller's own token claim. The remaining causes are deliberately not told apart
+  from one another.
 content:
   application/problem+json:
     schema:
