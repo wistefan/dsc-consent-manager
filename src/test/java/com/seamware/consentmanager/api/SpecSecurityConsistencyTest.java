@@ -156,6 +156,7 @@ class SpecSecurityConsistencyTest {
             boolean anonymous,
             List<String> schemes,
             List<String> roles,
+            List<String> parameterNames,
             Map<String, String> responseRefs) {
 
         @Override
@@ -498,7 +499,15 @@ class SpecSecurityConsistencyTest {
                 effective.isEmpty(),
                 List.copyOf(schemes),
                 List.copyOf(roles),
+                parameterNamesOf(operation),
                 responseRefsOf(operation));
+    }
+
+    /** The names of the path and query parameters an operation accepts, in declaration order. */
+    private static List<String> parameterNamesOf(Map<String, Object> operation) {
+        return asList(operation.get("parameters")).stream()
+                .map(parameter -> String.valueOf(asMap(parameter).get("name")))
+                .toList();
     }
 
     /** The {@code $ref} each documented status code resolves to, skipping inline responses. */
