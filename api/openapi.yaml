@@ -393,6 +393,106 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /participants/me:
+    get:
+      operationId: getCurrentParticipant
+      summary: Read the calling participant's own registration
+      description: >
+        Returns the registration of the participant the bearer token names.
+
+
+        Which record is returned is decided entirely by the token's
+        `claims.participant-identifier` claim, so there is no way to ask for
+        anybody else's record here; reading another participant is
+        `GET /participants/{identifier}`.
+
+
+        A token whose participant has never registered is answered with
+        `403 Forbidden` rather than `404 Not Found`: the caller is a valid
+        participant that has not yet created its record, and
+        `POST /participants` is what creates it.
+      tags:
+        - Participants
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      responses:
+        "200":
+          description: The calling participant's registration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+    put:
+      operationId: updateCurrentParticipant
+      summary: Replace the calling participant's own registration
+      description: >
+        Replaces the self-description of the participant the bearer token names
+        and returns the stored result.
+
+
+        The body is the self-description in full, not a patch: an optional
+        property left out is cleared. The identifier is not part of the body and
+        is never changed by an update - an `identifier` sent anyway is ignored
+        rather than rejected - so every consent and privacy notice already keyed
+        on it keeps naming the same organization.
+
+
+        A token whose participant has never registered is answered with
+        `403 Forbidden` rather than `404 Not Found`, exactly as the `get` is: an
+        update does not double as a registration, which is
+        `POST /participants`.
+
+
+        Concurrent updates are last-writer-wins: each replaces the whole
+        self-description, and the later one wins outright. An update that finds
+        the registration deregistered, or no longer there at all, applies
+        nothing and is answered `409 Conflict`.
+      tags:
+        - Participants
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParticipantUpdate"
+      responses:
+        "200":
+          description: The registration as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
   /participants/me/users/bulk:
     post:
       operationId: registerParticipantUsersBulk
@@ -725,6 +825,9 @@ components:
 
     ParticipantRegistration:
       $ref: "./components/schemas/ParticipantRegistration.yaml"
+
+    ParticipantUpdate:
+      $ref: "./components/schemas/ParticipantUpdate.yaml"
 
     ParticipantUserLink:
       $ref: "./components/schemas/ParticipantUserLink.yaml"

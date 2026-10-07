@@ -1153,6 +1153,11 @@ class UserServiceTest {
         }
 
         @Override
+        public Optional<Participant> findByIdForUpdate(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
         public Optional<Participant> findByIdentifier(String identifier) {
             return rows().values().stream()
                     .filter(p -> p.getIdentifier().equals(identifier))
