@@ -2,6 +2,7 @@ package com.seamware.consentmanager.repository;
 
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentStatus;
+import io.micronaut.data.annotation.Query;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
 import io.micronaut.data.model.Page;
 import io.micronaut.data.model.Pageable;
@@ -103,4 +104,50 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
      * @return a list of child consents referencing the specified parent
      */
     List<Consent> findByParentConsentId(UUID parentConsentId);
+
+    /**
+     * Consents in any of the given statuses where the participant is the provider.
+     *
+     * <p>Deregistration reads the two sides separately rather than through one {@code OR} query
+     * because a derived query binds the status enums for us; a consent naming the participant on
+     * both sides comes back from both calls and is de-duplicated by id.
+     */
+    List<Consent> findByProviderIdAndStatusIn(UUID providerId, Collection<ConsentStatus> statuses);
+
+    /** Consents in any of the given statuses where the participant is the consumer. */
+    List<Consent> findByConsumerIdAndStatusIn(UUID consumerId, Collection<ConsentStatus> statuses);
+
+    /**
+     * How many consents name the participant on either side, counting a self-dealing consent once.
+     *
+     * <p>Deregistration needs this twice over: it is the retained-consent tally reported back, and
+     * a non-zero count is what forces the record to be kept, since both participant foreign keys on
+     * {@code consents} are {@code ON DELETE RESTRICT}. Counted as an {@code int} because the tally
+     * is published through an {@code int32} field and could never have carried more.
+     */
+    @Query(
+            "SELECT COUNT(*) FROM consents"
+                    + " WHERE provider_id = :participantId OR consumer_id = :participantId")
+    int countByParticipant(UUID participantId);
+
+    /** How many consents in the given status name the participant on either side. */
+    @Query(
+            "SELECT COUNT(*) FROM consents"
+                    + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
+                    + " AND status = :status")
+    int countByParticipantAndStatus(UUID participantId, ConsentStatus status);
+
+    /**
+     * The first {@code limit} consent ids in the given status naming the participant, in id order.
+     *
+     * <p>Deregistration's refusal names the consents blocking it and reports the rest as a count,
+     * so only as many ids as it prints are ever read; a long-lived participant would otherwise
+     * materialise its whole granted history to produce one problem detail. The order is the id
+     * order the detail prints in, so the listed ids are stable across retries.
+     */
+    @Query(
+            "SELECT id FROM consents"
+                    + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
+                    + " AND status = :status ORDER BY id LIMIT :limit")
+    List<UUID> findIdsByParticipantAndStatus(UUID participantId, ConsentStatus status, int limit);
 }

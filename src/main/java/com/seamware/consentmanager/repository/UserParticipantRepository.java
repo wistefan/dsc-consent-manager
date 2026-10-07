@@ -64,4 +64,14 @@ public interface UserParticipantRepository
      * @return how many associations were removed
      */
     long deleteByIdUserId(UUID userId);
+
+    /**
+     * Removes every affiliation the given participant has, in one statement.
+     *
+     * <p>Deregistration needs this on both of its branches. The foreign key's {@code ON DELETE
+     * CASCADE} only fires when the {@code participants} row is actually deleted, so a retained row
+     * would otherwise keep every link to users who no longer have a counterparty. Counted as an
+     * {@code int} because the tally is published through an {@code int32} field.
+     */
+    int deleteByIdParticipantId(UUID participantId);
 }

@@ -12,8 +12,9 @@ import java.util.Objects;
  * identifier the {@code participants} table does not know still becomes a principal, just one whose
  * {@code participant} row is absent. That shape exists for exactly one route - {@code POST
  * /participants}, where a participant registers itself. Every other participant-scoped caller reads
- * the row through {@link #requireRegistered()} and so refuses an unregistered identifier with
- * {@code 403}.
+ * the row through {@link #requireRegistered()}, or through {@link #requireActive()} where it acts
+ * in the dataspace rather than merely reads the record back, and so refuses an unregistered - or a
+ * departed - identifier with {@code 403}.
  *
  * @param issuer the verified {@code iss}
  * @param subject the verified {@code sub}
@@ -58,5 +59,29 @@ public record ParticipantPrincipal(
                             + " using this operation.");
         }
         return participant;
+    }
+
+    /**
+     * The participant's registered row, for every operation that acts in the dataspace in its name.
+     *
+     * <p>Stricter than {@link #requireRegistered()} by one condition: a record marked {@code
+     * deregistered_at} is retained only so the consents and privacy notices naming it stay legible,
+     * and the organization behind it has left. Letting its token keep writing would let it
+     * re-create the very affiliations deregistration removed. Reading its own record stays open, so
+     * a departed participant can still see what became of it.
+     *
+     * @throws ForbiddenException {@code 403} when the identifier is not registered, or its record
+     *     is deregistered
+     */
+    public Participant requireActive() {
+        Participant registered = requireRegistered();
+        if (registered.getDeregisteredAt() != null) {
+            throw new ForbiddenException(
+                    "Participant '"
+                            + identifier
+                            + "' is deregistered. Register it again with POST /participants before"
+                            + " using this operation.");
+        }
+        return registered;
     }
 }

@@ -592,6 +592,76 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+    delete:
+      operationId: deregisterCurrentParticipant
+      summary: Deregister the calling participant
+      description: >
+        Removes the organization the bearer token names from the dataspace and
+        reports what that entailed.
+
+
+        The cascade runs in this order, as one transaction. Any consent naming
+        the participant as provider or consumer that is still `GRANTED` refuses
+        the whole operation with `409 Conflict`, and the problem detail names
+        the blocking consents: a granted consent is a permission the *user*
+        gave, and only that user can withdraw it. Otherwise every `PENDING` and
+        `DRAFT` consent naming the participant moves to `TERMINATED` with a
+        `CONSENT_TERMINATED` event, because an unanswered offer must not stay
+        advanceable once one side has left. Every link to a user is then
+        removed, and every privacy notice naming the participant as provider or
+        consumer that is not already archived is archived.
+
+
+        The `participants` row is finally deleted outright when nothing refers
+        to it, and otherwise retained, marked with `deregisteredAt`, with its
+        contact `email` cleared and its `endpoints` emptied. A retained record
+        keeps its `identifier`, `legalName`, `selfDescriptionUri` and
+        `legalPerson` intact and deliberately unscrubbed, so that the consents
+        and notices that still name it stay legible; it is excluded from
+        `GET /participants` but still resolves through
+        `GET /participants/{identifier}`. Registering the same identifier again
+        reactivates that record rather than conflicting with it.
+
+
+        A repeated call on an already-deregistered record is a `409 Conflict`
+        rather than a second cascade, so the recorded departure time cannot be
+        moved. After a deregistration the same token still reads its own record,
+        but no longer writes: the `/participants/me/users` operations answer
+        `403 Forbidden` until the participant registers again.
+
+
+        For why a granted consent blocks the exit while a draft does not, why an
+        organization is not pseudonymised the way an erased user is, and what
+        `deregisteredAt` does and does not mean, see
+        `docs/adr/0008-deregistration-retains-the-participant-and-closes-its-open-business.md`.
+      tags:
+        - Participants
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      responses:
+        "200":
+          description: >
+            The participant was deregistered. The body reports what that
+            entailed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeregistrationSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
   /participants/me/users/bulk:
     post:
       operationId: registerParticipantUsersBulk
@@ -988,6 +1058,9 @@ components:
 
     ParticipantUpdate:
       $ref: "./components/schemas/ParticipantUpdate.yaml"
+
+    DeregistrationSummary:
+      $ref: "./components/schemas/DeregistrationSummary.yaml"
 
     ParticipantUserLink:
       $ref: "./components/schemas/ParticipantUserLink.yaml"

@@ -201,7 +201,10 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 () ->
                         HttpRequest.PUT(
                                 PATH_CURRENT_PARTICIPANT,
-                                Map.of("legalName", PARTICIPANT_LEGAL_NAME)));
+                                Map.of("legalName", PARTICIPANT_LEGAL_NAME))),
+        DEREGISTER_CURRENT_PARTICIPANT(
+                "delete " + PATH_CURRENT_PARTICIPANT,
+                () -> HttpRequest.DELETE(PATH_CURRENT_PARTICIPANT));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -278,6 +281,16 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                         row(Endpoint.CURRENT_PARTICIPANT, denied, ok, denied, denied, challenged),
                         row(
                                 Endpoint.UPDATE_CURRENT_PARTICIPANT,
+                                denied,
+                                ok,
+                                denied,
+                                denied,
+                                challenged),
+                        // The fixture's participant has neither a consent nor a notice naming it,
+                        // so the caller leaves on the branch that deletes the row outright; the
+                        // next case re-seeds it.
+                        row(
+                                Endpoint.DEREGISTER_CURRENT_PARTICIPANT,
                                 denied,
                                 ok,
                                 denied,

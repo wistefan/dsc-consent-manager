@@ -1,0 +1,58 @@
+# Schema: DeregistrationSummary — referenced from api/openapi.yaml as
+# components.schemas.DeregistrationSummary.
+#
+# What `DELETE /participants/me` did, reported back to the departing
+# organization. Every count is always present, zero included; `deregisteredAt`
+# is absent when the row was deleted outright rather than retained.
+type: object
+description: >
+  The outcome of a deregistration: how much was closed, unlinked and archived,
+  and whether the participant record was kept or deleted.
+properties:
+  deregisteredAt:
+    type: string
+    format: date-time
+    description: >
+      When the record was marked deregistered. Present only when the record was
+      retained, which is what happens whenever a consent or a privacy notice
+      still names the participant - the usual case. Absent when nothing referred
+      to the record and it was deleted outright.
+    example: "2026-10-07T09:14:22.481193Z"
+  consentsTerminated:
+    type: integer
+    format: int32
+    minimum: 0
+    description: >
+      Consents naming the participant that were still unanswered - `PENDING` or
+      `DRAFT` - and are now `TERMINATED`, each with a new `CONSENT_TERMINATED`
+      event, since an offer cannot be answered once one side has left.
+    example: 1
+  consentsRetained:
+    type: integer
+    format: int32
+    minimum: 0
+    description: >
+      Consents naming the participant that remain in the record afterwards,
+      terminated ones included. They are the evidence of what was permitted
+      while it was permitted and are never deleted.
+    example: 4
+  noticesArchived:
+    type: integer
+    format: int32
+    minimum: 0
+    description: >
+      Privacy notices naming the participant as provider or consumer that were
+      still live and are now archived. Already-archived notices are left alone
+      and are not counted here.
+    example: 2
+  linksRemoved:
+    type: integer
+    format: int32
+    minimum: 0
+    description: Affiliations with users that were removed, ending every link.
+    example: 7
+required:
+  - consentsTerminated
+  - consentsRetained
+  - noticesArchived
+  - linksRemoved
