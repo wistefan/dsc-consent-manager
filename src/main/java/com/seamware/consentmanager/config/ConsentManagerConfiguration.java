@@ -15,6 +15,8 @@ import io.micronaut.core.annotation.Nullable;
  *   <li>{@code CONSENT_MANAGER_URL} &rarr; {@link #getUrl()}
  *   <li>{@code CONTRACT_SERVICE_URL} &rarr; {@link #getContractServiceUrl()}
  *   <li>{@code USERS_SEARCH_MAX_RESULTS} &rarr; {@link Users#getSearchMaxResults()}
+ *   <li>{@code PARTICIPANTS_PAGE_DEFAULT_SIZE} &rarr; {@link Participants#getPageDefaultSize()}
+ *   <li>{@code PARTICIPANTS_PAGE_MAX_SIZE} &rarr; {@link Participants#getPageMaxSize()}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut
@@ -137,6 +139,52 @@ public class ConsentManagerConfiguration {
         /** Sets the cap; a value below one would make every bulk registration a bad request. */
         public void setBulkMaxSize(int bulkMaxSize) {
             this.bulkMaxSize = bulkMaxSize;
+        }
+    }
+
+    /** Paging of the participant directory, bound under {@code consent-manager.participants}. */
+    @ConfigurationProperties("participants")
+    public static class Participants {
+
+        /** Records a directory page carries when the caller asks for no size. */
+        public static final int DEFAULT_PAGE_DEFAULT_SIZE = 20;
+
+        /** Most records a directory page may carry when no ceiling is configured. */
+        public static final int DEFAULT_PAGE_MAX_SIZE = 100;
+
+        private int pageDefaultSize = DEFAULT_PAGE_DEFAULT_SIZE;
+
+        private int pageMaxSize = DEFAULT_PAGE_MAX_SIZE;
+
+        /**
+         * Page size applied when {@code GET /participants} names none, bound to {@code
+         * PARTICIPANTS_PAGE_DEFAULT_SIZE}.
+         *
+         * <p>Deliberately absent from the specification, which could not track a value configured
+         * per deployment; the response reports the size it applied instead.
+         */
+        public int getPageDefaultSize() {
+            return pageDefaultSize;
+        }
+
+        /** Sets the default; a value below one would make every page answer empty. */
+        public void setPageDefaultSize(int pageDefaultSize) {
+            this.pageDefaultSize = pageDefaultSize;
+        }
+
+        /**
+         * Most records one directory page may carry, bound to {@code PARTICIPANTS_PAGE_MAX_SIZE}.
+         *
+         * <p>A larger requested size is clamped to this rather than refused, so raising or lowering
+         * the ceiling never turns a caller's working request into a {@code 400}.
+         */
+        public int getPageMaxSize() {
+            return pageMaxSize;
+        }
+
+        /** Sets the ceiling; it also caps the default, since the clamp applies to that too. */
+        public void setPageMaxSize(int pageMaxSize) {
+            this.pageMaxSize = pageMaxSize;
         }
     }
 }

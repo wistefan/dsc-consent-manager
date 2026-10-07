@@ -1170,6 +1170,16 @@ class UserServiceTest {
         }
 
         @Override
+        public Page<Participant> findByDeregisteredAtIsNull(Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Participant> findByIdentifier(String identifier, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
         public <S extends Participant> S save(S entity) {
             throw unsupported();
         }

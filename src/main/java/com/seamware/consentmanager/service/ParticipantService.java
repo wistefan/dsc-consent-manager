@@ -1,9 +1,15 @@
 package com.seamware.consentmanager.service;
 
+import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.error.ConflictException;
+import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.repository.ParticipantRepository;
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
+import io.micronaut.data.model.Page;
+import io.micronaut.data.model.Pageable;
+import io.micronaut.data.model.Sort;
 import jakarta.inject.Singleton;
 import jakarta.transaction.Transactional;
 
@@ -43,10 +49,66 @@ public class ParticipantService {
     private static final String DEREGISTERED_DETAIL =
             "Participant '%s' is deregistered. Its registration can no longer be updated.";
 
+    /** Why an identifier naming nobody is a {@code 404}; published as the problem detail. */
+    private static final String UNKNOWN_DETAIL = "No participant is registered as '%s'.";
+
+    /**
+     * Column the directory is ordered by. Unique, so paging never shows a record twice nor skips
+     * one, which an order on a non-unique column could not promise.
+     */
+    private static final String DIRECTORY_ORDER_PROPERTY = "identifier";
+
+    /** First page, applied when the caller names none. */
+    private static final int FIRST_PAGE = 0;
+
     private final ParticipantRepository participants;
 
-    public ParticipantService(ParticipantRepository participants) {
+    private final ConsentManagerConfiguration.Participants paging;
+
+    public ParticipantService(
+            ParticipantRepository participants, ConsentManagerConfiguration.Participants paging) {
         this.participants = participants;
+        this.paging = paging;
+    }
+
+    /**
+     * One page of the directory, ordered by identifier and excluding deregistered participants.
+     *
+     * <p>{@code size} is clamped to the configured ceiling rather than refused, so a caller asking
+     * for more than a deployment serves gets a smaller page instead of an error; the returned
+     * page's size reports what was applied. An {@code identifier} narrows the page to that exact,
+     * case-sensitive value and then resolves a deregistered participant too - it is the dependable
+     * way to reach one whose identifier contains a {@code /}.
+     */
+    public Page<Participant> list(
+            @Nullable Integer page, @Nullable Integer size, @Nullable String identifier) {
+        Pageable pageable =
+                Pageable.from(
+                        page == null ? FIRST_PAGE : page,
+                        applicableSize(size),
+                        Sort.of(Sort.Order.asc(DIRECTORY_ORDER_PROPERTY)));
+        return identifier == null
+                ? participants.findByDeregisteredAtIsNull(pageable)
+                : participants.findByIdentifier(identifier, pageable);
+    }
+
+    /**
+     * The participant an identifier names, deregistered or not - a retained record still has to
+     * resolve, or a consent naming it would name nobody a reader could identify.
+     *
+     * @throws NotFoundException {@code 404} when no participant carries the identifier
+     */
+    public Participant find(String identifier) {
+        return participants
+                .findByIdentifier(identifier)
+                .orElseThrow(() -> new NotFoundException(UNKNOWN_DETAIL.formatted(identifier)));
+    }
+
+    /**
+     * The requested size bounded by the configured ceiling, or the configured default when none.
+     */
+    private int applicableSize(@Nullable Integer size) {
+        return Math.min(size == null ? paging.getPageDefaultSize() : size, paging.getPageMaxSize());
     }
 
     /**

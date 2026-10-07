@@ -185,6 +185,10 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         UNLINK(
                 "delete " + PATH_PARTICIPANT_USERS + "/{identifier}",
                 () -> HttpRequest.DELETE(PATH_PARTICIPANT_USERS + "/" + LINKED_USER)),
+        LIST_PARTICIPANTS("get " + PATH_PARTICIPANTS, () -> HttpRequest.GET(PATH_PARTICIPANTS)),
+        LOOKUP_PARTICIPANT(
+                "get " + PATH_PARTICIPANTS + "/{identifier}",
+                () -> HttpRequest.GET(PATH_PARTICIPANTS + "/" + CALLER_PARTICIPANT)),
         SELF_REGISTER_PARTICIPANT(
                 SELF_REGISTRATION,
                 () ->
@@ -257,6 +261,10 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 challenged),
                         row(Endpoint.UPDATE_LINK, denied, ok, denied, denied, challenged),
                         row(Endpoint.UNLINK, denied, emptied, denied, denied, challenged),
+                        // The directory is readable by every role of this service: discovering who
+                        // may be transacted with is not a privilege of any one of them.
+                        row(Endpoint.LIST_PARTICIPANTS, ok, ok, ok, denied, challenged),
+                        row(Endpoint.LOOKUP_PARTICIPANT, ok, ok, ok, denied, challenged),
                         // The fixture registers the caller before every case, so the one caller
                         // this route admits lands on the conflict rather than on a second
                         // registration. That it gets there at all is what the matrix asserts.
@@ -353,7 +361,12 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
 
     /**
      * The published routes a {@code PARTICIPANT} may only reach once its identifier is registered:
-     * every operation admitting the role, less the registration that creates the row.
+     * every operation admitting the role, less the registration that creates the row and less the
+     * operations that also admit {@code USER}.
+     *
+     * <p>A route serving {@code USER} cannot demand a participant row, because a user never has
+     * one; demanding it would make the route's contract depend on who is calling. The participant
+     * directory is that kind of route, and it is excluded by the rule rather than by name.
      *
      * <p>Derived from the specification rather than listed, for the same reason {@link
      * #everySpecifiedOperationIsCovered()} exists - a participant route added later and forgotten
@@ -366,6 +379,7 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         List<Arguments> cases =
                 SpecSecurityConsistencyTest.specOperations()
                         .filter(operation -> operation.roles().contains(Role.PARTICIPANT.name()))
+                        .filter(operation -> !operation.roles().contains(Role.USER.name()))
                         .map(operation -> operation.httpMethod() + " " + operation.path())
                         .filter(specification -> !SELF_REGISTRATION.equals(specification))
                         .map(specification -> Arguments.of(rowFor(rows, specification)))
