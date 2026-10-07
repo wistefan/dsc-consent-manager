@@ -185,4 +185,7 @@ relative `$ref`s resolve for Swagger UI.
 - `KeycloakKeyRotationIT` — rotates the realm signing key mid-test and asserts tokens signed by the
   new key are accepted without an application restart.
 
-Integration tests are named `*IT` and run under `maven-failsafe-plugin` (`./mvnw verify -DskipUTs`).
+Integration tests are named `*IT` and run under `maven-failsafe-plugin`, so `./mvnw verify` runs
+them together with the unit suite; `./mvnw test` runs the unit tests alone. There is no
+integration-only flag: Surefire and Failsafe share the `skipTests` property, and no property
+separating the two is wired in `pom.xml`.
