@@ -1,0 +1,31 @@
+# Schema: ParticipantEndpoints — referenced from api/openapi.yaml as
+# components.schemas.ParticipantEndpoints.
+#
+# Backed by the `participants.endpoints` JSONB column, which is a free-form map
+# in the database and a named object here. The column is deliberately looser than
+# this schema: a deployment that stores an endpoint this revision does not name
+# keeps it, and the representation simply does not publish it.
+type: object
+description: >
+  Service endpoints a participant exposes to the Consent Manager.
+
+
+  Every endpoint is an absolute `https` URL the service calls out to, so each one
+  is a place this deployment may be made to send a request. That is why they are
+  pattern-bound rather than free-form strings.
+properties:
+  consentNotification:
+    type: string
+    # Generous rather than column-shaped: the column is TEXT and a callback URL
+    # may legitimately carry a long path or query.
+    maxLength: 2048
+    # Absolute and `https` only. A relative URL would resolve against this
+    # service, and plaintext `http` would carry a consent notification in the
+    # clear. Bean validation matches the whole value.
+    pattern: '^https://[^\s]+$'
+    description: >
+      Absolute `https` URL the Consent Manager notifies when a consent naming
+      this participant changes state. Absent when the participant does not want
+      to be notified, which is the default; notification itself is out of scope
+      for this revision and the value is only stored and published.
+    example: "https://clinic.example.org/consent-notifications"

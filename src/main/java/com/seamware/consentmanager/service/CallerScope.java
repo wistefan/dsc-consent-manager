@@ -16,10 +16,26 @@ import io.micronaut.core.annotation.Nullable;
  * cannot widen its own scope by what it sends.
  *
  * @param role the role the caller acts as on this operation
- * @param participant the participant whose links bound the result, {@code null} when the caller
- *     reads dataspace-wide
+ * @param participant the participant whose links bound the result, {@code null} only for a {@code
+ *     CATALOG} caller, which reads dataspace-wide. The constructor enforces that, so {@code null}
+ *     never stands for "participant unknown".
  */
 public record CallerScope(Role role, @Nullable Participant participant) {
+
+    /**
+     * Rejects a {@code PARTICIPANT} scope with no row.
+     *
+     * <p>Downstream a {@code null} participant means "read dataspace-wide", so that combination
+     * would widen an unregistered caller rather than bound it. Structural, because the shape is now
+     * constructible: {@link ParticipantPrincipal#participant()} is nullable.
+     */
+    public CallerScope {
+        if (role == Role.PARTICIPANT && participant == null) {
+            throw new IllegalArgumentException(
+                    "A PARTICIPANT scope must carry the participant whose links bound it;"
+                            + " a null participant reads as dataspace-wide.");
+        }
+    }
 
     /**
      * The scope a resolved principal grants.
@@ -28,11 +44,15 @@ public record CallerScope(Role role, @Nullable Participant participant) {
      * own record through {@code GET /users/me}. The routes using this are {@code @Secured} against
      * {@code USER}, so that branch is a defence against a widened route rather than a reachable
      * path.
+     *
+     * <p>An unregistered participant is refused here rather than scoped: a {@code null} participant
+     * means dataspace-wide downstream, so admitting one would widen the caller instead of stopping
+     * it.
      */
     public static CallerScope of(ConsentManagerPrincipal principal) {
         return switch (principal) {
             case ParticipantPrincipal caller ->
-                    new CallerScope(Role.PARTICIPANT, caller.participant());
+                    new CallerScope(Role.PARTICIPANT, caller.requireRegistered());
             case CatalogPrincipal ignored -> new CallerScope(Role.CATALOG, null);
             case UserPrincipal ignored ->
                     throw new ForbiddenException("This operation is not open to the USER role.");

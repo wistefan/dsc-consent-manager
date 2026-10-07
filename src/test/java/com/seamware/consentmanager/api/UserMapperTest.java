@@ -2,6 +2,7 @@ package com.seamware.consentmanager.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.security.Role;
 import com.seamware.consentmanager.service.CallerScope;
@@ -10,6 +11,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,6 +32,12 @@ class UserMapperTest {
 
     /** What the same user's links narrow to for a participant caller: its own, never the other. */
     private static final List<String> SCOPED_LINKS = List.of("urn:a");
+
+    /**
+     * The reading participant. Only its presence matters: the stub answers by overload, not by row.
+     */
+    private static final Participant CALLER =
+            new Participant("urn:a", "Participant A", null, null, Map.of(), null);
 
     /** A stub rather than a mock: the project carries no mocking framework. */
     private static UserMapper mapperLinkedTo(List<String> participants) {
@@ -113,7 +121,7 @@ class UserMapperTest {
     @Test
     @DisplayName("narrows the participants to what the reading caller may see")
     void narrowsTheParticipantLinksToTheCaller() {
-        CallerScope scope = new CallerScope(Role.PARTICIPANT, null);
+        CallerScope scope = new CallerScope(Role.PARTICIPANT, CALLER);
 
         assertThat(
                         mapperLinkedTo(ALL_LINKS, SCOPED_LINKS)

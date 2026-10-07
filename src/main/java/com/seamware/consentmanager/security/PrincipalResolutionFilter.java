@@ -48,9 +48,11 @@ import reactor.core.scheduler.Schedulers;
  *
  * <p>Everything this filter refuses is a {@code 403}, never a {@code 401}: the token authenticated,
  * it simply does not name a caller this service will act for. That covers a token granting no role
- * the route accepts, one missing the identifier claim its acting role requires, and a {@code
- * PARTICIPANT} whose identifier is not registered - participants are created explicitly
- * (TICKET-005), never on the strength of a token.
+ * the route accepts and one missing the identifier claim its acting role requires. A {@code
+ * PARTICIPANT} whose identifier is not registered is not refused here: it resolves to a {@link
+ * ParticipantPrincipal} with no row, so that {@code POST /participants} - self-registration - is
+ * reachable at all. Every other participant-scoped route turns that shape into a {@code 403} by
+ * reading the row through {@link ParticipantPrincipal#requireRegistered()}.
  *
  * <p>A {@code USER} is the one identity a token does create: {@link UserService} gives every {@link
  * UserPrincipal} a persisted row, plus the signal saying whether this request inserted it.
@@ -281,10 +283,16 @@ public class PrincipalResolutionFilter implements Ordered {
     }
 
     /**
-     * Builds a {@link ParticipantPrincipal} from the registered participant the token's identifier
-     * resolves to. Reads the database, so it runs on {@link #blocking}.
+     * Builds a {@link ParticipantPrincipal} around the token's participant identifier, carrying the
+     * {@code participants} row when the identifier is registered. Reads the database, so it runs on
+     * {@link #blocking}.
      *
-     * @throws AuthorizationException {@code 403} when the identifier is absent or unregistered
+     * <p>An unregistered identifier is resolved rather than refused, because {@code POST
+     * /participants} is how a participant registers itself and cannot be reached otherwise. Every
+     * other participant-scoped route refuses it through {@link
+     * ParticipantPrincipal#requireRegistered()}.
+     *
+     * @throws AuthorizationException {@code 403} when the identifier claim is absent
      */
     private ConsentManagerPrincipal participant(
             Authentication authentication,
@@ -298,15 +306,8 @@ public class PrincipalResolutionFilter implements Ordered {
         if (identifier.isEmpty()) {
             throw forbidden(authentication, "it carries no participant identifier claim");
         }
-        Participant row =
-                participants
-                        .findByIdentifier(identifier.get())
-                        .orElseThrow(
-                                () ->
-                                        forbidden(
-                                                authentication,
-                                                "its participant identifier is not registered"));
-        return new ParticipantPrincipal(issuer, subject, row.getIdentifier(), row);
+        Participant row = participants.findByIdentifier(identifier.get()).orElse(null);
+        return new ParticipantPrincipal(issuer, subject, identifier.get(), row);
     }
 
     /** Builds the {@code 403} refusal and records why at debug level only. */

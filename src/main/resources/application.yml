@@ -322,6 +322,17 @@ consent-manager:
     # a larger batch is refused whole with 400 before anything is written.
     bulk-max-size: ${USERS_BULK_MAX_SIZE:500}
 
+  participants:
+    # Records GET /participants returns when the caller names no size. Not written in
+    # the specification, which could not track a value configured per deployment; the
+    # response reports the size it actually applied.
+    page-default-size: ${PARTICIPANTS_PAGE_DEFAULT_SIZE:20}
+
+    # Most records one directory page may carry. A larger requested size is clamped to
+    # this and answered 200, never refused, so changing the ceiling cannot turn a
+    # caller's working request into a 400.
+    page-max-size: ${PARTICIPANTS_PAGE_MAX_SIZE:100}
+
   erasure:
     # Key of the salted HMAC an erased record keeps instead of its identifier, so
     # that the operator - and nobody else, since the key is not in the database -

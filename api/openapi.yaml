@@ -29,6 +29,29 @@ info:
     (missing, malformed, expired, incorrectly signed or untrusted token, with the
     body revealing nothing about which), while a request that authenticates but
     lacks the role required by the operation receives `403 Forbidden`.
+
+    ## Participant onboarding
+
+    **The identity provider is the gatekeeper.** A participant becomes able to
+    call this API the moment one of the trusted providers will issue it a token
+    carrying the `PARTICIPANT` role and a participant-identifier claim — which is
+    a matter between the organisation and that provider's operator, and happens
+    entirely outside this service. There is no login endpoint, no credential is
+    accepted and none is stored; the worked `client_credentials` example is on the
+    `bearerAuth` security scheme.
+
+    **Onboarding is one call.** Holding such a token, the organisation
+    `POST`s `/participants` with its self-description and is registered. There is
+    no approval workflow, no pending state and no administrator in the loop: the
+    response is the registration. Until that call succeeds the token still
+    authenticates, but every operation acting on the participant's own record
+    answers `403`; `POST /participants` is the only operation acting on the
+    caller's own record that accepts an identifier this service does not yet
+    know. The participant directory is readable either way.
+
+    The identifier is always taken from the token claim, never from the body, the
+    path or a query parameter, so a participant can only ever register, read,
+    update or deregister itself. `DELETE /participants/me` reverses onboarding.
   version: "0.1.0"
   contact:
     name: Seamware
@@ -288,11 +311,14 @@ paths:
 
 
         `{identifier}` is the URL-encoded global user identifier. A path
-        variable never spans a `/`, and the container percent-decodes before
-        routing, so an identifier containing a slash is not addressable here
-        even when encoded; look it up through `POST /users/search` instead. The
-        literal identifier `me` is likewise unreachable, because `GET /users/me`
-        claims that path for the caller's own record.
+        variable never spans a `/`, so an identifier containing one reaches this
+        route only percent-encoded, and whether an encoded slash survives is a
+        property of the deployment rather than of this service: an intermediary
+        that refuses or decodes `%2F` ahead of routing leaves such an identifier
+        unaddressable here. `POST /users/search` with the `identifier` criterion
+        matches the value whole and is dependable for that case. The literal
+        identifier `me` is unreachable here in every deployment, because
+        `GET /users/me` claims that path for the caller's own record.
 
 
         The `participants` array of the returned user is scoped to the caller: a
@@ -326,6 +352,332 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /participants:
+    get:
+      operationId: listParticipants
+      summary: List the participant directory
+      description: >
+        Returns a page of the dataspace's registered participants, so a caller
+        can discover who it may transact with.
+
+
+        Deregistered participants are left out, because the directory answers
+        who can be transacted with now. Such a record stays readable through
+        `GET /participants/{identifier}` and through the `identifier` filter
+        here, both of which carry `deregisteredAt`, so the state is never merely
+        implied by an absence.
+
+
+        Records are ordered by `identifier`, which is unique, so a record never
+        moves between pages while the directory itself does not change. The
+        count and the page are two separate statements over a directory anyone
+        may register in, so a registration or deregistration committed between
+        them - or between two page requests - can still shift a record across a
+        boundary or leave `totalElements` disagreeing with what `content`
+        carries. Nothing here is served from a snapshot.
+
+
+        Each entry is the participant record in full, the same representation
+        `GET /participants/{identifier}` returns. Nothing a participant records
+        about itself is a credential, so a listing has nothing to leave out that
+        a lookup would hand to the same caller anyway.
+
+
+        Neither the default page size nor the largest one accepted is written in
+        this document, because a literal here could not track a value each
+        deployment configures. Omitting `size` applies the configured default,
+        and a `size` above the configured ceiling is clamped to it and answered
+        `200` rather than rejected; the `size` of the response always reports the
+        value actually applied. The bounds that are fixed - a `page` from zero
+        and a `size` of at least one - are declared below and are enforced as
+        `400`.
+      tags:
+        - Participants
+      security:
+        - bearerAuth: [USER, PARTICIPANT, CATALOG]
+      x-roles: [USER, PARTICIPANT, CATALOG]
+      x-principal: ConsentManagerPrincipal
+      parameters:
+        - name: page
+          in: query
+          required: false
+          description: Zero-based index of the page to return.
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          required: false
+          description: >
+            How many records the page may carry. Omitted, this deployment's
+            configured default applies; above its configured ceiling, the
+            ceiling applies.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+        - name: identifier
+          in: query
+          required: false
+          description: >
+            Return only the participant whose identifier is exactly this,
+            deregistered or not. Matched whole and case-sensitively, and the
+            dependable way to reach a participant whose identifier contains a
+            `/`, which a path segment carries only percent-encoded.
+          schema:
+            type: string
+          example: "urn:example:participant:clinic"
+      responses:
+        "200":
+          description: The requested page of the directory.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParticipantPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+    post:
+      operationId: registerParticipant
+      summary: Register the calling participant
+      description: >
+        Registers the organization the bearer token names and returns its record.
+
+
+        The participant identifier is taken entirely from the token's
+        `claims.participant-identifier` claim: it is not a property of the
+        request body, and an `identifier` sent anyway is ignored rather than
+        rejected. A caller therefore cannot register anybody but itself, and
+        cannot rename an existing registration by re-registering under a
+        different identifier.
+
+
+        Unlike `POST /users/register` this is **not** idempotent: an identifier
+        this service already knows is answered with `409 Conflict`, because a
+        second registration carries a full self-description that would otherwise
+        silently either overwrite the stored one or be discarded. Updating a
+        registration is `PUT /participants/me`.
+
+
+        No credential is accepted and none is stored. Registration records what
+        the organization says about itself; authentication stays entirely with
+        the identity provider that issued the token.
+      tags:
+        - Participants
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParticipantRegistration"
+      responses:
+        "201":
+          description: The participant was registered by this request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /participants/me:
+    get:
+      operationId: getCurrentParticipant
+      summary: Read the calling participant's own registration
+      description: >
+        Returns the registration of the participant the bearer token names.
+
+
+        Which record is returned is decided entirely by the token's
+        `claims.participant-identifier` claim, so there is no way to ask for
+        anybody else's record here; reading another participant is
+        `GET /participants/{identifier}`.
+
+
+        A token whose participant has never registered is answered with
+        `403 Forbidden` rather than `404 Not Found`: the caller is a valid
+        participant that has not yet created its record, and
+        `POST /participants` is what creates it.
+      tags:
+        - Participants
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      responses:
+        "200":
+          description: The calling participant's registration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+    put:
+      operationId: updateCurrentParticipant
+      summary: Replace the calling participant's own registration
+      description: >
+        Replaces the self-description of the participant the bearer token names
+        and returns the stored result.
+
+
+        The body is the self-description in full, not a patch: an optional
+        property left out is cleared. The identifier is not part of the body and
+        is never changed by an update - an `identifier` sent anyway is ignored
+        rather than rejected - so every consent and privacy notice already keyed
+        on it keeps naming the same organization.
+
+
+        A token whose participant has never registered is answered with
+        `403 Forbidden` rather than `404 Not Found`, exactly as the `get` is: an
+        update does not double as a registration, which is
+        `POST /participants`.
+
+
+        Concurrent updates are last-writer-wins: each replaces the whole
+        self-description, and the later one wins outright. An update that finds
+        the registration deregistered, or no longer there at all, applies
+        nothing and is answered `409 Conflict`.
+      tags:
+        - Participants
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParticipantUpdate"
+      responses:
+        "200":
+          description: The registration as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+    delete:
+      operationId: deregisterCurrentParticipant
+      summary: Deregister the calling participant
+      description: >
+        Removes the organization the bearer token names from the dataspace and
+        reports what that entailed.
+
+
+        The cascade runs in this order, as one transaction. Any consent naming
+        the participant as provider or consumer that is still `GRANTED` refuses
+        the whole operation with `409 Conflict`, and the problem detail names
+        the blocking consents: a granted consent is a permission the *user*
+        gave, and only that user can withdraw it. Otherwise every `PENDING` and
+        `DRAFT` consent naming the participant moves to `TERMINATED` with a
+        `CONSENT_TERMINATED` event, because an unanswered offer must not stay
+        advanceable once one side has left. Every link to a user is then
+        removed, and every privacy notice naming the participant as provider or
+        consumer that is not already archived is archived.
+
+
+        The `participants` row is finally deleted outright when nothing refers
+        to it, and otherwise retained, marked with `deregisteredAt`, with its
+        contact `email` cleared and its `endpoints` emptied. A retained record
+        keeps its `identifier`, `legalName`, `selfDescriptionUri` and
+        `legalPerson` intact and deliberately unscrubbed, so that the consents
+        and notices that still name it stay legible; it is excluded from
+        `GET /participants` but still resolves through
+        `GET /participants/{identifier}`. Registering the same identifier again
+        reactivates that record rather than conflicting with it.
+
+
+        A repeated call on an already-deregistered record is a `409 Conflict`
+        rather than a second cascade, so the recorded departure time cannot be
+        moved. After a deregistration the same token still reads its own record,
+        but no longer writes: the `/participants/me/users` operations answer
+        `403 Forbidden` until the participant registers again.
+
+
+        For why a granted consent blocks the exit while a draft does not, why an
+        organization is not pseudonymised the way an erased user is, and what
+        `deregisteredAt` does and does not mean, see
+        `docs/adr/0008-deregistration-retains-the-participant-and-closes-its-open-business.md`.
+      tags:
+        - Participants
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      responses:
+        "200":
+          description: >
+            The participant was deregistered. The body reports what that
+            entailed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeregistrationSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
         default:
           description: Unexpected error
           content:
@@ -520,9 +872,10 @@ paths:
 
 
         `{identifier}` is the URL-encoded global user identifier, with the same
-        limits as on `GET /users/{identifier}`: a path variable never spans a
-        `/`, and the container percent-decodes before routing, so an identifier
-        containing a slash is not addressable here even when encoded.
+        limit as on `GET /users/{identifier}`: a path variable never spans a
+        `/`, so an identifier containing one reaches this route only
+        percent-encoded, and whether an encoded slash survives is a property of
+        the deployment rather than of this service.
       tags:
         - Participant Users
       security:
@@ -627,6 +980,66 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /participants/{identifier}:
+    get:
+      operationId: getParticipantByIdentifier
+      summary: Look a participant up by its global identifier
+      description: >
+        Returns the participant the identifier names, so a counterparty named by
+        a consent or a contract can be resolved to its self-description.
+
+
+        A deregistered participant resolves here and carries `deregisteredAt`,
+        because a consent retained after deregistration still names it and would
+        otherwise name nobody a reader could identify. It is only the directory
+        listing that leaves such a record out.
+
+
+        `{identifier}` is the URL-encoded global participant identifier. A path
+        variable never spans a `/`, so an identifier containing one - a
+        URI-shaped identifier, as opposed to a DID - reaches this route only
+        percent-encoded, and whether an encoded slash survives is a property of
+        the deployment rather than of this service: an intermediary that refuses
+        or decodes `%2F` ahead of routing leaves such an identifier
+        unaddressable here. `GET /participants?identifier=...` matches the
+        identifier whole and is dependable for that case. The literal identifier
+        `me` is unreachable here in every deployment, because
+        `GET /participants/me` claims that path for the calling participant's
+        own record.
+      tags:
+        - Participants
+      security:
+        - bearerAuth: [USER, PARTICIPANT, CATALOG]
+      x-roles: [USER, PARTICIPANT, CATALOG]
+      x-principal: ConsentManagerPrincipal
+      parameters:
+        - name: identifier
+          in: path
+          required: true
+          description: URL-encoded global participant identifier.
+          schema:
+            type: string
+          example: "urn:example:participant:clinic"
+      responses:
+        "200":
+          description: The participant the identifier names.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -654,6 +1067,24 @@ components:
     UserRegistrationResult:
       $ref: "./components/schemas/UserRegistrationResult.yaml"
 
+    Participant:
+      $ref: "./components/schemas/Participant.yaml"
+
+    ParticipantLegalPerson:
+      $ref: "./components/schemas/ParticipantLegalPerson.yaml"
+
+    ParticipantEndpoints:
+      $ref: "./components/schemas/ParticipantEndpoints.yaml"
+
+    ParticipantRegistration:
+      $ref: "./components/schemas/ParticipantRegistration.yaml"
+
+    ParticipantUpdate:
+      $ref: "./components/schemas/ParticipantUpdate.yaml"
+
+    DeregistrationSummary:
+      $ref: "./components/schemas/DeregistrationSummary.yaml"
+
     ParticipantUserLink:
       $ref: "./components/schemas/ParticipantUserLink.yaml"
 
@@ -669,12 +1100,12 @@ components:
     BulkRegistrationSummary:
       $ref: "./components/schemas/BulkRegistrationSummary.yaml"
 
-    # The two wrappers below are the only schemas written out here rather than
+    # The three wrappers below are the only schemas written out here rather than
     # under components/schemas/, and the reason is a generator limitation rather
     # than a change of convention: a `$ref` under `items` resolves to the named
     # model only when it is same-document. Written inside an externalised file,
     # `items: {$ref: "./BulkUserRegistrationEntry.yaml"}` silently degrades to
-    # `List<Object>` and the batch arrives untyped. Both are a thin shell around
+    # `List<Object>` and the batch arrives untyped. Each is a thin shell around
     # one array; the element schemas above carry the documentation.
     BulkUserRegistration:
       type: object
@@ -708,6 +1139,52 @@ components:
       required:
         - results
         - summary
+
+    ParticipantPage:
+      type: object
+      description: >
+        One page of the participant directory, with enough of the whole to page
+        through it without a second request.
+      properties:
+        content:
+          type: array
+          description: >
+            The records of this page, ordered by `identifier`. Empty when the
+            requested page lies past the end of the directory, which is a `200`
+            rather than a `404` - the page is a view of a collection, not a
+            record that does or does not exist.
+          items:
+            $ref: "#/components/schemas/Participant"
+        page:
+          type: integer
+          format: int32
+          description: Zero-based index of this page, as requested.
+        size:
+          type: integer
+          format: int32
+          description: >
+            Records this page was allowed to carry, which is the value actually
+            applied: the configured default when `size` was omitted, and the
+            configured ceiling when the requested `size` exceeded it.
+        totalElements:
+          type: integer
+          format: int64
+          description: >
+            Records the query matches across every page, counted under the same
+            filter - so with deregistered participants excluded unless an
+            `identifier` filter was given.
+        totalPages:
+          type: integer
+          format: int32
+          description: >
+            Pages the matching records occupy at the applied `size`; zero when
+            nothing matches.
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
 
   responses:
     # Shared error responses referenced by every secured operation. `/api-status`

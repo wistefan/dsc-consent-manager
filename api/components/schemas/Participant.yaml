@@ -1,0 +1,74 @@
+# Schema: Participant — referenced from api/openapi.yaml as
+# components.schemas.Participant.
+#
+# No property is declared `nullable`, for the same reason User.yaml gives: an
+# attribute this service does not know is simply absent, and a nullable property
+# would make the generator wrap it in JsonNullable, a request-side distinction
+# no read operation here needs. `deregisteredAt` relies on that rule - it is
+# absent while the participant is active rather than present and null.
+type: object
+description: >
+  A dataspace participant: an organization acting as a data provider, a data
+  consumer, or both. Identified across the dataspace by `identifier`, which is
+  read from the participant's own access token and never from a request body.
+
+
+  Carries only the organization's self-description — never a credential, key,
+  token or secret. The Consent Manager stores no participant credentials at all.
+properties:
+  identifier:
+    type: string
+    description: >
+      The globally unique participant identifier, taken from the
+      `claims.participant-identifier` claim of the issuing identity provider when
+      the participant registered. Stable for the life of the record and the value
+      every participant-scoped record keys on.
+    example: "urn:example:participant:clinic"
+  legalName:
+    type: string
+    description: Official legal name of the organization.
+    example: "Example Clinic Ltd"
+  selfDescriptionUri:
+    type: string
+    description: >
+      Absolute `https` URL of the participant's self-description document, absent
+      when it publishes none.
+    example: "https://clinic.example.org/.well-known/self-description.json"
+  email:
+    type: string
+    format: email
+    description: >
+      Contact address for the organization, absent when none is known. The one
+      plausibly personal field on this representation, since in practice it names
+      a contact person rather than the organization, which is why deregistration
+      clears it even on a record it has to retain.
+    example: "data-protection@clinic.example.org"
+  legalPerson:
+    $ref: "./ParticipantLegalPerson.yaml"
+  endpoints:
+    $ref: "./ParticipantEndpoints.yaml"
+  createdAt:
+    type: string
+    format: date-time
+    description: When the record was first created.
+  updatedAt:
+    type: string
+    format: date-time
+    description: When the record was last modified.
+  deregisteredAt:
+    type: string
+    format: date-time
+    description: >
+      When the participant deregistered. **Absent for every active
+      participant**, which is what a reader should test on rather than comparing
+      the value to anything.
+
+
+      Only ever present on a record deregistration had to retain because a
+      consent or a privacy notice still references it; a record nothing
+      references is deleted outright and cannot be read back at all. Such a
+      record is kept intact rather than pseudonymised, so that a retained consent
+      still names a counterparty a reader can identify.
+required:
+  - identifier
+  - legalName

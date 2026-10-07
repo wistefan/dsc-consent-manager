@@ -1076,6 +1076,11 @@ class UserServiceTest {
         }
 
         @Override
+        public int deleteByIdParticipantId(UUID participantId) {
+            throw unsupported();
+        }
+
+        @Override
         @SuppressWarnings("unchecked")
         public <S extends UserParticipant> S save(S entity) {
             failIfTold();
@@ -1153,6 +1158,11 @@ class UserServiceTest {
         }
 
         @Override
+        public Optional<Participant> findByIdForUpdate(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
         public Optional<Participant> findByIdentifier(String identifier) {
             return rows().values().stream()
                     .filter(p -> p.getIdentifier().equals(identifier))
@@ -1161,6 +1171,16 @@ class UserServiceTest {
 
         @Override
         public boolean existsByIdentifier(String identifier) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Participant> findByDeregisteredAtIsNull(Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Participant> findByIdentifier(String identifier, Pageable pageable) {
             throw unsupported();
         }
 
@@ -1254,6 +1274,34 @@ class UserServiceTest {
 
         @Override
         public List<Consent> findByParentConsentId(UUID parentConsentId) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findByProviderIdAndStatusIn(
+                UUID providerId, Collection<ConsentStatus> statuses) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findByConsumerIdAndStatusIn(
+                UUID consumerId, Collection<ConsentStatus> statuses) {
+            throw unsupported();
+        }
+
+        @Override
+        public int countByParticipantAndStatus(UUID participantId, ConsentStatus status) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<UUID> findIdsByParticipantAndStatus(
+                UUID participantId, ConsentStatus status, int limit) {
+            throw unsupported();
+        }
+
+        @Override
+        public int countByParticipant(UUID participantId) {
             throw unsupported();
         }
 

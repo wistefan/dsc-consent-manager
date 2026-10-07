@@ -84,6 +84,16 @@ public class Participant {
     private Instant updatedAt;
 
     /**
+     * When this participant deregistered, or {@code null} while it is still active.
+     *
+     * <p>Only set on a row deregistration had to retain because a consent or a privacy notice still
+     * references it; a row nothing references is deleted outright.
+     */
+    @Nullable
+    @MappedProperty("deregistered_at")
+    private Instant deregisteredAt;
+
+    /**
      * Default no-argument constructor required by Micronaut Data.
      *
      * <p>Use the parameterized constructor for application-level entity creation.
@@ -285,5 +295,24 @@ public class Participant {
      */
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    /**
+     * Returns when this participant deregistered.
+     *
+     * @return the deregistration timestamp, or {@code null} while the participant is active
+     */
+    @Nullable
+    public Instant getDeregisteredAt() {
+        return deregisteredAt;
+    }
+
+    /**
+     * Sets the deregistration timestamp.
+     *
+     * @param deregisteredAt when the participant deregistered, or {@code null} to reactivate it
+     */
+    public void setDeregisteredAt(@Nullable Instant deregisteredAt) {
+        this.deregisteredAt = deregisteredAt;
     }
 }

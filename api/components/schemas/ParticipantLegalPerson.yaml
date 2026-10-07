@@ -1,0 +1,52 @@
+# Schema: ParticipantLegalPerson — referenced from api/openapi.yaml as
+# components.schemas.ParticipantLegalPerson.
+#
+# Backed by the nullable `participants.legal_person` JSONB column. Shaped after
+# the Gaia-X legal-person self-description attributes a participant publishes
+# about itself; every property is optional because which of them a given
+# jurisdiction and deployment can supply varies, and a participant that supplies
+# none simply omits the object.
+#
+# All of this describes an organization rather than a natural person, which is
+# why no property here is treated as personal data by the deregistration
+# cascade: the row is retained legible, not scrubbed.
+type: object
+description: >
+  Registered legal-entity metadata about the participant organization, as it
+  describes itself. The Consent Manager stores and republishes these attributes
+  and never verifies them against a register.
+properties:
+  registrationNumber:
+    type: string
+    maxLength: 255
+    description: >
+      The organization's registration number in whatever register it is
+      incorporated in — a VAT, EORI, LEI or local company number.
+    example: "DE123456789"
+  headquartersAddress:
+    type: string
+    maxLength: 1024
+    description: Address of the organization's headquarters, as a single line.
+    example: "Hauptstrasse 1, 10115 Berlin, DE"
+  legalAddress:
+    type: string
+    maxLength: 1024
+    description: >
+      Registered address of the legal entity, which may differ from the
+      headquarters address.
+    example: "Hauptstrasse 1, 10115 Berlin, DE"
+  parentOrganization:
+    type: string
+    maxLength: 2048
+    description: >
+      Identifier of the organization this one is a subsidiary of, absent when it
+      has no parent. Free-form rather than a participant identifier: the parent
+      need not be a participant of this dataspace.
+    example: "urn:example:participant:holding"
+  subOrganization:
+    type: string
+    maxLength: 2048
+    description: >
+      Identifier of an organization subordinate to this one, absent when it has
+      none. Same free-form rule as `parentOrganization`.
+    example: "urn:example:participant:clinic-north"

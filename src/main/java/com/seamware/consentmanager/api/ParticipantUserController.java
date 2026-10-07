@@ -31,10 +31,13 @@ import org.openapitools.jackson.nullable.JsonNullable;
  * Serves the {@code /participants/me/users} operations: the registration surface a participant uses
  * to put its own users into the directory.
  *
- * <p>The participant is {@link ParticipantPrincipal#participant()} and nothing else. The body
- * deliberately cannot name one, and a {@code participantIdentifier} property sent anyway is ignored
- * rather than refused - the generated model does not forbid unknown properties, so such a request
- * succeeds and still links the user to the caller.
+ * <p>The participant is {@link ParticipantPrincipal#requireActive()} and nothing else, so an
+ * identifier with no row behind it, or one whose record has been deregistered, is refused here
+ * rather than served - a departed organization must not be able to re-acquire the affiliations its
+ * deregistration removed. The body deliberately cannot name one, and a {@code
+ * participantIdentifier} property sent anyway is ignored rather than refused - the generated model
+ * does not forbid unknown properties, so such a request succeeds and still links the user to the
+ * caller.
  *
  * <p>{@code UserRegistration} here is the generated API model; the service's record of the same
  * name is written out in full to keep the two apart.
@@ -69,7 +72,7 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
     public HttpResponse<UserRegistrationResult> registerParticipantUser(
             ParticipantPrincipal principal, UserRegistration body) {
         RegistrationResult result =
-                users.registerForParticipant(principal.participant(), toRegistration(body));
+                users.registerForParticipant(principal.requireActive(), toRegistration(body));
         UserRegistrationResult payload =
                 new UserRegistrationResult(
                         mapper.toRepresentation(result.user(), CallerScope.of(principal)),
@@ -92,7 +95,7 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
             ParticipantPrincipal principal, BulkUserRegistration body) {
         List<BulkEntryResult> results =
                 users.registerBulkForParticipant(
-                        principal.participant(),
+                        principal.requireActive(),
                         body.getUsers().stream()
                                 .map(ParticipantUserController::toRegistration)
                                 .toList());
@@ -180,8 +183,8 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
         JsonNullable<String> update = participantUserLinkUpdate.getLocalIdentifier_JsonNullable();
         var link =
                 update.isPresent()
-                        ? users.updateLink(principal.participant(), identifier, update.get())
-                        : users.linkFor(principal.participant(), identifier);
+                        ? users.updateLink(principal.requireActive(), identifier, update.get())
+                        : users.linkFor(principal.requireActive(), identifier);
         return HttpResponse.ok(mapper.toLinkRepresentation(identifier, link));
     }
 
@@ -189,7 +192,7 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
     @Override
     public HttpResponse<Void> unlinkParticipantUser(
             ParticipantPrincipal principal, String identifier) {
-        users.unlink(principal.participant(), identifier);
+        users.unlink(principal.requireActive(), identifier);
         return HttpResponse.noContent();
     }
 
