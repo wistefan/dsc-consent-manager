@@ -24,6 +24,7 @@ import io.micronaut.http.client.exceptions.HttpClientResponseException;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -100,6 +101,9 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_PRIVACY_NOTICES = "/privacy-notices";
 
+    private static final String PATH_PRIVACY_NOTICES_BY_CONTRACT =
+            PATH_PRIVACY_NOTICES + "/by-contract";
+
     /**
      * A contract identifier no case serves. Generation resolves its two named participants before
      * it fetches anything, so paired with {@link #UNREGISTERED_PARTY} it never leaves this process.
@@ -146,6 +150,22 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     /** Body of a request to an operation that specifies none; the route ignores it. */
     private static final String NO_BODY = "";
 
+    /**
+     * Contract Service URL for a suite that stands none up: a port in the reserved range, where a
+     * connection is refused rather than left to time out.
+     */
+    private static final String UNREACHABLE_CONTRACT_SERVICE = "http://localhost:1";
+
+    /**
+     * Upstream attempts per fetch, which is the one: a refused connection is not going to answer
+     * differently on a second try, and the default budget would spend seconds finding that out.
+     * This is the total, so {@code 1} is the smallest the retry policy accepts.
+     */
+    private static final String SINGLE_ATTEMPT = "1";
+
+    /** Pause between retries, which this suite never waits out. */
+    private static final String RETRY_DELAY = "10ms";
+
     /** Media type every refusal carries, per RFC 7807. */
     private static final String PROBLEM_JSON = "application/problem+json";
 
@@ -168,6 +188,23 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
      * The {@code USER} caller's global identifier, resolved once because reading it costs a token.
      */
     private String userIdentifier;
+
+    /**
+     * Points the Contract Service at a port nothing listens on, with the retry budget spent at
+     * once.
+     *
+     * <p>The by-contract row needs an outcome that is upstream's rather than this service's, and
+     * needs it in milliseconds: a refused connection is the fastest unambiguous one, and the
+     * default retry budget would spend seconds on it.
+     */
+    @Override
+    public Map<String, String> getProperties() {
+        Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
+        properties.put("consent-manager.contract-service.url", UNREACHABLE_CONTRACT_SERVICE);
+        properties.put("consent-manager.contract-service.retry-attempts", SINGLE_ATTEMPT);
+        properties.put("consent-manager.contract-service.retry-delay", RETRY_DELAY);
+        return properties;
+    }
 
     /**
      * The callers in the matrix: one per role the realm grants, plus the two the service refuses.
@@ -260,7 +297,13 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 Map.of(
                                         "contractUri", UNSERVED_CONTRACT,
                                         "dataProvider", CALLER_PARTICIPANT,
-                                        "dataConsumer", UNREGISTERED_PARTY)));
+                                        "dataConsumer", UNREGISTERED_PARTY))),
+        GENERATE_PRIVACY_NOTICE_BY_CONTRACT(
+                "post " + PATH_PRIVACY_NOTICES_BY_CONTRACT,
+                () ->
+                        HttpRequest.POST(
+                                PATH_PRIVACY_NOTICES_BY_CONTRACT,
+                                Map.of("contractUri", UNSERVED_CONTRACT)));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -357,6 +400,7 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         HttpStatus unknownParty = HttpStatus.NOT_FOUND;
         HttpStatus denied = HttpStatus.FORBIDDEN;
         HttpStatus challenged = HttpStatus.UNAUTHORIZED;
+        HttpStatus upstreamDown = HttpStatus.BAD_GATEWAY;
         return Stream.of(
                         row(Endpoint.API_STATUS, ok, ok, ok, ok, ok),
                         row(Endpoint.REGISTER_USER, created, denied, denied, denied, challenged),
@@ -421,6 +465,18 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 Endpoint.GENERATE_PRIVACY_NOTICE,
                                 denied,
                                 unknownParty,
+                                denied,
+                                denied,
+                                challenged),
+                        // This form reads the parties off the contract, so it cannot stop at the
+                        // directory the way the row above does: it reaches the Contract Service
+                        // this suite deliberately points at a closed port, and the 502 that comes
+                        // back is precisely the evidence that authorization let the caller
+                        // through. PrivacyNoticeByContractIT owns the rest of the flow.
+                        row(
+                                Endpoint.GENERATE_PRIVACY_NOTICE_BY_CONTRACT,
+                                denied,
+                                upstreamDown,
                                 denied,
                                 denied,
                                 challenged))
