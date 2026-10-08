@@ -1051,10 +1051,13 @@ paths:
 
         The flow is fixed, and a refusal names the step it failed at. The two
         identifiers are resolved against this service's participant directory, a
-        `404` naming whichever is unknown. The caller must be one of the two
-        parties, or the request is `403`; a deregistered caller is `403` too,
-        because generating a notice acts in the dataspace in the participant's
-        name. The contract is then fetched from the Contract Service — an
+        `404` naming whichever is unknown — and a deregistered participant is
+        unknown here, because a new notice must not republish the record its
+        deregistration retained only to keep the existing notices legible. The
+        caller must be one of the two parties, or the request is `403`; a
+        deregistered caller is `403` too, because generating a notice acts in the
+        dataspace in the participant's name. The contract is then fetched from
+        the Contract Service — an
         unknown contract is `404`, an unreachable Contract Service is `502`, and
         this is the one place in the whole API where that outage is fatal rather
         than degraded. The two declared parties must both be named by the fetched
@@ -1077,9 +1080,12 @@ paths:
 
 
         One active notice is held per contract and provider, and the database
-        enforces it. Two callers generating at once therefore both succeed and
-        both receive the same notice: the one that lost the race returns the
-        winner's notice with `200` rather than an error.
+        enforces it. Two callers generating at once therefore both succeed: the
+        one that lost the race re-reads the winner and answers exactly as it
+        would have done had the two run in sequence — `200` with the winner's
+        notice when that notice says what this request yields, `201` superseding
+        it when it does not. Only a slot contended faster than one retry can
+        claim it is refused, with `409`.
 
 
         Nothing here resolves external documents, so the `resolution` block of
@@ -1124,6 +1130,15 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: >
+            Concurrent generations are contending for this contract and
+            provider's one active notice faster than this request could claim
+            it. Nothing was written; the request is safe to retry.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
         "502":
           description: >
             The Contract Service could not be reached, so the contract behind the

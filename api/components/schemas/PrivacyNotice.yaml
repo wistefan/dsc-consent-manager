@@ -88,10 +88,11 @@ properties:
   recipients:
     type: array
     description: >
-      Who the data reaches besides the two parties, named as the contract names
-      them. A disclosure the contract declares without naming the recipient is
-      reported under a reserved URN rather than dropped, so a notice never
-      understates the disclosure.
+      Every participant the contract names as party to it, as the contract names
+      it: for a bilateral contract its data provider and its data consumer, for
+      an ecosystem contract its members less the revoked ones — a member that has
+      not signed is kept. This notice's own two parties are therefore listed here
+      as well.
 
 
       `name`, `contact` and `selfDescriptionUri` are filled in only by a resolved
@@ -148,7 +149,18 @@ properties:
       enumeration no caller could rely on.
   internationalTransfers:
     type: array
-    description: Transfers of the data outside its originating jurisdiction.
+    description: >
+      The third parties the contract declares a disclosure to. Neither contract
+      shape carries a jurisdiction for a third party, so an entry here is a
+      declared disclosure and not necessarily a transfer abroad — a named party
+      may well be domestic, and a client that renders this under an
+      international-transfer heading alone mislabels it.
+
+
+      A disclosure declared without naming the party is reported as the reserved
+      identifier `urn:consent-manager:third-party:unnamed` rather than dropped,
+      so a notice never understates the disclosure. A client has to match that
+      value to render it in its own words.
     items:
       type: string
   withdrawalOfConsent:

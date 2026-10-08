@@ -7,6 +7,7 @@ import com.seamware.consentmanager.client.dto.ContractResponse.ServiceOffering;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.repository.ParticipantRepository;
@@ -16,11 +17,11 @@ import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -34,6 +35,14 @@ import java.util.stream.Collectors;
  */
 @Singleton
 public class PrivacyNoticeService {
+
+    /**
+     * SQLState Postgres raises when a unique index rejects a write.
+     *
+     * <p>Here it means one thing only: {@code uq_privacy_notices_active_contract} already holds an
+     * active notice for this contract and provider, which is a lost race rather than a defect.
+     */
+    private static final String UNIQUE_VIOLATION = "23505";
 
     private final ParticipantRepository participants;
     private final PrivacyNoticeRepository notices;
@@ -61,8 +70,8 @@ public class PrivacyNoticeService {
      * <p>The caller must be one of the two parties and must be active, because generating a notice
      * acts in the dataspace in the participant's name. Its own standing is checked before anything
      * the body names, so a token carrying no active registration is refused whatever it asks for.
-     * The two parties must differ, and both must be registered here and bound by the fetched
-     * contract. An unreachable Contract Service surfaces as {@link
+     * The two parties must differ, and both must be registered here, still active, and bound by the
+     * fetched contract. An unreachable Contract Service surfaces as {@link
      * com.seamware.consentmanager.error.UpstreamServiceException} from the gateway - the one place
      * in this API where that outage is fatal rather than degraded.
      */
@@ -108,15 +117,24 @@ public class PrivacyNoticeService {
         }
     }
 
-    /** The registered participant an identifier names; {@code 404} when it names none. */
+    /**
+     * The active participant an identifier names; {@code 404} when it names none.
+     *
+     * <p>A departed participant is refused like an unknown one. Its record is retained only so the
+     * notices already naming it stay legible, and minting a new one would republish the legal name
+     * and contact deregistration archived - the very re-creation {@link
+     * ParticipantPrincipal#requireActive()} refuses the caller, reached through the body instead of
+     * the token.
+     */
     @NonNull
     private Participant require(String identifier) {
         return participants
                 .findByIdentifier(identifier)
+                .filter(participant -> participant.getDeregisteredAt() == null)
                 .orElseThrow(
                         () ->
                                 new NotFoundException(
-                                        "No participant is registered under '"
+                                        "No active participant is registered under '"
                                                 + identifier
                                                 + "'."));
     }
@@ -207,13 +225,69 @@ public class PrivacyNoticeService {
     @NonNull
     private GeneratedNotice store(
             String contractUri, Participant provider, Participant consumer, NoticeContent content) {
-        Optional<PrivacyNotice> active =
-                notices.findByContractUriAndProviderIdAndArchivedAtIsNull(
-                        contractUri, provider.getId());
+        Optional<PrivacyNotice> active = activeNotice(contractUri, provider);
         if (active.isPresent() && unchanged(active.get(), consumer, content)) {
             return render(active.get(), provider, consumer, false);
         }
+        try {
+            return write(active.orElse(null), contractUri, provider, consumer, content);
+        } catch (DataAccessException e) {
+            if (!lostTheActiveSlot(e)) {
+                throw e;
+            }
+            return settleRace(contractUri, provider, consumer, content, e);
+        }
+    }
 
+    /**
+     * Settles a race this call lost on {@code uq_privacy_notices_active_contract}.
+     *
+     * <p>The winner decides the outcome: a notice saying exactly what this call computed is served
+     * as it stands, and one saying anything else is superseded - which is what the two generations
+     * run in sequence would have done, so a concurrent pair cannot answer differently from a
+     * sequential one. The retry is single: a second rejection means the slot is being contended
+     * faster than this call can claim it, and {@code 409} says so rather than reporting a dropped
+     * change as success.
+     */
+    @NonNull
+    private GeneratedNotice settleRace(
+            String contractUri,
+            Participant provider,
+            Participant consumer,
+            NoticeContent content,
+            DataAccessException lost) {
+        Optional<PrivacyNotice> winner = activeNotice(contractUri, provider);
+        if (winner.isPresent() && unchanged(winner.get(), consumer, content)) {
+            return render(winner.get(), provider, consumer, false);
+        }
+        try {
+            return write(winner.orElse(null), contractUri, provider, consumer, content);
+        } catch (DataAccessException retried) {
+            if (!lostTheActiveSlot(retried)) {
+                throw retried;
+            }
+            throw new ConflictException(
+                    "Another generation is holding the active notice for contract '"
+                            + contractUri
+                            + "'. Retry the request.",
+                    lost);
+        }
+    }
+
+    /** The notice holding this contract's active slot for this provider, when one does. */
+    private Optional<PrivacyNotice> activeNotice(String contractUri, Participant provider) {
+        return notices.findByContractUriAndProviderIdAndArchivedAtIsNull(
+                contractUri, provider.getId());
+    }
+
+    /** Archives the notice handed in, when there is one, and stores the contract's content. */
+    @NonNull
+    private GeneratedNotice write(
+            @Nullable PrivacyNotice superseded,
+            String contractUri,
+            Participant provider,
+            Participant consumer,
+            NoticeContent content) {
         PrivacyNotice replacement =
                 new PrivacyNotice(
                         contractUri,
@@ -221,23 +295,25 @@ public class PrivacyNoticeService {
                         provider.getId(),
                         consumer.getId(),
                         content.payload());
-        try {
-            return render(
-                    writer.archiveAndCreate(active.orElse(null), replacement),
-                    provider,
-                    consumer,
-                    true);
-        } catch (DataAccessException e) {
-            // A concurrent generation holds the active slot; serve its notice rather than an error.
-            // Only a row saying exactly what this call computed proves that is what happened: any
-            // other write failure would otherwise be answered "nothing changed" while the change
-            // was dropped, so it is rethrown.
-            return notices.findByContractUriAndProviderIdAndArchivedAtIsNull(
-                            contractUri, provider.getId())
-                    .filter(raced -> unchanged(raced, consumer, content))
-                    .map(raced -> render(raced, provider, consumer, false))
-                    .orElseThrow(() -> e);
+        return render(writer.archiveAndCreate(superseded, replacement), provider, consumer, true);
+    }
+
+    /**
+     * Whether a write failed because the active-notice index already holds a row.
+     *
+     * <p>Told apart on the constraint rather than on what the surviving row says: a race whose
+     * winner computed different content is still a race, and a deadlock or a severed connection is
+     * not one however closely the row left behind resembles this call's.
+     */
+    private static boolean lostTheActiveSlot(DataAccessException e) {
+        Throwable cause = e;
+        while (cause != null) {
+            if (cause instanceof SQLException sql && UNIQUE_VIOLATION.equals(sql.getSQLState())) {
+                return true;
+            }
+            cause = cause.getCause() == cause ? null : cause.getCause();
         }
+        return false;
     }
 
     /** Whether the stored notice already says exactly what this contract yields now. */
@@ -251,24 +327,14 @@ public class PrivacyNoticeService {
     /**
      * Names the notice's parties by identifier.
      *
-     * <p>The resolved consumer answers for every notice this call assembled; only a race-loser can
-     * be serving a row naming someone else, and that one costs the lookup.
+     * <p>Every path hands in the consumer the row names: the two that report a notice already held
+     * are behind {@link #unchanged}, which compares it, and the two that report one written pass
+     * the row they just built from it.
      */
     @NonNull
     private GeneratedNotice render(
             PrivacyNotice notice, Participant provider, Participant consumer, boolean created) {
-        UUID storedConsumer = notice.getConsumerId();
-        String consumerIdentifier =
-                Objects.equals(storedConsumer, consumer.getId())
-                        ? consumer.getIdentifier()
-                        : consumerIdentifier(storedConsumer);
-        return new GeneratedNotice(notice, provider.getIdentifier(), consumerIdentifier, created);
-    }
-
-    @Nullable
-    private String consumerIdentifier(@Nullable UUID consumerId) {
-        return consumerId == null
-                ? null
-                : participants.findById(consumerId).map(Participant::getIdentifier).orElse(null);
+        return new GeneratedNotice(
+                notice, provider.getIdentifier(), consumer.getIdentifier(), created);
     }
 }

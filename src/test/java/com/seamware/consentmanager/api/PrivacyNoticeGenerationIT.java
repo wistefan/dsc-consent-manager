@@ -285,6 +285,25 @@ class PrivacyNoticeGenerationIT extends KeycloakAndPostgresTestResource {
         }
     }
 
+    /**
+     * The provider side of this rule is reached only by a caller that is the consumer, and this
+     * suite holds a token for one participant; {@code PrivacyNoticeServiceTest} covers both sides.
+     */
+    @Test
+    @DisplayName("a deregistered party is a 404, so no new notice republishes its retained record")
+    void refusesADeregisteredParty() {
+        String contractUri = serveEcosystem("deregistered-consumer");
+        deregister(CONSUMER);
+        try {
+            HttpResponse<String> response = generate(contractUri, CALLER, CONSUMER);
+
+            assertThat(response.code()).isEqualTo(HttpStatus.NOT_FOUND.getCode());
+            assertThat(activeNotices(contractUri)).isEmpty();
+        } finally {
+            reactivate(CONSUMER);
+        }
+    }
+
     @Test
     @DisplayName("regenerating from an unchanged contract returns the notice already held")
     void regenerationOfAnUnchangedContractWritesNothing() {

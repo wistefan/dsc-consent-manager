@@ -10,6 +10,7 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.repository.ParticipantRepository;
@@ -23,16 +24,18 @@ import io.micronaut.data.exceptions.DataAccessException;
 import io.micronaut.data.model.Page;
 import io.micronaut.data.model.Pageable;
 import io.micronaut.data.model.Sort;
+import java.sql.SQLException;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.function.UnaryOperator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -42,8 +45,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 /**
  * Covers the rules {@link PrivacyNoticeService} enforces before it writes, over both contract
  * shapes, plus the two branches {@link PrivacyNoticeGenerationIT} cannot force deterministically:
- * the write that fails because a concurrent generation won the slot, and the write that fails for
- * any other reason and must not be reported as "nothing changed".
+ * the write that loses the active slot to a concurrent generation, and the write that fails for any
+ * other reason and must not be reported as "nothing changed".
  */
 @DisplayName("Privacy notice service")
 class PrivacyNoticeServiceTest {
@@ -65,6 +68,9 @@ class PrivacyNoticeServiceTest {
 
     /** Identifier no participant is registered under. */
     private static final String UNREGISTERED = "did:web:never-registered.example.org";
+
+    /** SQLState Postgres raises when a unique index rejects a write, as the stub writer does. */
+    private static final String UNIQUE_VIOLATION = "23505";
 
     /** Contract URI every case fetches under; the gateway stub ignores it. */
     private static final String CONTRACT_URI = "https://contract.example.org/v1/contracts/c-1";
@@ -209,6 +215,25 @@ class PrivacyNoticeServiceTest {
                 Arguments.of("data consumer", PROVIDER, UNREGISTERED));
     }
 
+    @ParameterizedTest(name = "a deregistered {0} is not found")
+    @MethodSource("parties")
+    @DisplayName("refuses a party that has deregistered, so no new notice republishes its record")
+    void refusesADeregisteredParty(String role, String departed, String caller) {
+        contracts.serve(ContractFixtures.contract(ContractFixtures.ECOSYSTEM));
+        participants.findByIdentifier(departed).orElseThrow().setDeregisteredAt(Instant.now());
+
+        assertThatThrownBy(() -> generate(caller, PROVIDER, CONSUMER))
+                .as(role)
+                .isInstanceOf(NotFoundException.class);
+        assertThat(notices.rows()).isEmpty();
+    }
+
+    static List<Arguments> parties() {
+        return List.of(
+                Arguments.of("data provider", PROVIDER, CONSUMER),
+                Arguments.of("data consumer", CONSUMER, PROVIDER));
+    }
+
     @Test
     @DisplayName("a contract the upstream does not hold is not found")
     void refusesAnUnknownContract() {
@@ -237,7 +262,7 @@ class PrivacyNoticeServiceTest {
     void aLostRaceIsServedTheWinnersNotice() {
         contracts.serve(ContractFixtures.contract(ContractFixtures.ECOSYSTEM));
         PrivacyNotice winner = whateverThisCallWouldHaveWritten();
-        writer.failAfter(winner);
+        writer.losesTheSlotTo(winner);
 
         GeneratedNotice served = generate(PROVIDER, PROVIDER, CONSUMER);
 
@@ -246,17 +271,47 @@ class PrivacyNoticeServiceTest {
     }
 
     @Test
+    @DisplayName(
+            "a race whose winner wrote something else supersedes it, as a sequential pair would")
+    void aLostRaceAgainstDifferentContentSupersedesTheWinner() {
+        contracts.serve(ContractFixtures.contract(ContractFixtures.ECOSYSTEM));
+        PrivacyNotice winner = supersededNotice();
+        writer.losesTheSlotTo(winner);
+
+        GeneratedNotice served = generate(PROVIDER, PROVIDER, CONSUMER);
+
+        assertThat(served.created())
+                .as("the winner says something else, so this call still has a change to make")
+                .isTrue();
+        assertThat(served.notice().getId()).isNotEqualTo(winner.getId());
+        assertThat(notices.rows().get(winner.getId()).getArchivedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("a slot contended faster than one retry is a conflict, not a dropped change")
+    void aSlotContendedFasterThanOneRetryIsAConflict() {
+        contracts.serve(ContractFixtures.contract(ContractFixtures.ECOSYSTEM));
+        writer.losesTheSlotTo(supersededNotice());
+        writer.losesTheSlotTo(supersededNotice());
+
+        assertThatThrownBy(() -> generate(PROVIDER, PROVIDER, CONSUMER))
+                .as("nothing this call computed was stored, and the caller is told to retry")
+                .isInstanceOf(ConflictException.class);
+    }
+
+    @Test
     @DisplayName("a write failure that is not the race is raised, not reported as unchanged")
     void aWriteFailureThatIsNotTheRaceIsRaised() {
         contracts.serve(ContractFixtures.contract(ContractFixtures.ECOSYSTEM));
         PrivacyNotice stale = notices.put(supersededNotice());
-        writer.failAfter(null);
+        writer.failsOutright();
 
         assertThatThrownBy(() -> generate(PROVIDER, PROVIDER, CONSUMER))
                 .as(
-                        "the row left behind says something else, so answering 200 would drop the"
-                                + " change the caller asked for and report success")
-                .isInstanceOf(DataAccessException.class);
+                        "a deadlock or a severed connection is not the race, however closely the"
+                                + " row left behind resembles one, so it must not be answered 200")
+                .isInstanceOf(DataAccessException.class)
+                .isNotInstanceOf(ConflictException.class);
         assertThat(notices.rows().get(stale.getId()).getArchivedAt()).isNull();
     }
 
@@ -351,35 +406,43 @@ class PrivacyNoticeServiceTest {
         }
     }
 
-    /** A writer that stores normally until a case arms it to lose the slot. */
+    /** A writer that stores normally until a case arms the next write (or writes) to fail. */
     private final class StubWriter extends PrivacyNoticeWriter {
 
-        @Nullable private PrivacyNotice winner;
-
-        private boolean armed;
+        private final Deque<Runnable> failures = new ArrayDeque<>();
 
         private StubWriter() {
             super(null);
         }
 
         /**
-         * Makes the next write fail, after committing {@code winner} - {@code null} models a
-         * failure that was never the duplicate-key race.
+         * Arms the next write to lose the active slot to {@code winner}, which is committed first -
+         * the state a concurrent generation leaves behind when the index rejects this one.
          */
-        void failAfter(@Nullable PrivacyNotice committed) {
-            this.winner = committed;
-            this.armed = true;
+        void losesTheSlotTo(PrivacyNotice winner) {
+            failures.add(
+                    () -> {
+                        notices.put(winner);
+                        throw new DataAccessException(
+                                "uq_privacy_notices_active_contract",
+                                new SQLException("duplicate key value", UNIQUE_VIOLATION));
+                    });
+        }
+
+        /** Arms the next write to fail for a reason that was never the race. */
+        void failsOutright() {
+            failures.add(
+                    () -> {
+                        throw new DataAccessException("the write did not land");
+                    });
         }
 
         @Override
         public PrivacyNotice archiveAndCreate(
                 @Nullable PrivacyNotice superseded, PrivacyNotice replacement) {
-            if (armed) {
-                armed = false;
-                if (winner != null) {
-                    notices.put(winner);
-                }
-                throw new DataAccessException("the write did not land");
+            Runnable failure = failures.poll();
+            if (failure != null) {
+                failure.run();
             }
             if (superseded != null) {
                 superseded.setArchivedAt(Instant.now());
@@ -569,7 +632,4 @@ class PrivacyNoticeServiceTest {
             return new UnsupportedOperationException("not used by privacy notice generation");
         }
     }
-
-    /** Kept so the unused-import check does not fire on a helper a later case will want. */
-    private static final UnaryOperator<String> IDENTITY = UnaryOperator.identity();
 }
