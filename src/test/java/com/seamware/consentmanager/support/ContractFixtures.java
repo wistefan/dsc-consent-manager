@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.support;
 
+import com.seamware.consentmanager.client.dto.ContractResponse;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -28,10 +29,54 @@ public final class ContractFixtures {
     public static final String BILATERAL_UNKNOWN_PROPERTY =
             "bilateral-contract-unknown-property.json";
 
+    /** A bilateral contract with policies but no purpose list, and no terms and conditions. */
+    public static final String BILATERAL_NO_PURPOSE = "bilateral-contract-no-purpose.json";
+
+    /** A bilateral contract naming its two parties and nothing else. */
+    public static final String BILATERAL_MINIMAL = "bilateral-contract-minimal.json";
+
+    /** An ecosystem contract whose purposes state different retention terminations. */
+    public static final String ECOSYSTEM_DIVERGENT_TERMINATION =
+            "ecosystem-contract-divergent-termination.json";
+
+    /** An ecosystem contract with policies but no purpose list, and one revoked member. */
+    public static final String ECOSYSTEM_NO_PURPOSE = "ecosystem-contract-no-purpose.json";
+
+    /** An ecosystem contract naming no ecosystem, so only its identifier can title it. */
+    public static final String ECOSYSTEM_UNTITLED = "ecosystem-contract-untitled.json";
+
+    /**
+     * An ecosystem contract declaring third-party disclosure without naming the third party, whose
+     * purposes also state no purpose text of their own.
+     */
+    public static final String ECOSYSTEM_UNNAMED_DISCLOSURE =
+            "ecosystem-contract-unnamed-disclosure.json";
+
+    /** An ecosystem contract that states terms and conditions, which that shape usually omits. */
+    public static final String ECOSYSTEM_TERMS = "ecosystem-contract-terms.json";
+
+    /** An ecosystem contract one of whose members has not signed yet. */
+    public static final String ECOSYSTEM_UNSIGNED_MEMBER =
+            "ecosystem-contract-unsigned-member.json";
+
     /** Classpath directory the fixture documents live in. */
     private static final String DIRECTORY = "contracts/";
 
     private ContractFixtures() {}
+
+    /** A fixture decoded with the application's own mapper, as a fetch would decode it. */
+    public static ContractResponse contract(String fixture) {
+        return decode(body(fixture));
+    }
+
+    /** A contract document decoded as served, for a caller that altered one first. */
+    public static ContractResponse decode(String document) {
+        try {
+            return TestJson.mapper().readValue(document, ContractResponse.class);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not decode contract document", e);
+        }
+    }
 
     /** Reads a fixture document; fails loudly rather than returning an empty body. */
     public static String body(String fixture) {

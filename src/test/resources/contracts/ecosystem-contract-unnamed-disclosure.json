@@ -1,0 +1,27 @@
+{
+  "uid": "66d0e2f7a1b2c3d4e5f6000a",
+  "profile": "mobility-data-space",
+  "ecosystem": "https://catalog.example.org/v1/catalog/ecosystems/mobility-data-space",
+  "serviceOfferings": [],
+  "purpose": [
+    {
+      "uid": "purpose-fraud-screening",
+      "purpose": "   ",
+      "piiCategory": "Payment data",
+      "consentType": "EXPLICIT",
+      "termination": "P90D",
+      "thirdPartyDisclosure": true
+    },
+    {
+      "uid": "purpose-billing",
+      "purpose": "Bill the data consumer for retrieved records.",
+      "piiCategory": null,
+      "consentType": "EXPLICIT",
+      "termination": "P90D",
+      "thirdPartyDisclosure": true,
+      "thirdPartyName": "  "
+    }
+  ],
+  "members": [],
+  "status": "signed"
+}

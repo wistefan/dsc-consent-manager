@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.service;
 
+import static com.seamware.consentmanager.support.PrivacyNoticeFixtures.emptyPayload;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -10,7 +11,6 @@ import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
-import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.error.ConflictException;
@@ -413,8 +413,7 @@ class ParticipantDeregistrationIT extends PostgresTestResource {
                         null,
                         side == Side.PROVIDER ? subject.getId() : other.getId(),
                         side == Side.PROVIDER ? other.getId() : subject.getId(),
-                        new PrivacyNoticePayload(
-                                null, null, null, null, null, null, null, null, null));
+                        emptyPayload());
         notice.setArchivedAt(archivedAt);
         return notices.save(notice);
     }

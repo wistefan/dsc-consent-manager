@@ -1,0 +1,14 @@
+{
+  "_id": "66d0e2f7a1b2c3d4e5f60009",
+  "profile": "mobility-data-space",
+  "orchestrator": "did:web:orchestrator.example.org",
+  "members": [
+    {
+      "participant": "did:web:provider.example.org",
+      "role": "Data provider",
+      "signature": "hasSigned",
+      "date": "2026-07-01T09:00:00.000Z"
+    }
+  ],
+  "status": "pending"
+}
