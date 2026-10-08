@@ -137,11 +137,54 @@ class PrivacyNoticeServiceTest {
                         OUTSIDER,
                         false),
                 Arguments.of(
-                        "an ecosystem contract whose consumer offers the service",
+                        "an ecosystem contract with its recorded roles the wrong way round",
                         ContractFixtures.ECOSYSTEM,
                         CONSUMER,
                         PROVIDER,
-                        false));
+                        false),
+                Arguments.of(
+                        "an ecosystem contract both of whose parties offer a service",
+                        ContractFixtures.ECOSYSTEM_NO_PURPOSE,
+                        PROVIDER,
+                        CONSUMER,
+                        true),
+                Arguments.of(
+                        // Both parties offer here, so the service-offering evidence puts both on
+                        // the providing side and only the recorded roles can tell them apart.
+                        "an ecosystem contract whose parties both offer, declared the wrong way"
+                                + " round",
+                        ContractFixtures.ECOSYSTEM_NO_PURPOSE,
+                        CONSUMER,
+                        PROVIDER,
+                        false),
+                Arguments.of(
+                        // Members with roles and no offerings at all: the shape the Contract
+                        // Service serves for an ecosystem whose offerings are not listed on it.
+                        "an ecosystem contract naming members but no service offerings",
+                        ContractFixtures.ECOSYSTEM_UNSIGNED_MEMBER,
+                        PROVIDER,
+                        CONSUMER,
+                        true),
+                Arguments.of(
+                        "an offering-less ecosystem contract declared against its recorded roles",
+                        ContractFixtures.ECOSYSTEM_UNSIGNED_MEMBER,
+                        CONSUMER,
+                        PROVIDER,
+                        false),
+                Arguments.of(
+                        // Neither roles nor offerings, so membership is all the document
+                        // constrains and the request's own declaration stands either way round.
+                        "an ecosystem contract evidencing no direction at all",
+                        ContractFixtures.ECOSYSTEM_ROLELESS,
+                        PROVIDER,
+                        CONSUMER,
+                        true),
+                Arguments.of(
+                        "an ecosystem contract evidencing no direction, declared the other way",
+                        ContractFixtures.ECOSYSTEM_ROLELESS,
+                        CONSUMER,
+                        PROVIDER,
+                        true));
     }
 
     @ParameterizedTest(name = "{0}")

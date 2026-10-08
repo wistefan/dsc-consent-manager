@@ -16,6 +16,16 @@ description: >
   base64-encoded**, neither on this operation nor on the calls it makes to the
   Contract Service; an encoded identifier is simply an identifier nobody is
   registered under and is answered `404`.
+
+
+  The contract decides the **direction** as far as it records it. A bilateral
+  contract states both sides outright. An ecosystem contract names N members, so
+  the direction is read off the role it records for a member and, where it
+  records none, off who offers a service under it: a participant the contract
+  puts on one side may not be declared on the other, and an ecosystem contract
+  that evidences neither — members without roles and no service offerings —
+  constrains membership only and lets this request's own declaration stand.
+  A contradiction is answered `400` naming the side the contract records.
 properties:
   contractUri:
     type: string
@@ -38,7 +48,9 @@ properties:
     pattern: '^(?!\s*$).+$'
     description: >
       Global identifier of the participant providing the data. Must be
-      registered here and must be named as a party by the fetched contract.
+      registered here and active, must be named as a party by the fetched
+      contract, and must not be the party that contract records as consuming
+      the data.
     example: "urn:example:participant:clinic"
   dataConsumer:
     type: string
@@ -47,7 +59,10 @@ properties:
     pattern: '^(?!\s*$).+$'
     description: >
       Global identifier of the participant consuming the data. Must be
-      registered here and must be named as a party by the fetched contract.
+      registered here and active, must be named as a party by the fetched
+      contract, and must differ from `dataProvider`. An ecosystem contract that
+      records no role for it but names it as offering a service under the
+      contract puts it on the providing side, which is also refused.
     example: "urn:example:participant:research-lab"
 required:
   - contractUri

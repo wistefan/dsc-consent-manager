@@ -41,6 +41,8 @@ class PrivacyNoticeMapperTest {
 
     private static final String CONSUMER = "urn:test:participant:consumer";
 
+    private static final String TITLE = "Mobility insights";
+
     private static final String OFFERING_URI = "https://catalog.example.org/offerings/trips";
 
     private static final Instant CREATED_AT = Instant.parse("2026-01-02T03:04:05Z");
@@ -57,6 +59,7 @@ class PrivacyNoticeMapperTest {
         PrivacyNotice notice = render(fullPayload(), CONSUMER);
 
         assertThat(notice.getContractUri()).isEqualTo(CONTRACT_URI);
+        assertThat(notice.getTitle()).isEqualTo(TITLE);
         assertThat(notice.getDataProvider()).isEqualTo(PROVIDER);
         assertThat(notice.getDataConsumer()).isEqualTo(CONSUMER);
         assertThat(notice.getPurposes()).containsExactly("Produce aggregated mobility insights.");
@@ -162,11 +165,7 @@ class PrivacyNoticeMapperTest {
             PrivacyNoticePayload payload) {
         com.seamware.consentmanager.domain.PrivacyNotice stored =
                 new com.seamware.consentmanager.domain.PrivacyNotice(
-                        CONTRACT_URI,
-                        "Mobility insights",
-                        UUID.randomUUID(),
-                        UUID.randomUUID(),
-                        payload);
+                        CONTRACT_URI, TITLE, UUID.randomUUID(), UUID.randomUUID(), payload);
         stored.setCreatedAt(CREATED_AT);
         stored.setUpdatedAt(UPDATED_AT);
         return stored;

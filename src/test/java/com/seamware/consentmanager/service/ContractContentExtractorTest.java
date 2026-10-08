@@ -33,7 +33,6 @@ class ContractContentExtractorTest {
     private static final String PROVIDER_URI = CATALOG + "participants/provider";
     private static final String ECOSYSTEM_URI = CATALOG + "ecosystems/mobility-data-space";
     private static final String TRIP_HISTORY_URI = CATALOG + "serviceofferings/trip-history";
-    private static final String ROUTE_QUALITY_URI = CATALOG + "serviceofferings/route-quality";
     private static final String CHARGING_SESSIONS_URI =
             CATALOG + "serviceofferings/charging-sessions";
     private static final String METER_READINGS_URI = CATALOG + "serviceofferings/meter-readings";
@@ -143,9 +142,10 @@ class ContractContentExtractorTest {
                                                 "Trip history may be read by signed members of this"
                                                         + " ecosystem only."),
                                         null,
-                                        List.of(
-                                                reference(TRIP_HISTORY_URI),
-                                                reference(ROUTE_QUALITY_URI)),
+                                        // The consumer offers route-quality under the same
+                                        // contract; it stays out of a notice this provider
+                                        // controls, which names only what that provider offers.
+                                        List.of(reference(TRIP_HISTORY_URI)),
                                         List.of(PROVIDER_IDENTIFIER, CONSUMER_IDENTIFIER),
                                         null,
                                         null,

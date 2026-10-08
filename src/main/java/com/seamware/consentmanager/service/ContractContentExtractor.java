@@ -59,7 +59,7 @@ public class ContractContentExtractor {
                 new PrivacyNoticePayload(
                         purposes(contract),
                         categoriesOfData(contract),
-                        data(contract),
+                        data(contract, provider),
                         recipients(contract),
                         controllerDetails(provider),
                         retentionPeriod(contract),
@@ -150,13 +150,23 @@ public class ContractContentExtractor {
      *
      * <p>Service offerings, because a contract names offerings and never the data resources behind
      * them; resolving those is a retrieval-time walk of the catalog.
+     *
+     * <p>Only the offerings this notice's own provider makes. An ecosystem contract may name
+     * several participants as offering a service, and listing another participant's offering under
+     * a notice that names this provider as controller would say it controls data it does not
+     * provide.
      */
     @Nullable
-    private List<DataReference> data(ContractResponse contract) {
+    private List<DataReference> data(ContractResponse contract, Participant provider) {
         Stream<String> offerings =
                 contract.shape() == Shape.BILATERAL
                         ? Stream.of(contract.serviceOffering())
                         : orEmpty(contract.serviceOfferings()).stream()
+                                .filter(
+                                        offering ->
+                                                Objects.equals(
+                                                        offering.participantIdentifier(),
+                                                        provider.getIdentifier()))
                                 .map(ServiceOffering::serviceOffering);
         List<String> uris = distinct(offerings.map(this::text).filter(Objects::nonNull).toList());
         return uris == null
@@ -188,8 +198,7 @@ public class ContractContentExtractor {
     private List<String> identifiers(ContractResponse contract) {
         if (contract.shape() == Shape.BILATERAL) {
             return distinct(
-                    Stream.of(contract.dataProvider(), contract.dataConsumer())
-                            .map(this::text)
+                    Stream.of(contract.dataProviderIdentifier(), contract.dataConsumerIdentifier())
                             .filter(Objects::nonNull)
                             .toList());
         }
@@ -217,9 +226,7 @@ public class ContractContentExtractor {
 
     /** The participants a member list names, the ones naming nobody dropped. */
     private Stream<String> participants(@Nullable List<Member> members) {
-        return orEmpty(members).stream()
-                .map(member -> text(member.participant()))
-                .filter(Objects::nonNull);
+        return orEmpty(members).stream().map(Member::identifier).filter(Objects::nonNull);
     }
 
     /** The controller, as this service has the provider registered. */
