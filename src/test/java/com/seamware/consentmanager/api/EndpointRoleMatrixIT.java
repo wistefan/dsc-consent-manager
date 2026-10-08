@@ -98,6 +98,22 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_BULK = PATH_PARTICIPANT_USERS + "/bulk";
 
+    private static final String PATH_PRIVACY_NOTICES = "/privacy-notices";
+
+    /**
+     * A contract identifier no case serves. Generation resolves its two named participants before
+     * it fetches anything, so paired with {@link #UNREGISTERED_PARTY} it never leaves this process.
+     */
+    private static final String UNSERVED_CONTRACT =
+            "https://contracts.example.org/contracts/absent";
+
+    /**
+     * An identifier this suite never registers, which is what keeps the generation row
+     * deterministic here: the route stops at the participant directory rather than calling a
+     * Contract Service this suite does not stand up.
+     */
+    private static final String UNREGISTERED_PARTY = "urn:test:participant:role-matrix-unknown";
+
     /**
      * The one {@code PARTICIPANT} operation an unregistered identifier may reach, named as {@link
      * Endpoint#toString()} names it. It is what creates the row every other route demands, so it is
@@ -235,7 +251,16 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 Map.of("legalName", PARTICIPANT_LEGAL_NAME))),
         DEREGISTER_CURRENT_PARTICIPANT(
                 "delete " + PATH_CURRENT_PARTICIPANT,
-                () -> HttpRequest.DELETE(PATH_CURRENT_PARTICIPANT));
+                () -> HttpRequest.DELETE(PATH_CURRENT_PARTICIPANT)),
+        GENERATE_PRIVACY_NOTICE(
+                "post " + PATH_PRIVACY_NOTICES,
+                () ->
+                        HttpRequest.POST(
+                                PATH_PRIVACY_NOTICES,
+                                Map.of(
+                                        "contractUri", UNSERVED_CONTRACT,
+                                        "dataProvider", CALLER_PARTICIPANT,
+                                        "dataConsumer", UNREGISTERED_PARTY)));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -329,6 +354,7 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         HttpStatus perEntry = HttpStatus.MULTI_STATUS;
         HttpStatus emptied = HttpStatus.NO_CONTENT;
         HttpStatus alreadyRegistered = HttpStatus.CONFLICT;
+        HttpStatus unknownParty = HttpStatus.NOT_FOUND;
         HttpStatus denied = HttpStatus.FORBIDDEN;
         HttpStatus challenged = HttpStatus.UNAUTHORIZED;
         return Stream.of(
@@ -383,6 +409,18 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 Endpoint.DEREGISTER_CURRENT_PARTICIPANT,
                                 denied,
                                 ok,
+                                denied,
+                                denied,
+                                challenged),
+                        // Generation needs a Contract Service, which this suite does not stand up,
+                        // so the one caller this route admits is sent at an unregistered consumer
+                        // and stops at the directory. That it gets past authorization to reach that
+                        // refusal is what the matrix asserts; PrivacyNoticeGenerationIT owns the
+                        // rest of the flow.
+                        row(
+                                Endpoint.GENERATE_PRIVACY_NOTICE,
+                                denied,
+                                unknownParty,
                                 denied,
                                 denied,
                                 challenged))

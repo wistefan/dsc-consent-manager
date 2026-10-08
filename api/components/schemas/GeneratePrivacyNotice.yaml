@@ -1,0 +1,55 @@
+# Schema: GeneratePrivacyNotice — referenced from api/openapi.yaml as
+# components.schemas.GeneratePrivacyNotice.
+#
+# Every property carries a `maxLength`: all three are free-form values that
+# reach `TEXT` columns, and none of them is derived from a token this service
+# has already validated.
+type: object
+description: >
+  What a participant names when it asks for a privacy notice: the contract the
+  notice is to be generated from, and the two parties the contract binds.
+
+
+  `dataProvider` and `dataConsumer` are **global participant identifiers**, the
+  same values `GET /participants` lists — not self-description URLs, and not
+  identifiers of any kind this service hands out. **Nothing here is
+  base64-encoded**, neither on this operation nor on the calls it makes to the
+  Contract Service; an encoded identifier is simply an identifier nobody is
+  registered under and is answered `404`.
+properties:
+  contractUri:
+    type: string
+    minLength: 1
+    maxLength: 2048
+    # Rejects a value that is only whitespace, which `minLength` alone would let
+    # through. Bean validation matches the whole value.
+    pattern: '^(?!\s*$).+$'
+    description: >
+      URI of the contract the notice states. Stored verbatim: it is the key one
+      active notice per provider is held against, so this service never
+      normalises it. The contract itself is fetched from the Contract Service
+      this deployment is configured against, under the identifier the URI's last
+      path segment carries.
+    example: "https://contract.example.org/contracts/65d1f0a2b3c4d5e6f7a8b9c0"
+  dataProvider:
+    type: string
+    minLength: 1
+    maxLength: 512
+    pattern: '^(?!\s*$).+$'
+    description: >
+      Global identifier of the participant providing the data. Must be
+      registered here and must be named as a party by the fetched contract.
+    example: "urn:example:participant:clinic"
+  dataConsumer:
+    type: string
+    minLength: 1
+    maxLength: 512
+    pattern: '^(?!\s*$).+$'
+    description: >
+      Global identifier of the participant consuming the data. Must be
+      registered here and must be named as a party by the fetched contract.
+    example: "urn:example:participant:research-lab"
+required:
+  - contractUri
+  - dataProvider
+  - dataConsumer

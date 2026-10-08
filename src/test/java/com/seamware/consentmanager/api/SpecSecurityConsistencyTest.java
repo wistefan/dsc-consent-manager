@@ -84,7 +84,7 @@ class SpecSecurityConsistencyTest {
      * Operations {@code api/openapi.yaml} declares, which is how many cases every generated test
      * below must run.
      */
-    private static final int SPECIFIED_OPERATION_COUNT = 16;
+    private static final int SPECIFIED_OPERATION_COUNT = 17;
 
     /** Path item key that would hide every operation beneath it from this test. */
     private static final String REF_KEY = "$ref";
