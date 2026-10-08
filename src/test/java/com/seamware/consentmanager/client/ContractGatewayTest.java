@@ -16,6 +16,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
@@ -56,6 +57,9 @@ class ContractGatewayTest {
 
     /** The identifier derived from that URI. */
     private static final String CONTRACT_ID = "c-1";
+
+    /** A 200 that is no contract: what a proxy in front of the upstream answers with. */
+    private static final String PROXY_ERROR_PAGE = "<html><body>502 Bad Gateway</body></html>";
 
     @ParameterizedTest(name = "{0} is retried")
     @ValueSource(ints = {500, 502, 503})
@@ -180,13 +184,32 @@ class ContractGatewayTest {
     }
 
     @Test
-    @DisplayName("the upstream identifier is the URI's last segment, and the URI is not normalised")
-    void derivesTheIdentifierFromTheLastSegment() {
-        assertThat(ContractGateway.contractIdOf(CONTRACT_URI)).isEqualTo(CONTRACT_ID);
-        assertThat(ContractGateway.contractIdOf(CONTRACT_URI + "/")).isEqualTo(CONTRACT_ID);
-        assertThat(ContractGateway.contractIdOf(CONTRACT_ID))
-                .as("a bare identifier is already the identifier")
-                .isEqualTo(CONTRACT_ID);
+    @DisplayName("a 200 carrying no contract is an upstream failure, not a defect in this service")
+    void anUndecodableBodyIsAnUpstreamFailure() {
+        try (ContractServiceStub stub = new ContractServiceStub();
+                ApplicationContext context = startContext(stub, Map.of())) {
+            stub.serveEcosystemContract(CONTRACT_ID, PROXY_ERROR_PAGE);
+            ContractGateway gateway = context.getBean(ContractGateway.class);
+
+            assertThatThrownBy(() -> gateway.fetch(CONTRACT_URI))
+                    .as("a proxy's error page served as JSON is a 502, never the 500 of a defect")
+                    .isInstanceOf(UpstreamServiceException.class);
+        }
+    }
+
+    @ParameterizedTest(name = "{0} is fetched as {1}")
+    @CsvSource({
+        "https://contract.example.org/v1/contracts/c-1, c-1",
+        "https://contract.example.org/v1/contracts/c-1/, c-1",
+        "https://contract.example.org/v1/contracts/c-1?version=2, c-1",
+        "https://contract.example.org/v1/contracts/c-1#terms, c-1",
+        "c-1, c-1"
+    })
+    @DisplayName("an http contract URI is fetched by its last path segment, query and fragment off")
+    void derivesTheIdentifierFromTheLastSegment(String contractUri, String expectedId) {
+        assertThat(ContractGateway.contractIdOf(contractUri))
+                .as("an identifier carrying a query would URL-encode into a 404")
+                .isEqualTo(expectedId);
     }
 
     /** Starts a context whose Contract Service is the stub, with a quick retry budget. */

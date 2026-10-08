@@ -15,7 +15,7 @@
       "uid": "purpose-grid-planning",
       "purpose": "Plan charging infrastructure from observed demand.",
       "purposeCategory": "Infrastructure planning",
-      "piiCategory": "Energy consumption data",
+      "piiCategory": ["Energy consumption data", "Charging session data"],
       "consentType": "EXPLICIT",
       "termination": "Processing ends when the contract terminates.",
       "thirdPartyDisclosure": true,

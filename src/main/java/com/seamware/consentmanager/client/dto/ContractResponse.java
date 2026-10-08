@@ -2,7 +2,9 @@ package com.seamware.consentmanager.client.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.micronaut.core.annotation.Nullable;
+import io.micronaut.json.tree.JsonNode;
 import io.micronaut.serde.annotation.Serdeable;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -94,11 +96,36 @@ public record ContractResponse(
             @Nullable String uid,
             @Nullable String purpose,
             @Nullable String purposeCategory,
-            @Nullable String piiCategory,
+            @Nullable JsonNode piiCategory,
             @Nullable String consentType,
             @Nullable String termination,
             @Nullable Boolean thirdPartyDisclosure,
-            @Nullable String thirdPartyName) {}
+            @Nullable String thirdPartyName) {
+
+        /**
+         * The PII categories this purpose names, whichever way the document declared them.
+         *
+         * <p>Held as a tree because the two shapes disagree: the ecosystem document declares one
+         * string, the bilateral one an array of them. Either fixed type would fail to decode the
+         * other shape and turn a perfectly well-formed contract into a 502, so the one form is read
+         * and both are normalised here. Never null; a purpose naming none yields an empty list.
+         */
+        public List<String> piiCategories() {
+            if (piiCategory == null || piiCategory.isNull()) {
+                return List.of();
+            }
+            if (!piiCategory.isArray()) {
+                return List.of(piiCategory.coerceStringValue());
+            }
+            List<String> categories = new ArrayList<>();
+            for (JsonNode element : piiCategory.values()) {
+                if (!element.isNull()) {
+                    categories.add(element.coerceStringValue());
+                }
+            }
+            return List.copyOf(categories);
+        }
+    }
 
     /** One participant's membership of an ecosystem contract, signed or not yet signed. */
     @Serdeable

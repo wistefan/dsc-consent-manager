@@ -341,8 +341,10 @@ consent-manager:
     # generated from. Forwarded to `micronaut.http.services.contract-service.url` above.
     url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
 
-    # Bounds on one upstream call. The read timeout also bounds how long a generation
-    # request can be held open waiting for a contract.
+    # Bounds on one upstream attempt, not on a whole fetch: a fetch is bounded by
+    # (retry-attempts + 1) x read-timeout plus the growing retry pauses - about 23.5s at
+    # the defaults - and by twice that when the ecosystem endpoint misses and the
+    # bilateral one is tried as well. Size a caller's own timeout from that bound.
     connect-timeout: ${CONTRACT_SERVICE_CONNECT_TIMEOUT:2s}
     read-timeout: ${CONTRACT_SERVICE_READ_TIMEOUT:5s}
 

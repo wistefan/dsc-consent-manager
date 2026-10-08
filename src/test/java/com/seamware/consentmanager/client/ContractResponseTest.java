@@ -8,13 +8,16 @@ import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.env.Environment;
 import io.micronaut.serde.ObjectMapper;
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Pins what the one contract model makes of the two documents the Contract Service serves.
@@ -49,13 +52,29 @@ class ContractResponseTest {
         context.close();
     }
 
+    /** The served documents, named by the constants so a renamed file breaks the compile. */
+    static Stream<Arguments> servedDocuments() {
+        return Stream.of(
+                Arguments.of(
+                        ContractFixtures.ECOSYSTEM,
+                        "66d0e2f7a1b2c3d4e5f60001",
+                        ContractResponse.Shape.ECOSYSTEM),
+                Arguments.of(
+                        ContractFixtures.BILATERAL,
+                        "66d0e2f7a1b2c3d4e5f60002",
+                        ContractResponse.Shape.BILATERAL),
+                Arguments.of(
+                        ContractFixtures.ECOSYSTEM_MONGO_ID,
+                        "66d0e2f7a1b2c3d4e5f60003",
+                        ContractResponse.Shape.ECOSYSTEM),
+                Arguments.of(
+                        ContractFixtures.BILATERAL_UNKNOWN_PROPERTY,
+                        "66d0e2f7a1b2c3d4e5f60004",
+                        ContractResponse.Shape.BILATERAL));
+    }
+
     @ParameterizedTest(name = "{0} is {2} contract {1}")
-    @CsvSource({
-        "ecosystem-contract.json, 66d0e2f7a1b2c3d4e5f60001, ECOSYSTEM",
-        "bilateral-contract.json, 66d0e2f7a1b2c3d4e5f60002, BILATERAL",
-        "ecosystem-contract-mongo-id.json, 66d0e2f7a1b2c3d4e5f60003, ECOSYSTEM",
-        "bilateral-contract-unknown-property.json, 66d0e2f7a1b2c3d4e5f60004, BILATERAL"
-    })
+    @MethodSource("servedDocuments")
     @DisplayName("every served document decodes to an identified, shaped contract")
     void decodesIdentityAndShape(String fixture, String expectedId, ContractResponse.Shape shape)
             throws IOException {
@@ -77,6 +96,26 @@ class ContractResponseTest {
         assertThat(contract.dataConsumer())
                 .as("an upstream addition leaves the members this service does read intact")
                 .isEqualTo("https://catalog.example.org/v1/catalog/participants/consumer");
+    }
+
+    /** The two ways the upstream declares a purpose's PII categories, and what each must yield. */
+    static Stream<Arguments> piiCategoryForms() {
+        return Stream.of(
+                Arguments.of(ContractFixtures.ECOSYSTEM, List.of("Location data")),
+                Arguments.of(
+                        ContractFixtures.BILATERAL,
+                        List.of("Energy consumption data", "Charging session data")));
+    }
+
+    @ParameterizedTest(name = "{0} yields {1}")
+    @MethodSource("piiCategoryForms")
+    @DisplayName("piiCategory decodes whether the document declares a string or an array")
+    void decodesEitherPiiCategoryForm(String fixture, List<String> expected) throws IOException {
+        ContractResponse contract = decode(fixture);
+
+        assertThat(contract.purpose().getFirst().piiCategories())
+                .as("a shape this service cannot decode would 502 a well-formed contract")
+                .isEqualTo(expected);
     }
 
     @Test
