@@ -1,0 +1,57 @@
+{
+  "uid": "66d0e2f7a1b2c3d4e5f60008",
+  "profile": "mobility-data-space",
+  "ecosystem": "https://catalog.example.org/v1/catalog/ecosystems/mobility-data-space",
+  "orchestrator": "https://catalog.example.org/v1/catalog/participants/orchestrator",
+  "serviceOfferings": [
+    {
+      "participant": "https://catalog.example.org/v1/catalog/participants/provider",
+      "serviceOffering": "https://catalog.example.org/v1/catalog/serviceofferings/trip-history",
+      "policies": [
+        {
+          "ruleId": "rule-access",
+          "description": "Trip history may be read by signed members of this ecosystem only."
+        }
+      ]
+    },
+    {
+      "participant": "https://catalog.example.org/v1/catalog/participants/consumer",
+      "serviceOffering": "https://catalog.example.org/v1/catalog/serviceofferings/route-quality",
+      "policies": [
+        {
+          "ruleId": "rule-access",
+          "description": "Trip history may be read by signed members of this ecosystem only."
+        }
+      ]
+    }
+  ],
+  "members": [
+    {
+      "participant": "https://catalog.example.org/v1/catalog/participants/provider",
+      "role": "Data provider",
+      "signature": "hasSigned",
+      "date": "2026-05-02T09:00:00.000Z"
+    },
+    {
+      "participant": "https://catalog.example.org/v1/catalog/participants/consumer",
+      "role": "Data consumer",
+      "signature": "hasSigned",
+      "date": "2026-05-02T10:00:00.000Z"
+    },
+    {
+      "participant": "https://catalog.example.org/v1/catalog/participants/departed",
+      "role": "Data consumer",
+      "signature": "hasSigned",
+      "date": "2026-05-02T11:00:00.000Z"
+    }
+  ],
+  "revokedMembers": [
+    {
+      "participant": "https://catalog.example.org/v1/catalog/participants/departed",
+      "role": "Data consumer",
+      "signature": "hasRevoked",
+      "date": "2026-06-01T08:00:00.000Z"
+    }
+  ],
+  "status": "signed"
+}

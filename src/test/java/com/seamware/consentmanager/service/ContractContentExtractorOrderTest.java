@@ -1,0 +1,194 @@
+package com.seamware.consentmanager.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.seamware.consentmanager.client.dto.ContractResponse;
+import com.seamware.consentmanager.domain.Participant;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload;
+import com.seamware.consentmanager.support.ContractFixtures;
+import io.micronaut.context.ApplicationContext;
+import io.micronaut.context.env.Environment;
+import io.micronaut.core.type.Argument;
+import io.micronaut.serde.ObjectMapper;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.UnaryOperator;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+/**
+ * Pins that extraction is deterministic and that its lists follow the contract's own order.
+ *
+ * <p>This is what repeated generation rests on: it decides whether a contract changed by comparing
+ * the content it would store against the stored one, so a payload that reshuffled between two
+ * extractions of the same document would report a change nobody made.
+ */
+@DisplayName("Contract content extraction order")
+class ContractContentExtractorOrderTest {
+
+    /** The ecosystem member list this suite reorders; its entries become the recipients. */
+    private static final String MEMBERS = "members";
+
+    private static ApplicationContext context;
+    private static ObjectMapper json;
+
+    private final ContractContentExtractor extractor = new ContractContentExtractor();
+
+    @BeforeAll
+    static void startContext() {
+        context =
+                ApplicationContext.builder(Environment.TEST)
+                        .properties(
+                                Map.of(
+                                        "datasources.default.enabled", false,
+                                        "flyway.enabled", false))
+                        .start();
+        json = context.getBean(ObjectMapper.class);
+    }
+
+    @AfterAll
+    static void stopContext() {
+        context.close();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(
+            strings = {
+                ContractFixtures.ECOSYSTEM,
+                ContractFixtures.BILATERAL,
+                ContractFixtures.ECOSYSTEM_NO_PURPOSE,
+                ContractFixtures.ECOSYSTEM_DIVERGENT_TERMINATION,
+                ContractFixtures.BILATERAL_NO_PURPOSE
+            })
+    @DisplayName("yields equal content for the same document twice")
+    void extractsDeterministically(String fixture) {
+        ContractResponse contract = decode(ContractFixtures.body(fixture));
+        assertThat(extractor.extract(contract, provider()))
+                .isEqualTo(extractor.extract(contract, provider()));
+    }
+
+    @Test
+    @DisplayName("reorders only the section whose source the document reordered")
+    void followsDocumentOrder() {
+        PrivacyNoticePayload original =
+                extractor
+                        .extract(
+                                decode(
+                                        ContractFixtures.body(
+                                                ContractFixtures.ECOSYSTEM_NO_PURPOSE)),
+                                provider())
+                        .payload();
+        PrivacyNoticePayload reordered =
+                extractor
+                        .extract(
+                                mutatedMembers(ContractContentExtractorOrderTest::reversed),
+                                provider())
+                        .payload();
+
+        assertThat(reordered.recipients())
+                .containsExactlyElementsOf(reversed(new ArrayList<>(original.recipients())));
+        assertThat(withRecipients(reordered, original.recipients())).isEqualTo(original);
+    }
+
+    @Test
+    @DisplayName("collapses a repeated source entry instead of repeating it")
+    void collapsesRepeatedEntries() {
+        PrivacyNoticePayload original =
+                extractor
+                        .extract(
+                                decode(
+                                        ContractFixtures.body(
+                                                ContractFixtures.ECOSYSTEM_NO_PURPOSE)),
+                                provider())
+                        .payload();
+        PrivacyNoticePayload duplicated =
+                extractor
+                        .extract(
+                                mutatedMembers(ContractContentExtractorOrderTest::concatenated),
+                                provider())
+                        .payload();
+
+        assertThat(duplicated).isEqualTo(original);
+    }
+
+    /** The ecosystem fixture with its member list put through the given change. */
+    private ContractResponse mutatedMembers(UnaryOperator<List<Object>> change) {
+        Map<String, Object> document =
+                new LinkedHashMap<>(
+                        readMap(ContractFixtures.body(ContractFixtures.ECOSYSTEM_NO_PURPOSE)));
+        @SuppressWarnings("unchecked")
+        List<Object> members = (List<Object>) document.get(MEMBERS);
+        document.put(MEMBERS, change.apply(new ArrayList<>(members)));
+        return decode(write(document));
+    }
+
+    /** The payload with its recipients replaced, to compare everything else for equality. */
+    private static PrivacyNoticePayload withRecipients(
+            PrivacyNoticePayload payload, List<String> recipients) {
+        return new PrivacyNoticePayload(
+                payload.purposes(),
+                payload.categoriesOfData(),
+                payload.data(),
+                recipients,
+                payload.controllerDetails(),
+                payload.retentionPeriod(),
+                payload.piiPrincipalRights(),
+                payload.internationalTransfers(),
+                payload.withdrawalOfConsent());
+    }
+
+    private static <T> List<T> reversed(List<T> values) {
+        List<T> copy = new ArrayList<>(values);
+        Collections.reverse(copy);
+        return copy;
+    }
+
+    private static List<Object> concatenated(List<Object> values) {
+        List<Object> twice = new ArrayList<>(values);
+        twice.addAll(values);
+        return twice;
+    }
+
+    private static Participant provider() {
+        return new Participant(
+                "did:web:provider.example.org",
+                "Example Provider GmbH",
+                "https://catalog.example.org/v1/catalog/participants/provider",
+                "privacy@provider.example.org",
+                Map.of(),
+                null);
+    }
+
+    private static ContractResponse decode(String body) {
+        try {
+            return json.readValue(body, ContractResponse.class);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not decode contract document", e);
+        }
+    }
+
+    private static Map<String, Object> readMap(String body) {
+        try {
+            return json.readValue(body, Argument.mapOf(String.class, Object.class));
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not read contract document as a tree", e);
+        }
+    }
+
+    private static String write(Map<String, Object> document) {
+        try {
+            return json.writeValueAsString(document);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not write contract document back", e);
+        }
+    }
+}

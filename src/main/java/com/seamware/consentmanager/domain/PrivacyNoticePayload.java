@@ -5,34 +5,48 @@ import io.micronaut.serde.annotation.Serdeable;
 import java.util.List;
 
 /**
- * Represents the contract-derived content of a privacy notice, stored as JSONB in the {@code
- * payload} column of the {@code privacy_notices} table.
+ * The contract-derived content of a privacy notice, stored as JSONB in the {@code payload} column
+ * of {@code privacy_notices}.
  *
- * <p>All fields are nullable because the payload structure is contract-derived and may vary between
- * different privacy notice configurations. This record is annotated with {@link Serdeable} to
- * enable automatic JSONB round-tripping via Micronaut Serde Jackson.
- *
- * @param purposes the declared purposes for data processing (e.g. "marketing",
- *     "service-improvement")
- * @param dataCategories the categories of personal data being processed (e.g. "name", "email",
- *     "location")
- * @param recipients the entities or categories of entities that will receive the data
- * @param controllerName the name of the data controller responsible for the processing
- * @param controllerContact the contact information for the data controller
- * @param retentionPeriod the duration for which personal data will be retained (e.g. "24 months")
- * @param piiPrincipalRights the rights available to the PII principal (e.g. "access", "erasure",
- *     "portability")
- * @param internationalTransfers the countries or regions to which data may be transferred
- * @param withdrawalMethod a description of how consent can be withdrawn
+ * <p>Named after the headings a privacy notice is published under, so the stored form and the
+ * served form of a legal document do not disagree on what a section is called. Every component is
+ * nullable because a contract need not carry a source for every heading, and an absent component is
+ * the honest encoding of that: a section with no source is left out rather than written as an empty
+ * string or an empty list.
  */
 @Serdeable
 public record PrivacyNoticePayload(
         @Nullable List<String> purposes,
-        @Nullable List<String> dataCategories,
+        @Nullable List<String> categoriesOfData,
+        @Nullable List<DataReference> data,
         @Nullable List<String> recipients,
-        @Nullable String controllerName,
-        @Nullable String controllerContact,
+        @Nullable ControllerDetails controllerDetails,
         @Nullable String retentionPeriod,
-        @Nullable List<String> piiPrincipalRights,
+        @Nullable String piiPrincipalRights,
         @Nullable List<String> internationalTransfers,
-        @Nullable String withdrawalMethod) {}
+        @Nullable String withdrawalOfConsent) {
+
+    /**
+     * The data controller, named and reachable.
+     *
+     * <p>Taken from the provider participant's own registration rather than from the contract, so
+     * the notice names the controller as this service knows it.
+     */
+    @Serdeable
+    public record ControllerDetails(
+            @Nullable String name,
+            @Nullable String contact,
+            @Nullable String identifier,
+            @Nullable String selfDescriptionUri) {}
+
+    /**
+     * One catalog document the notice covers, by URI.
+     *
+     * <p>Generation stores the URI alone, because that is all a contract names; the title and
+     * description are filled in by a resolved retrieval, which is the only place the catalog
+     * document is actually read.
+     */
+    @Serdeable
+    public record DataReference(
+            @Nullable String uri, @Nullable String title, @Nullable String description) {}
+}

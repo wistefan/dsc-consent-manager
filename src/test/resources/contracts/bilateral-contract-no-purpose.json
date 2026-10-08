@@ -1,0 +1,24 @@
+{
+  "uid": "66d0e2f7a1b2c3d4e5f60005",
+  "profile": "bilateral-default",
+  "dataProvider": "https://catalog.example.org/v1/catalog/participants/provider",
+  "dataConsumer": "https://catalog.example.org/v1/catalog/participants/consumer",
+  "serviceOffering": "https://catalog.example.org/v1/catalog/serviceofferings/meter-readings",
+  "policy": [
+    {
+      "ruleId": "rule-access",
+      "description": "Meter readings may be read by the data consumer only."
+    },
+    {
+      "ruleId": "rule-retention",
+      "description": "Meter readings may be stored for no longer than the contract runs."
+    }
+  ],
+  "status": "signed",
+  "terminationAndValidity": {
+    "effectiveDate": "2026-04-01T00:00:00.000Z",
+    "terminationPeriod": "P14D"
+  },
+  "createdAt": "2026-03-30T12:00:00.000Z",
+  "updatedAt": "2026-04-01T09:00:00.000Z"
+}

@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.api;
 
+import static com.seamware.consentmanager.support.PrivacyNoticeFixtures.emptyPayload;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.domain.Consent;
@@ -7,7 +8,6 @@ import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
-import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.repository.ConsentRepository;
@@ -422,8 +422,7 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
                                 null,
                                 participantId(provider),
                                 participantId(consumer),
-                                new PrivacyNoticePayload(
-                                        null, null, null, null, null, null, null, null, null)));
+                                emptyPayload()));
         consents.save(
                 Consent.withStatus(
                         status,

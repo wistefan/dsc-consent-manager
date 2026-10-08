@@ -28,6 +28,22 @@ public final class ContractFixtures {
     public static final String BILATERAL_UNKNOWN_PROPERTY =
             "bilateral-contract-unknown-property.json";
 
+    /** A bilateral contract with policies but no purpose list, and no terms and conditions. */
+    public static final String BILATERAL_NO_PURPOSE = "bilateral-contract-no-purpose.json";
+
+    /** A bilateral contract naming its two parties and nothing else. */
+    public static final String BILATERAL_MINIMAL = "bilateral-contract-minimal.json";
+
+    /** An ecosystem contract whose purposes state different retention terminations. */
+    public static final String ECOSYSTEM_DIVERGENT_TERMINATION =
+            "ecosystem-contract-divergent-termination.json";
+
+    /** An ecosystem contract with policies but no purpose list, and one revoked member. */
+    public static final String ECOSYSTEM_NO_PURPOSE = "ecosystem-contract-no-purpose.json";
+
+    /** An ecosystem contract naming no ecosystem, so only its identifier can title it. */
+    public static final String ECOSYSTEM_UNTITLED = "ecosystem-contract-untitled.json";
+
     /** Classpath directory the fixture documents live in. */
     private static final String DIRECTORY = "contracts/";
 
