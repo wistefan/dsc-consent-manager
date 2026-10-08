@@ -64,14 +64,6 @@ public interface PrivacyNoticeRepository extends PageableRepository<PrivacyNotic
     List<PrivacyNotice> findByConsumerIdAndArchivedAtIsNull(UUID consumerId);
 
     /**
-     * Every notice recorded for a contract, archived ones included.
-     *
-     * <p>The active lookups above answer what the service acts on; this answers what it has done,
-     * which is what an audit of a contract's notice history needs.
-     */
-    List<PrivacyNotice> findByContractUri(String contractUri);
-
-    /**
      * How many privacy notices name the participant on either side, archived ones included.
      *
      * <p>Both participant foreign keys here are {@code ON DELETE RESTRICT}, so a non-zero count is

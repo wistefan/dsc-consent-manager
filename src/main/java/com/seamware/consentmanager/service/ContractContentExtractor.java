@@ -9,6 +9,7 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.ControllerDetails;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.DataReference;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
@@ -178,7 +179,13 @@ public class ContractContentExtractor {
      * understate who receives the data - the direction a notice must not err in.
      */
     @Nullable
-    private List<String> recipients(ContractResponse contract) {
+    private List<Recipient> recipients(ContractResponse contract) {
+        return named(identifiers(contract));
+    }
+
+    /** The recipient identifiers the contract names, de-duplicated in first-seen order. */
+    @Nullable
+    private List<String> identifiers(ContractResponse contract) {
         if (contract.shape() == Shape.BILATERAL) {
             return distinct(
                     Stream.of(contract.dataProvider(), contract.dataConsumer())
@@ -191,6 +198,21 @@ public class ContractContentExtractor {
                 participants(contract.members())
                         .filter(participant -> !revoked.contains(participant))
                         .toList());
+    }
+
+    /**
+     * Each identifier as a recipient carrying nothing else.
+     *
+     * <p>A contract names its parties and describes none of them; the remaining components are what
+     * a resolved retrieval fills in from this service's participant registry.
+     */
+    @Nullable
+    private static List<Recipient> named(@Nullable List<String> identifiers) {
+        return identifiers == null
+                ? null
+                : identifiers.stream()
+                        .map(identifier -> new Recipient(identifier, null, null, null))
+                        .toList();
     }
 
     /** The participants a member list names, the ones naming nobody dropped. */

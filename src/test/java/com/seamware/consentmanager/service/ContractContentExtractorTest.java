@@ -6,6 +6,7 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.ControllerDetails;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.DataReference;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
 import com.seamware.consentmanager.support.ContractFixtures;
 import java.util.List;
 import java.util.Map;
@@ -235,13 +236,25 @@ class ContractContentExtractorTest {
                 purposes,
                 categoriesOfData,
                 data,
-                recipients,
+                recipients(recipients),
                 CONTROLLER,
                 retentionPeriod,
                 piiPrincipalRights,
                 internationalTransfers,
                 // No contract shape carries a source for it, so every case expects it absent.
                 null);
+    }
+
+    /**
+     * The recipients as generation stores them: the identifiers the contract names, nothing
+     * resolved.
+     */
+    private static List<Recipient> recipients(List<String> identifiers) {
+        return identifiers == null
+                ? null
+                : identifiers.stream()
+                        .map(identifier -> new Recipient(identifier, null, null, null))
+                        .toList();
     }
 
     /** A data reference as generation stores it: the URI, with resolution's fields still empty. */

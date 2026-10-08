@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.seamware.consentmanager.client.ContractGateway;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.support.ContractFixtures;
@@ -33,6 +34,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -159,7 +161,9 @@ class PrivacyNoticeGenerationIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo("https://catalog.example.org/v1/catalog/ecosystems/mobility-data-space");
         assertThat(stored.getPayload().purposes())
                 .containsExactly("Produce aggregated mobility insights for the city of Example.");
-        assertThat(stored.getPayload().recipients()).contains(CALLER, CONSUMER);
+        assertThat(stored.getPayload().recipients())
+                .extracting(PrivacyNoticePayload.Recipient::identifier)
+                .contains(CALLER, CONSUMER);
         assertThat(stored.getPayload().controllerDetails().identifier())
                 .as("the controller is the provider as this service has it registered")
                 .isEqualTo(CALLER);
@@ -172,6 +176,56 @@ class PrivacyNoticeGenerationIT extends KeycloakAndPostgresTestResource {
         assertThat(resolution(body).values())
                 .as("generation dereferences nothing, so every section is NOT_REQUESTED")
                 .containsOnly("NOT_REQUESTED");
+    }
+
+    @Test
+    @DisplayName("a bilateral contract yields a notice just as an ecosystem one does")
+    void generatesANoticeFromABilateralContract() {
+        String contractUri = serveBilateral("bilateral");
+
+        HttpResponse<String> response = generate(contractUri, CALLER, CONSUMER);
+
+        assertThat(response.code())
+                .as("the ecosystem endpoint does not hold it, so the gateway falls through")
+                .isEqualTo(HttpStatus.CREATED.getCode());
+        PrivacyNotice stored = activeNotice(contractUri);
+        assertThat(stored.getTitle())
+                .as("a bilateral contract's subject is the service offering it is about")
+                .isEqualTo(
+                        "https://catalog.example.org/v1/catalog/serviceofferings/charging-sessions");
+        assertThat(stored.getPayload().recipients())
+                .extracting(PrivacyNoticePayload.Recipient::identifier)
+                .containsExactly(CALLER, CONSUMER);
+        assertThat(stored.getPayload().piiPrincipalRights())
+                .as("only the bilateral shape states terms, and they fill this heading alone")
+                .startsWith("The PII principal may request access to");
+        assertThat(stored.getPayload().withdrawalOfConsent()).isNull();
+    }
+
+    @Test
+    @DisplayName("a consumer a bilateral contract does not bind is refused")
+    void refusesAPartyTheBilateralContractDoesNotBind() {
+        String contractUri = serveBilateral("bilateral-unbound");
+
+        HttpResponse<String> response = generate(contractUri, CALLER, OTHER_CONSUMER);
+
+        assertThat(response.code()).isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+        assertThat(allNotices(contractUri)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("one participant may not be named on both sides")
+    void refusesAParticipantNamedAsBothParties() {
+        String contractUri = serveEcosystem("same-party");
+
+        HttpResponse<String> response = generate(contractUri, CALLER, CALLER);
+
+        assertThat(response.code())
+                .as(
+                        "an ecosystem contract binds its provider as a member too, so only this"
+                                + " refuses a notice saying a participant consumes its own data")
+                .isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+        assertThat(allNotices(contractUri)).isEmpty();
     }
 
     @Test
@@ -394,6 +448,15 @@ class PrivacyNoticeGenerationIT extends KeycloakAndPostgresTestResource {
         return CONTRACT_URI_PREFIX + contractId;
     }
 
+    /** Serves the bilateral fixture on the bilateral endpoint alone, the caller its provider. */
+    private String serveBilateral(String contractId) {
+        CONTRACTS.serveBilateralContract(
+                contractId,
+                ContractFixtures.body(ContractFixtures.BILATERAL)
+                        .replace(FIXTURE_PROVIDER, CALLER));
+        return CONTRACT_URI_PREFIX + contractId;
+    }
+
     /** The ecosystem fixture with the caller as its provider, so the caller is a party. */
     private static String ecosystem() {
         return ContractFixtures.body(ContractFixtures.ECOSYSTEM).replace(FIXTURE_PROVIDER, CALLER);
@@ -426,8 +489,16 @@ class PrivacyNoticeGenerationIT extends KeycloakAndPostgresTestResource {
                 .toList();
     }
 
+    /**
+     * Every row this suite wrote for a contract, archived ones included.
+     *
+     * <p>Filtered here rather than queried: nothing in {@code src/main} reads a contract's whole
+     * notice history, so the repository carries no method for it.
+     */
     private List<PrivacyNotice> allNotices(String contractUri) {
-        return notices.findByContractUri(contractUri);
+        return StreamSupport.stream(notices.findAll().spliterator(), false)
+                .filter(notice -> contractUri.equals(notice.getContractUri()))
+                .toList();
     }
 
     private PrivacyNotice notice(UUID id) {

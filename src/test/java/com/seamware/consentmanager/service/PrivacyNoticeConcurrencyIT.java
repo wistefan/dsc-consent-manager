@@ -25,6 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -108,7 +109,8 @@ class PrivacyNoticeConcurrencyIT extends PostgresTestResource {
         List<UUID> served = raceToGenerate(caller);
 
         List<PrivacyNotice> active =
-                notices.findByContractUri(CONTRACT_URI).stream()
+                StreamSupport.stream(notices.findAll().spliterator(), false)
+                        .filter(notice -> CONTRACT_URI.equals(notice.getContractUri()))
                         .filter(notice -> notice.getArchivedAt() == null)
                         .toList();
         assertThat(active)

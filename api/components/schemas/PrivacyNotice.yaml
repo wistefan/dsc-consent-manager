@@ -92,9 +92,27 @@ properties:
       them. A disclosure the contract declares without naming the recipient is
       reported under a reserved URN rather than dropped, so a notice never
       understates the disclosure.
+
+
+      `name`, `contact` and `selfDescriptionUri` are filled in only by a resolved
+      retrieval reading this service's participant registry; a recipient it has
+      no registration for keeps its bare identifier.
     items:
-      type: string
-    example: ["urn:example:participant:analytics"]
+      type: object
+      properties:
+        identifier:
+          type: string
+          description: Global participant identifier, as the contract names it.
+          example: "urn:example:participant:analytics"
+        name:
+          type: string
+          description: Legal name taken from the resolved registration.
+        contact:
+          type: string
+          description: Contact address taken from the resolved registration.
+        selfDescriptionUri:
+          type: string
+          description: Absolute URL of the recipient's self-description document.
   controllerDetails:
     type: object
     description: >

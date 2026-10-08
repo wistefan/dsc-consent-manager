@@ -15,7 +15,7 @@ import io.micronaut.http.annotation.Controller;
  * <p>The status code is the whole report of what happened: {@code 201} when this request stored a
  * notice, archiving whatever it superseded, and {@code 200} when an identical active notice was
  * already there and nothing was written. Nothing here dereferences the catalog, so the resolution
- * block is {@link PrivacyNoticeMapper#UNRESOLVED} throughout.
+ * block is {@link PrivacyNoticeMapper#unresolved()} throughout.
  *
  * <p>{@code PrivacyNotice} here is the generated API model; the stored row is named in full to keep
  * the two apart.
@@ -46,7 +46,7 @@ public class PrivacyNoticeController extends AbstractPrivacyNoticesController {
                         generated.notice(),
                         generated.dataProvider(),
                         generated.dataConsumer(),
-                        PrivacyNoticeMapper.UNRESOLVED);
+                        PrivacyNoticeMapper.unresolved());
         return generated.created() ? HttpResponse.created(body) : HttpResponse.ok(body);
     }
 }

@@ -8,6 +8,7 @@ import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.ControllerDetails;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.DataReference;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
 import com.seamware.consentmanager.support.PostgresTestResource;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
@@ -97,7 +98,13 @@ class PrivacyNoticePayloadIT extends PostgresTestResource {
                                 "https://catalog.example.org/v1/catalog/serviceofferings/routes",
                                 null,
                                 null)),
-                List.of(PROVIDER_PARTICIPANT, CONSUMER_PARTICIPANT),
+                List.of(
+                        new Recipient(PROVIDER_PARTICIPANT, null, null, null),
+                        new Recipient(
+                                CONSUMER_PARTICIPANT,
+                                "Example Research Lab",
+                                "privacy@lab.example.org",
+                                "https://catalog.example.org/v1/catalog/participants/lab")),
                 new ControllerDetails(
                         "Example Provider GmbH",
                         "privacy@provider.example.org",

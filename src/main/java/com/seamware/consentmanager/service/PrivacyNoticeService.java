@@ -61,8 +61,8 @@ public class PrivacyNoticeService {
      * <p>The caller must be one of the two parties and must be active, because generating a notice
      * acts in the dataspace in the participant's name. Its own standing is checked before anything
      * the body names, so a token carrying no active registration is refused whatever it asks for.
-     * Both identifiers must then be registered here and both must be bound by the fetched contract.
-     * An unreachable Contract Service surfaces as {@link
+     * The two parties must differ, and both must be registered here and bound by the fetched
+     * contract. An unreachable Contract Service surfaces as {@link
      * com.seamware.consentmanager.error.UpstreamServiceException} from the gateway - the one place
      * in this API where that outage is fatal rather than degraded.
      */
@@ -73,6 +73,7 @@ public class PrivacyNoticeService {
             @NonNull String providerIdentifier,
             @NonNull String consumerIdentifier) {
         String callerIdentifier = caller.requireActive().getIdentifier();
+        requireDistinctParties(providerIdentifier, consumerIdentifier);
         Participant provider = require(providerIdentifier);
         Participant consumer = require(consumerIdentifier);
         requireParty(callerIdentifier, provider, consumer);
@@ -89,6 +90,22 @@ public class PrivacyNoticeService {
         requireBound(contract, providerIdentifier, consumerIdentifier);
 
         return store(contractUri, provider, consumer, extractor.extract(contract, provider));
+    }
+
+    /**
+     * Refuses a request naming one participant on both sides.
+     *
+     * <p>An ecosystem contract binds its provider as a member too, so without this the two sides
+     * would both pass and the published notice would say a participant consumes its own data.
+     */
+    private static void requireDistinctParties(String provider, String consumer) {
+        if (provider.equals(consumer)) {
+            throw new BadRequestException(
+                    "The data provider and the data consumer must be different participants, but"
+                            + " both are '"
+                            + provider
+                            + "'.");
+        }
     }
 
     /** The registered participant an identifier names; {@code 404} when it names none. */
@@ -212,8 +229,12 @@ public class PrivacyNoticeService {
                     true);
         } catch (DataAccessException e) {
             // A concurrent generation holds the active slot; serve its notice rather than an error.
+            // Only a row saying exactly what this call computed proves that is what happened: any
+            // other write failure would otherwise be answered "nothing changed" while the change
+            // was dropped, so it is rethrown.
             return notices.findByContractUriAndProviderIdAndArchivedAtIsNull(
                             contractUri, provider.getId())
+                    .filter(raced -> unchanged(raced, consumer, content))
                     .map(raced -> render(raced, provider, consumer, false))
                     .orElseThrow(() -> e);
         }

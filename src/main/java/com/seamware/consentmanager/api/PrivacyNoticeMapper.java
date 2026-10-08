@@ -3,11 +3,13 @@ package com.seamware.consentmanager.api;
 import com.seamware.consentmanager.api.generated.model.PrivacyNotice;
 import com.seamware.consentmanager.api.generated.model.PrivacyNoticeControllerDetails;
 import com.seamware.consentmanager.api.generated.model.PrivacyNoticeDataInner;
+import com.seamware.consentmanager.api.generated.model.PrivacyNoticeRecipientsInner;
 import com.seamware.consentmanager.api.generated.model.PrivacyNoticeResolution;
 import com.seamware.consentmanager.api.generated.model.ResolutionState;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.ControllerDetails;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.DataReference;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
@@ -19,7 +21,7 @@ import java.util.List;
  * <p>Shared by every operation that returns a notice, so the published shape of a legal document
  * does not drift between generation and retrieval. The parties are passed in rather than read: the
  * row holds participant keys while the representation names global identifiers. The resolution
- * block is a parameter for the same reason - generation always reports {@link #UNRESOLVED}, and a
+ * block is a parameter for the same reason - generation always reports {@link #unresolved()}, and a
  * resolved retrieval says how far it got.
  *
  * <p>A section the payload carries no value for is set to {@code null} and dropped by the service's
@@ -31,13 +33,20 @@ import java.util.List;
 @Singleton
 public class PrivacyNoticeMapper {
 
-    /** The resolution block of a notice nothing was dereferenced for. */
-    public static final PrivacyNoticeResolution UNRESOLVED =
-            new PrivacyNoticeResolution(
-                    ResolutionState.NOT_REQUESTED,
-                    ResolutionState.NOT_REQUESTED,
-                    ResolutionState.NOT_REQUESTED,
-                    ResolutionState.NOT_REQUESTED);
+    /**
+     * A fresh resolution block for a notice nothing was dereferenced for.
+     *
+     * <p>A new instance per call rather than a shared constant: the generated model is mutable, so
+     * a shared one could be aliased into every response and mutated by a single caller.
+     */
+    @NonNull
+    public static PrivacyNoticeResolution unresolved() {
+        return new PrivacyNoticeResolution(
+                ResolutionState.NOT_REQUESTED,
+                ResolutionState.NOT_REQUESTED,
+                ResolutionState.NOT_REQUESTED,
+                ResolutionState.NOT_REQUESTED);
+    }
 
     /** The stored notice as the API publishes it, under the resolution the caller's request got. */
     @NonNull
@@ -55,7 +64,7 @@ public class PrivacyNoticeMapper {
         notice.setPurposes(payload.purposes());
         notice.setCategoriesOfData(payload.categoriesOfData());
         notice.setData(data(payload.data()));
-        notice.setRecipients(payload.recipients());
+        notice.setRecipients(recipients(payload.recipients()));
         notice.setControllerDetails(controllerDetails(payload.controllerDetails()));
         notice.setRetentionPeriod(payload.retentionPeriod());
         notice.setPiiPrincipalRights(payload.piiPrincipalRights());
@@ -79,6 +88,22 @@ public class PrivacyNoticeMapper {
                 .uri(reference.uri())
                 .title(reference.title())
                 .description(reference.description());
+    }
+
+    @Nullable
+    private static List<PrivacyNoticeRecipientsInner> recipients(
+            @Nullable List<Recipient> recipients) {
+        return recipients == null
+                ? null
+                : recipients.stream().map(PrivacyNoticeMapper::recipient).toList();
+    }
+
+    private static PrivacyNoticeRecipientsInner recipient(Recipient recipient) {
+        return new PrivacyNoticeRecipientsInner()
+                .identifier(recipient.identifier())
+                .name(recipient.name())
+                .contact(recipient.contact())
+                .selfDescriptionUri(recipient.selfDescriptionUri());
     }
 
     @Nullable
