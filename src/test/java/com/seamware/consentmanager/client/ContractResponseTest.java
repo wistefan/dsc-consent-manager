@@ -4,15 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.client.dto.ContractResponse;
 import com.seamware.consentmanager.support.ContractFixtures;
-import io.micronaut.context.ApplicationContext;
-import io.micronaut.context.env.Environment;
-import io.micronaut.serde.ObjectMapper;
-import java.io.IOException;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -28,29 +21,6 @@ import org.junit.jupiter.params.provider.MethodSource;
  */
 @DisplayName("Contract deserialization")
 class ContractResponseTest {
-
-    private static ApplicationContext context;
-
-    private static ObjectMapper json;
-
-    @BeforeAll
-    static void startContext() {
-        // No datasource and no Flyway: this suite decodes documents and nothing else, and a
-        // database would make a unit test wait on Testcontainers.
-        context =
-                ApplicationContext.builder(Environment.TEST)
-                        .properties(
-                                Map.of(
-                                        "datasources.default.enabled", false,
-                                        "flyway.enabled", false))
-                        .start();
-        json = context.getBean(ObjectMapper.class);
-    }
-
-    @AfterAll
-    static void stopContext() {
-        context.close();
-    }
 
     /** The served documents, named by the constants so a renamed file breaks the compile. */
     static Stream<Arguments> servedDocuments() {
@@ -76,9 +46,8 @@ class ContractResponseTest {
     @ParameterizedTest(name = "{0} is {2} contract {1}")
     @MethodSource("servedDocuments")
     @DisplayName("every served document decodes to an identified, shaped contract")
-    void decodesIdentityAndShape(String fixture, String expectedId, ContractResponse.Shape shape)
-            throws IOException {
-        ContractResponse contract = decode(fixture);
+    void decodesIdentityAndShape(String fixture, String expectedId, ContractResponse.Shape shape) {
+        ContractResponse contract = ContractFixtures.contract(fixture);
 
         assertThat(contract.contractId())
                 .as("the identifier is read from whichever of uid and _id the document carries")
@@ -90,12 +59,13 @@ class ContractResponseTest {
 
     @Test
     @DisplayName("an unknown top-level property does not fail the fetch")
-    void toleratesAnUnknownProperty() throws IOException {
-        ContractResponse contract = decode(ContractFixtures.BILATERAL_UNKNOWN_PROPERTY);
+    void toleratesAnUnknownProperty() {
+        ContractResponse contract =
+                ContractFixtures.contract(ContractFixtures.BILATERAL_UNKNOWN_PROPERTY);
 
         assertThat(contract.dataConsumer())
                 .as("an upstream addition leaves the members this service does read intact")
-                .isEqualTo("https://catalog.example.org/v1/catalog/participants/consumer");
+                .isEqualTo("did:web:consumer.example.org");
     }
 
     /** The two ways the upstream declares a purpose's PII categories, and what each must yield. */
@@ -110,8 +80,8 @@ class ContractResponseTest {
     @ParameterizedTest(name = "{0} yields {1}")
     @MethodSource("piiCategoryForms")
     @DisplayName("piiCategory decodes whether the document declares a string or an array")
-    void decodesEitherPiiCategoryForm(String fixture, List<String> expected) throws IOException {
-        ContractResponse contract = decode(fixture);
+    void decodesEitherPiiCategoryForm(String fixture, List<String> expected) {
+        ContractResponse contract = ContractFixtures.contract(fixture);
 
         assertThat(contract.purpose().getFirst().piiCategories())
                 .as("a shape this service cannot decode would 502 a well-formed contract")
@@ -120,8 +90,8 @@ class ContractResponseTest {
 
     @Test
     @DisplayName("an ecosystem contract keeps its offerings, policies, purposes and members")
-    void decodesTheEcosystemMembers() throws IOException {
-        ContractResponse contract = decode(ContractFixtures.ECOSYSTEM);
+    void decodesTheEcosystemMembers() {
+        ContractResponse contract = ContractFixtures.contract(ContractFixtures.ECOSYSTEM);
 
         assertThat(contract.serviceOfferings()).hasSize(1);
         assertThat(contract.serviceOfferings().getFirst().policies())
@@ -142,11 +112,10 @@ class ContractResponseTest {
 
     @Test
     @DisplayName("a bilateral contract keeps its parties, terms and validity")
-    void decodesTheBilateralMembers() throws IOException {
-        ContractResponse contract = decode(ContractFixtures.BILATERAL);
+    void decodesTheBilateralMembers() {
+        ContractResponse contract = ContractFixtures.contract(ContractFixtures.BILATERAL);
 
-        assertThat(contract.dataProvider())
-                .isEqualTo("https://catalog.example.org/v1/catalog/participants/provider");
+        assertThat(contract.dataProvider()).isEqualTo("did:web:provider.example.org");
         assertThat(contract.policy())
                 .extracting(ContractResponse.Policy::ruleId)
                 .containsExactly("rule-access");
@@ -159,9 +128,8 @@ class ContractResponseTest {
         assertThat(contract.members())
                 .as("a bilateral contract names its parties directly, never through members")
                 .isNull();
-    }
-
-    private static ContractResponse decode(String fixture) throws IOException {
-        return json.readValue(ContractFixtures.body(fixture), ContractResponse.class);
+        assertThat(contract.signatures().getFirst().party())
+                .as("a document may also carry a party's catalog record, which is not its identity")
+                .isEqualTo("https://catalog.example.org/v1/catalog/participants/provider");
     }
 }

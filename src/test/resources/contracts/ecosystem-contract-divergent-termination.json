@@ -2,7 +2,7 @@
   "uid": "66d0e2f7a1b2c3d4e5f60007",
   "profile": "mobility-data-space",
   "ecosystem": "https://catalog.example.org/v1/catalog/ecosystems/mobility-data-space",
-  "orchestrator": "https://catalog.example.org/v1/catalog/participants/orchestrator",
+  "orchestrator": "did:web:orchestrator.example.org",
   "serviceOfferings": [],
   "purpose": [
     {

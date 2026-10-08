@@ -2,10 +2,10 @@
   "uid": "66d0e2f7a1b2c3d4e5f60008",
   "profile": "mobility-data-space",
   "ecosystem": "https://catalog.example.org/v1/catalog/ecosystems/mobility-data-space",
-  "orchestrator": "https://catalog.example.org/v1/catalog/participants/orchestrator",
+  "orchestrator": "did:web:orchestrator.example.org",
   "serviceOfferings": [
     {
-      "participant": "https://catalog.example.org/v1/catalog/participants/provider",
+      "participant": "did:web:provider.example.org",
       "serviceOffering": "https://catalog.example.org/v1/catalog/serviceofferings/trip-history",
       "policies": [
         {
@@ -15,7 +15,7 @@
       ]
     },
     {
-      "participant": "https://catalog.example.org/v1/catalog/participants/consumer",
+      "participant": "did:web:consumer.example.org",
       "serviceOffering": "https://catalog.example.org/v1/catalog/serviceofferings/route-quality",
       "policies": [
         {
@@ -27,19 +27,19 @@
   ],
   "members": [
     {
-      "participant": "https://catalog.example.org/v1/catalog/participants/provider",
+      "participant": "did:web:provider.example.org",
       "role": "Data provider",
       "signature": "hasSigned",
       "date": "2026-05-02T09:00:00.000Z"
     },
     {
-      "participant": "https://catalog.example.org/v1/catalog/participants/consumer",
+      "participant": "did:web:consumer.example.org",
       "role": "Data consumer",
       "signature": "hasSigned",
       "date": "2026-05-02T10:00:00.000Z"
     },
     {
-      "participant": "https://catalog.example.org/v1/catalog/participants/departed",
+      "participant": "did:web:departed.example.org",
       "role": "Data consumer",
       "signature": "hasSigned",
       "date": "2026-05-02T11:00:00.000Z"
@@ -47,7 +47,7 @@
   ],
   "revokedMembers": [
     {
-      "participant": "https://catalog.example.org/v1/catalog/participants/departed",
+      "participant": "did:web:departed.example.org",
       "role": "Data consumer",
       "signature": "hasRevoked",
       "date": "2026-06-01T08:00:00.000Z"

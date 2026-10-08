@@ -6,10 +6,8 @@ import com.seamware.consentmanager.client.dto.ContractResponse;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.support.ContractFixtures;
-import io.micronaut.context.ApplicationContext;
-import io.micronaut.context.env.Environment;
+import com.seamware.consentmanager.support.TestJson;
 import io.micronaut.core.type.Argument;
-import io.micronaut.serde.ObjectMapper;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
@@ -19,8 +17,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -39,27 +35,7 @@ class ContractContentExtractorOrderTest {
     /** The ecosystem member list this suite reorders; its entries become the recipients. */
     private static final String MEMBERS = "members";
 
-    private static ApplicationContext context;
-    private static ObjectMapper json;
-
     private final ContractContentExtractor extractor = new ContractContentExtractor();
-
-    @BeforeAll
-    static void startContext() {
-        context =
-                ApplicationContext.builder(Environment.TEST)
-                        .properties(
-                                Map.of(
-                                        "datasources.default.enabled", false,
-                                        "flyway.enabled", false))
-                        .start();
-        json = context.getBean(ObjectMapper.class);
-    }
-
-    @AfterAll
-    static void stopContext() {
-        context.close();
-    }
 
     /** The documents whose extraction must not depend on when or how often it runs. */
     static Stream<String> fixtures() {
@@ -78,9 +54,8 @@ class ContractContentExtractorOrderTest {
     void extractsDeterministically(String fixture) {
         // Decoded twice rather than extracted twice from one instance: extraction is pure, so a
         // second call on the same object cannot differ, and the reading is where an order could.
-        String document = ContractFixtures.body(fixture);
-        assertThat(extractor.extract(decode(document), provider()))
-                .isEqualTo(extractor.extract(decode(document), provider()));
+        assertThat(extractor.extract(ContractFixtures.contract(fixture), provider()))
+                .isEqualTo(extractor.extract(ContractFixtures.contract(fixture), provider()));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -91,7 +66,7 @@ class ContractContentExtractorOrderTest {
         // has been through the JSONB column, so any reordering or absent-to-empty drift in the
         // serialized form would report a contract change nobody made.
         PrivacyNoticePayload extracted =
-                extractor.extract(decode(ContractFixtures.body(fixture)), provider()).payload();
+                extractor.extract(ContractFixtures.contract(fixture), provider()).payload();
 
         assertThat(serialized(extracted)).isEqualTo(extracted);
     }
@@ -102,9 +77,7 @@ class ContractContentExtractorOrderTest {
         PrivacyNoticePayload original =
                 extractor
                         .extract(
-                                decode(
-                                        ContractFixtures.body(
-                                                ContractFixtures.ECOSYSTEM_NO_PURPOSE)),
+                                ContractFixtures.contract(ContractFixtures.ECOSYSTEM_NO_PURPOSE),
                                 provider())
                         .payload();
         PrivacyNoticePayload reordered =
@@ -125,9 +98,7 @@ class ContractContentExtractorOrderTest {
         PrivacyNoticePayload original =
                 extractor
                         .extract(
-                                decode(
-                                        ContractFixtures.body(
-                                                ContractFixtures.ECOSYSTEM_NO_PURPOSE)),
+                                ContractFixtures.contract(ContractFixtures.ECOSYSTEM_NO_PURPOSE),
                                 provider())
                         .payload();
         PrivacyNoticePayload duplicated =
@@ -148,7 +119,7 @@ class ContractContentExtractorOrderTest {
         @SuppressWarnings("unchecked")
         List<Object> members = (List<Object>) document.get(MEMBERS);
         document.put(MEMBERS, change.apply(new ArrayList<>(members)));
-        return decode(write(document));
+        return ContractFixtures.decode(write(document));
     }
 
     /** The payload with its recipients replaced, to compare everything else for equality. */
@@ -191,23 +162,18 @@ class ContractContentExtractorOrderTest {
     /** The payload as it comes back out of the JSONB column, via its serialized form. */
     private static PrivacyNoticePayload serialized(PrivacyNoticePayload payload) {
         try {
-            return json.readValue(json.writeValueAsString(payload), PrivacyNoticePayload.class);
+            return TestJson.mapper()
+                    .readValue(
+                            TestJson.mapper().writeValueAsString(payload),
+                            PrivacyNoticePayload.class);
         } catch (IOException e) {
             throw new UncheckedIOException("Could not round-trip a notice payload", e);
         }
     }
 
-    private static ContractResponse decode(String body) {
-        try {
-            return json.readValue(body, ContractResponse.class);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Could not decode contract document", e);
-        }
-    }
-
     private static Map<String, Object> readMap(String body) {
         try {
-            return json.readValue(body, Argument.mapOf(String.class, Object.class));
+            return TestJson.mapper().readValue(body, Argument.mapOf(String.class, Object.class));
         } catch (IOException e) {
             throw new UncheckedIOException("Could not read contract document as a tree", e);
         }
@@ -215,7 +181,7 @@ class ContractContentExtractorOrderTest {
 
     private static String write(Map<String, Object> document) {
         try {
-            return json.writeValueAsString(document);
+            return TestJson.mapper().writeValueAsString(document);
         } catch (IOException e) {
             throw new UncheckedIOException("Could not write contract document back", e);
         }

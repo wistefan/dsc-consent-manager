@@ -5,13 +5,13 @@
   "serviceOfferings": [],
   "members": [
     {
-      "participant": "https://catalog.example.org/v1/catalog/participants/provider",
+      "participant": "did:web:provider.example.org",
       "role": "Data provider",
       "signature": "hasSigned",
       "date": "2026-08-01T09:00:00.000Z"
     },
     {
-      "participant": "https://catalog.example.org/v1/catalog/participants/consumer",
+      "participant": "did:web:consumer.example.org",
       "role": "Data consumer"
     }
   ],

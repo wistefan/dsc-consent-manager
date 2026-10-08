@@ -1,8 +1,8 @@
 {
   "uid": "66d0e2f7a1b2c3d4e5f60002",
   "profile": "bilateral-default",
-  "dataProvider": "https://catalog.example.org/v1/catalog/participants/provider",
-  "dataConsumer": "https://catalog.example.org/v1/catalog/participants/consumer",
+  "dataProvider": "did:web:provider.example.org",
+  "dataConsumer": "did:web:consumer.example.org",
   "serviceOffering": "https://catalog.example.org/v1/catalog/serviceofferings/charging-sessions",
   "policy": [
     {

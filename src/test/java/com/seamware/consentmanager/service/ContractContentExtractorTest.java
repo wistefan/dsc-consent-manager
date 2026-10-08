@@ -2,22 +2,14 @@ package com.seamware.consentmanager.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.seamware.consentmanager.client.dto.ContractResponse;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.ControllerDetails;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.DataReference;
 import com.seamware.consentmanager.support.ContractFixtures;
-import io.micronaut.context.ApplicationContext;
-import io.micronaut.context.env.Environment;
-import io.micronaut.serde.ObjectMapper;
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -36,8 +28,8 @@ class ContractContentExtractorTest {
     private static final String PROVIDER_LEGAL_NAME = "Example Provider GmbH";
     private static final String PROVIDER_EMAIL = "privacy@provider.example.org";
     private static final String CATALOG = "https://catalog.example.org/v1/catalog/";
+    private static final String CONSUMER_IDENTIFIER = "did:web:consumer.example.org";
     private static final String PROVIDER_URI = CATALOG + "participants/provider";
-    private static final String CONSUMER_URI = CATALOG + "participants/consumer";
     private static final String ECOSYSTEM_URI = CATALOG + "ecosystems/mobility-data-space";
     private static final String TRIP_HISTORY_URI = CATALOG + "serviceofferings/trip-history";
     private static final String ROUTE_QUALITY_URI = CATALOG + "serviceofferings/route-quality";
@@ -46,34 +38,13 @@ class ContractContentExtractorTest {
     private static final String METER_READINGS_URI = CATALOG + "serviceofferings/meter-readings";
 
     /** What a disclosure the contract declares without naming the party is reported as. */
-    private static final String UNNAMED_THIRD_PARTY = "Unnamed third party";
+    private static final String UNNAMED_THIRD_PARTY = "urn:consent-manager:third-party:unnamed";
 
     private static final ControllerDetails CONTROLLER =
             new ControllerDetails(
                     PROVIDER_LEGAL_NAME, PROVIDER_EMAIL, PROVIDER_IDENTIFIER, PROVIDER_URI);
 
-    private static ApplicationContext context;
-    private static ObjectMapper json;
-
     private final ContractContentExtractor extractor = new ContractContentExtractor();
-
-    @BeforeAll
-    static void startContext() {
-        // Decoding only: no datasource, so this stays a unit test rather than a Testcontainers one.
-        context =
-                ApplicationContext.builder(Environment.TEST)
-                        .properties(
-                                Map.of(
-                                        "datasources.default.enabled", false,
-                                        "flyway.enabled", false))
-                        .start();
-        json = context.getBean(ObjectMapper.class);
-    }
-
-    @AfterAll
-    static void stopContext() {
-        context.close();
-    }
 
     /** The extraction matrix: one document, one content it must yield. */
     static Stream<Arguments> extractionMatrix() {
@@ -89,7 +60,7 @@ class ContractContentExtractorTest {
                                                         + " of Example."),
                                         List.of("Location data"),
                                         List.of(reference(TRIP_HISTORY_URI)),
-                                        List.of(PROVIDER_URI, CONSUMER_URI),
+                                        List.of(PROVIDER_IDENTIFIER, CONSUMER_IDENTIFIER),
                                         "Processing ends when the PII principal withdraws consent.",
                                         null,
                                         null))),
@@ -104,7 +75,7 @@ class ContractContentExtractorTest {
                                                         + " demand."),
                                         List.of("Energy consumption data", "Charging session data"),
                                         List.of(reference(CHARGING_SESSIONS_URI)),
-                                        List.of(PROVIDER_URI, CONSUMER_URI),
+                                        List.of(PROVIDER_IDENTIFIER, CONSUMER_IDENTIFIER),
                                         "P30D",
                                         "The PII principal may request access to, rectification of"
                                                 + " and erasure of the data processed under this"
@@ -128,7 +99,7 @@ class ContractContentExtractorTest {
                                                         + " the contract runs."),
                                         null,
                                         List.of(reference(METER_READINGS_URI)),
-                                        List.of(PROVIDER_URI, CONSUMER_URI),
+                                        List.of(PROVIDER_IDENTIFIER, CONSUMER_IDENTIFIER),
                                         "P14D",
                                         null,
                                         null))),
@@ -141,7 +112,7 @@ class ContractContentExtractorTest {
                                         null,
                                         null,
                                         null,
-                                        List.of(PROVIDER_URI, CONSUMER_URI),
+                                        List.of(PROVIDER_IDENTIFIER, CONSUMER_IDENTIFIER),
                                         null,
                                         null,
                                         null))),
@@ -174,7 +145,7 @@ class ContractContentExtractorTest {
                                         List.of(
                                                 reference(TRIP_HISTORY_URI),
                                                 reference(ROUTE_QUALITY_URI)),
-                                        List.of(PROVIDER_URI, CONSUMER_URI),
+                                        List.of(PROVIDER_IDENTIFIER, CONSUMER_IDENTIFIER),
                                         null,
                                         null,
                                         null))),
@@ -208,7 +179,7 @@ class ContractContentExtractorTest {
                                         null,
                                         // The unsigned member is a recipient-to-be and is named:
                                         // omitting it would understate who receives the data.
-                                        List.of(PROVIDER_URI, CONSUMER_URI),
+                                        List.of(PROVIDER_IDENTIFIER, CONSUMER_IDENTIFIER),
                                         null,
                                         null,
                                         null))),
@@ -221,9 +192,25 @@ class ContractContentExtractorTest {
                                         null,
                                         null,
                                         null,
-                                        List.of(PROVIDER_URI),
+                                        List.of(PROVIDER_IDENTIFIER),
                                         null,
                                         null,
+                                        null))),
+                Arguments.of(
+                        "ecosystem contract stating terms, which fill the principal's rights",
+                        ContractFixtures.ECOSYSTEM_TERMS,
+                        new NoticeContent(
+                                ECOSYSTEM_URI,
+                                payload(
+                                        null,
+                                        null,
+                                        null,
+                                        List.of(PROVIDER_IDENTIFIER),
+                                        null,
+                                        // Read from whichever shape states it: the heading is
+                                        // filled by the field's presence, not by the shape.
+                                        "Members of this ecosystem answer a PII principal's access"
+                                                + " and erasure requests within one month.",
                                         null))));
     }
 
@@ -231,7 +218,8 @@ class ContractContentExtractorTest {
     @MethodSource("extractionMatrix")
     @DisplayName("yields the whole notice content the document supports")
     void extractsNoticeContent(String description, String fixture, NoticeContent expected) {
-        assertThat(extractor.extract(contract(fixture), provider())).isEqualTo(expected);
+        assertThat(extractor.extract(ContractFixtures.contract(fixture), provider()))
+                .isEqualTo(expected);
     }
 
     /** The content a contract yields, with the controller every case shares filled in. */
@@ -259,14 +247,6 @@ class ContractContentExtractorTest {
     /** A data reference as generation stores it: the URI, with resolution's fields still empty. */
     private static DataReference reference(String uri) {
         return new DataReference(uri, null, null);
-    }
-
-    private static ContractResponse contract(String fixture) {
-        try {
-            return json.readValue(ContractFixtures.body(fixture), ContractResponse.class);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Could not decode contract fixture " + fixture, e);
-        }
     }
 
     private static Participant provider() {

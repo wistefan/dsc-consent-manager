@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.support;
 
+import com.seamware.consentmanager.client.dto.ContractResponse;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -51,6 +52,9 @@ public final class ContractFixtures {
     public static final String ECOSYSTEM_UNNAMED_DISCLOSURE =
             "ecosystem-contract-unnamed-disclosure.json";
 
+    /** An ecosystem contract that states terms and conditions, which that shape usually omits. */
+    public static final String ECOSYSTEM_TERMS = "ecosystem-contract-terms.json";
+
     /** An ecosystem contract one of whose members has not signed yet. */
     public static final String ECOSYSTEM_UNSIGNED_MEMBER =
             "ecosystem-contract-unsigned-member.json";
@@ -59,6 +63,20 @@ public final class ContractFixtures {
     private static final String DIRECTORY = "contracts/";
 
     private ContractFixtures() {}
+
+    /** A fixture decoded with the application's own mapper, as a fetch would decode it. */
+    public static ContractResponse contract(String fixture) {
+        return decode(body(fixture));
+    }
+
+    /** A contract document decoded as served, for a caller that altered one first. */
+    public static ContractResponse decode(String document) {
+        try {
+            return TestJson.mapper().readValue(document, ContractResponse.class);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not decode contract document", e);
+        }
+    }
 
     /** Reads a fixture document; fails loudly rather than returning an empty body. */
     public static String body(String fixture) {

@@ -40,8 +40,12 @@ public class ContractContentExtractor {
      * <p>Dropping such a purpose would publish a notice saying the data goes to no third party
      * while the contract says it does, which is the under-disclosure direction and the one that
      * harms the data subject. The disclosure is reported; only the name is missing.
+     *
+     * <p>A reserved URN rather than prose, because the entries around it are party names a client
+     * displays verbatim: a client matches this one and renders it in its own words, and a third
+     * party actually called "Unnamed third party" stays distinguishable from a missing name.
      */
-    private static final String UNNAMED_THIRD_PARTY = "Unnamed third party";
+    private static final String UNNAMED_THIRD_PARTY = "urn:consent-manager:third-party:unnamed";
 
     /**
      * The contract's content as a notice states it, with the controller taken from the provider's
@@ -96,6 +100,11 @@ public class ContractContentExtractor {
      * ODRL rules; the policy descriptions only when the contract declares no purposes, so a notice
      * says something about processing rather than nothing. A purpose stating no text is named by
      * its identifier rather than dropped.
+     *
+     * <p>The fallback is total on purpose: where purposes exist the policy descriptions are dropped
+     * rather than appended, because a usage rule listed as a processing purpose would misstate what
+     * the data is processed for. Carrying them under a heading of their own is a change to the
+     * notice's published vocabulary, which the spec owns and this mapping does not.
      */
     @Nullable
     private List<String> purposes(ContractResponse contract) {
@@ -157,6 +166,12 @@ public class ContractContentExtractor {
     /**
      * The participants the data reaches under this contract.
      *
+     * <p>Each party is reported as the contract names it, with no normalisation: a contract names
+     * its parties by the dataspace's global participant identifier, which is the value {@code
+     * participants.identifier} holds, so a recipient resolves through {@code findByIdentifier} and
+     * never through a self-description URL. A deployment whose contracts name parties some other
+     * way registers its participants under that same value; this service adds no second lookup.
+     *
      * <p>A revoked member is excluded wherever it appears: it is no longer party to the contract,
      * and naming it as a recipient would overstate who receives the data. A member that has not
      * signed yet is kept, because it is still named as a recipient-to-be and omitting it would
@@ -201,6 +216,10 @@ public class ContractContentExtractor {
      * states it per purpose, so it is reported only when every purpose agrees on it: a purpose
      * naming none, or two naming different periods, leaves the section absent rather than letting
      * one purpose's period stand for the whole notice.
+     *
+     * <p>Reported in the contract's own wording, which is not one format: a bilateral termination
+     * period is an ISO-8601 duration, an ecosystem purpose's termination is free prose. A reader
+     * displays it and does not parse it.
      */
     @Nullable
     private String retentionPeriod(ContractResponse contract) {
@@ -222,13 +241,15 @@ public class ContractContentExtractor {
     /**
      * What the PII principal may do about the data, in the contract's own words.
      *
-     * <p>Only a bilateral contract carries a candidate, its terms and conditions, and that one
-     * block of text fills this heading alone - printing it again under withdrawal of consent would
-     * dress one paragraph up as two sections.
+     * <p>The contract's terms and conditions, read wherever a document states them rather than only
+     * on the shape that usually does: an ecosystem contract carrying terms would otherwise have
+     * them dropped, and the two shapes share the member. That one block of text fills this heading
+     * alone - printing it again under withdrawal of consent would dress one paragraph up as two
+     * sections.
      */
     @Nullable
     private String piiPrincipalRights(ContractResponse contract) {
-        return contract.shape() == Shape.BILATERAL ? text(contract.termsAndConditions()) : null;
+        return text(contract.termsAndConditions());
     }
 
     /**
