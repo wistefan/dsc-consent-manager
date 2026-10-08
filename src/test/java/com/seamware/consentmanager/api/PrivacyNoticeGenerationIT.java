@@ -2,42 +2,17 @@ package com.seamware.consentmanager.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.seamware.consentmanager.client.ContractGateway;
-import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
-import com.seamware.consentmanager.repository.ParticipantRepository;
-import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.support.ContractFixtures;
-import com.seamware.consentmanager.support.ContractServiceStub;
-import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
-import com.seamware.consentmanager.support.KeycloakTestResource;
-import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
-import io.micronaut.cache.CacheManager;
-import io.micronaut.http.HttpRequest;
+import com.seamware.consentmanager.support.PrivacyNoticeApiTestSupport;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
-import io.micronaut.http.MutableHttpRequest;
-import io.micronaut.http.client.HttpClient;
-import io.micronaut.http.client.annotation.Client;
-import io.micronaut.http.client.exceptions.HttpClientResponseException;
-import io.micronaut.serde.ObjectMapper;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
-import jakarta.inject.Inject;
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
-import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
-import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -58,94 +33,12 @@ import org.junit.jupiter.params.provider.CsvSource;
  */
 @MicronautTest(transactional = false)
 @DisplayName("Privacy notice generation over HTTP")
-class PrivacyNoticeGenerationIT extends KeycloakAndPostgresTestResource {
+class PrivacyNoticeGenerationIT extends PrivacyNoticeApiTestSupport {
 
     private static final String PATH = "/privacy-notices";
 
-    /** Content type every refusal in this suite renders. */
-    private static final String PROBLEM_JSON = "application/problem+json";
-
-    /** Prefix every contract URI in this suite carries; the last segment is the upstream id. */
-    private static final String CONTRACT_URI_PREFIX = "https://contract.example.org/v1/contracts/";
-
-    /** Participant the realm's {@code PARTICIPANT} token acts as. */
-    private static final String CALLER = KeycloakTestResource.PARTICIPANT_IDENTIFIER;
-
-    /** Provider the fixtures name, replaced by {@link #CALLER} wherever the caller is a party. */
-    private static final String FIXTURE_PROVIDER = "did:web:provider.example.org";
-
-    /** Consumer the fixtures name, registered here so the parties resolve. */
-    private static final String CONSUMER = "did:web:consumer.example.org";
-
-    /** A second consumer, for the ecosystem contract that admits two against one provider. */
-    private static final String OTHER_CONSUMER = "did:web:other-consumer.example.org";
-
-    /** Identifier no participant is registered under. */
-    private static final String UNREGISTERED = "urn:test:participant:never-registered";
-
     /** Status standing in for an outage that outlasts the retry budget. */
     private static final int UPSTREAM_FAILURE = 503;
-
-    /** Retry budget this suite runs under, so a 502 case costs milliseconds rather than seconds. */
-    private static final String RETRY_ATTEMPTS = "1";
-
-    private static final String RETRY_DELAY = "10ms";
-
-    /**
-     * The stubbed Contract Service. Static because {@link #getProperties()} must name its URL
-     * before the context that reads it starts.
-     */
-    private static final ContractServiceStub CONTRACTS = new ContractServiceStub();
-
-    @Inject
-    @Client("/")
-    HttpClient client;
-
-    @Inject ParticipantRepository participants;
-
-    @Inject PrivacyNoticeRepository notices;
-
-    @Inject CacheManager<?> caches;
-
-    @Inject ObjectMapper json;
-
-    @Override
-    public Map<String, String> getProperties() {
-        Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
-        properties.put("consent-manager.contract-service.url", CONTRACTS.url());
-        properties.put("consent-manager.contract-service.retry-attempts", RETRY_ATTEMPTS);
-        properties.put("consent-manager.contract-service.retry-delay", RETRY_DELAY);
-        return properties;
-    }
-
-    @AfterAll
-    static void stopContractService() {
-        CONTRACTS.close();
-    }
-
-    @BeforeEach
-    void registerParties() {
-        register(CALLER);
-        register(FIXTURE_PROVIDER);
-        register(CONSUMER);
-        register(OTHER_CONSUMER);
-    }
-
-    /**
-     * Rows these cases commit outlive the transaction, and a notice holds its parties against
-     * {@code ON DELETE RESTRICT}, so a leftover would make every later suite's participant cleanup
-     * fail.
-     */
-    @AfterEach
-    void removeCommittedRows() {
-        notices.deleteAll();
-        Stream.of(CALLER, FIXTURE_PROVIDER, CONSUMER, OTHER_CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
-    }
 
     @Test
     @DisplayName("a contract between two registered parties yields a stored notice")
@@ -376,8 +269,8 @@ class PrivacyNoticeGenerationIT extends KeycloakAndPostgresTestResource {
     @DisplayName("an unreachable Contract Service is the one fatal outage")
     void anUnreachableContractServiceIsABadGateway() {
         String contractId = "unreachable";
-        String contractUri = CONTRACT_URI_PREFIX + contractId;
-        CONTRACTS.serveStatus(contractId, UPSTREAM_FAILURE);
+        String contractUri = uri(contractId);
+        contracts.serveStatus(contractId, UPSTREAM_FAILURE);
 
         HttpResponse<String> response = generate(contractUri, CALLER, CONSUMER);
 
@@ -391,8 +284,8 @@ class PrivacyNoticeGenerationIT extends KeycloakAndPostgresTestResource {
     @DisplayName("a contract the upstream does not hold is a 404, not a bad gateway")
     void anUnknownContractIsNotFound() {
         String contractId = "unknown";
-        String contractUri = CONTRACT_URI_PREFIX + contractId;
-        CONTRACTS.serveUnknown(contractId);
+        String contractUri = uri(contractId);
+        contracts.serveUnknown(contractId);
 
         HttpResponse<String> response = generate(contractUri, CALLER, CONSUMER);
 
@@ -438,126 +331,13 @@ class PrivacyNoticeGenerationIT extends KeycloakAndPostgresTestResource {
                                         .isEqualTo(participant(OTHER_CONSUMER).getId()));
     }
 
-    /** Issues a generation request with the realm's participant token. */
+    /** Issues a generation request with both parties declared. */
     private HttpResponse<String> generate(String contractUri, String provider, String consumer) {
-        MutableHttpRequest<Map<String, String>> request =
-                HttpRequest.POST(
-                                PATH,
-                                Map.of(
-                                        "contractUri", contractUri,
-                                        "dataProvider", provider,
-                                        "dataConsumer", consumer))
-                        .bearerAuth(KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
-        try {
-            return client.toBlocking().exchange(request, String.class);
-        } catch (HttpClientResponseException e) {
-            @SuppressWarnings("unchecked")
-            HttpResponse<String> refusal = (HttpResponse<String>) e.getResponse();
-            return refusal;
-        }
-    }
-
-    /** Serves the ecosystem fixture, the caller standing in as its provider. */
-    private String serveEcosystem(String contractId) {
-        return serveBody(contractId, ecosystem());
-    }
-
-    private String serveBody(String contractId, String document) {
-        CONTRACTS.serveEcosystemContract(contractId, document);
-        return CONTRACT_URI_PREFIX + contractId;
-    }
-
-    /** Serves the bilateral fixture on the bilateral endpoint alone, the caller its provider. */
-    private String serveBilateral(String contractId) {
-        CONTRACTS.serveBilateralContract(
-                contractId,
-                ContractFixtures.body(ContractFixtures.BILATERAL)
-                        .replace(FIXTURE_PROVIDER, CALLER));
-        return CONTRACT_URI_PREFIX + contractId;
-    }
-
-    /** The ecosystem fixture with the caller as its provider, so the caller is a party. */
-    private static String ecosystem() {
-        return ContractFixtures.body(ContractFixtures.ECOSYSTEM).replace(FIXTURE_PROVIDER, CALLER);
-    }
-
-    /** The same contract, admitting a second consumer against the one provider. */
-    private static String twoConsumerEcosystem() {
-        return ecosystem()
-                .replace(
-                        "\"members\": [",
-                        "\"members\": [{\"participant\": \""
-                                + OTHER_CONSUMER
-                                + "\", \"role\": \"Data consumer\","
-                                + " \"signature\": \"hasSigned\","
-                                + " \"date\": \"2026-01-16T09:00:00.000Z\"},");
-    }
-
-    /** Drops the cached contract, which is TTL expiry without waiting one out. */
-    private void invalidate(String contractUri) {
-        caches.getCache(ContractGateway.CACHE_NAME).invalidate(contractUri);
-    }
-
-    private PrivacyNotice activeNotice(String contractUri) {
-        return activeNotices(contractUri).stream().findFirst().orElseThrow();
-    }
-
-    private List<PrivacyNotice> activeNotices(String contractUri) {
-        return allNotices(contractUri).stream()
-                .filter(notice -> notice.getArchivedAt() == null)
-                .toList();
-    }
-
-    /**
-     * Every row this suite wrote for a contract, archived ones included.
-     *
-     * <p>Filtered here rather than queried: nothing in {@code src/main} reads a contract's whole
-     * notice history, so the repository carries no method for it.
-     */
-    private List<PrivacyNotice> allNotices(String contractUri) {
-        return StreamSupport.stream(notices.findAll().spliterator(), false)
-                .filter(notice -> contractUri.equals(notice.getContractUri()))
-                .toList();
-    }
-
-    private PrivacyNotice notice(UUID id) {
-        return notices.findById(id).orElseThrow();
-    }
-
-    private Participant participant(String identifier) {
-        return participants.findByIdentifier(identifier).orElseThrow();
-    }
-
-    private void register(String identifier) {
-        Optional<Participant> existing = participants.findByIdentifier(identifier);
-        if (existing.isEmpty()) {
-            participants.save(new Participant(identifier, identifier, null, null, Map.of(), null));
-        }
-    }
-
-    private void deregister(String identifier) {
-        Participant participant = participant(identifier);
-        participant.setDeregisteredAt(java.time.Instant.now());
-        participants.update(participant);
-    }
-
-    private void reactivate(String identifier) {
-        Participant participant = participant(identifier);
-        participant.setDeregisteredAt(null);
-        participants.update(participant);
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> body(HttpResponse<String> response) {
-        try {
-            return json.readValue(response.body(), Map.class);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Could not read the response body", e);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> resolution(Map<String, Object> body) {
-        return (Map<String, Object>) body.get("resolution");
+        return post(
+                PATH,
+                Map.of(
+                        "contractUri", contractUri,
+                        "dataProvider", provider,
+                        "dataConsumer", consumer));
     }
 }

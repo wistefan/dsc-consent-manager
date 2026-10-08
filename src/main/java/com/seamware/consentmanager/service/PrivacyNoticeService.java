@@ -83,7 +83,7 @@ public class PrivacyNoticeService {
         requireDistinctParties(providerIdentifier, consumerIdentifier);
         Participant provider = require(providerIdentifier);
         Participant consumer = require(consumerIdentifier);
-        requireParty(callerIdentifier, provider, consumer);
+        requireParty(callerIdentifier, providerIdentifier, consumerIdentifier);
 
         return generate(fetch(contractUri), contractUri, provider, consumer);
     }
@@ -97,6 +97,11 @@ public class PrivacyNoticeService {
      * over duplicates, archival, the caller's standing or a lost race. A contract that does not
      * narrow each side to one party is {@code 400} from {@link ContractPartyResolver}, which is why
      * the fetch comes first here: there is nothing to look up until the document has been read.
+     *
+     * <p>The caller is checked against the derived pair <em>before</em> either party is looked up,
+     * which the declared form has no reason to do. Here the identifiers come off the contract
+     * rather than off the request, so looking them up first would let a stranger read one back out
+     * of the {@code 404} that reports a party this deployment has no registration for.
      */
     @NonNull
     public GeneratedNotice generateByContract(
@@ -106,9 +111,9 @@ public class PrivacyNoticeService {
         ContractParties derived = parties.resolve(contract);
 
         requireDistinctParties(derived.dataProvider(), derived.dataConsumer());
+        requireParty(callerIdentifier, derived.dataProvider(), derived.dataConsumer());
         Participant provider = require(derived.dataProvider());
         Participant consumer = require(derived.dataConsumer());
-        requireParty(callerIdentifier, provider, consumer);
 
         return generate(contract, contractUri, provider, consumer);
     }
@@ -182,10 +187,8 @@ public class PrivacyNoticeService {
     }
 
     /** Refuses a caller that is neither of the two parties. */
-    private static void requireParty(
-            String identifier, Participant provider, Participant consumer) {
-        if (!identifier.equals(provider.getIdentifier())
-                && !identifier.equals(consumer.getIdentifier())) {
+    private static void requireParty(String identifier, String provider, String consumer) {
+        if (!identifier.equals(provider) && !identifier.equals(consumer)) {
             throw new ForbiddenException(
                     "Participant '"
                             + identifier
