@@ -99,8 +99,8 @@ public class ConsentManagerConfiguration {
         private Duration readTimeout = DEFAULT_READ_TIMEOUT;
 
         /**
-         * Retries after a failed fetch, bound to {@code CONTRACT_SERVICE_RETRY_ATTEMPTS}; zero
-         * makes a failed fetch final.
+         * Retries after a failed fetch, bound to {@code CONTRACT_SERVICE_RETRY_ATTEMPTS}; one is
+         * the floor, because {@code @Retryable} refuses a budget below it at the first call.
          *
          * <p>Counted after the initial attempt, as {@code @Retryable} does, so three retries are at
          * most four upstream requests. Only a 5xx or a transport failure is retried; a 4xx is a

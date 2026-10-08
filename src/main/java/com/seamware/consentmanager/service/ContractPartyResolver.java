@@ -11,7 +11,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -91,9 +90,6 @@ public class ContractPartyResolver {
                         "data consumer");
             }
             case ECOSYSTEM -> requireEcosystemParties(contract, provider, consumer);
-            default ->
-                    throw new IllegalStateException(
-                            "No binding rule for contract shape " + contract.shape());
         }
     }
 
@@ -190,7 +186,11 @@ public class ContractPartyResolver {
      *
      * <p>Both counts are reported, because which side is ambiguous is rarely the whole story: a
      * contract with two consumers against one provider and one with no evidence at all are read
-     * very differently by whoever has to declare the pair by hand.
+     * very differently by whoever has to declare the pair by hand. The participants themselves are
+     * <em>not</em> named: this refusal is reached before anything has established that the caller
+     * is a party, so naming them would hand a contract's membership to whoever can guess its URI. A
+     * party can read the names off the contract it already holds, and a count is all a caller needs
+     * in order to declare the pair.
      */
     private static void requireSingle(Set<String> side, String role, Set<String> other) {
         if (side.size() != UNAMBIGUOUS) {
@@ -199,18 +199,11 @@ public class ContractPartyResolver {
                             + side.size()
                             + " participants on its "
                             + role
-                            + " side"
-                            + named(side)
-                            + " and "
+                            + " side and "
                             + other.size()
                             + " on the other, so it does not say which two parties this notice is"
                             + " between. Declare both parties with POST /privacy-notices instead.");
         }
-    }
-
-    /** The side's participants, in a stable order, or nothing at all when it has none. */
-    private static String named(Set<String> side) {
-        return side.isEmpty() ? "" : " (" + String.join(", ", new TreeSet<>(side)) + ")";
     }
 
     private static String only(Set<String> side) {

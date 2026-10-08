@@ -180,14 +180,22 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
 
     /** The same contract, recording a second consumer against the one provider. */
     protected static String twoConsumerEcosystem() {
-        return ecosystem()
-                .replace(
-                        "\"members\": [",
-                        "\"members\": [{\"participant\": \""
-                                + OTHER_CONSUMER
-                                + "\", \"role\": \"Data consumer\","
-                                + " \"signature\": \"hasSigned\","
-                                + " \"date\": \"2026-01-16T09:00:00.000Z\"},");
+        return withSecondConsumer(ecosystem());
+    }
+
+    /**
+     * An ecosystem document with one more consumer than it had, which is what leaves its consuming
+     * side open. Takes the document so a case can make a contract ambiguous for a caller that is no
+     * party to it.
+     */
+    protected static String withSecondConsumer(String document) {
+        return document.replace(
+                "\"members\": [",
+                "\"members\": [{\"participant\": \""
+                        + OTHER_CONSUMER
+                        + "\", \"role\": \"Data consumer\","
+                        + " \"signature\": \"hasSigned\","
+                        + " \"date\": \"2026-01-16T09:00:00.000Z\"},");
     }
 
     /** Drops the cached contract, which is TTL expiry without waiting one out. */

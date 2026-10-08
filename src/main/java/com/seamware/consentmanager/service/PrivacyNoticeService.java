@@ -98,10 +98,12 @@ public class PrivacyNoticeService {
      * narrow each side to one party is {@code 400} from {@link ContractPartyResolver}, which is why
      * the fetch comes first here: there is nothing to look up until the document has been read.
      *
-     * <p>The caller is checked against the derived pair <em>before</em> either party is looked up,
-     * which the declared form has no reason to do. Here the identifiers come off the contract
-     * rather than off the request, so looking them up first would let a stranger read one back out
-     * of the {@code 404} that reports a party this deployment has no registration for.
+     * <p>The caller is checked against the derived pair <em>before</em> anything else names a
+     * party, which the declared form has no reason to do. Here the identifiers come off the
+     * contract rather than off the request, so every refusal that quotes one - the {@code 404} for
+     * a party this deployment has no registration for, the {@code 400} for a contract naming one
+     * participant on both sides - would otherwise report it to a stranger. The resolver's own
+     * ambiguity refusal precedes this check and therefore names no participant at all.
      */
     @NonNull
     public GeneratedNotice generateByContract(
@@ -110,8 +112,8 @@ public class PrivacyNoticeService {
         ContractResponse contract = fetch(contractUri);
         ContractParties derived = parties.resolve(contract);
 
-        requireDistinctParties(derived.dataProvider(), derived.dataConsumer());
         requireParty(callerIdentifier, derived.dataProvider(), derived.dataConsumer());
+        requireDistinctParties(derived.dataProvider(), derived.dataConsumer());
         Participant provider = require(derived.dataProvider());
         Participant consumer = require(derived.dataConsumer());
 

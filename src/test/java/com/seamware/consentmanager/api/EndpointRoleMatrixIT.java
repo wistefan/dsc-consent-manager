@@ -157,13 +157,15 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     private static final String UNREACHABLE_CONTRACT_SERVICE = "http://localhost:1";
 
     /**
-     * Upstream attempts per fetch, which is the one: a refused connection is not going to answer
-     * differently on a second try, and the default budget would spend seconds finding that out.
-     * This is the total, so {@code 1} is the smallest the retry policy accepts.
+     * Retries after a failed fetch, counted after the initial attempt, so this is two upstream
+     * requests and not one: a refused connection is not going to answer differently on a second
+     * try, and the default budget would spend seconds finding that out. One is the floor -
+     * {@code @Retryable} refuses a budget below it - so a single retry is as close to none as this
+     * suite can configure.
      */
-    private static final String SINGLE_ATTEMPT = "1";
+    private static final String SINGLE_RETRY = "1";
 
-    /** Pause between retries, which this suite never waits out. */
+    /** Pause before the one retry, which this suite has no reason to wait out. */
     private static final String RETRY_DELAY = "10ms";
 
     /** Media type every refusal carries, per RFC 7807. */
@@ -190,8 +192,8 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     private String userIdentifier;
 
     /**
-     * Points the Contract Service at a port nothing listens on, with the retry budget spent at
-     * once.
+     * Points the Contract Service at a port nothing listens on, with the smallest retry budget
+     * {@code @Retryable} accepts.
      *
      * <p>The by-contract row needs an outcome that is upstream's rather than this service's, and
      * needs it in milliseconds: a refused connection is the fastest unambiguous one, and the
@@ -201,7 +203,7 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     public Map<String, String> getProperties() {
         Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
         properties.put("consent-manager.contract-service.url", UNREACHABLE_CONTRACT_SERVICE);
-        properties.put("consent-manager.contract-service.retry-attempts", SINGLE_ATTEMPT);
+        properties.put("consent-manager.contract-service.retry-attempts", SINGLE_RETRY);
         properties.put("consent-manager.contract-service.retry-delay", RETRY_DELAY);
         return properties;
     }

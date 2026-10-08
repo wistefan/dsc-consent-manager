@@ -35,6 +35,9 @@ class PrivacyNoticeByContractIT extends PrivacyNoticeApiTestSupport {
     /** Where the same generation is reached with the two parties declared. */
     private static final String DECLARED_PATH = "/privacy-notices";
 
+    /** Problem member carrying the refusal's explanation, per RFC 7807. */
+    private static final String DETAIL = "detail";
+
     @Test
     @DisplayName("the contract's own parties yield the notice the declared form would have")
     void derivesThePartiesAndStoresTheSameNotice() {
@@ -137,6 +140,29 @@ class PrivacyNoticeByContractIT extends PrivacyNoticeApiTestSupport {
         assertThat(response.code())
                 .as("two consumers against one provider name no single pair")
                 .isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+        assertThat(allNotices(contractUri)).isEmpty();
+    }
+
+    /**
+     * The ambiguity is settled on the document alone, so it is refused before anything has
+     * established that the caller is a party - which is why the refusal may count the contract's
+     * participants but may not name them.
+     */
+    @Test
+    @DisplayName("the ambiguity refusal tells a caller that is no party how many, not which")
+    void refusesAnAmbiguousContractWithoutNamingItsParticipants() {
+        String contractUri =
+                serveBody(
+                        "ambiguous-foreign",
+                        withSecondConsumer(ContractFixtures.body(ContractFixtures.ECOSYSTEM)));
+
+        HttpResponse<String> response = generate(contractUri);
+
+        assertThat(response.code()).isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+        assertThat((String) body(response).get(DETAIL))
+                .as("a stranger needs only the contract URI to reach this refusal")
+                .contains("2 participants")
+                .doesNotContain(FIXTURE_PROVIDER, CONSUMER, OTHER_CONSUMER);
         assertThat(allNotices(contractUri)).isEmpty();
     }
 
