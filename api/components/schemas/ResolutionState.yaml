@@ -1,0 +1,22 @@
+# Schema: ResolutionState — referenced from api/openapi.yaml as
+# components.schemas.ResolutionState.
+#
+# Its own schema rather than an enum repeated inside PrivacyNoticeResolution:
+# the four sections report the same three states, and writing them out four
+# times would let them drift apart one edit at a time.
+type: string
+description: >
+  How far one section of a privacy notice could be filled in from documents this
+  service does not own.
+
+
+  `RESOLVED` — every external document the section needs was read in full.
+  `UNAVAILABLE` — resolution was asked for and at least one document could not
+  be read; the section carries what the contract itself said and nothing more.
+  `NOT_REQUESTED` — resolution was not asked for, which is what a freshly
+  generated notice reports.
+enum:
+  - RESOLVED
+  - UNAVAILABLE
+  - NOT_REQUESTED
+example: "NOT_REQUESTED"

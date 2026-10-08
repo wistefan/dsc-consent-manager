@@ -59,6 +59,12 @@ public final class ContractFixtures {
     public static final String ECOSYSTEM_UNSIGNED_MEMBER =
             "ecosystem-contract-unsigned-member.json";
 
+    /**
+     * An ecosystem contract evidencing neither side: its members carry no role and it names no
+     * service offering, so nothing in it contradicts whichever direction a request declares.
+     */
+    public static final String ECOSYSTEM_ROLELESS = "ecosystem-contract-roleless.json";
+
     /** Classpath directory the fixture documents live in. */
     private static final String DIRECTORY = "contracts/";
 

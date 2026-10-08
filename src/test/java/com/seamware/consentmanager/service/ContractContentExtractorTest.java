@@ -6,6 +6,7 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.ControllerDetails;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.DataReference;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
 import com.seamware.consentmanager.support.ContractFixtures;
 import java.util.List;
 import java.util.Map;
@@ -32,7 +33,6 @@ class ContractContentExtractorTest {
     private static final String PROVIDER_URI = CATALOG + "participants/provider";
     private static final String ECOSYSTEM_URI = CATALOG + "ecosystems/mobility-data-space";
     private static final String TRIP_HISTORY_URI = CATALOG + "serviceofferings/trip-history";
-    private static final String ROUTE_QUALITY_URI = CATALOG + "serviceofferings/route-quality";
     private static final String CHARGING_SESSIONS_URI =
             CATALOG + "serviceofferings/charging-sessions";
     private static final String METER_READINGS_URI = CATALOG + "serviceofferings/meter-readings";
@@ -142,9 +142,10 @@ class ContractContentExtractorTest {
                                                 "Trip history may be read by signed members of this"
                                                         + " ecosystem only."),
                                         null,
-                                        List.of(
-                                                reference(TRIP_HISTORY_URI),
-                                                reference(ROUTE_QUALITY_URI)),
+                                        // The consumer offers route-quality under the same
+                                        // contract; it stays out of a notice this provider
+                                        // controls, which names only what that provider offers.
+                                        List.of(reference(TRIP_HISTORY_URI)),
                                         List.of(PROVIDER_IDENTIFIER, CONSUMER_IDENTIFIER),
                                         null,
                                         null,
@@ -235,13 +236,25 @@ class ContractContentExtractorTest {
                 purposes,
                 categoriesOfData,
                 data,
-                recipients,
+                recipients(recipients),
                 CONTROLLER,
                 retentionPeriod,
                 piiPrincipalRights,
                 internationalTransfers,
                 // No contract shape carries a source for it, so every case expects it absent.
                 null);
+    }
+
+    /**
+     * The recipients as generation stores them: the identifiers the contract names, nothing
+     * resolved.
+     */
+    private static List<Recipient> recipients(List<String> identifiers) {
+        return identifiers == null
+                ? null
+                : identifiers.stream()
+                        .map(identifier -> new Recipient(identifier, null, null, null))
+                        .toList();
     }
 
     /** A data reference as generation stores it: the URI, with resolution's fields still empty. */

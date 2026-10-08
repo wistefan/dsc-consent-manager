@@ -19,7 +19,7 @@ public record PrivacyNoticePayload(
         @Nullable List<String> purposes,
         @Nullable List<String> categoriesOfData,
         @Nullable List<DataReference> data,
-        @Nullable List<String> recipients,
+        @Nullable List<Recipient> recipients,
         @Nullable ControllerDetails controllerDetails,
         @Nullable String retentionPeriod,
         @Nullable String piiPrincipalRights,
@@ -37,6 +37,20 @@ public record PrivacyNoticePayload(
             @Nullable String name,
             @Nullable String contact,
             @Nullable String identifier,
+            @Nullable String selfDescriptionUri) {}
+
+    /**
+     * One party the data reaches, named as the contract names it.
+     *
+     * <p>Generation stores the identifier alone, because that is all a contract carries; the name
+     * and contact are filled in by a resolved retrieval reading this service's own participant
+     * registry, and a recipient with no row here keeps its bare identifier.
+     */
+    @Serdeable
+    public record Recipient(
+            @Nullable String identifier,
+            @Nullable String name,
+            @Nullable String contact,
             @Nullable String selfDescriptionUri) {}
 
     /**

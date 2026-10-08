@@ -1,0 +1,191 @@
+# Schema: PrivacyNotice — referenced from api/openapi.yaml as
+# components.schemas.PrivacyNotice.
+#
+# No property is `nullable`. A nullable response property forces `JsonNullable`
+# onto the generated model, and a notice has nothing to say with an explicit
+# null that an absent property does not say better: a heading the contract
+# carries no source for is left out rather than published empty, and
+# `archivedAt` reports "still active" by being absent.
+type: object
+description: >
+  A privacy notice: what a contract says about the processing of personal data,
+  stated under the headings a notice is published with.
+
+
+  Generated from a contract held by the Contract Service and stored as it was
+  extracted, so the notice a consent points at stays the notice that was
+  published. The contract names the service offerings it covers only by catalog
+  URI; `GET /privacy-notices/{id}?resolve=true` is the one place those documents
+  are read, and `resolution` says how far that got.
+
+
+  A heading the contract carries no source for is **absent**, never an empty
+  string or an empty array. `withdrawalOfConsent` is absent on every notice this
+  revision generates: withdrawing consent is a procedure of this service rather
+  than a term of a contract between two participants, so no contract carries a
+  source for it.
+properties:
+  id:
+    type: string
+    format: uuid
+    description: Identifier of this notice, assigned here and stable for its lifetime.
+    example: "018f3a2b-7c4d-7e8f-9a0b-1c2d3e4f5a6b"
+  contractUri:
+    type: string
+    description: >
+      URI of the contract the notice states, verbatim as it was supplied. It is
+      the key one active notice per provider is held against.
+    example: "https://contract.example.org/contracts/65d1f0a2b3c4d5e6f7a8b9c0"
+  title:
+    type: string
+    description: >
+      Title of the notice, derived from the contract's subject — the ecosystem it
+      governs, or the service offering a bilateral contract is about — falling
+      back to the contract's own identifier. Absent when the contract names
+      neither.
+    example: "Clinical research data sharing"
+  dataProvider:
+    type: string
+    description: Global identifier of the participant providing the data.
+    example: "urn:example:participant:clinic"
+  dataConsumer:
+    type: string
+    description: Global identifier of the participant consuming the data.
+    example: "urn:example:participant:research-lab"
+  purposes:
+    type: array
+    description: >
+      Why the data is processed. Taken from the contract's own purposes where it
+      declares them, and from its policy descriptions where it does not.
+    items:
+      type: string
+    example: ["Clinical outcome research"]
+  categoriesOfData:
+    type: array
+    description: Categories of personal data the processing covers.
+    items:
+      type: string
+    example: ["Health data", "Demographics"]
+  data:
+    type: array
+    description: >
+      The catalog documents the notice covers, by URI. `title` and `description`
+      are filled in only by a resolved retrieval, because a contract names an
+      offering without describing it.
+    items:
+      type: object
+      properties:
+        uri:
+          type: string
+          description: Absolute URI of the catalog document.
+          example: "https://catalog.example.org/v1/catalog/serviceofferings/65d1"
+        title:
+          type: string
+          description: Title taken from the resolved document.
+        description:
+          type: string
+          description: Description taken from the resolved document.
+  recipients:
+    type: array
+    description: >
+      Every participant the contract names as party to it, as the contract names
+      it: for a bilateral contract its data provider and its data consumer, for
+      an ecosystem contract its members less the revoked ones — a member that has
+      not signed is kept. This notice's own two parties are therefore listed here
+      as well.
+
+
+      `name`, `contact` and `selfDescriptionUri` are filled in only by a resolved
+      retrieval reading this service's participant registry; a recipient it has
+      no registration for keeps its bare identifier.
+    items:
+      type: object
+      properties:
+        identifier:
+          type: string
+          description: Global participant identifier, as the contract names it.
+          example: "urn:example:participant:analytics"
+        name:
+          type: string
+          description: Legal name taken from the resolved registration.
+        contact:
+          type: string
+          description: Contact address taken from the resolved registration.
+        selfDescriptionUri:
+          type: string
+          description: Absolute URL of the recipient's self-description document.
+  controllerDetails:
+    type: object
+    description: >
+      The data controller, taken from the provider's own registration here
+      rather than from the contract, so the notice names the controller as this
+      service knows it.
+    properties:
+      name:
+        type: string
+        description: Legal name of the controller.
+        example: "Example Clinic Ltd"
+      contact:
+        type: string
+        description: Contact address for the controller.
+        example: "data-protection@clinic.example.org"
+      identifier:
+        type: string
+        description: Global participant identifier of the controller.
+        example: "urn:example:participant:clinic"
+      selfDescriptionUri:
+        type: string
+        description: Absolute URL of the controller's self-description document.
+  retentionPeriod:
+    type: string
+    description: How long the data is kept, as the contract states it.
+    example: "24 months from the effective date"
+  piiPrincipalRights:
+    type: string
+    description: >
+      What the contract states about the rights of the person the data is about.
+      One block of free text, because its only source is the contract's terms and
+      conditions; splitting a paragraph into a list would dress it up as an
+      enumeration no caller could rely on.
+  internationalTransfers:
+    type: array
+    description: >
+      The third parties the contract declares a disclosure to. Neither contract
+      shape carries a jurisdiction for a third party, so an entry here is a
+      declared disclosure and not necessarily a transfer abroad — a named party
+      may well be domestic, and a client that renders this under an
+      international-transfer heading alone mislabels it.
+
+
+      A disclosure declared without naming the party is reported as the reserved
+      identifier `urn:consent-manager:third-party:unnamed` rather than dropped,
+      so a notice never understates the disclosure. A client has to match that
+      value to render it in its own words.
+    items:
+      type: string
+  withdrawalOfConsent:
+    type: string
+    description: >
+      How consent may be withdrawn. Absent on every notice this revision
+      generates — see the note above.
+  createdAt:
+    type: string
+    format: date-time
+    description: When this notice was generated.
+  updatedAt:
+    type: string
+    format: date-time
+    description: When this notice was last written.
+  archivedAt:
+    type: string
+    format: date-time
+    description: >
+      When this notice was superseded by a regeneration. Absent while the notice
+      is the active one for its contract and provider.
+  resolution:
+    $ref: "./PrivacyNoticeResolution.yaml"
+required:
+  - id
+  - contractUri
+  - dataProvider
+  - resolution

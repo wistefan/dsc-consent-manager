@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.seamware.consentmanager.client.dto.ContractResponse;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
 import com.seamware.consentmanager.support.ContractFixtures;
 import com.seamware.consentmanager.support.TestJson;
 import io.micronaut.core.type.Argument;
@@ -124,7 +125,7 @@ class ContractContentExtractorOrderTest {
 
     /** The payload with its recipients replaced, to compare everything else for equality. */
     private static PrivacyNoticePayload withRecipients(
-            PrivacyNoticePayload payload, List<String> recipients) {
+            PrivacyNoticePayload payload, List<Recipient> recipients) {
         return new PrivacyNoticePayload(
                 payload.purposes(),
                 payload.categoriesOfData(),

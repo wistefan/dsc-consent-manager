@@ -74,12 +74,47 @@ public record ContractResponse(
         return dataProvider != null || dataConsumer != null ? Shape.BILATERAL : Shape.ECOSYSTEM;
     }
 
+    /**
+     * The data provider a bilateral contract names, as a participant identifier.
+     *
+     * <p>Trimmed, and null when the document states nothing, so that the identity of a party is
+     * read the same way wherever it is read - the bound check and the stored recipient list cannot
+     * disagree over a value the document padded.
+     */
+    @Nullable
+    public String dataProviderIdentifier() {
+        return stated(dataProvider);
+    }
+
+    /** The data consumer a bilateral contract names, read the same way as the provider. */
+    @Nullable
+    public String dataConsumerIdentifier() {
+        return stated(dataConsumer);
+    }
+
+    /** The value's stated content, or null when it states nothing. */
+    @Nullable
+    private static String stated(@Nullable String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     /** One ecosystem member's offering, with the policies that member attached to it. */
     @Serdeable
     public record ServiceOffering(
             @Nullable String participant,
             @Nullable String serviceOffering,
-            @Nullable List<Policy> policies) {}
+            @Nullable List<Policy> policies) {
+
+        /** The participant offering this service, as a participant identifier. */
+        @Nullable
+        public String participantIdentifier() {
+            return stated(participant);
+        }
+    }
 
     /** One ODRL rule attached to an offering, as the contract states it. */
     @Serdeable
@@ -133,7 +168,14 @@ public record ContractResponse(
             @Nullable String participant,
             @Nullable String role,
             @Nullable String signature,
-            @Nullable String date) {}
+            @Nullable String date) {
+
+        /** The participant this membership names, as a participant identifier. */
+        @Nullable
+        public String identifier() {
+            return stated(participant);
+        }
+    }
 
     /** One party's signature on a bilateral contract. */
     @Serdeable
