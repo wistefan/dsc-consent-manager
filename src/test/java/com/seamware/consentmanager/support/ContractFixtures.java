@@ -44,6 +44,17 @@ public final class ContractFixtures {
     /** An ecosystem contract naming no ecosystem, so only its identifier can title it. */
     public static final String ECOSYSTEM_UNTITLED = "ecosystem-contract-untitled.json";
 
+    /**
+     * An ecosystem contract declaring third-party disclosure without naming the third party, whose
+     * purposes also state no purpose text of their own.
+     */
+    public static final String ECOSYSTEM_UNNAMED_DISCLOSURE =
+            "ecosystem-contract-unnamed-disclosure.json";
+
+    /** An ecosystem contract one of whose members has not signed yet. */
+    public static final String ECOSYSTEM_UNSIGNED_MEMBER =
+            "ecosystem-contract-unsigned-member.json";
+
     /** Classpath directory the fixture documents live in. */
     private static final String DIRECTORY = "contracts/";
 

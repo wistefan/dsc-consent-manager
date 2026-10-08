@@ -45,6 +45,9 @@ class ContractContentExtractorTest {
             CATALOG + "serviceofferings/charging-sessions";
     private static final String METER_READINGS_URI = CATALOG + "serviceofferings/meter-readings";
 
+    /** What a disclosure the contract declares without naming the party is reported as. */
+    private static final String UNNAMED_THIRD_PARTY = "Unnamed third party";
+
     private static final ControllerDetails CONTROLLER =
             new ControllerDetails(
                     PROVIDER_LEGAL_NAME, PROVIDER_EMAIL, PROVIDER_IDENTIFIER, PROVIDER_URI);
@@ -171,6 +174,40 @@ class ContractContentExtractorTest {
                                         List.of(
                                                 reference(TRIP_HISTORY_URI),
                                                 reference(ROUTE_QUALITY_URI)),
+                                        List.of(PROVIDER_URI, CONSUMER_URI),
+                                        null,
+                                        null,
+                                        null))),
+                Arguments.of(
+                        "ecosystem contract disclosing to a third party it does not name",
+                        ContractFixtures.ECOSYSTEM_UNNAMED_DISCLOSURE,
+                        new NoticeContent(
+                                ECOSYSTEM_URI,
+                                payload(
+                                        // The first purpose states no text, so its identifier
+                                        // names it rather than the section losing an entry.
+                                        List.of(
+                                                "purpose-fraud-screening",
+                                                "Bill the data consumer for retrieved records."),
+                                        List.of("Payment data"),
+                                        null,
+                                        null,
+                                        "P90D",
+                                        null,
+                                        // Both purposes disclose and neither names the party, so
+                                        // the disclosure is reported once under the placeholder.
+                                        List.of(UNNAMED_THIRD_PARTY)))),
+                Arguments.of(
+                        "ecosystem contract one of whose members has not signed yet",
+                        ContractFixtures.ECOSYSTEM_UNSIGNED_MEMBER,
+                        new NoticeContent(
+                                ECOSYSTEM_URI,
+                                payload(
+                                        null,
+                                        null,
+                                        null,
+                                        // The unsigned member is a recipient-to-be and is named:
+                                        // omitting it would understate who receives the data.
                                         List.of(PROVIDER_URI, CONSUMER_URI),
                                         null,
                                         null,

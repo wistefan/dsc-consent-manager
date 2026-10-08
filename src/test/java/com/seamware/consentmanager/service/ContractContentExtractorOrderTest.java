@@ -18,12 +18,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.UnaryOperator;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Pins that extraction is deterministic and that its lists follow the contract's own order.
@@ -60,20 +61,39 @@ class ContractContentExtractorOrderTest {
         context.close();
     }
 
-    @ParameterizedTest(name = "{0}")
-    @ValueSource(
-            strings = {
+    /** The documents whose extraction must not depend on when or how often it runs. */
+    static Stream<String> fixtures() {
+        return Stream.of(
                 ContractFixtures.ECOSYSTEM,
                 ContractFixtures.BILATERAL,
                 ContractFixtures.ECOSYSTEM_NO_PURPOSE,
                 ContractFixtures.ECOSYSTEM_DIVERGENT_TERMINATION,
-                ContractFixtures.BILATERAL_NO_PURPOSE
-            })
-    @DisplayName("yields equal content for the same document twice")
+                ContractFixtures.BILATERAL_NO_PURPOSE,
+                ContractFixtures.ECOSYSTEM_UNNAMED_DISCLOSURE);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("fixtures")
+    @DisplayName("yields equal content for two independent readings of the same document")
     void extractsDeterministically(String fixture) {
-        ContractResponse contract = decode(ContractFixtures.body(fixture));
-        assertThat(extractor.extract(contract, provider()))
-                .isEqualTo(extractor.extract(contract, provider()));
+        // Decoded twice rather than extracted twice from one instance: extraction is pure, so a
+        // second call on the same object cannot differ, and the reading is where an order could.
+        String document = ContractFixtures.body(fixture);
+        assertThat(extractor.extract(decode(document), provider()))
+                .isEqualTo(extractor.extract(decode(document), provider()));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("fixtures")
+    @DisplayName("yields a payload that still equals itself after being stored and read back")
+    void survivesSerialization(String fixture) {
+        // What repeated generation actually compares: a freshly extracted payload against one that
+        // has been through the JSONB column, so any reordering or absent-to-empty drift in the
+        // serialized form would report a contract change nobody made.
+        PrivacyNoticePayload extracted =
+                extractor.extract(decode(ContractFixtures.body(fixture)), provider()).payload();
+
+        assertThat(serialized(extracted)).isEqualTo(extracted);
     }
 
     @Test
@@ -166,6 +186,15 @@ class ContractContentExtractorOrderTest {
                 "privacy@provider.example.org",
                 Map.of(),
                 null);
+    }
+
+    /** The payload as it comes back out of the JSONB column, via its serialized form. */
+    private static PrivacyNoticePayload serialized(PrivacyNoticePayload payload) {
+        try {
+            return json.readValue(json.writeValueAsString(payload), PrivacyNoticePayload.class);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not round-trip a notice payload", e);
+        }
     }
 
     private static ContractResponse decode(String body) {
