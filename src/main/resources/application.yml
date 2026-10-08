@@ -216,6 +216,32 @@ micronaut:
     jwks:
       expire-after-write: ${IDP_JWKS_CACHE_TTL:60s}
 
+    # Contracts fetched from the Contract Service, keyed on the contract URI exactly as a
+    # caller gave it - the same key `privacy_notices` is indexed on. `ContractGateway`
+    # reads and writes this cache itself rather than through `@Cacheable`, because the
+    # annotation has no way to skip storing a miss and would freeze an unknown contract
+    # for a whole lifetime; see docs in the gateway.
+    #
+    # The lifetime is NOT a latency knob. A notice is generated from whatever document
+    # this cache holds, so it bounds how stale the contract behind a freshly published
+    # notice may be, and how long a contract change stays invisible to a repeated
+    # generation. It is declared once under `consent-manager.contract-service.cache-ttl`
+    # and read from there, so the two can never drift apart.
+    contracts:
+      expire-after-write: ${consent-manager.contract-service.cache-ttl}
+      maximum-size: ${CONTRACT_SERVICE_CACHE_MAX_SIZE:1000}
+
+  # Per-service HTTP client settings. `micronaut.http.services.<id>` is the only place
+  # Micronaut reads a declarative client's timeouts from, so the values are forwarded
+  # here from `consent-manager.contract-service`, which stays the one place a deployment
+  # sets them.
+  http:
+    services:
+      contract-service:
+        url: ${consent-manager.contract-service.url}
+        connect-timeout: ${consent-manager.contract-service.connect-timeout}
+        read-timeout: ${consent-manager.contract-service.read-timeout}
+
   metrics:
     enabled: true
     export:
@@ -309,7 +335,28 @@ tracing:
 # Custom application configuration bound to environment variables
 consent-manager:
   url: ${CONSENT_MANAGER_URL:`http://localhost:8080`}
-  contract-service-url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
+
+  contract-service:
+    # Base URL of the Contract Service, the owner of the contracts a privacy notice is
+    # generated from. Forwarded to `micronaut.http.services.contract-service.url` above.
+    url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
+
+    # Bounds on one upstream call. The read timeout also bounds how long a generation
+    # request can be held open waiting for a contract.
+    connect-timeout: ${CONTRACT_SERVICE_CONNECT_TIMEOUT:2s}
+    read-timeout: ${CONTRACT_SERVICE_READ_TIMEOUT:5s}
+
+    # Retries after a failed fetch, counted after the initial attempt, and the growing
+    # pause between them - three retries are at most four upstream requests. Only a 5xx
+    # or a transport failure is retried: a 4xx is a defect retrying cannot fix, and a
+    # 404 never reaches the retry at all because it is the "no such contract" answer.
+    retry-attempts: ${CONTRACT_SERVICE_RETRY_ATTEMPTS:3}
+    retry-delay: ${CONTRACT_SERVICE_RETRY_DELAY:500ms}
+    retry-multiplier: ${CONTRACT_SERVICE_RETRY_MULTIPLIER:2.0}
+
+    # How long a fetched contract is served from `micronaut.caches.contracts`. Short on
+    # purpose: see the comment on that cache.
+    cache-ttl: ${CONTRACT_SERVICE_CACHE_TTL:60s}
 
   users:
     # Most users POST /users/search may return. The operation is not paginated, so a

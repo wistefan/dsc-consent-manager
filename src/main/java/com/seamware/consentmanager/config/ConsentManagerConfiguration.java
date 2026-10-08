@@ -2,6 +2,7 @@ package com.seamware.consentmanager.config;
 
 import io.micronaut.context.annotation.ConfigurationProperties;
 import io.micronaut.core.annotation.Nullable;
+import java.time.Duration;
 
 /**
  * Root configuration properties for the Consent Manager application.
@@ -13,7 +14,7 @@ import io.micronaut.core.annotation.Nullable;
  *
  * <ul>
  *   <li>{@code CONSENT_MANAGER_URL} &rarr; {@link #getUrl()}
- *   <li>{@code CONTRACT_SERVICE_URL} &rarr; {@link #getContractServiceUrl()}
+ *   <li>{@code CONTRACT_SERVICE_URL} &rarr; {@link ContractService#getUrl()}
  *   <li>{@code USERS_SEARCH_MAX_RESULTS} &rarr; {@link Users#getSearchMaxResults()}
  *   <li>{@code PARTICIPANTS_PAGE_DEFAULT_SIZE} &rarr; {@link Participants#getPageDefaultSize()}
  *   <li>{@code PARTICIPANTS_PAGE_MAX_SIZE} &rarr; {@link Participants#getPageMaxSize()}
@@ -26,7 +27,6 @@ import io.micronaut.core.annotation.Nullable;
 public class ConsentManagerConfiguration {
 
     private String url;
-    private String contractServiceUrl;
 
     /**
      * Returns the public base URL of this Consent Manager instance.
@@ -50,24 +50,142 @@ public class ConsentManagerConfiguration {
     }
 
     /**
-     * Returns the base URL of the Contract Service.
+     * The Contract Service this instance reads contracts from, bound under {@code
+     * consent-manager.contract-service}.
      *
-     * <p>Bound to the {@code CONTRACT_SERVICE_URL} environment variable via the {@code
-     * consent-manager.contract-service-url} configuration key.
-     *
-     * @return the Contract Service base URL (default provided via {@code application.yml})
+     * <p>These keys are the single place each setting is named. {@code application.yml} forwards
+     * them into the keys the framework reads - {@code micronaut.http.services.contract-service} for
+     * the base URL and the two timeouts, {@code micronaut.caches.contracts} for the cache lifetime
+     * - and the retry settings are resolved from them by the {@code @Retryable} placeholders on
+     * {@code ContractServiceClient}. The getters here type and document that contract in one place;
+     * only {@link #getUrl()} is read from Java, where a failure has to name the upstream it failed
+     * against.
      */
-    public String getContractServiceUrl() {
-        return contractServiceUrl;
-    }
+    @ConfigurationProperties("contract-service")
+    public static class ContractService {
 
-    /**
-     * Sets the base URL of the Contract Service.
-     *
-     * @param contractServiceUrl the Contract Service base URL
-     */
-    public void setContractServiceUrl(String contractServiceUrl) {
-        this.contractServiceUrl = contractServiceUrl;
+        /** Longest a connection attempt may take when none is configured. */
+        public static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(2);
+
+        /** Longest a response may take to arrive when none is configured. */
+        public static final Duration DEFAULT_READ_TIMEOUT = Duration.ofSeconds(5);
+
+        /** Retries attempted after a failed fetch, when none is configured. */
+        public static final int DEFAULT_RETRY_ATTEMPTS = 3;
+
+        /** Pause before the first retry when none is configured. */
+        public static final Duration DEFAULT_RETRY_DELAY = Duration.ofMillis(500);
+
+        /** Factor each further retry delay is multiplied by when none is configured. */
+        public static final double DEFAULT_RETRY_MULTIPLIER = 2.0;
+
+        /** Longest a fetched contract is served from the cache when none is configured. */
+        public static final Duration DEFAULT_CACHE_TTL = Duration.ofSeconds(60);
+
+        private String url;
+
+        private Duration connectTimeout = DEFAULT_CONNECT_TIMEOUT;
+
+        private Duration readTimeout = DEFAULT_READ_TIMEOUT;
+
+        private int retryAttempts = DEFAULT_RETRY_ATTEMPTS;
+
+        private Duration retryDelay = DEFAULT_RETRY_DELAY;
+
+        private double retryMultiplier = DEFAULT_RETRY_MULTIPLIER;
+
+        private Duration cacheTtl = DEFAULT_CACHE_TTL;
+
+        /** Base URL of the Contract Service, bound to {@code CONTRACT_SERVICE_URL}. */
+        public String getUrl() {
+            return url;
+        }
+
+        /** Sets the base URL; the declarative client resolves it at startup. */
+        public void setUrl(String url) {
+            this.url = url;
+        }
+
+        /**
+         * Longest a connection attempt may take, bound to {@code CONTRACT_SERVICE_CONNECT_TIMEOUT}.
+         */
+        public Duration getConnectTimeout() {
+            return connectTimeout;
+        }
+
+        /** Sets the connect timeout; exceeding it is a retryable failure, not a bad contract. */
+        public void setConnectTimeout(Duration connectTimeout) {
+            this.connectTimeout = connectTimeout;
+        }
+
+        /**
+         * Longest a response may take to arrive, bound to {@code CONTRACT_SERVICE_READ_TIMEOUT}.
+         */
+        public Duration getReadTimeout() {
+            return readTimeout;
+        }
+
+        /** Sets the read timeout; it bounds how long a generation request can be held open. */
+        public void setReadTimeout(Duration readTimeout) {
+            this.readTimeout = readTimeout;
+        }
+
+        /**
+         * Retries after a failed fetch, bound to {@code CONTRACT_SERVICE_RETRY_ATTEMPTS}.
+         *
+         * <p>Counted after the initial attempt, as {@code @Retryable} does, so three retries are at
+         * most four upstream requests. Only a 5xx or a transport failure is retried; a 4xx is a
+         * defect retrying cannot fix and would only multiply the load on an upstream that already
+         * refused.
+         */
+        public int getRetryAttempts() {
+            return retryAttempts;
+        }
+
+        /** Sets the retry budget; zero makes a failed fetch final. */
+        public void setRetryAttempts(int retryAttempts) {
+            this.retryAttempts = retryAttempts;
+        }
+
+        /** Pause before the first retry, bound to {@code CONTRACT_SERVICE_RETRY_DELAY}. */
+        public Duration getRetryDelay() {
+            return retryDelay;
+        }
+
+        /** Sets the first retry delay; together with the multiplier it bounds the total wait. */
+        public void setRetryDelay(Duration retryDelay) {
+            this.retryDelay = retryDelay;
+        }
+
+        /**
+         * Factor each further retry delay grows by, bound to {@code
+         * CONTRACT_SERVICE_RETRY_MULTIPLIER}.
+         */
+        public double getRetryMultiplier() {
+            return retryMultiplier;
+        }
+
+        /** Sets the backoff factor; one makes every retry wait the same delay. */
+        public void setRetryMultiplier(double retryMultiplier) {
+            this.retryMultiplier = retryMultiplier;
+        }
+
+        /**
+         * Longest a fetched contract is served from the cache, bound to {@code
+         * CONTRACT_SERVICE_CACHE_TTL}.
+         *
+         * <p>Not a latency knob: a notice is generated from the cached document, so this is how
+         * stale the contract behind a freshly published notice may be, and how long a contract
+         * change can go unnoticed by a repeated generation. Keep it short.
+         */
+        public Duration getCacheTtl() {
+            return cacheTtl;
+        }
+
+        /** Sets the contract cache lifetime; longer trades contract freshness for fewer calls. */
+        public void setCacheTtl(Duration cacheTtl) {
+            this.cacheTtl = cacheTtl;
+        }
     }
 
     /** Settings of the erasure path, bound under {@code consent-manager.erasure}. */

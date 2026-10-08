@@ -181,6 +181,20 @@
         </dependency>
 
         <!--
+            Micronaut Retry.
+
+            `@Retryable` and the `RetryPredicate` SPI live here, and the module is what
+            registers the interceptor that applies them. The Contract Service client is
+            the only retrying caller: a 5xx or a timeout from it is a transient outage
+            worth a second attempt, while a 4xx is a defect retrying would only multiply.
+        -->
+        <dependency>
+            <groupId>io.micronaut</groupId>
+            <artifactId>micronaut-retry</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!--
             Micronaut Reactor.
 
             The reactive SPIs this service implements and consumes - `TokenValidator`,
