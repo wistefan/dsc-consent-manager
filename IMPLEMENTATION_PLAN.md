@@ -140,9 +140,10 @@ These are not in the ticket text. Each is called out so a reviewer can overrule 
    contact travel together. **`piiPrincipalRights` also changes type**, `List<String>` →
    `String`: its only source in either contract shape is `termsAndConditions`, one block of free
    text, and splitting that into a singleton list would dress a paragraph up as an enumeration
-   that no caller can rely on. It therefore matches `withdrawalOfConsent`, which is a `String`
-   already and comes from the same field. The **six** test files that construct a
-   `PrivacyNoticePayload` positionally are updated in the same commit.
+   that no caller can rely on. The type change stands on that alone, and no longer rests on
+   matching `withdrawalOfConsent`, which decision 16 leaves unpopulated. The six test files that
+   construct a `PrivacyNoticePayload` positionally need **no** repair — decision 17 says why, and
+   corrects an earlier draft of this plan that said they break.
 
 10. **The `/for/{participantIdentifier}` client methods are not declared.** The ticket's
     snippet lists `fetchContractsFor` and `fetchBilateralsFor`, but none of this ticket's three
@@ -187,6 +188,60 @@ These are not in the ticket text. Each is called out so a reviewer can overrule 
     widening it to `(contract_uri, provider_id, consumer_id)` is a migration against TICKET-002's
     schema; it is named here rather than silently absorbed, and Step 3's IT pins the behaviour
     so a later ticket can change it deliberately.
+
+15. **The contract cache bounds *when* a contract change becomes visible, and AC 5 is triggered
+    by the observation rather than by the upstream edit.** AC 12 asks for a cache keyed on
+    `contractUri`; AC 5 asks that a changed contract archive the active notice and generate a new
+    one. Inside `cache-ttl` the gateway serves the document it last fetched, so a second
+    generation compares against *that* and returns `200` even though upstream has since changed.
+    The two criteria are not in conflict — they are ordered in time — but the plan has to say so,
+    because both obvious repairs are worse than the window. Generation must **not** bypass the
+    cache: repeated generation is the exact path AC 12 names, so bypassing there voids the
+    criterion the cache exists for. Generation must **not** evict after each call either; that
+    leaves a cache which never serves a hit. The window therefore stands, it is exactly
+    `cache-ttl`, and `cache-ttl` is consequently not a performance knob but the deployment's
+    answer to *how stale may the contract behind a published notice be* — Step 1 defaults it
+    short for that reason and documents it in those words in `.env.sample`, rather than as a
+    latency tuning value.
+
+    **Step 3's AC 5 case drives the change deterministically by invalidating the key** — it
+    injects the `contracts` `SyncCache` and calls `invalidate(contractUri)` between the two
+    generations, which is TTL expiry without a sleep. Two wrong ways are ruled out here so the
+    step agent does not rediscover them: a distinct `contractUri` per case makes the assertion
+    **vacuous**, because the active-notice lookup is keyed on `(contractUri, providerId)` and a
+    fresh URI finds no notice to archive; and waiting out a real TTL makes the suite slow and
+    timing-dependent. A companion assertion pins the window as deliberate: *without* the
+    invalidation, the second generation returns `200` and archives nothing even though the stub
+    is already serving the changed contract.
+
+16. **`termsAndConditions` fills one heading, not two.** On the bilateral shape it is the only
+    candidate source for both `piiPrincipalRights` and `withdrawalOfConsent`, and mapping it to
+    both would print the identical paragraph under two distinct legal headings — a notice that
+    presents one undifferentiated blob as if it were two sections. By decision 4's own argument
+    that is worse than an honest absence. So `termsAndConditions` fills `piiPrincipalRights`
+    only, and **`withdrawalOfConsent` is absent on both contract shapes**. The asymmetry is not a
+    coin flip: a contract's terms are plausibly where it states what the PII principal may do,
+    whereas withdrawing consent is a procedure of *this* service — the consent record is revoked
+    here, not under the contract between two participants — so the contract has no source for it
+    at all. The field stays in the payload and in the served schema, unpopulated by this ticket,
+    for TICKET-008 to fill once consent withdrawal exists.
+
+17. **The six existing `PrivacyNoticePayload` fixtures do not break, and the compiler is not a
+    tripwire here.** All six call sites pass nine `null` literals — `ParticipantUserLinkIT:425`,
+    `UserErasureIT:422`, `ParticipantDeregistrationSurfaceIT:346`,
+    `ParticipantDeregistrationAtomicityIT:145`, `UserErasureAtomicityIT:137`,
+    `ParticipantDeregistrationIT:416`. Decision 9 keeps the arity at nine (merging
+    `controllerName`/`controllerContact` is offset by the new `data`) and every component stays
+    `@Nullable`, so `null` is assignable at every position regardless of the reordering and the
+    two type changes. All six compile untouched and keep their meaning, *a notice with an empty
+    payload*. A step agent waiting for a red build to point at them would wait for a build that
+    stays green.
+
+    The real hazard is the silent one: nine positional nulls say nothing about which component is
+    which, so the next arity or ordering change can shift meaning with no diagnostic anywhere.
+    Step 2 therefore replaces the six literals with a single shared helper instead of editing
+    nulls in six places, and Step 6's `PrivacyNoticeSpecParityTest` asserts the payload's
+    component names and types, so a drift between record and spec costs a build.
 
 ### Repo-specific constraints every step inherits
 
@@ -241,7 +296,9 @@ Covers AC 12 and AC 13 at the client level. No API surface changes, so
   a nested `@ConfigurationProperties("contract-service")` class, matching the `Users`,
   `Erasure` and `Participants` precedent and the `consent-manager.contract-service.url` key the
   ticket names. It holds `url`, `connectTimeout`, `readTimeout`, `retryAttempts`, `retryDelay`,
-  `retryMultiplier` and `cacheTtl`, each defaulted from a named `DEFAULT_*` constant. Keeping
+  `retryMultiplier` and `cacheTtl`, each defaulted from a named `DEFAULT_*` constant.
+  `cacheTtl`'s default is deliberately short: decision 15 makes it the bound on how stale the
+  contract behind a published notice may be, not a latency knob, and `.env.sample` says so. Keeping
   both `contract-service-url` and a `contract-service` block would leave two keys for one
   setting and invite relaxed-binding ambiguity; the **env var `CONTRACT_SERVICE_URL` is
   unchanged**, so no deployment has to move. Nothing in `src/main` reads the old getter today —
@@ -291,7 +348,10 @@ Covers AC 12 and AC 13 at the client level. No API surface changes, so
   value when it carries no `/`), try `fetchContract`, fall back to `fetchBilateralContract`, and
   `put` **only** when a contract came back. An empty result is returned uncached; a transport
   failure or an exhausted retry becomes an `UpstreamServiceException` naming the upstream and
-  the URI, also uncached.
+  the URI, also uncached. The cache key is the **`contractUri` as given**, not the derived
+  contract id, so the key matches the one `privacy_notices` is indexed on. Because `SyncCache`
+  exposes `invalidate(key)`, a test can simulate TTL expiry deterministically, which is what
+  Step 3's AC 5 case uses (decision 15); nothing in `src/main` invalidates.
 
 **Tests**
 
@@ -328,17 +388,20 @@ Covers AC 15. Still no API surface change, so `SPECIFIED_OPERATION_COUNT` stays 
   `selfDescriptionUri`); add `@Nullable List<DataReference> data`, where `DataReference` is a
   nested record of `uri` plus the optional `title`/`description` that resolution fills in; and
   change `piiPrincipalRights` from `List<String>` to `String`, because its only source is the
-  single free-text `termsAndConditions` block (decision 9). Every component stays `@Nullable`
-  and the record stays `@Serdeable`. See decision 9 for why this is free: nothing writes the
+  single free-text bilateral `termsAndConditions` block (decision 9). `withdrawalOfConsent`
+  keeps its `String` type but is written by nothing in this ticket (decision 16). Every component
+  stays `@Nullable` and the record stays `@Serdeable`. See decision 9 for why this is free: nothing writes the
   table yet.
-- The **six** test files constructing the record positionally —
-  `api/ParticipantUserLinkIT`, `api/UserErasureIT`, `api/ParticipantDeregistrationSurfaceIT`,
+- The six test files constructing the record positionally — `api/ParticipantUserLinkIT`,
+  `api/UserErasureIT`, `api/ParticipantDeregistrationSurfaceIT`,
   `service/ParticipantDeregistrationAtomicityIT`, `service/ParticipantDeregistrationIT`,
-  `service/UserErasureAtomicityIT` — are updated in the same commit. They only seed fixtures, so
-  the edits are mechanical, but every one of them breaks: merging `controllerName` and
-  `controllerContact` into `ControllerDetails` and adding `data` leaves the arity at nine while
-  changing the order and two component types, so a positional call that still compiles would be
-  worse than one that does not. The build stays red until all six are done.
+  `service/UserErasureAtomicityIT` — **still compile after the rename and still mean what they
+  meant**: each passes nine `null` literals, the arity stays nine and every component stays
+  `@Nullable` (decision 17). Expect a green build, not a red one. They are edited anyway, for a
+  different reason and into a different shape: the nine positional nulls are replaced by one
+  shared `emptyPayload()` helper in `support/`, so the next arity or ordering change has a single
+  call site and cannot shift a component's meaning unnoticed. That is six one-line edits, and it
+  is the only thing this rename asks of the existing suite.
 - `domain/ConsentSnapshot.java` is **not** touched. It is TICKET-008's model, it is not written
   by anything yet either, and widening this step to cover it would couple two tickets.
 
@@ -360,7 +423,7 @@ Covers AC 15. Still no API surface change, so `SPECIFIED_OPERATION_COUNT` stays 
   | `retentionPeriod` | `purpose[].termination` when all entries agree | `terminationAndValidity.terminationPeriod` |
   | `internationalTransfers` | `purpose[]` entries with `thirdPartyDisclosure` true, named by `thirdPartyName` | same |
   | `piiPrincipalRights` (a `String`, decision 9) | **absent** — no source | `termsAndConditions` when present, else absent |
-  | `withdrawalOfConsent` | **absent** — no source | `termsAndConditions` when present, else absent |
+  | `withdrawalOfConsent` | **absent** — no source | **absent** — `termsAndConditions` already fills `piiPrincipalRights` and is not printed twice (decision 16) |
 
   Every "absent" is a real absence: no `""`, no `[]`, no configured placeholder (decision 4).
   Ordering is deterministic — lists are de-duplicated preserving first-seen order — because a
@@ -373,8 +436,10 @@ Covers AC 15. Still no API surface change, so `SPECIFIED_OPERATION_COUNT` stays 
   for, over the Step 1 JSON fixtures plus the shapes that exercise the gaps: a full bilateral
   contract; a full ecosystem contract; a contract with no `purpose[]` (falls back to policy
   descriptions); a contract with no `policy`/`policies` either (purposes absent, not empty); a
-  bilateral contract with no `termsAndConditions` (`piiPrincipalRights` and
-  `withdrawalOfConsent` **absent**); an ecosystem contract, which never has it; a contract with
+  bilateral contract with no `termsAndConditions` (`piiPrincipalRights` **absent**); a bilateral
+  contract *with* `termsAndConditions`, asserting it reaches `piiPrincipalRights` and that
+  `withdrawalOfConsent` is **absent**, so decision 16's no-duplication rule is pinned rather than
+  left to whoever reads the extractor next; an ecosystem contract, which never has it; a contract with
   no `serviceOffering` (`data` absent); a contract whose `purpose[]` entries disagree on
   `termination` (`retentionPeriod` absent rather than arbitrarily picked); a contract with
   `piiCategory` as a scalar and as an array; a contract carrying only `_id`. Each case asserts
@@ -493,9 +558,11 @@ Covers AC 1, AC 2, AC 3, AC 4, AC 5, AC 6, AC 10. Raises `SPECIFIED_OPERATION_CO
   claim is pinned rather than assumed); a caller that is neither party gets `403` (AC 3); an
   unknown provider or consumer gets `404`; a deregistered caller gets `403`; generating twice
   for an unchanged contract returns the same `id` with `200` and leaves one row (AC 4);
-  generating after the contract changes returns `201` with a new `id`, and the old row carries
-  `archivedAt` (AC 5); an upstream edit that does not alter the extracted payload returns `200`
-  and does **not** archive; an unreachable Contract Service returns `502` with
+  generating after the contract changes — the stub reconfigured **and** the `contracts` cache key
+  invalidated, decision 15 — returns `201` with a new `id`, and the old row carries `archivedAt`
+  (AC 5), while the same change *without* the invalidation returns `200` and archives nothing,
+  which pins the `cache-ttl` staleness window as deliberate; an upstream edit that does not alter
+  the extracted payload returns `200` and does **not** archive; an unreachable Contract Service returns `502` with
   `application/problem+json` (AC 10); an unknown contract returns `404`, not `502`; a request
   naming a consumer the fetched contract does not name returns `400` and writes nothing
   (point 3's membership check); and, for an ecosystem contract admitting two consumers against
@@ -684,8 +751,9 @@ Covers AC 14 across the module and closes the matrix the earlier steps only touc
 - `api/PrivacyNoticeSpecParityTest.java` — a plain surefire unit test, in the style of
   `ParticipantSchemaParityTest`: `GeneratePrivacyNotice` and `GenerateByContract` agree on
   `contractUri`'s constraints, `PrivacyNotice`'s fields are exactly the extractor's payload
-  components plus the entity's own columns and the resolution block, no `PrivacyNotice` property
-  is `nullable`, and the generated `data` and `recipients` accessors return their **element
+  components plus the entity's own columns and the resolution block, the payload record's
+  component **names and types** are asserted explicitly so a positional shift cannot pass
+  unnoticed (decision 17), no `PrivacyNotice` property is `nullable`, and the generated `data` and `recipients` accessors return their **element
   type** and not `Object` — the assertion Step 3's inline-items probe leaves behind, so a
   degraded `List<Object>` is a build failure rather than a silently untyped array. A spec edit
   that drifts from the payload then costs a build rather than a silent hole in a served notice.
@@ -744,7 +812,9 @@ anything else found stale while editing is in scope.
    `@Client` interface, and it uses `SyncCache` explicitly rather than `@Cacheable` because
    `@Cacheable` has no `unless` and would cache an empty result, freezing an unknown contract
    for the whole TTL. Only a hit is stored. `SelfDescriptionClient` caches the same way and for
-   the same reason.
+   the same reason. Record that `cache-ttl` is the bound on how stale the contract behind a
+   published notice may be — a contract change is archived and regenerated only once the cached
+   entry expires (decision 15) — so it is a correctness setting, not a latency one.
 5. **Partial resolution** — `RESOLVED` / `UNAVAILABLE` / `NOT_REQUESTED`; resolution never fails
    a request and never writes back; the resolver catches the gateway's `UpstreamServiceException`
    so that generation stays the single place a Contract Service outage is a `502`. Record that
@@ -756,31 +826,33 @@ anything else found stale while editing is in scope.
    what makes concurrent generation safe, so an application-level check is not the guarantee.
 8. **The renamed `PrivacyNoticePayload` vocabulary** — `categoriesOfData`, `controllerDetails`,
    `withdrawalOfConsent`, `data`, and `piiPrincipalRights` now a `String` — and that
-   `ConsentSnapshot` still carries the *old* names and is TICKET-008's to align.
-   - **The self-description guard** — https-only unless `allow-plaintext-http`, host allow-list,
-     private/loopback refused **unless the host is in `allowed-hosts`**, which is both the
-     operator escape hatch and what makes WireMock-stubbed resolution testable.
-   - **The inline-`items` question, settled by Step 3's probe.** Replace the "unverified" wording
-     this plan's refresh put in the `items: $ref` gotcha with whichever answer the probe
-     produced, and name the parity-test assertion that now holds it.
+   `ConsentSnapshot` still carries the *old* names and is TICKET-008's to align. Record that
+   `withdrawalOfConsent` is deliberately unpopulated — `termsAndConditions` fills
+   `piiPrincipalRights` only and is not printed under two headings (decision 16).
+9. **The self-description guard** — https-only unless `allow-plaintext-http`, host allow-list,
+   private/loopback refused **unless the host is in `allowed-hosts`**, which is both the operator
+   escape hatch and what makes WireMock-stubbed resolution testable.
+10. **The inline-`items` question, settled by Step 3's probe.** Replace the "unverified" wording
+    this plan's refresh put in the `items: $ref` gotcha with whichever answer the probe produced,
+    and name the parity-test assertion that now holds it.
 
 **Already applied by this plan agent — verify, do not redo.** Ticket #69's Step 10 deferred its
 `AGENTS.md` refresh to a plan-mode agent and no such agent ever ran, so the file every step
 agent loads as system prompt was still stale on all of it. It is fixed in the same commit as
 this plan, because a step agent starting from a context file that names a class which does not
-exist will act on it. Points 9-18 are therefore a **checklist to confirm still true at the end
+exist will act on it. Points 11-20 are therefore a **checklist to confirm still true at the end
 of the ticket**, not work to perform:
 
-9. `service/` names `UserProvisioningService`, which does not exist — JIT provisioning lives in
-   `UserService` and returns a `ProvisionedUser`. The line should name `UserService`,
-   `ParticipantService`, `ErasureVerifier` and `CallerScope`, and the participant module's
-   `ParticipantRegistration`, `ParticipantUpdate` and `DeregistrationResult`.
-10. `api/` omits `ParticipantController`, `ParticipantMapper` and `ApiStatusController`.
-11. The pagination convention is undocumented: `GET /participants` clamps an oversized `size`
+11. `service/` names `UserProvisioningService`, which does not exist — JIT provisioning lives in
+    `UserService` and returns a `ProvisionedUser`. The line should name `UserService`,
+    `ParticipantService`, `ErasureVerifier` and `CallerScope`, and the participant module's
+    `ParticipantRegistration`, `ParticipantUpdate` and `DeregistrationResult`.
+12. `api/` omits `ParticipantController`, `ParticipantMapper` and `ApiStatusController`.
+13. The pagination convention is undocumented: `GET /participants` clamps an oversized `size`
     to `consent-manager.participants.page-max-size` and answers `200` rather than refusing; the
     spec carries no `maximum` because the ceiling is per deployment; the response reports the
     size it applied.
-12. `GET /participants/{identifier}`'s two limitations. Use the merged tree's wording, not the
+14. `GET /participants/{identifier}`'s two limitations. Use the merged tree's wording, not the
     stronger claim PR #5 removed: a path variable never spans a `/`, so a URI-shaped identifier
     reaches the route **only percent-encoded**, and whether an encoded slash survives is a
     property of the deployment rather than of this service — this stack happens to route `%2F`
@@ -788,7 +860,7 @@ of the ticket**, not work to perform:
     filter on `GET /participants` is therefore the *dependable* way, not the only one. Second
     limitation, same sentence: the literal identifier `me` is unreachable on that route in every
     deployment, because `GET /participants/me` claims the path.
-13. `ParticipantPrincipal` is a **three**-state contract. The row may be absent, which is what
+15. `ParticipantPrincipal` is a **three**-state contract. The row may be absent, which is what
     makes self-registration reachable and which only `POST /participants` accepts.
     `requireRegistered()` admits any registered row and is what a route reading or writing the
     caller's own record uses (`ParticipantController`, and `CallerScope.of()`, which is why
@@ -796,22 +868,22 @@ of the ticket**, not work to perform:
     stricter by one condition — it also refuses a row carrying `deregistered_at` — and is what
     every route acting in the dataspace in the participant's name uses
     (`ParticipantUserController`, and now privacy-notice generation).
-14. `V3__participant_deregistration.sql` is missing from the migration list, as are the
+16. `V3__participant_deregistration.sql` is missing from the migration list, as are the
     `deregistered_at` semantics: nullable, null for every active participant, set only on the
     retain branch, with a partial index keeping the directory listing to active rows.
-15. `config/ConsentManagerConfiguration.java` reads "nested Erasure / Users classes"; there are
+17. `config/ConsentManagerConfiguration.java` reads "nested Erasure / Users classes"; there are
     now `Participants`, `ContractService` and `SelfDescription` too. The ADR range reads
     `0001-0007`; it should read `0001-0008`.
-16. The `api/components/schemas/` listing omits the six schemas #69 added — `Participant.yaml`,
+18. The `api/components/schemas/` listing omits the six schemas #69 added — `Participant.yaml`,
     `ParticipantEndpoints.yaml`, `ParticipantLegalPerson.yaml`, `ParticipantRegistration.yaml`,
     `ParticipantUpdate.yaml`, `DeregistrationSummary.yaml` — and `ParticipantSchemaParityTest`
     and `ParticipantCredentialAbsenceTest` are not named as build-failing spec tests.
-17. `error/` omits `ApiExceptionHandler.java`, `ConstraintViolationProblemHandler.java` and
+19. `error/` omits `ApiExceptionHandler.java`, `ConstraintViolationProblemHandler.java` and
     `ProblemType.java`; `domain/` omits `PrivacyNoticePayload.java`; `src/main/resources/`
     omits `static/swagger-ui/index.html`, which is what makes the Swagger UI entry under
     "Important Files" work. `SpecReferenceResolutionTest` is a second build-failing spec test
     not called out.
-18. **`./mvnw verify -DskipUTs` does not skip unit tests.** `skipUTs` is defined nowhere in
+20. **`./mvnw verify -DskipUTs` does not skip unit tests.** `skipUTs` is defined nowhere in
     `pom.xml`, `.mvn/`, or the inherited `micronaut-parent` / `micronaut-platform` 5.2.0 poms;
     Surefire and Failsafe are declared with no `<configuration>` at all, and Maven silently
     ignores an undefined `-D`, so the documented command runs the whole suite. #69's Step 9
