@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.api;
 
 import com.seamware.consentmanager.api.generated.AbstractPrivacyNoticesController;
+import com.seamware.consentmanager.api.generated.model.GenerateByContract;
 import com.seamware.consentmanager.api.generated.model.GeneratePrivacyNotice;
 import com.seamware.consentmanager.api.generated.model.PrivacyNotice;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
@@ -12,10 +13,11 @@ import io.micronaut.http.annotation.Controller;
 /**
  * Serves the {@code /privacy-notices} operations.
  *
- * <p>The status code is the whole report of what happened: {@code 201} when this request stored a
- * notice, archiving whatever it superseded, and {@code 200} when an identical active notice was
- * already there and nothing was written. Nothing here dereferences the catalog, so the resolution
- * block is {@link PrivacyNoticeMapper#unresolved()} throughout.
+ * <p>Both operations are one generation differing only in where the two parties come from, so they
+ * render through the same path. The status code is the whole report of what happened: {@code 201}
+ * when this request stored a notice, archiving whatever it superseded, and {@code 200} when an
+ * identical active notice was already there and nothing was written. Nothing here dereferences the
+ * catalog, so the resolution block is {@link PrivacyNoticeMapper#unresolved()} throughout.
  *
  * <p>{@code PrivacyNotice} here is the generated API model; the stored row is named in full to keep
  * the two apart.
@@ -41,6 +43,17 @@ public class PrivacyNoticeController extends AbstractPrivacyNoticesController {
                         request.getContractUri(),
                         request.getDataProvider(),
                         request.getDataConsumer());
+        return served(generated);
+    }
+
+    @Override
+    public HttpResponse<PrivacyNotice> generatePrivacyNoticeByContract(
+            ParticipantPrincipal principal, GenerateByContract request) {
+        return served(notices.generateByContract(principal, request.getContractUri()));
+    }
+
+    /** Renders a generated notice under the code its outcome calls for. */
+    private HttpResponse<PrivacyNotice> served(GeneratedNotice generated) {
         PrivacyNotice body =
                 mapper.toApi(
                         generated.notice(),

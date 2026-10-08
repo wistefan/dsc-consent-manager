@@ -349,9 +349,10 @@ consent-manager:
     read-timeout: ${CONTRACT_SERVICE_READ_TIMEOUT:5s}
 
     # Retries after a failed fetch, counted after the initial attempt, and the growing
-    # pause between them - three retries are at most four upstream requests. Only a 5xx
-    # or a transport failure is retried: a 4xx is a defect retrying cannot fix, and a
-    # 404 never reaches the retry at all because it is the "no such contract" answer.
+    # pause between them - three retries are at most four upstream requests, and one is
+    # the smallest budget accepted. Only a 5xx or a transport failure is retried: a 4xx
+    # is a defect retrying cannot fix, and a 404 never reaches the retry at all because
+    # it is the "no such contract" answer.
     retry-attempts: ${CONTRACT_SERVICE_RETRY_ATTEMPTS:3}
     retry-delay: ${CONTRACT_SERVICE_RETRY_DELAY:500ms}
     retry-multiplier: ${CONTRACT_SERVICE_RETRY_MULTIPLIER:2.0}

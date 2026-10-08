@@ -86,7 +86,13 @@ class PrivacyNoticeServiceTest {
     private final StubWriter writer = new StubWriter();
 
     private final PrivacyNoticeService service =
-            new PrivacyNoticeService(participants, notices, contracts, extractor, writer);
+            new PrivacyNoticeService(
+                    participants,
+                    notices,
+                    contracts,
+                    extractor,
+                    writer,
+                    new ContractPartyResolver());
 
     private final Participant provider = register(PROVIDER);
 

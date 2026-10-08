@@ -65,6 +65,22 @@ public final class ContractFixtures {
      */
     public static final String ECOSYSTEM_ROLELESS = "ecosystem-contract-roleless.json";
 
+    /** A bilateral contract stating a data provider and no data consumer. */
+    public static final String BILATERAL_NO_CONSUMER = "bilateral-contract-no-consumer.json";
+
+    /**
+     * An ecosystem contract recording no roles, one member offering a service and one not, so its
+     * two sides are evidenced by the offering alone.
+     */
+    public static final String ECOSYSTEM_OFFERING_EVIDENCE =
+            "ecosystem-contract-offering-evidence.json";
+
+    /** An ecosystem contract recording no roles whose two members both offer a service. */
+    public static final String ECOSYSTEM_TWO_OFFERINGS = "ecosystem-contract-two-offerings.json";
+
+    /** An ecosystem contract recording no roles, with one offering member and two others. */
+    public static final String ECOSYSTEM_THREE_MEMBERS = "ecosystem-contract-three-members.json";
+
     /** Classpath directory the fixture documents live in. */
     private static final String DIRECTORY = "contracts/";
 
