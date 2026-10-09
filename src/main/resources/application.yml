@@ -385,7 +385,21 @@ consent-manager:
     # restricts fetching to the listed hosts AND waives the private-address refusal for
     # them, because naming a host here is an operator's statement about their own
     # network and outranks the address heuristic.
+    #
+    # It is operator configuration and nothing else writes it. A participant that
+    # self-registers does NOT add its own host here: a list a stranger can extend is not
+    # a guard, and the private-address waiver each entry carries is exactly what a
+    # self-registered host must not be able to grant itself. Leaving the list empty is
+    # the usual deployment - public catalogs are already admitted - and an entry is
+    # added only to pin the catalog down, or to read one inside this network.
     allowed-hosts: ${SELF_DESCRIPTION_ALLOWED_HOSTS:}
+
+    # Documents one resolved retrieval reads before it stops walking the catalog and
+    # reports the data section UNAVAILABLE. The walk is over lists this service does not
+    # author - the offerings a contract names, and the resources each offering names -
+    # so without a ceiling a single authenticated GET fans out as far as whoever
+    # publishes them decides.
+    max-documents: ${SELF_DESCRIPTION_MAX_DOCUMENTS:50}
 
     # Whether a self-description may be read over plain http. False on purpose: a
     # catalog document is fetched by URL from an upstream contract, and plaintext would

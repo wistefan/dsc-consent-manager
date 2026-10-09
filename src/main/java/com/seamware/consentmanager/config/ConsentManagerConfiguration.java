@@ -153,6 +153,9 @@ public class ConsentManagerConfiguration {
         /** Longest a fetched self-description is served from the cache when none is configured. */
         public static final Duration DEFAULT_CACHE_TTL = Duration.ofMinutes(10);
 
+        /** Documents one resolved retrieval reads before it stops walking the catalog. */
+        public static final int DEFAULT_MAX_DOCUMENTS = 50;
+
         /**
          * Hosts a self-description may be fetched from, bound to {@code
          * SELF_DESCRIPTION_ALLOWED_HOSTS}; empty admits any host outside this network.
@@ -162,6 +165,16 @@ public class ConsentManagerConfiguration {
          * An empty list still refuses every loopback, link-local and private-range address.
          */
         private List<String> allowedHosts = List.of();
+
+        /**
+         * Documents one resolved retrieval reads before it gives up and reports the data section
+         * unavailable, bound to {@code SELF_DESCRIPTION_MAX_DOCUMENTS}.
+         *
+         * <p>The walk is over lists this service does not author - the offerings a contract names
+         * and the resources each offering names - so without a ceiling a single authenticated GET
+         * fans out as far as whoever publishes them decides.
+         */
+        private int maxDocuments = DEFAULT_MAX_DOCUMENTS;
 
         /**
          * Whether a self-description may be read over plain {@code http}, bound to {@code
@@ -178,6 +191,24 @@ public class ConsentManagerConfiguration {
          * legal statement.
          */
         private Duration cacheTtl = DEFAULT_CACHE_TTL;
+
+        /**
+         * Sets the allow-list, dropping the blank entries a configured-but-empty value leaves.
+         *
+         * <p>Written out rather than generated because {@code ${SELF_DESCRIPTION_ALLOWED_HOSTS:}}
+         * resolves to the empty string when the variable is unset, which binds as a single blank
+         * entry. That would make the list non-empty, and a non-empty list no real host is named in
+         * refuses every URL - resolution would be dead in the default configuration.
+         */
+        public void setAllowedHosts(@Nullable List<String> allowedHosts) {
+            this.allowedHosts =
+                    allowedHosts == null
+                            ? List.of()
+                            : allowedHosts.stream()
+                                    .filter(host -> host != null && !host.isBlank())
+                                    .map(String::trim)
+                                    .toList();
+        }
     }
 
     /** Settings of the erasure path, bound under {@code consent-manager.erasure}. */

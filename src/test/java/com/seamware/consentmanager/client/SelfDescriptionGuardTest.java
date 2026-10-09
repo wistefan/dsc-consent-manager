@@ -8,8 +8,9 @@ import com.seamware.consentmanager.support.CatalogStub;
 import io.micronaut.cache.CacheManager;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.env.Environment;
+import io.micronaut.http.client.HttpClient;
+import io.micronaut.inject.qualifiers.Qualifiers;
 import io.micronaut.json.JsonMapper;
-import java.io.IOException;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
@@ -54,6 +55,18 @@ class SelfDescriptionGuardTest {
     /** A literal in a range this deployment's own network uses, named by no entry. */
     private static final String PRIVATE_RANGE_URL =
             "https://10.1.2.3/v1/catalog/dataresources/trip-records";
+
+    /**
+     * A literal in no range this deployment's own network uses, named by no entry.
+     *
+     * <p>A literal and not a host name: with an empty allow-list the guard decides on the resolved
+     * addresses, and a name would make the case depend on the build machine having DNS.
+     */
+    private static final String PUBLIC_RANGE_URL =
+            "https://203.0.113.10/v1/catalog/dataresources/trip-records";
+
+    /** Path the stub answers with a bounce, to a URL nothing is supposed to connect to. */
+    private static final String REDIRECT_PATH = "/catalog/dataresources/bouncing";
 
     /** A well-formed public URL outside a non-empty allow-list. */
     private static final String OUTSIDE_URL =
@@ -124,15 +137,15 @@ class SelfDescriptionGuardTest {
     @MethodSource("refusals")
     @DisplayName("a URL this deployment does not read from is refused before anything is sent")
     void refusesWhatTheGuardDoesNotAdmit(
-            String name, List<String> allowedHosts, boolean plaintext, String url)
-            throws IOException {
+            String name, List<String> allowedHosts, boolean plaintext, String url) {
         int reads = catalog.requestCount();
-        try (SelfDescriptionClient client = client(allowedHosts, plaintext)) {
-            assertThat(client.permits(url)).isFalse();
-            assertThat(client.fetch(url))
-                    .as("a refusal is the same empty result as a failed read, never an exception")
-                    .isEmpty();
-        }
+        SelfDescriptionClient client = client(allowedHosts, plaintext);
+
+        assertThat(client.permits(url)).isFalse();
+        assertThat(client.fetch(url))
+                .as("a refusal is the same empty result as a failed read, never an exception")
+                .isEmpty();
+
         assertThat(catalog.requestCount())
                 .as("refusing after connecting would be no guard at all")
                 .isEqualTo(reads);
@@ -140,33 +153,87 @@ class SelfDescriptionGuardTest {
 
     @Test
     @DisplayName("a public https host an entry names is admitted without an address lookup")
-    void admitsAnAllowedPublicHost() throws IOException {
-        try (SelfDescriptionClient client = client(List.of(PUBLIC_HOST), false)) {
-            assertThat(client.permits(PUBLIC_URL)).isTrue();
-        }
+    void admitsAnAllowedPublicHost() {
+        assertThat(client(List.of(PUBLIC_HOST), false).permits(PUBLIC_URL)).isTrue();
     }
 
     @Test
     @DisplayName("an entry waives the private-address refusal for the host it names")
-    void admitsALoopbackHostAnEntryNames() throws IOException {
-        try (SelfDescriptionClient client = client(List.of(loopbackHost), true)) {
-            Optional<SelfDescription> document = client.fetch(documentUrl);
+    void admitsALoopbackHostAnEntryNames() {
+        Optional<SelfDescription> document = client(List.of(loopbackHost), true).fetch(documentUrl);
+
+        assertThat(document)
+                .as("naming a host is an operator's decision and outranks the heuristic")
+                .hasValueSatisfying(read -> assertThat(read.name()).isEqualTo(DOCUMENT_NAME));
+    }
+
+    @Test
+    @DisplayName("a redirect off an admitted host is not followed")
+    void refusesToFollowARedirect() {
+        try (CatalogStub target = new CatalogStub()) {
+            String reached = target.serveResource(DOCUMENT_PATH, DOCUMENT_NAME, "Behind a bounce.");
+            String bouncing = catalog.serveRedirect(REDIRECT_PATH, reached);
+
+            Optional<SelfDescription> document =
+                    client(List.of(loopbackHost), true).fetch(bouncing);
 
             assertThat(document)
-                    .as("naming a host is an operator's decision and outranks the heuristic")
-                    .hasValueSatisfying(read -> assertThat(read.name()).isEqualTo(DOCUMENT_NAME));
+                    .as("the guard vetted the URL this service was handed, not where it points")
+                    .isEmpty();
+            assertThat(target.requestCount())
+                    .as("a followed redirect would take the connection somewhere nothing vetted")
+                    .isZero();
         }
     }
 
-    /** A client configured exactly as the case names, over the context's cache and mapper. */
+    @Test
+    @DisplayName("an unset allow-list binds to no entries rather than to one blank one")
+    void bindsAnUnsetAllowListToNothing() {
+        try (ApplicationContext unset =
+                ApplicationContext.builder(Environment.TEST)
+                        .properties(
+                                Map.of(
+                                        "datasources.default.enabled",
+                                        false,
+                                        "flyway.enabled",
+                                        false,
+                                        "micronaut.server.port",
+                                        -1,
+                                        "consent-manager.contract-service.url",
+                                        UNUSED_CONTRACT_SERVICE_URL,
+                                        // What ${SELF_DESCRIPTION_ALLOWED_HOSTS:} resolves to when
+                                        // the variable is unset, which is the default deployment.
+                                        "consent-manager.self-description.allowed-hosts",
+                                        ""))
+                        .start()) {
+            ConsentManagerConfiguration.SelfDescription configuration =
+                    unset.getBean(ConsentManagerConfiguration.SelfDescription.class);
+
+            assertThat(configuration.getAllowedHosts())
+                    .as("one blank entry would be a non-empty list no real host is named in")
+                    .isEmpty();
+            assertThat(client(configuration).permits(PUBLIC_RANGE_URL))
+                    .as("the default configuration has to read public catalogs, not refuse them")
+                    .isTrue();
+        }
+    }
+
+    /** A client configured exactly as the case names, over the context's own HTTP client. */
     private static SelfDescriptionClient client(List<String> allowedHosts, boolean plaintext) {
         ConsentManagerConfiguration.SelfDescription configuration =
                 new ConsentManagerConfiguration.SelfDescription();
         configuration.setAllowedHosts(allowedHosts);
         configuration.setAllowPlaintextHttp(plaintext);
+        return client(configuration);
+    }
+
+    /** A client over that configuration and the shared, redirect-refusing client bean. */
+    private static SelfDescriptionClient client(
+            ConsentManagerConfiguration.SelfDescription configuration) {
         return new SelfDescriptionClient(
                 configuration,
-                context.getBean(ConsentManagerConfiguration.ContractService.class),
+                context.getBean(
+                        HttpClient.class, Qualifiers.byName(SelfDescriptionHttpClientFactory.NAME)),
                 context.getBean(CacheManager.class),
                 context.getBean(JsonMapper.class));
     }

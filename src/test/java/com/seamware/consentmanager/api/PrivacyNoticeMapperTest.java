@@ -45,6 +45,8 @@ class PrivacyNoticeMapperTest {
 
     private static final String OFFERING_URI = "https://catalog.example.org/offerings/trips";
 
+    private static final String RESOURCE_URI = "https://catalog.example.org/dataresources/trips";
+
     private static final Instant CREATED_AT = Instant.parse("2026-01-02T03:04:05Z");
 
     private static final Instant UPDATED_AT = Instant.parse("2026-02-03T04:05:06Z");
@@ -65,8 +67,9 @@ class PrivacyNoticeMapperTest {
         assertThat(notice.getPurposes()).containsExactly("Produce aggregated mobility insights.");
         assertThat(notice.getCategoriesOfData()).containsExactly("location");
         assertThat(notice.getData())
-                .extracting("uri", "title", "description")
-                .containsExactly(tuple(OFFERING_URI, "Trips", "Raw trips"));
+                .as("partOf travels too, so a resource is not served as if it were an offering")
+                .extracting("uri", "title", "description", "partOf")
+                .containsExactly(tuple(RESOURCE_URI, "Trips", "Raw trips", OFFERING_URI));
         assertThat(notice.getRecipients())
                 .as("generation stores the identifier alone; the rest is resolution's to fill")
                 .extracting("identifier", "name", "contact", "selfDescriptionUri")
@@ -148,7 +151,7 @@ class PrivacyNoticeMapperTest {
         return new PrivacyNoticePayload(
                 List.of("Produce aggregated mobility insights."),
                 List.of("location"),
-                List.of(new DataReference(OFFERING_URI, "Trips", "Raw trips")),
+                List.of(new DataReference(RESOURCE_URI, "Trips", "Raw trips", OFFERING_URI)),
                 List.of(new Recipient(CONSUMER, null, null, null)),
                 new ControllerDetails(
                         "Provider Ltd",

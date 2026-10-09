@@ -32,6 +32,9 @@ class PrivacyNoticeRetrievalIT extends PrivacyNoticeApiTestSupport {
 
     private static final String PATH = "/privacy-notices/";
 
+    /** An id the UUID-typed path variable cannot hold, which is a 400 and not a 404. */
+    private static final String NOT_A_UUID = "not-a-uuid";
+
     /** Title the resolvable fixture's subject yields, which is not the title seeded below. */
     private static final String LIVE_TITLE =
             "https://catalog.example.org/v1/catalog/ecosystems/mobility-data-space";
@@ -98,15 +101,18 @@ class PrivacyNoticeRetrievalIT extends PrivacyNoticeApiTestSupport {
         List<Map<String, Object>> data = entries(body, "data");
         assertThat(data).hasSize(2);
         assertThat(data.get(0))
+                .as("an offering is what the contract named, so it is part of nothing")
                 .containsEntry("uri", offeringUrl)
                 .containsEntry("title", OFFERING_NAME)
-                .containsEntry("description", OFFERING_DESCRIPTION);
+                .containsEntry("description", OFFERING_DESCRIPTION)
+                .doesNotContainKey("partOf");
         assertThat(data.get(1))
                 .as(
                         "the data resource behind the offering is a hop further and an entry of its own")
                 .containsEntry("uri", resourceUrl)
                 .containsEntry("title", RESOURCE_NAME)
-                .containsEntry("description", RESOURCE_DESCRIPTION);
+                .containsEntry("description", RESOURCE_DESCRIPTION)
+                .containsEntry("partOf", offeringUrl);
 
         assertThat(entries(body, "recipients"))
                 .extracting(recipient -> recipient.get("name"))
@@ -147,6 +153,18 @@ class PrivacyNoticeRetrievalIT extends PrivacyNoticeApiTestSupport {
         HttpResponse<String> response = get(PATH + UUID.randomUUID());
 
         assertThat(response.code()).isEqualTo(HttpStatus.NOT_FOUND.getCode());
+        assertThat(response.getContentType())
+                .hasValueSatisfying(type -> assertThat(type.toString()).isEqualTo(PROBLEM_JSON));
+    }
+
+    @Test
+    @DisplayName("an id that is not a UUID is a 400, which the specification now says")
+    void refusesAnIdThatIsNotAUuid() {
+        HttpResponse<String> response = get(PATH + NOT_A_UUID);
+
+        assertThat(response.code())
+                .as("the path variable binds to a UUID, so this never reaches the service")
+                .isEqualTo(HttpStatus.BAD_REQUEST.getCode());
         assertThat(response.getContentType())
                 .hasValueSatisfying(type -> assertThat(type.toString()).isEqualTo(PROBLEM_JSON));
     }

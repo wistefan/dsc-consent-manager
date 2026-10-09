@@ -71,7 +71,9 @@ properties:
     description: >
       The catalog documents the notice covers, by URI. `title` and `description`
       are filled in only by a resolved retrieval, because a contract names an
-      offering without describing it.
+      offering without describing it. A resolved retrieval also appends the data
+      resources behind each offering as entries of their own, which `partOf`
+      tells apart from the offerings themselves.
     items:
       type: object
       properties:
@@ -85,6 +87,13 @@ properties:
         description:
           type: string
           description: Description taken from the resolved document.
+        partOf:
+          type: string
+          description: >
+            URI of the service offering this entry was discovered behind. Absent
+            on a service offering, which the contract names directly, and present
+            on a data resource, which only that offering's document names.
+          example: "https://catalog.example.org/v1/catalog/serviceofferings/65d1"
   recipients:
     type: array
     description: >

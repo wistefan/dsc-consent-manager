@@ -36,7 +36,7 @@ public final class PrivacyNoticeFixtures {
 
     /** A data reference as generation stores one: the URI alone, nothing dereferenced yet. */
     public static DataReference reference(String uri) {
-        return new DataReference(uri, null, null);
+        return DataReference.offering(uri);
     }
 
     /** A recipient as generation stores one: the identifier alone, with no local row read. */

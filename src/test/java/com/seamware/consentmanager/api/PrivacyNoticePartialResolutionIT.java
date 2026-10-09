@@ -240,7 +240,10 @@ class PrivacyNoticePartialResolutionIT extends PrivacyNoticeApiTestSupport {
                             .as("what did resolve is still served, the rest bare")
                             .hasSize(2);
                     assertThat(data.getFirst()).containsEntry("title", OFFERING_NAME);
-                    assertThat(data.getLast()).containsOnlyKeys("uri");
+                    assertThat(data.getLast())
+                            .as("a resource that could not be read still says what it belongs to")
+                            .containsOnlyKeys("uri", "partOf")
+                            .containsEntry("partOf", offeringUrl);
                 });
     }
 

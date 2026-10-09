@@ -6,15 +6,16 @@ import io.micronaut.cache.CacheManager;
 import io.micronaut.cache.SyncCache;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.http.HttpRequest;
-import io.micronaut.http.client.DefaultHttpClientConfiguration;
 import io.micronaut.http.client.HttpClient;
 import io.micronaut.json.JsonMapper;
+import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
@@ -30,6 +31,9 @@ import org.slf4j.LoggerFactory;
  * non-2xx, a body that will not parse - is an empty result, because a retrieval that threw here
  * would answer the 5xx that resolution exists to avoid.
  *
+ * <p>The guard only decides the URL it is given, so the client it reads over must not follow
+ * redirects - {@link SelfDescriptionHttpClientFactory} is where that is set, and why.
+ *
  * <p>Not {@code @Cacheable}, for {@link ContractGateway}'s reason and a stronger one: the
  * annotation cannot decline to store a result, and an empty one here can mean a blipped network as
  * easily as an unknown document, so it would pin a momentarily unreachable catalog to unavailable
@@ -38,7 +42,7 @@ import org.slf4j.LoggerFactory;
  * result, and re-deciding it costs nothing.
  */
 @Singleton
-public class SelfDescriptionClient implements AutoCloseable {
+public class SelfDescriptionClient {
 
     /** Name of the cache declared under {@code micronaut.caches.self-descriptions}. */
     public static final String CACHE_NAME = "self-descriptions";
@@ -57,18 +61,13 @@ public class SelfDescriptionClient implements AutoCloseable {
     private final Set<String> allowedHosts;
     private final boolean allowPlaintextHttp;
 
-    /** Creates the client over its own HTTP connection pool, bounded by the upstream timeouts. */
+    /** Reads over the injected client, which is where the timeouts and the redirect rule live. */
     public SelfDescriptionClient(
             ConsentManagerConfiguration.SelfDescription configuration,
-            ConsentManagerConfiguration.ContractService timeouts,
+            @Named(SelfDescriptionHttpClientFactory.NAME) HttpClient http,
             CacheManager<?> cacheManager,
             JsonMapper json) {
-        DefaultHttpClientConfiguration clientConfiguration = new DefaultHttpClientConfiguration();
-        clientConfiguration.setConnectTimeout(timeouts.getConnectTimeout());
-        clientConfiguration.setReadTimeout(timeouts.getReadTimeout());
-        // No base URL: every URL this client is given is absolute and comes from a fetched
-        // document, so there is no service to be registered against.
-        this.http = HttpClient.create(null, clientConfiguration);
+        this.http = http;
         this.cache = cacheManager.getCache(CACHE_NAME);
         this.json = json;
         this.allowedHosts =
@@ -106,12 +105,6 @@ public class SelfDescriptionClient implements AutoCloseable {
     public boolean permits(@NonNull String url) {
         URI uri = parsed(url);
         return uri != null && permitted(uri);
-    }
-
-    /** Closes the connection pool; Micronaut calls this when the context shuts down. */
-    @Override
-    public void close() throws IOException {
-        http.close();
     }
 
     /** The URL as a URI, or null when it is not one. */
@@ -155,19 +148,20 @@ public class SelfDescriptionClient implements AutoCloseable {
      */
     private static boolean isExternal(String host) {
         try {
-            for (InetAddress address : InetAddress.getAllByName(host)) {
-                if (address.isLoopbackAddress()
-                        || address.isLinkLocalAddress()
-                        || address.isSiteLocalAddress()
-                        || address.isAnyLocalAddress()
-                        || address.isMulticastAddress()) {
-                    return false;
-                }
-            }
-            return true;
+            return Arrays.stream(InetAddress.getAllByName(host))
+                    .noneMatch(SelfDescriptionClient::isInternal);
         } catch (UnknownHostException e) {
             return false;
         }
+    }
+
+    /** Whether that address is one this deployment's own network answers for. */
+    private static boolean isInternal(InetAddress address) {
+        return address.isLoopbackAddress()
+                || address.isLinkLocalAddress()
+                || address.isSiteLocalAddress()
+                || address.isAnyLocalAddress()
+                || address.isMulticastAddress();
     }
 
     /** The document at that URI, or empty when anything at all went wrong reading it. */

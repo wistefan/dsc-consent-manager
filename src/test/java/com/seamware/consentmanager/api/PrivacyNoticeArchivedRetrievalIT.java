@@ -18,9 +18,9 @@ import org.junit.jupiter.api.Test;
  * Exercises retrieval of a notice a regeneration has superseded.
  *
  * <p>What only an end-to-end run can show: that archiving takes a notice out of the active lookup
- * without taking it out of reach. A consent is given against the notice that was published, so the
- * published one has to stay readable - and readable in full, resolution included, rather than as a
- * stored husk.
+ * without taking it out of reach, and that what it serves is still the document that was published.
+ * A consent is given against the published notice, so resolution fills in its catalog documents and
+ * its recipients but leaves the superseding contract unread.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Archived privacy notice retrieval over HTTP")
@@ -65,7 +65,7 @@ class PrivacyNoticeArchivedRetrievalIT extends PrivacyNoticeApiTestSupport {
     }
 
     @Test
-    @DisplayName("a superseded notice is still retrievable, reports archivedAt and resolves")
+    @DisplayName("a superseded notice is retrievable, reports archivedAt and keeps its own text")
     void servesAnArchivedNoticeInFull() {
         String resourceUrl =
                 catalog.serveResource(RESOURCE_PATH, RESOURCE_NAME, RESOURCE_DESCRIPTION);
@@ -95,9 +95,14 @@ class PrivacyNoticeArchivedRetrievalIT extends PrivacyNoticeApiTestSupport {
                 .extracting(entry -> entry.get("description"))
                 .containsExactly(OFFERING_DESCRIPTION, RESOURCE_DESCRIPTION);
         assertThat(archived.get("purposes"))
-                .as("resolution reads the contract as it stands now, archived notice or not")
-                .isEqualTo(List.of(CHANGED_PURPOSE));
-        assertThat(resolution(archived).values()).containsOnly("RESOLVED");
+                .as("the superseding contract's text is not printed under the superseded id")
+                .isEqualTo(List.of(ORIGINAL_PURPOSE));
+        assertThat(resolution(archived))
+                .as("the contract-fed sections report that they were deliberately not read")
+                .containsEntry("contract", "NOT_REQUESTED")
+                .containsEntry("purposes", "NOT_REQUESTED")
+                .containsEntry("dataResources", "RESOLVED")
+                .containsEntry("recipients", "RESOLVED");
     }
 
     /** The resolvable fixture with the caller as provider, the stub's offering and that purpose. */

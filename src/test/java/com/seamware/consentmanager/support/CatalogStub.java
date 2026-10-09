@@ -28,6 +28,10 @@ public final class CatalogStub implements AutoCloseable {
 
     private static final int OK = 200;
 
+    private static final int FOUND = 302;
+
+    private static final String LOCATION = "Location";
+
     private final WireMockServer server;
 
     /** Starts the stub on a free port; nothing is stubbed until a {@code serve} call. */
@@ -87,6 +91,14 @@ public final class CatalogStub implements AutoCloseable {
                                         .withStatus(OK)
                                         .withHeader(CONTENT_TYPE, JSON)
                                         .withBody(body)));
+        return url() + path;
+    }
+
+    /** Answers that path with a redirect, which is how the guard's bypass case is stubbed. */
+    public String serveRedirect(String path, String location) {
+        server.stubFor(
+                get(urlEqualTo(path))
+                        .willReturn(aResponse().withStatus(FOUND).withHeader(LOCATION, location)));
         return url() + path;
     }
 

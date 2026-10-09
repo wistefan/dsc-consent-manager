@@ -143,7 +143,8 @@ public class PrivacyNoticeMapper {
         return new PrivacyNoticeDataInner()
                 .uri(reference.uri())
                 .title(reference.title())
-                .description(reference.description());
+                .description(reference.description())
+                .partOf(reference.partOf());
     }
 
     @Nullable

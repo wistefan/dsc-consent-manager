@@ -1291,12 +1291,19 @@ paths:
         `NOT_REQUESTED` for all four sections.
 
 
-        An archived notice stays retrievable by id and carries `archivedAt`; it
-        resolves exactly like an active one, because a consent given against it
-        is still read against the notice that was published. Retrieval is
-        deliberately not scoped to the notice's two parties: a user has to be
-        able to read the notice they are being asked to consent to before any
-        link to it exists.
+        An archived notice stays retrievable by id and carries `archivedAt`,
+        because a consent given against it is still read against the notice that
+        was published. Its catalog documents and recipients resolve as an active
+        notice's do, but the contract is deliberately left unread and `contract`
+        and `purposes` report `NOT_REQUESTED`: the notice was archived precisely
+        because the contract changed, so reading the live one would print the
+        superseding contract's title, purposes and terms under the superseded
+        notice's id. Retrieval is deliberately not scoped to the notice's two
+        parties: a user has to be able to read the notice they are being asked to
+        consent to before any link to it exists.
+
+
+        An `id` that is not a UUID is a `400`, not a `404`.
       tags:
         - Privacy Notices
       security:
@@ -1329,6 +1336,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PrivacyNotice"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":

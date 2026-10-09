@@ -19,6 +19,7 @@ import java.sql.SQLException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 /**
  * Generates the privacy notice a contract yields, and decides whether it supersedes the one already
@@ -70,8 +71,9 @@ public class PrivacyNoticeService {
      *
      * <p>An archived notice is returned like an active one and reports {@code archivedAt}: a
      * consent given against a notice is read against the notice that was published, not against
-     * whatever superseded it. Not scoped to the two parties either - a user has to be able to read
-     * the notice they are being asked to consent to before any link to it exists.
+     * whatever superseded it - which is also why the resolver leaves its contract unread. Not
+     * scoped to the two parties either - a user has to be able to read the notice they are being
+     * asked to consent to before any link to it exists.
      */
     @NonNull
     public ResolvedNotice get(@NonNull UUID id, boolean resolve) {
@@ -339,14 +341,14 @@ public class PrivacyNoticeService {
      * not one however closely the row left behind resembles this call's.
      */
     private static boolean lostTheActiveSlot(DataAccessException e) {
-        Throwable cause = e;
-        while (cause != null) {
-            if (cause instanceof SQLException sql && UNIQUE_VIOLATION.equals(sql.getSQLState())) {
-                return true;
-            }
-            cause = cause.getCause() == cause ? null : cause.getCause();
-        }
-        return false;
+        return Stream.iterate(
+                        (Throwable) e,
+                        Objects::nonNull,
+                        cause -> cause.getCause() == cause ? null : cause.getCause())
+                .anyMatch(
+                        cause ->
+                                cause instanceof SQLException sql
+                                        && UNIQUE_VIOLATION.equals(sql.getSQLState()));
     }
 
     /** Whether the stored notice already says exactly what this contract yields now. */
