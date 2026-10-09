@@ -105,6 +105,14 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
             PATH_PRIVACY_NOTICES + "/by-contract";
 
     /**
+     * A notice id no case stores, so every admitted caller stops at the same {@code 404}.
+     *
+     * <p>Retrieval is deliberately unscoped, so an absent notice is the only way to tell an
+     * admitted caller from a refused one by status alone.
+     */
+    private static final String ABSENT_NOTICE = "0199a4f2-0000-7000-8000-000000000000";
+
+    /**
      * A contract identifier no case serves. Generation resolves its two named participants before
      * it fetches anything, so paired with {@link #UNREGISTERED_PARTY} it never leaves this process.
      */
@@ -305,7 +313,10 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 () ->
                         HttpRequest.POST(
                                 PATH_PRIVACY_NOTICES_BY_CONTRACT,
-                                Map.of("contractUri", UNSERVED_CONTRACT)));
+                                Map.of("contractUri", UNSERVED_CONTRACT))),
+        RETRIEVE_PRIVACY_NOTICE(
+                "get " + PATH_PRIVACY_NOTICES + "/{id}",
+                () -> HttpRequest.GET(PATH_PRIVACY_NOTICES + "/" + ABSENT_NOTICE));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -403,6 +414,7 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         HttpStatus denied = HttpStatus.FORBIDDEN;
         HttpStatus challenged = HttpStatus.UNAUTHORIZED;
         HttpStatus upstreamDown = HttpStatus.BAD_GATEWAY;
+        HttpStatus unknownNotice = HttpStatus.NOT_FOUND;
         return Stream.of(
                         row(Endpoint.API_STATUS, ok, ok, ok, ok, ok),
                         row(Endpoint.REGISTER_USER, created, denied, denied, denied, challenged),
@@ -480,6 +492,16 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 denied,
                                 upstreamDown,
                                 denied,
+                                denied,
+                                challenged),
+                        // Retrieval is the one route open to all three roles, and it is not scoped
+                        // to the notice's parties, so an id nothing stored is what tells an
+                        // admitted caller from a refused one.
+                        row(
+                                Endpoint.RETRIEVE_PRIVACY_NOTICE,
+                                unknownNotice,
+                                unknownNotice,
+                                unknownNotice,
                                 denied,
                                 challenged))
                 .flatMap(row -> row);

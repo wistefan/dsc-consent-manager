@@ -75,6 +75,16 @@ logger:
 # every test context must fill those blanks in place. A differently-named entry here
 # would leave `primary` blank and fail validation for every full-context test.
 consent-manager:
+  # WireMock is the only stub mechanism this repo has and it binds on loopback, so
+  # every resolution test would otherwise be asserting the SSRF guard rather than the
+  # feature. Naming the loopback hosts here waives the private-address refusal for them
+  # exactly as it would in a deployment; production leaves both at their defaults.
+  self-description:
+    allowed-hosts:
+      - localhost
+      - 127.0.0.1
+    allow-plaintext-http: true
+
   # Production leaves this unset; the tests configure a key so that the verifier an
   # erased record keeps is exercised rather than silently skipped.
   erasure:

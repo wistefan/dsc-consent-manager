@@ -92,7 +92,10 @@ class PrivacyNoticeServiceTest {
                     contracts,
                     extractor,
                     writer,
-                    new ContractPartyResolver());
+                    new ContractPartyResolver(),
+                    // Retrieval is covered by the ITs; no case here calls get(), so the
+                    // resolver is held and never consulted.
+                    new PrivacyNoticeResolver(contracts, extractor, null, participants));
 
     private final Participant provider = register(PROVIDER);
 

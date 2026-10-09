@@ -3,6 +3,7 @@ package com.seamware.consentmanager.config;
 import io.micronaut.context.annotation.ConfigurationProperties;
 import io.micronaut.core.annotation.Nullable;
 import java.time.Duration;
+import java.util.List;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -129,6 +130,52 @@ public class ConsentManagerConfiguration {
          * <p>Not a latency knob: a notice is generated from the cached document, so this is how
          * stale the contract behind a freshly published notice may be, and how long a contract
          * change can go unnoticed by a repeated generation. Keep it short.
+         */
+        private Duration cacheTtl = DEFAULT_CACHE_TTL;
+    }
+
+    /**
+     * Reading of the catalog self-descriptions a contract only names, bound under {@code
+     * consent-manager.self-description}.
+     *
+     * <p>Only a resolved retrieval reads these, and what it reads is an absolute URL taken from a
+     * document this service does not own. The two guards here are what keeps that from being an
+     * open proxy into the deployment's own network.
+     *
+     * <p>The timeouts are the Contract Service's: both are reads of an upstream catalog on the same
+     * request path, and a second pair of knobs would only let them drift apart.
+     */
+    @Getter
+    @Setter
+    @ConfigurationProperties("self-description")
+    public static class SelfDescription {
+
+        /** Longest a fetched self-description is served from the cache when none is configured. */
+        public static final Duration DEFAULT_CACHE_TTL = Duration.ofMinutes(10);
+
+        /**
+         * Hosts a self-description may be fetched from, bound to {@code
+         * SELF_DESCRIPTION_ALLOWED_HOSTS}; empty admits any host outside this network.
+         *
+         * <p>An entry also waives the private-address refusal for that host: naming a host here is
+         * an operator's statement about their own network, and it outranks the address heuristic.
+         * An empty list still refuses every loopback, link-local and private-range address.
+         */
+        private List<String> allowedHosts = List.of();
+
+        /**
+         * Whether a self-description may be read over plain {@code http}, bound to {@code
+         * SELF_DESCRIPTION_ALLOW_PLAINTEXT_HTTP}.
+         */
+        private boolean allowPlaintextHttp;
+
+        /**
+         * Longest a fetched self-description is served from the cache, bound to {@code
+         * SELF_DESCRIPTION_CACHE_TTL}.
+         *
+         * <p>Longer than the contract's may be: a catalog document describes a resource rather than
+         * stating the terms a notice is published under, so staleness here costs a title and not a
+         * legal statement.
          */
         private Duration cacheTtl = DEFAULT_CACHE_TTL;
     }

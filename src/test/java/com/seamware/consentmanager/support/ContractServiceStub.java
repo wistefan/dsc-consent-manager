@@ -8,6 +8,7 @@ import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options
 import static com.github.tomakehurst.wiremock.stubbing.Scenario.STARTED;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.http.Fault;
 import java.time.Duration;
 
 /**
@@ -39,6 +40,9 @@ public final class ContractServiceStub implements AutoCloseable {
 
     /** Scenario state a recovering stub serves the contract from. */
     private static final String RECOVERED_STATE = "recovered";
+
+    /** A JSON-typed body that is not JSON, so reading it fails where decoding happens. */
+    private static final String MALFORMED_BODY = "this is not a contract";
 
     private final WireMockServer server;
 
@@ -109,6 +113,29 @@ public final class ContractServiceStub implements AutoCloseable {
                                         .withStatus(OK)
                                         .withHeader(CONTENT_TYPE, JSON)
                                         .withBody(body)));
+    }
+
+    /**
+     * Serves a body on the ecosystem endpoint that is not a contract document at all.
+     *
+     * <p>Decoding it raises a {@code CodecException}, which the gateway reports as an unreachable
+     * upstream like any other - the distinction a caller can act on is that the contract could not
+     * be read, not why.
+     */
+    public void serveMalformedContract(String contractId) {
+        serveBody(ECOSYSTEM_PATH + contractId, MALFORMED_BODY);
+    }
+
+    /** Drops the connection on the ecosystem endpoint, the transport failure a retry cannot fix. */
+    public void serveFault(String contractId) {
+        server.stubFor(
+                get(urlEqualTo(ECOSYSTEM_PATH + contractId))
+                        .willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
+    }
+
+    /** Requests this stub has received at all, which is how "nothing was read" is asserted. */
+    public int requestCount() {
+        return server.getAllServeEvents().size();
     }
 
     /** Requests the ecosystem endpoint has received for that id. */
