@@ -11,6 +11,8 @@ import io.micronaut.json.JsonMapper;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.io.IOException;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -54,6 +56,21 @@ public class SelfDescriptionClient {
 
     /** The scheme {@code allow-plaintext-http} admits, for a catalog stub or a private network. */
     private static final String HTTP_SCHEME = "http";
+
+    /** Mask and value of RFC 4193's unique-local IPv6 prefix, {@code fc00::/7}. */
+    private static final int UNIQUE_LOCAL_V6_MASK = 0xfe;
+
+    private static final int UNIQUE_LOCAL_V6_PREFIX = 0xfc;
+
+    /** First octet, and the second's bounds, of RFC 6598's {@code 100.64.0.0/10}. */
+    private static final int SHARED_V4_FIRST_OCTET = 100;
+
+    private static final int SHARED_V4_SECOND_OCTET_MIN = 64;
+
+    private static final int SHARED_V4_SECOND_OCTET_MAX = 127;
+
+    /** Reads one byte of an address as the unsigned octet it stands for. */
+    private static final int OCTET_MASK = 0xff;
 
     private final HttpClient http;
     private final SyncCache<?> cache;
@@ -155,13 +172,40 @@ public class SelfDescriptionClient {
         }
     }
 
-    /** Whether that address is one this deployment's own network answers for. */
+    /**
+     * Whether that address is one this deployment's own network answers for.
+     *
+     * <p>The two ranges spelled out below are the ones {@link InetAddress}'s own predicates miss:
+     * {@code isSiteLocalAddress} tests only the deprecated {@code fec0::/10} on IPv6, never the
+     * {@code fc00::/7} every IPv6-addressed cluster actually uses, and no predicate covers the
+     * shared address space managed Kubernetes hands out.
+     */
     private static boolean isInternal(InetAddress address) {
         return address.isLoopbackAddress()
                 || address.isLinkLocalAddress()
                 || address.isSiteLocalAddress()
                 || address.isAnyLocalAddress()
-                || address.isMulticastAddress();
+                || address.isMulticastAddress()
+                || isUniqueLocalV6(address)
+                || isSharedV4(address);
+    }
+
+    /** Whether that is an RFC 4193 unique-local IPv6 address, {@code fc00::/7}. */
+    private static boolean isUniqueLocalV6(InetAddress address) {
+        return address instanceof Inet6Address
+                && (address.getAddress()[0] & UNIQUE_LOCAL_V6_MASK) == UNIQUE_LOCAL_V6_PREFIX;
+    }
+
+    /** Whether that is in RFC 6598 shared address space, {@code 100.64.0.0/10}. */
+    private static boolean isSharedV4(InetAddress address) {
+        if (!(address instanceof Inet4Address)) {
+            return false;
+        }
+        byte[] octets = address.getAddress();
+        int second = octets[1] & OCTET_MASK;
+        return (octets[0] & OCTET_MASK) == SHARED_V4_FIRST_OCTET
+                && second >= SHARED_V4_SECOND_OCTET_MIN
+                && second <= SHARED_V4_SECOND_OCTET_MAX;
     }
 
     /** The document at that URI, or empty when anything at all went wrong reading it. */

@@ -15,6 +15,7 @@ import com.seamware.consentmanager.service.NoticeResolution.State;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
+import java.time.Duration;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -53,6 +54,7 @@ public class PrivacyNoticeResolver {
     private final SelfDescriptionClient selfDescriptions;
     private final ParticipantRepository participants;
     private final int maxDocuments;
+    private final Duration maxDuration;
 
     /** Takes the catalog budget from configuration; everything else is a collaborator. */
     public PrivacyNoticeResolver(
@@ -66,6 +68,7 @@ public class PrivacyNoticeResolver {
         this.selfDescriptions = selfDescriptions;
         this.participants = participants;
         this.maxDocuments = configuration.getMaxDocuments();
+        this.maxDuration = configuration.getMaxDuration();
     }
 
     /**
@@ -159,7 +162,8 @@ public class PrivacyNoticeResolver {
      * is where a resource's title and description belong and the contract carries nothing about
      * them. A failure at either hop leaves the affected entry bare and marks the whole section
      * unavailable: a list that is only partly filled in while claiming to be resolved would
-     * misreport itself. Running out of budget is reported the same way, and for the same reason.
+     * misreport itself. Running out of either budget - the documents one walk may read, or the time
+     * it may spend reading them - is reported the same way, and for the same reason.
      */
     private Section<List<DataReference>> data(@Nullable List<DataReference> stored) {
         if (stored == null) {
@@ -236,18 +240,23 @@ public class PrivacyNoticeResolver {
     }
 
     /**
-     * One retrieval's walk over the catalog, carrying the budget and what has already been read.
+     * One retrieval's walk over the catalog, carrying the budgets and what has already been read.
      *
-     * <p>Both lists it walks come out of documents this service does not author, so without the
-     * budget a single authenticated GET fans out as far as whoever publishes them decides. The
-     * de-duplication is the same concern from the other side: two offerings naming one resource
-     * read it once and publish it once.
+     * <p>Both lists it walks come out of documents this service does not author, so without a
+     * budget a single authenticated GET fans out as far as whoever publishes them decides. It takes
+     * two to bound that: a document ceiling, and a deadline, because a ceiling alone still admits
+     * the ceiling many reads each sitting out the read timeout. The de-duplication is the same
+     * concern from the other side: two offerings naming one resource read it once and publish it
+     * once.
      */
     private final class CatalogWalk {
 
         private final Set<String> read = new LinkedHashSet<>();
 
-        /** False once any document could not be read, or the budget ran out before it was tried. */
+        /** When this walk stops reading, however many documents it has got through by then. */
+        private final long deadline = System.nanoTime() + maxDuration.toNanos();
+
+        /** False once any document could not be read, or a budget ran out before it was tried. */
         private boolean complete = true;
 
         /** The entry as the catalog describes it, followed by the resources behind it. */
@@ -275,11 +284,16 @@ public class PrivacyNoticeResolver {
                     .orElseGet(() -> new DataReference(url, null, null, offeringUri));
         }
 
-        /** Reads one document against the budget; an exhausted budget reads nothing further. */
+        /** Reads one document against the budgets; an exhausted budget reads nothing further. */
         private Optional<SelfDescription> fetch(String url) {
             if (read.size() >= maxDocuments) {
                 LOG.debug(
                         "Stopping the catalog walk at {} documents, before {}", maxDocuments, url);
+                complete = false;
+                return Optional.empty();
+            }
+            if (System.nanoTime() - deadline >= 0) {
+                LOG.debug("Stopping the catalog walk after {}, before {}", maxDuration, url);
                 complete = false;
                 return Optional.empty();
             }

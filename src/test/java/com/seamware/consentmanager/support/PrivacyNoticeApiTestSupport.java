@@ -278,10 +278,35 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
         return participants.findByIdentifier(identifier).orElseThrow();
     }
 
+    /**
+     * Registers a party under a legal name and a contact neither of which is its identifier.
+     *
+     * <p>Distinct on purpose: a row whose legal name equals its identifier makes every assertion
+     * that a recipient was read from this service's own registration equally true of a resolver
+     * that echoed the stored identifier back, so the assertion could not fail for the reason it
+     * names.
+     */
     protected void register(String identifier) {
         if (participants.findByIdentifier(identifier).isEmpty()) {
-            participants.save(new Participant(identifier, identifier, null, null, Map.of(), null));
+            participants.save(
+                    new Participant(
+                            identifier,
+                            legalNameOf(identifier),
+                            null,
+                            emailOf(identifier),
+                            Map.of(),
+                            null));
         }
+    }
+
+    /** Legal name the registration of that party carries. */
+    protected static String legalNameOf(String identifier) {
+        return "Legal name of " + identifier;
+    }
+
+    /** Contact the registration of that party carries; no seeded recipient holds one. */
+    protected static String emailOf(String identifier) {
+        return identifier.replaceAll("[^a-zA-Z0-9]", "-") + "@example.org";
     }
 
     protected void deregister(String identifier) {

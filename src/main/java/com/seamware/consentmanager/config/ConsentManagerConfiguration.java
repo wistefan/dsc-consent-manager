@@ -156,6 +156,9 @@ public class ConsentManagerConfiguration {
         /** Documents one resolved retrieval reads before it stops walking the catalog. */
         public static final int DEFAULT_MAX_DOCUMENTS = 50;
 
+        /** Longest one resolved retrieval spends walking the catalog when none is configured. */
+        public static final Duration DEFAULT_MAX_DURATION = Duration.ofSeconds(15);
+
         /**
          * Hosts a self-description may be fetched from, bound to {@code
          * SELF_DESCRIPTION_ALLOWED_HOSTS}; empty admits any host outside this network.
@@ -175,6 +178,17 @@ public class ConsentManagerConfiguration {
          * fans out as far as whoever publishes them decides.
          */
         private int maxDocuments = DEFAULT_MAX_DOCUMENTS;
+
+        /**
+         * Longest one resolved retrieval spends walking the catalog before it gives up and reports
+         * the data section unavailable, bound to {@code SELF_DESCRIPTION_MAX_DURATION}.
+         *
+         * <p>The companion of {@code max-documents}, and not a duplicate of it: a document ceiling
+         * bounds how many reads a retrieval makes but not how long each one takes, so without this
+         * the walk's worst case is the ceiling times the read timeout and a handful of concurrent
+         * retrievals of one notice would hold the request pool for minutes.
+         */
+        private Duration maxDuration = DEFAULT_MAX_DURATION;
 
         /**
          * Whether a self-description may be read over plain {@code http}, bound to {@code

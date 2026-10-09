@@ -401,6 +401,14 @@ consent-manager:
     # publishes them decides.
     max-documents: ${SELF_DESCRIPTION_MAX_DOCUMENTS:50}
 
+    # Longest one resolved retrieval spends walking the catalog before it stops and
+    # reports the data section UNAVAILABLE. The companion of max-documents rather than a
+    # duplicate: a document ceiling bounds how many reads a retrieval makes but not how
+    # long each one sits out the read timeout, so without a deadline the walk's worst
+    # case is the ceiling times that timeout and a few concurrent retrievals of one
+    # notice hold the request pool for minutes.
+    max-duration: ${SELF_DESCRIPTION_MAX_DURATION:15s}
+
     # Whether a self-description may be read over plain http. False on purpose: a
     # catalog document is fetched by URL from an upstream contract, and plaintext would
     # let whoever can see that traffic rewrite what a published notice says.

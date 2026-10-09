@@ -62,6 +62,16 @@ public final class CatalogStub implements AutoCloseable {
     /** A service-offering document naming the data resources behind it. */
     public String serveOffering(
             String path, String name, String description, List<String> dataResourceUrls) {
+        return serveOffering(path, name, description, dataResourceUrls, Duration.ZERO);
+    }
+
+    /** The same document answered late, which is how a walk's deadline is stubbed. */
+    public String serveOffering(
+            String path,
+            String name,
+            String description,
+            List<String> dataResourceUrls,
+            Duration delay) {
         String resources =
                 dataResourceUrls.stream()
                         .map(resource -> '"' + resource + '"')
@@ -70,7 +80,8 @@ public final class CatalogStub implements AutoCloseable {
                 path,
                 """
                 {"_id": "%s", "name": "%s", "description": "%s", "dataResources": %s}"""
-                        .formatted(path, name, description, resources));
+                        .formatted(path, name, description, resources),
+                delay);
     }
 
     /** A data-resource document, the second hop, which names no resources of its own. */
@@ -84,12 +95,18 @@ public final class CatalogStub implements AutoCloseable {
 
     /** Serves a body verbatim, which is how a document that will not parse is stubbed. */
     public String serveDocument(String path, String body) {
+        return serveDocument(path, body, Duration.ZERO);
+    }
+
+    /** The same body held back for that long; {@link Duration#ZERO} answers at once. */
+    public String serveDocument(String path, String body, Duration delay) {
         server.stubFor(
                 get(urlEqualTo(path))
                         .willReturn(
                                 aResponse()
                                         .withStatus(OK)
                                         .withHeader(CONTENT_TYPE, JSON)
+                                        .withFixedDelay((int) delay.toMillis())
                                         .withBody(body)));
         return url() + path;
     }

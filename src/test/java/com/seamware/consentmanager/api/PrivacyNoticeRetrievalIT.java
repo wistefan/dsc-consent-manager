@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.support.CatalogStub;
@@ -115,9 +116,12 @@ class PrivacyNoticeRetrievalIT extends PrivacyNoticeApiTestSupport {
                 .containsEntry("partOf", offeringUrl);
 
         assertThat(entries(body, "recipients"))
-                .extracting(recipient -> recipient.get("name"))
-                .as("each recipient is named from this service's own registration")
-                .containsExactly(CALLER, CONSUMER);
+                .extracting(
+                        recipient -> recipient.get("name"), recipient -> recipient.get("contact"))
+                .as("each recipient is named and contacted from this service's own registration")
+                .containsExactly(
+                        tuple(legalNameOf(CALLER), emailOf(CALLER)),
+                        tuple(legalNameOf(CONSUMER), emailOf(CONSUMER)));
 
         assertThat(resolution(body).values()).containsOnly("RESOLVED");
     }

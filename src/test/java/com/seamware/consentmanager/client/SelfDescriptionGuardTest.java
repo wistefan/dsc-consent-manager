@@ -57,6 +57,20 @@ class SelfDescriptionGuardTest {
             "https://10.1.2.3/v1/catalog/dataresources/trip-records";
 
     /**
+     * A unique-local IPv6 literal, {@code fc00::/7}, which is what a private IPv6 network uses.
+     *
+     * <p>{@code InetAddress.isSiteLocalAddress} is false for it - it tests the deprecated {@code
+     * fec0::/10} - so this case fails against every heuristic that trusts the JDK's predicates
+     * alone, which is the only way an IPv6-addressed deployment stays guarded.
+     */
+    private static final String UNIQUE_LOCAL_V6_URL =
+            "https://[fd00::1234]/v1/catalog/dataresources/trip-records";
+
+    /** A shared-address-space literal, {@code 100.64.0.0/10}, as a managed cluster hands out. */
+    private static final String SHARED_RANGE_URL =
+            "https://100.64.7.9/v1/catalog/dataresources/trip-records";
+
+    /**
      * A literal in no range this deployment's own network uses, named by no entry.
      *
      * <p>A literal and not a host name: with an empty allow-list the guard decides on the resolved
@@ -126,6 +140,16 @@ class SelfDescriptionGuardTest {
                         List.of(),
                         false,
                         PRIVATE_RANGE_URL),
+                Arguments.of(
+                        "a unique-local IPv6 literal no entry names",
+                        List.of(),
+                        false,
+                        UNIQUE_LOCAL_V6_URL),
+                Arguments.of(
+                        "a shared-address-space literal no entry names",
+                        List.of(),
+                        false,
+                        SHARED_RANGE_URL),
                 Arguments.of(
                         "a host outside a non-empty allow-list",
                         List.of(PUBLIC_HOST),
