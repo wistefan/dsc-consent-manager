@@ -1250,6 +1250,107 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /privacy-notices/{id}:
+    get:
+      operationId: getPrivacyNotice
+      summary: Retrieve a privacy notice
+      description: >
+        Returns a stored privacy notice, optionally with the documents it only
+        names filled in.
+
+
+        The notice is served as it was stored. `resolve=true`, the default,
+        additionally dereferences what a contract names without describing — the
+        contract itself for its current title and terms, the catalog
+        self-descriptions behind `data`, the purposes the contract states, and
+        this service's own registration for each recipient — and `resolution`
+        reports per section how far that got.
+
+
+        **Resolution never fails the request.** An unreachable Contract Service,
+        an unreadable catalog document or a recipient this deployment has no
+        registration for degrades the affected section to `UNAVAILABLE` and the
+        notice is served anyway, with whatever did resolve in place and the
+        stored values everywhere else. That is why no `502` is declared here,
+        unlike on the two generating operations: a notice that cannot be
+        displayed at all is worse than one displayed with a section marked
+        unavailable.
+
+
+        Two sections move together by construction. `purposes` is resolved from
+        the contract, so a contract that could not be read degrades `purposes`
+        with it; no other input degrades `purposes` alone. `dataResources` is two
+        hops — each entry of `data` names a service offering, whose own document
+        names the data resources behind it — and a failure at either hop marks
+        the section `UNAVAILABLE` even though the entries that did resolve are
+        still returned, because a partially filled list claiming `RESOLVED` would
+        misreport itself.
+
+
+        `resolve=false` makes no external request at all and reports
+        `NOT_REQUESTED` for all four sections.
+
+
+        An archived notice stays retrievable by id and carries `archivedAt`,
+        because a consent given against it is still read against the notice that
+        was published. Its catalog documents and recipients resolve as an active
+        notice's do, but the contract is deliberately left unread and `contract`
+        and `purposes` report `NOT_REQUESTED`: the notice was archived precisely
+        because the contract changed, so reading the live one would print the
+        superseding contract's title, purposes and terms under the superseded
+        notice's id. Retrieval is deliberately not scoped to the notice's two
+        parties: a user has to be able to read the notice they are being asked to
+        consent to before any link to it exists.
+
+
+        An `id` that is not a UUID is a `400`, not a `404`.
+      tags:
+        - Privacy Notices
+      security:
+        - bearerAuth: [USER, PARTICIPANT, CATALOG]
+      x-roles: [USER, PARTICIPANT, CATALOG]
+      x-principal: ConsentManagerPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the notice to return.
+          schema:
+            type: string
+            format: uuid
+        - name: resolve
+          in: query
+          required: false
+          description: >
+            Whether to dereference the documents the notice only names. False
+            serves the stored notice and makes no external request.
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "200":
+          description: >
+            The notice, with `resolution` reporting how far each section was
+            filled in.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivacyNotice"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:

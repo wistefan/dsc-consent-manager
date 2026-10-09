@@ -81,6 +81,12 @@ public final class ContractFixtures {
     /** An ecosystem contract recording no roles, with one offering member and two others. */
     public static final String ECOSYSTEM_THREE_MEMBERS = "ecosystem-contract-three-members.json";
 
+    /**
+     * An ecosystem contract stating both purposes and terms, so every contract-derived heading of a
+     * notice has a live source and a resolved retrieval can be seen to have consulted it.
+     */
+    public static final String ECOSYSTEM_RESOLVABLE = "ecosystem-contract-resolvable.json";
+
     /** Classpath directory the fixture documents live in. */
     private static final String DIRECTORY = "contracts/";
 

@@ -169,9 +169,7 @@ public class ContractContentExtractor {
                                                         provider.getIdentifier()))
                                 .map(ServiceOffering::serviceOffering);
         List<String> uris = distinct(offerings.map(this::text).filter(Objects::nonNull).toList());
-        return uris == null
-                ? null
-                : uris.stream().map(uri -> new DataReference(uri, null, null)).toList();
+        return uris == null ? null : uris.stream().map(DataReference::offering).toList();
     }
 
     /**

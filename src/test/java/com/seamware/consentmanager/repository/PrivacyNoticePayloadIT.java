@@ -91,13 +91,12 @@ class PrivacyNoticePayloadIT extends PostgresTestResource {
                 List.of("Location data", "Vehicle data"),
                 List.of(
                         new DataReference(
-                                "https://catalog.example.org/v1/catalog/serviceofferings/trips",
+                                "https://catalog.example.org/v1/catalog/dataresources/trips",
                                 "Trip history",
-                                "Trips taken, per vehicle and day."),
-                        new DataReference(
-                                "https://catalog.example.org/v1/catalog/serviceofferings/routes",
-                                null,
-                                null)),
+                                "Trips taken, per vehicle and day.",
+                                "https://catalog.example.org/v1/catalog/serviceofferings/trips"),
+                        DataReference.offering(
+                                "https://catalog.example.org/v1/catalog/serviceofferings/routes")),
                 List.of(
                         new Recipient(PROVIDER_PARTICIPANT, null, null, null),
                         new Recipient(

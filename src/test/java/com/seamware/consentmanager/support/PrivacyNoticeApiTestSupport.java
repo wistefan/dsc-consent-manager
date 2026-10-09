@@ -3,6 +3,7 @@ package com.seamware.consentmanager.support;
 import com.seamware.consentmanager.client.ContractGateway;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
@@ -134,6 +135,42 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
         }
     }
 
+    /** Reads a path with the realm's participant token, returning a refusal as a response. */
+    protected HttpResponse<String> get(String path) {
+        HttpRequest<?> request =
+                HttpRequest.GET(path)
+                        .bearerAuth(KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
+        try {
+            return client.toBlocking().exchange(request, String.class);
+        } catch (HttpClientResponseException e) {
+            @SuppressWarnings("unchecked")
+            HttpResponse<String> refusal = (HttpResponse<String>) e.getResponse();
+            return refusal;
+        }
+    }
+
+    /**
+     * Writes a notice straight to the table, bypassing generation.
+     *
+     * <p>What a resolution case needs: generating through the API would fetch the contract and
+     * leave it cached, so the retrieval under test would be served from the cache and never reach
+     * the stub it is about.
+     */
+    protected PrivacyNotice seed(
+            String contractUri,
+            String title,
+            String provider,
+            String consumer,
+            PrivacyNoticePayload payload) {
+        return notices.save(
+                new PrivacyNotice(
+                        contractUri,
+                        title,
+                        participant(provider).getId(),
+                        consumer == null ? null : participant(consumer).getId(),
+                        payload));
+    }
+
     @SuppressWarnings("unchecked")
     protected Map<String, Object> body(HttpResponse<String> response) {
         try {
@@ -156,6 +193,14 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
     /** Serves the ecosystem fixture, the caller standing in as its provider. */
     protected String serveEcosystem(String contractId) {
         return serveBody(contractId, ecosystem());
+    }
+
+    /** Serves the fixture stating both purposes and terms, the caller standing in as provider. */
+    protected String serveResolvable(String contractId) {
+        return serveBody(
+                contractId,
+                ContractFixtures.body(ContractFixtures.ECOSYSTEM_RESOLVABLE)
+                        .replace(FIXTURE_PROVIDER, CALLER));
     }
 
     /** Serves a document on the ecosystem endpoint, returning the URI it is held under. */
@@ -233,10 +278,35 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
         return participants.findByIdentifier(identifier).orElseThrow();
     }
 
+    /**
+     * Registers a party under a legal name and a contact neither of which is its identifier.
+     *
+     * <p>Distinct on purpose: a row whose legal name equals its identifier makes every assertion
+     * that a recipient was read from this service's own registration equally true of a resolver
+     * that echoed the stored identifier back, so the assertion could not fail for the reason it
+     * names.
+     */
     protected void register(String identifier) {
         if (participants.findByIdentifier(identifier).isEmpty()) {
-            participants.save(new Participant(identifier, identifier, null, null, Map.of(), null));
+            participants.save(
+                    new Participant(
+                            identifier,
+                            legalNameOf(identifier),
+                            null,
+                            emailOf(identifier),
+                            Map.of(),
+                            null));
         }
+    }
+
+    /** Legal name the registration of that party carries. */
+    protected static String legalNameOf(String identifier) {
+        return "Legal name of " + identifier;
+    }
+
+    /** Contact the registration of that party carries; no seeded recipient holds one. */
+    protected static String emailOf(String identifier) {
+        return identifier.replaceAll("[^a-zA-Z0-9]", "-") + "@example.org";
     }
 
     protected void deregister(String identifier) {

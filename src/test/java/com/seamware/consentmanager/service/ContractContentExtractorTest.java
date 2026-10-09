@@ -259,7 +259,7 @@ class ContractContentExtractorTest {
 
     /** A data reference as generation stores it: the URI, with resolution's fields still empty. */
     private static DataReference reference(String uri) {
-        return new DataReference(uri, null, null);
+        return DataReference.offering(uri);
     }
 
     private static Participant provider() {

@@ -231,6 +231,19 @@ micronaut:
       expire-after-write: ${consent-manager.contract-service.cache-ttl}
       maximum-size: ${CONTRACT_SERVICE_CACHE_MAX_SIZE:1000}
 
+    # Catalog self-descriptions read while resolving a notice, keyed on the absolute URL
+    # they were read from. Written by `SelfDescriptionClient` itself for the gateway's
+    # reason and a stronger one: a failed read here can mean a blipped network as easily
+    # as an unknown document, so storing it would pin a momentarily unreachable catalog
+    # to UNAVAILABLE for a whole lifetime. Only a parsed document is stored.
+    #
+    # Longer-lived than `contracts` may be: a catalog document carries a title and a
+    # description rather than the terms a notice is published under, so staleness here
+    # costs a label and not a legal statement.
+    self-descriptions:
+      expire-after-write: ${consent-manager.self-description.cache-ttl}
+      maximum-size: ${SELF_DESCRIPTION_CACHE_MAX_SIZE:1000}
+
   # Per-service HTTP client settings. `micronaut.http.services.<id>` is the only place
   # Micronaut reads a declarative client's timeouts from, so the values are forwarded
   # here from `consent-manager.contract-service`, which stays the one place a deployment
@@ -360,6 +373,50 @@ consent-manager:
     # How long a fetched contract is served from `micronaut.caches.contracts`. Short on
     # purpose: see the comment on that cache.
     cache-ttl: ${CONTRACT_SERVICE_CACHE_TTL:60s}
+
+  # Reading of the catalog self-descriptions a contract only names. Only a resolved
+  # retrieval reads these, and the URLs come out of a document this service does not
+  # own, so the two guards below are what keeps that from being an open proxy into the
+  # deployment's own network. The timeouts are the Contract Service's: both are reads of
+  # an upstream catalog on the same request path.
+  self-description:
+    # Hosts a self-description may be fetched from. Empty - the default - admits any
+    # host whose addresses all lie outside this network. An entry does double duty: it
+    # restricts fetching to the listed hosts AND waives the private-address refusal for
+    # them, because naming a host here is an operator's statement about their own
+    # network and outranks the address heuristic.
+    #
+    # It is operator configuration and nothing else writes it. A participant that
+    # self-registers does NOT add its own host here: a list a stranger can extend is not
+    # a guard, and the private-address waiver each entry carries is exactly what a
+    # self-registered host must not be able to grant itself. Leaving the list empty is
+    # the usual deployment - public catalogs are already admitted - and an entry is
+    # added only to pin the catalog down, or to read one inside this network.
+    allowed-hosts: ${SELF_DESCRIPTION_ALLOWED_HOSTS:}
+
+    # Documents one resolved retrieval reads before it stops walking the catalog and
+    # reports the data section UNAVAILABLE. The walk is over lists this service does not
+    # author - the offerings a contract names, and the resources each offering names -
+    # so without a ceiling a single authenticated GET fans out as far as whoever
+    # publishes them decides.
+    max-documents: ${SELF_DESCRIPTION_MAX_DOCUMENTS:50}
+
+    # Longest one resolved retrieval spends walking the catalog before it stops and
+    # reports the data section UNAVAILABLE. The companion of max-documents rather than a
+    # duplicate: a document ceiling bounds how many reads a retrieval makes but not how
+    # long each one sits out the read timeout, so without a deadline the walk's worst
+    # case is the ceiling times that timeout and a few concurrent retrievals of one
+    # notice hold the request pool for minutes.
+    max-duration: ${SELF_DESCRIPTION_MAX_DURATION:15s}
+
+    # Whether a self-description may be read over plain http. False on purpose: a
+    # catalog document is fetched by URL from an upstream contract, and plaintext would
+    # let whoever can see that traffic rewrite what a published notice says.
+    allow-plaintext-http: ${SELF_DESCRIPTION_ALLOW_PLAINTEXT_HTTP:false}
+
+    # How long a fetched self-description is served from `micronaut.caches
+    # .self-descriptions`. May be longer than the contract's: see that cache.
+    cache-ttl: ${SELF_DESCRIPTION_CACHE_TTL:10m}
 
   users:
     # Most users POST /users/search may return. The operation is not paginated, so a

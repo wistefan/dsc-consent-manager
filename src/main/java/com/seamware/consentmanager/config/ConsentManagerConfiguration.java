@@ -3,6 +3,7 @@ package com.seamware.consentmanager.config;
 import io.micronaut.context.annotation.ConfigurationProperties;
 import io.micronaut.core.annotation.Nullable;
 import java.time.Duration;
+import java.util.List;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -131,6 +132,97 @@ public class ConsentManagerConfiguration {
          * change can go unnoticed by a repeated generation. Keep it short.
          */
         private Duration cacheTtl = DEFAULT_CACHE_TTL;
+    }
+
+    /**
+     * Reading of the catalog self-descriptions a contract only names, bound under {@code
+     * consent-manager.self-description}.
+     *
+     * <p>Only a resolved retrieval reads these, and what it reads is an absolute URL taken from a
+     * document this service does not own. The two guards here are what keeps that from being an
+     * open proxy into the deployment's own network.
+     *
+     * <p>The timeouts are the Contract Service's: both are reads of an upstream catalog on the same
+     * request path, and a second pair of knobs would only let them drift apart.
+     */
+    @Getter
+    @Setter
+    @ConfigurationProperties("self-description")
+    public static class SelfDescription {
+
+        /** Longest a fetched self-description is served from the cache when none is configured. */
+        public static final Duration DEFAULT_CACHE_TTL = Duration.ofMinutes(10);
+
+        /** Documents one resolved retrieval reads before it stops walking the catalog. */
+        public static final int DEFAULT_MAX_DOCUMENTS = 50;
+
+        /** Longest one resolved retrieval spends walking the catalog when none is configured. */
+        public static final Duration DEFAULT_MAX_DURATION = Duration.ofSeconds(15);
+
+        /**
+         * Hosts a self-description may be fetched from, bound to {@code
+         * SELF_DESCRIPTION_ALLOWED_HOSTS}; empty admits any host outside this network.
+         *
+         * <p>An entry also waives the private-address refusal for that host: naming a host here is
+         * an operator's statement about their own network, and it outranks the address heuristic.
+         * An empty list still refuses every loopback, link-local and private-range address.
+         */
+        private List<String> allowedHosts = List.of();
+
+        /**
+         * Documents one resolved retrieval reads before it gives up and reports the data section
+         * unavailable, bound to {@code SELF_DESCRIPTION_MAX_DOCUMENTS}.
+         *
+         * <p>The walk is over lists this service does not author - the offerings a contract names
+         * and the resources each offering names - so without a ceiling a single authenticated GET
+         * fans out as far as whoever publishes them decides.
+         */
+        private int maxDocuments = DEFAULT_MAX_DOCUMENTS;
+
+        /**
+         * Longest one resolved retrieval spends walking the catalog before it gives up and reports
+         * the data section unavailable, bound to {@code SELF_DESCRIPTION_MAX_DURATION}.
+         *
+         * <p>The companion of {@code max-documents}, and not a duplicate of it: a document ceiling
+         * bounds how many reads a retrieval makes but not how long each one takes, so without this
+         * the walk's worst case is the ceiling times the read timeout and a handful of concurrent
+         * retrievals of one notice would hold the request pool for minutes.
+         */
+        private Duration maxDuration = DEFAULT_MAX_DURATION;
+
+        /**
+         * Whether a self-description may be read over plain {@code http}, bound to {@code
+         * SELF_DESCRIPTION_ALLOW_PLAINTEXT_HTTP}.
+         */
+        private boolean allowPlaintextHttp;
+
+        /**
+         * Longest a fetched self-description is served from the cache, bound to {@code
+         * SELF_DESCRIPTION_CACHE_TTL}.
+         *
+         * <p>Longer than the contract's may be: a catalog document describes a resource rather than
+         * stating the terms a notice is published under, so staleness here costs a title and not a
+         * legal statement.
+         */
+        private Duration cacheTtl = DEFAULT_CACHE_TTL;
+
+        /**
+         * Sets the allow-list, dropping the blank entries a configured-but-empty value leaves.
+         *
+         * <p>Written out rather than generated because {@code ${SELF_DESCRIPTION_ALLOWED_HOSTS:}}
+         * resolves to the empty string when the variable is unset, which binds as a single blank
+         * entry. That would make the list non-empty, and a non-empty list no real host is named in
+         * refuses every URL - resolution would be dead in the default configuration.
+         */
+        public void setAllowedHosts(@Nullable List<String> allowedHosts) {
+            this.allowedHosts =
+                    allowedHosts == null
+                            ? List.of()
+                            : allowedHosts.stream()
+                                    .filter(host -> host != null && !host.isBlank())
+                                    .map(String::trim)
+                                    .toList();
+        }
     }
 
     /** Settings of the erasure path, bound under {@code consent-manager.erasure}. */

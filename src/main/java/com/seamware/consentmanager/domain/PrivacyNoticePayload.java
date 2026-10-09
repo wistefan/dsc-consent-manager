@@ -59,8 +59,22 @@ public record PrivacyNoticePayload(
      * <p>Generation stores the URI alone, because that is all a contract names; the title and
      * description are filled in by a resolved retrieval, which is the only place the catalog
      * document is actually read.
+     *
+     * <p>{@code partOf} is what keeps the two kinds of entry apart. It is absent on a service
+     * offering, which the contract itself names, and carries the offering's URI on a data resource,
+     * which only that offering's document names - so a caller can say which resources belong to
+     * which offering instead of reading one undifferentiated list.
      */
     @Serdeable
     public record DataReference(
-            @Nullable String uri, @Nullable String title, @Nullable String description) {}
+            @Nullable String uri,
+            @Nullable String title,
+            @Nullable String description,
+            @Nullable String partOf) {
+
+        /** A reference to a document a contract named directly, nothing read from it yet. */
+        public static DataReference offering(@Nullable String uri) {
+            return new DataReference(uri, null, null, null);
+        }
+    }
 }

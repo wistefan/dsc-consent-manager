@@ -18,6 +18,8 @@ import jakarta.inject.Singleton;
 import java.sql.SQLException;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.stream.Stream;
 
 /**
  * Generates the privacy notice a contract yields, and decides whether it supersedes the one already
@@ -45,6 +47,7 @@ public class PrivacyNoticeService {
     private final ContractContentExtractor extractor;
     private final PrivacyNoticeWriter writer;
     private final ContractPartyResolver parties;
+    private final PrivacyNoticeResolver resolver;
 
     public PrivacyNoticeService(
             ParticipantRepository participants,
@@ -52,13 +55,61 @@ public class PrivacyNoticeService {
             ContractGateway contracts,
             ContractContentExtractor extractor,
             PrivacyNoticeWriter writer,
-            ContractPartyResolver parties) {
+            ContractPartyResolver parties,
+            PrivacyNoticeResolver resolver) {
         this.participants = participants;
         this.notices = notices;
         this.contracts = contracts;
         this.extractor = extractor;
         this.writer = writer;
         this.parties = parties;
+        this.resolver = resolver;
+    }
+
+    /**
+     * The notice held under an id, with the documents it only names filled in when asked for.
+     *
+     * <p>An archived notice is returned like an active one and reports {@code archivedAt}: a
+     * consent given against a notice is read against the notice that was published, not against
+     * whatever superseded it - which is also why the resolver leaves its contract unread. Not
+     * scoped to the two parties either - a user has to be able to read the notice they are being
+     * asked to consent to before any link to it exists.
+     */
+    @NonNull
+    public ResolvedNotice get(@NonNull UUID id, boolean resolve) {
+        PrivacyNotice notice =
+                notices.findById(id)
+                        .orElseThrow(
+                                () ->
+                                        new NotFoundException(
+                                                "No privacy notice is held under '" + id + "'."));
+        return resolver.resolve(
+                notice, party(notice.getProviderId()), consumer(notice.getConsumerId()), resolve);
+    }
+
+    /** The consumer a notice names, or null when it names none. */
+    @Nullable
+    private Participant consumer(@Nullable UUID consumerId) {
+        return consumerId == null ? null : party(consumerId);
+    }
+
+    /**
+     * The participant row a stored notice points at.
+     *
+     * <p>Both foreign keys are {@code ON DELETE RESTRICT}, so a notice can only ever point at a row
+     * that exists; a missing one is a broken database rather than a request the caller got wrong,
+     * and saying so beats reporting it as a notice that is not there.
+     */
+    @NonNull
+    private Participant party(UUID participantId) {
+        return participants
+                .findById(participantId)
+                .orElseThrow(
+                        () ->
+                                new IllegalStateException(
+                                        "Privacy notice names participant "
+                                                + participantId
+                                                + ", which no longer has a row."));
     }
 
     /**
@@ -290,14 +341,14 @@ public class PrivacyNoticeService {
      * not one however closely the row left behind resembles this call's.
      */
     private static boolean lostTheActiveSlot(DataAccessException e) {
-        Throwable cause = e;
-        while (cause != null) {
-            if (cause instanceof SQLException sql && UNIQUE_VIOLATION.equals(sql.getSQLState())) {
-                return true;
-            }
-            cause = cause.getCause() == cause ? null : cause.getCause();
-        }
-        return false;
+        return Stream.iterate(
+                        (Throwable) e,
+                        Objects::nonNull,
+                        cause -> cause.getCause() == cause ? null : cause.getCause())
+                .anyMatch(
+                        cause ->
+                                cause instanceof SQLException sql
+                                        && UNIQUE_VIOLATION.equals(sql.getSQLState()));
     }
 
     /** Whether the stored notice already says exactly what this contract yields now. */

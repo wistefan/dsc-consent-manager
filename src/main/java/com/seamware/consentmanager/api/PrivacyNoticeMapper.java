@@ -10,6 +10,8 @@ import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.ControllerDetails;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.DataReference;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
+import com.seamware.consentmanager.service.NoticeResolution;
+import com.seamware.consentmanager.service.ResolvedNotice;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
@@ -55,11 +57,65 @@ public class PrivacyNoticeMapper {
             @NonNull String dataProvider,
             @Nullable String dataConsumer,
             @NonNull PrivacyNoticeResolution resolution) {
-        PrivacyNoticePayload payload = stored.getPayload();
+        return render(
+                stored,
+                dataProvider,
+                dataConsumer,
+                stored.getTitle(),
+                stored.getPayload(),
+                resolution);
+    }
+
+    /**
+     * A retrieved notice as the API publishes it, with whatever resolution filled in.
+     *
+     * <p>The title and payload come off the resolved view rather than off the row, because
+     * resolution is read-only: the row still holds what generation extracted.
+     */
+    @NonNull
+    public PrivacyNotice toApi(@NonNull ResolvedNotice resolved) {
+        return render(
+                resolved.notice(),
+                resolved.dataProvider(),
+                resolved.dataConsumer(),
+                resolved.title(),
+                resolved.payload(),
+                resolution(resolved.resolution()));
+    }
+
+    /** The service's per-section report in the model the API publishes it as. */
+    @NonNull
+    private static PrivacyNoticeResolution resolution(@NonNull NoticeResolution resolution) {
+        return new PrivacyNoticeResolution(
+                state(resolution.contract()),
+                state(resolution.dataResources()),
+                state(resolution.purposes()),
+                state(resolution.recipients()));
+    }
+
+    private static ResolutionState state(NoticeResolution.State state) {
+        // Written out rather than matched by name: the two enums are a service record and a
+        // generated model, and a compiler error beats a runtime one when either is extended.
+        return switch (state) {
+            case RESOLVED -> ResolutionState.RESOLVED;
+            case UNAVAILABLE -> ResolutionState.UNAVAILABLE;
+            case NOT_REQUESTED -> ResolutionState.NOT_REQUESTED;
+        };
+    }
+
+    /** The one place a notice is rendered, so generation and retrieval cannot publish it apart. */
+    @NonNull
+    private PrivacyNotice render(
+            com.seamware.consentmanager.domain.PrivacyNotice stored,
+            String dataProvider,
+            @Nullable String dataConsumer,
+            @Nullable String title,
+            PrivacyNoticePayload payload,
+            PrivacyNoticeResolution resolution) {
         PrivacyNotice notice =
                 new PrivacyNotice(
                         stored.getId(), stored.getContractUri(), dataProvider, resolution);
-        notice.setTitle(stored.getTitle());
+        notice.setTitle(title);
         notice.setDataConsumer(dataConsumer);
         notice.setPurposes(payload.purposes());
         notice.setCategoriesOfData(payload.categoriesOfData());
@@ -87,7 +143,8 @@ public class PrivacyNoticeMapper {
         return new PrivacyNoticeDataInner()
                 .uri(reference.uri())
                 .title(reference.title())
-                .description(reference.description());
+                .description(reference.description())
+                .partOf(reference.partOf());
     }
 
     @Nullable
