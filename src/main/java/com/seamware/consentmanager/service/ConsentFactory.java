@@ -75,7 +75,7 @@ public class ConsentFactory {
                         contractUri,
                         snapshot);
         return new RecordedConsent(
-                consent, event(consent, actor, ConsentEventTrigger.EXPLICIT, null));
+                consent, event(consent, actor, ConsentEventTrigger.EXPLICIT, null), true);
     }
 
     /**
@@ -110,7 +110,7 @@ public class ConsentFactory {
             @Nullable Map<String, Object> details) {
         lifecycle.requireTransition(consent.getStatus(), target);
         consent.updateStatus(target);
-        return new RecordedConsent(consent, event(consent, actor, trigger, details));
+        return new RecordedConsent(consent, event(consent, actor, trigger, details), false);
     }
 
     private static ConsentEvent event(

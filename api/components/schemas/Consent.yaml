@@ -1,0 +1,122 @@
+# Schema: Consent — referenced from api/openapi.yaml as
+# components.schemas.Consent.
+#
+# No property is `nullable`. A nullable response property forces `JsonNullable`
+# onto the generated model, and a consent has nothing to say with an explicit
+# null that an absent property does not say better: a consent that supersedes
+# nothing simply carries no `parentConsentId`.
+type: object
+description: >
+  A consent record: where one data subject stands on one privacy notice — a
+  decision taken, or a request still waiting for one — and the terms it is
+  decided against, frozen as the notice stated them.
+
+
+  `status` is the record's own state and `consented` is derived from it, never
+  from the request, so the two can never disagree. `purposes` and `data` are
+  the scope the record was decided against, copied off the notice at the moment
+  it was created: they stay as they were even if the notice is later
+  regenerated, which is what makes a stored consent evidence of the terms in
+  play rather than a view of what the current notice says. They describe the
+  scope whatever the status — on a `REFUSED` or `PENDING` record they are what
+  was put to the subject, not what was agreed to; `consented` alone says
+  whether anything may be processed.
+properties:
+  id:
+    type: string
+    format: uuid
+    description: Identifier of this consent, assigned here and stable for its lifetime.
+    example: "018f3a2b-7c4d-7e8f-9a0b-1c2d3e4f5a6b"
+  privacyNoticeId:
+    type: string
+    format: uuid
+    description: The notice this consent was decided against.
+    example: "018f3a2b-9d5e-7a1b-8c2d-3e4f5a6b7c8d"
+  parentConsentId:
+    type: string
+    format: uuid
+    description: >
+      The consent this one supersedes, when the decision replaced an earlier
+      record for the same subject and notice. Absent when there was nothing to
+      supersede, which is how a chain reports its first link.
+    example: "018f3a2b-0e6f-7b2c-9d3e-4f5a6b7c8d9e"
+  status:
+    type: string
+    description: >
+      State of the record. `GRANTED` and `REFUSED` are decisions the subject
+      took; `PENDING` is a request awaiting one; `DRAFT` is a record not yet
+      put to the subject; `REVOKED`, `EXPIRED` and `TERMINATED` are the ways a
+      record stops being in force — withdrawn by the subject, run out of time,
+      or ended by a change elsewhere such as the deregistration of a party.
+    enum:
+      - PENDING
+      - DRAFT
+      - GRANTED
+      - REVOKED
+      - EXPIRED
+      - TERMINATED
+      - REFUSED
+    example: "GRANTED"
+  consented:
+    type: boolean
+    description: >
+      Whether the data may be processed under this record right now. True for
+      `GRANTED` alone, and derived from `status` rather than stated separately,
+      so no record can read as a grant the status does not support.
+    example: true
+  provider:
+    type: string
+    description: Global identifier of the participant providing the data.
+    example: "urn:example:participant:clinic"
+  consumer:
+    type: string
+    description: Global identifier of the participant consuming the data.
+    example: "urn:example:participant:research-lab"
+  purposes:
+    type: array
+    description: >
+      The purposes this record was decided against, as the notice stated them
+      when it was created — the elected subset where the decision narrowed the
+      notice, the notice's own list where it did not. Read with `consented`:
+      these are the purposes in play, not by themselves purposes agreed to.
+      Absent when the notice declared none.
+    items:
+      type: string
+    example: ["Produce aggregated mobility insights for the city of Example."]
+  data:
+    type: array
+    description: >
+      The categories of personal data this record was decided against, under the
+      same rule as `purposes` and read the same way. The documents the notice
+      names are not repeated here; `GET /privacy-notices/{id}` serves those.
+    items:
+      type: string
+    example: ["Trip records"]
+  contractUri:
+    type: string
+    description: >
+      URI of the contract this record was decided under, recorded on the consent
+      itself rather than read back off the notice, so the record keeps naming
+      its contract whatever later happens to the notice.
+    example: "https://contract.example.org/contracts/65d1f0a2b3c4d5e6f7a8b9c0"
+  createdAt:
+    type: string
+    format: date-time
+    description: >
+      When this record was created. Where the record began as a participant's
+      request, this dates the request rather than the subject's answer to it.
+  updatedAt:
+    type: string
+    format: date-time
+    description: >
+      When this record last changed state — the moment the subject decided, on a
+      record that answered an open request.
+required:
+  - id
+  - privacyNoticeId
+  - status
+  - consented
+  - provider
+  - consumer
+  - createdAt
+  - updatedAt

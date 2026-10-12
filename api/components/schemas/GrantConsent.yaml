@@ -1,0 +1,62 @@
+# Schema: GrantConsent — referenced from api/openapi.yaml as
+# components.schemas.GrantConsent.
+#
+# The body names no user. The subject is taken from the token alone, so there is
+# no property here by which a decision could be recorded in someone else's name.
+type: object
+description: >
+  A data subject's decision about one privacy notice, and how far they narrowed
+  it.
+
+
+  The decision is recorded for the subject the bearer token names. Any user
+  identifier, email or key sent alongside these properties is ignored rather
+  than honoured: the token is the only statement of who decided.
+
+
+  `purposes` and `data` elect part of the notice's terms. Omitting a list
+  consents to the whole of it as the notice declares it; sending one narrows the
+  consent to the entries named, which must all be declared by the notice. An
+  empty list is refused — it elects nothing, which is not a narrowing — and so
+  is a value the notice does not declare, both with `400`. Whatever is elected
+  is frozen onto the consent, so a later edit to the notice cannot widen a
+  decision already taken.
+properties:
+  privacyNoticeId:
+    type: string
+    format: uuid
+    description: >
+      The notice being decided about. It must exist and must still be the active
+      notice for its contract: an archived notice states terms no longer in
+      force and is refused with `400`.
+    example: "018f3a2b-7c4d-7e8f-9a0b-1c2d3e4f5a6b"
+  decision:
+    type: string
+    description: >
+      What the subject decided. `GRANTED` records consent and `REFUSED` records
+      its deliberate withholding; both are decisions and both are stored, which
+      is what makes a refusal auditable instead of indistinguishable from
+      silence. No other status is reachable here — the ones a lifecycle move
+      produces are not a decision a subject takes on a notice.
+    enum:
+      - GRANTED
+      - REFUSED
+    example: "GRANTED"
+  purposes:
+    type: array
+    description: >
+      The notice's purposes consented to. Absent means all of them.
+    items:
+      type: string
+    example: ["Produce aggregated mobility insights for the city of Example."]
+  data:
+    type: array
+    description: >
+      The notice's categories of personal data consented to. Absent means all of
+      them.
+    items:
+      type: string
+    example: ["Trip records"]
+required:
+  - privacyNoticeId
+  - decision

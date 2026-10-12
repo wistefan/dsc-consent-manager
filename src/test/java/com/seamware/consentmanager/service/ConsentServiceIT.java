@@ -326,6 +326,9 @@ class ConsentServiceIT extends PostgresTestResource {
         ConsentDetails details = decide(subject, notice, ConsentStatus.GRANTED, null, null);
 
         assertThat(details.consent().getId()).isNotEqualTo(previous);
+        assertThat(details.created())
+                .as("a decision with no open request to answer brings a record into being")
+                .isTrue();
         assertThat(consents.findById(details.consent().getId()).orElseThrow().getParentConsentId())
                 .as("a terminal status ends the consent, not the lineage")
                 .isEqualTo(previous);
@@ -346,6 +349,9 @@ class ConsentServiceIT extends PostgresTestResource {
         assertThat(details.consent().getId())
                 .as("the request a participant opened is the consent that answers it")
                 .isEqualTo(requested);
+        assertThat(details.created())
+                .as("answering an open request creates nothing, and the API owes a 200 for it")
+                .isFalse();
         assertThat(consents.findByPrivacyNoticeId(notice.getId()))
                 .as("answering a request creates no second consent for the pair")
                 .singleElement()

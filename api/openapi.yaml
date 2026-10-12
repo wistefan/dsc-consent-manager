@@ -1351,6 +1351,105 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /consents:
+    post:
+      operationId: grantConsent
+      summary: Decide about a privacy notice
+      description: >
+        Records the calling data subject's decision about one privacy notice —
+        consent granted, or consent refused — and returns the consent that
+        decision created.
+
+
+        **The subject is the token.** The body names a notice and a decision and
+        nothing else; there is no property by which a caller could record a
+        decision for another person, and a user identifier, email or key sent
+        alongside is ignored rather than honoured. Only a `USER` token reaches
+        this operation: a participant asks for consent with
+        `POST /consents/requests`, which creates a `PENDING` record conferring
+        nothing, and no operation anywhere lets a participant grant on a
+        subject's behalf.
+
+
+        The notice must exist — `404` otherwise — and must still be the active
+        notice for its contract: an archived notice states terms no longer in
+        force, and deciding against it is `400`. `purposes` and `data` elect
+        part of the notice's terms, and an election naming anything the notice
+        does not declare, or electing nothing at all, is `400`. Whatever is
+        elected is frozen onto the consent together with the notice's title and
+        the contract it was given under, so the record stays evidence of what
+        was agreed even after the notice is regenerated.
+
+
+        A decision supersedes whatever the subject had already recorded for the
+        same notice: a record still in force is revoked in the same transaction,
+        and the new record names the most recent previous record — whatever its
+        status — as its `parentConsentId`, which is what makes the chain
+        readable backwards. A predecessor that had already ended, as a refusal,
+        an expiry or a termination, is linked but not written to: its status
+        does not change. One record per subject and notice is in force at a time
+        and the database enforces it, so two decisions submitted at once cannot
+        both stand — the one that loses the race is answered `409` and is safe
+        to resubmit against the record it can then read.
+
+
+        **Answering an open request returns that record, not a new one.** Where
+        a participant has already asked for this consent with
+        `POST /consents/requests` and the request is still `PENDING`, the
+        decision is written onto that record: the response carries the `id` the
+        request was created with and the `parentConsentId` the request already
+        had — re-pointed only where the same decision also closed a grant that
+        was still in force — so a client that answers a request must not expect
+        a fresh identifier or a new parent link. `createdAt` then dates the request — when consent
+        was asked for — and `updatedAt` is when the subject decided. The status
+        code says which of the two happened: `201` for a record this decision
+        created, `200` for a request it answered in place. Only where no request
+        is open does a decision create a record of its own.
+      tags:
+        - Consents
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrantConsent"
+      responses:
+        "200":
+          description: >
+            The decision answered a request that was already open; the body is
+            that record, carrying the identifier it was created with.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "201":
+          description: >
+            The decision was recorded; the body is the consent it created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1425,6 +1524,12 @@ components:
 
     ResolutionState:
       $ref: "./components/schemas/ResolutionState.yaml"
+
+    Consent:
+      $ref: "./components/schemas/Consent.yaml"
+
+    GrantConsent:
+      $ref: "./components/schemas/GrantConsent.yaml"
 
     # The three wrappers below are the only schemas written out here rather than
     # under components/schemas/, and the reason is a generator limitation rather

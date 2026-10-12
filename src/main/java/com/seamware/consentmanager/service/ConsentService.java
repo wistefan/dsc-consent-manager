@@ -76,6 +76,10 @@ public class ConsentService {
      * 404}, a status that is not a decision, an archived or unconsentable notice and an election
      * outside its terms with {@code 400}, and a decision overtaken by a concurrent grant with
      * {@code 409}.
+     *
+     * <p>{@link ConsentDetails#created()} reports which of the writer's branches ran: a decision
+     * answering a request that was still open is written onto that record rather than creating
+     * one, and the API owes the caller a different success code for it.
      */
     @NonNull
     public ConsentDetails decide(@NonNull User subject, @NonNull ConsentDecision decision) {
@@ -92,13 +96,13 @@ public class ConsentService {
     }
 
     /** The decision as stored, with a race on the one-grant-per-notice index answered as 409. */
-    private Consent record(
+    private RecordedConsent record(
             User subject,
             PrivacyNotice notice,
             ConsentDecision decision,
             ConsentSnapshot snapshot) {
         try {
-            return writer.decide(subject, notice, decision.decision(), snapshot).consent();
+            return writer.decide(subject, notice, decision.decision(), snapshot);
         } catch (DataAccessException e) {
             if (!UniqueViolation.rejected(e)) {
                 throw e;
@@ -163,11 +167,13 @@ public class ConsentService {
     }
 
     /** The stored consent with both parties resolved to the identifiers the API renders. */
-    private ConsentDetails details(Consent consent, PrivacyNotice notice) {
+    private ConsentDetails details(RecordedConsent recorded, PrivacyNotice notice) {
+        Consent consent = recorded.consent();
         return new ConsentDetails(
                 consent,
                 party(notice, consent.getProviderId()).getIdentifier(),
-                party(notice, consent.getConsumerId()).getIdentifier());
+                party(notice, consent.getConsumerId()).getIdentifier(),
+                recorded.created());
     }
 
     /**
