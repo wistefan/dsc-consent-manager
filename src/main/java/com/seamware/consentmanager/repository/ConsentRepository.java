@@ -118,6 +118,34 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
     List<Consent> findByConsumerIdAndStatusIn(UUID consumerId, Collection<ConsentStatus> statuses);
 
     /**
+     * Every consent for the pair, newest first, locked against concurrent decisions.
+     *
+     * <p>The writer's single read, following {@link ParticipantRepository#findByIdForUpdate}: a
+     * decision taken against this result cannot be overtaken between the read and the write, which
+     * no index could cover because the writer also updates an unanswered consent in place.
+     *
+     * <p>Unfiltered by status deliberately. The open rows are what a decision supersedes and the
+     * most recent row of any status is what it links as its parent, so a status predicate would
+     * both lose the parent and, under {@code READ COMMITTED}, drop a row whose lock it waited for
+     * precisely because another transaction had just moved it out of the filter. The id breaks a
+     * tie within one microsecond, and a UUIDv7 orders by creation time like {@code created_at}.
+     */
+    @Query(
+            "SELECT * FROM consents WHERE user_id = :userId"
+                    + " AND privacy_notice_id = :privacyNoticeId"
+                    + " ORDER BY created_at DESC, id DESC FOR UPDATE")
+    List<Consent> findByUserIdAndPrivacyNoticeIdForUpdate(UUID userId, UUID privacyNoticeId);
+
+    /**
+     * Whether the pair already holds a consent in any of the given statuses.
+     *
+     * <p>Read with {@code ConsentStateMachine#OPEN_STATUSES} to refuse a request for a decision the
+     * user has already been asked for or has already given.
+     */
+    boolean existsByUserIdAndPrivacyNoticeIdAndStatusIn(
+            UUID userId, UUID privacyNoticeId, Collection<ConsentStatus> statuses);
+
+    /**
      * How many consents name the participant on either side, counting a self-dealing consent once.
      *
      * <p>Deregistration needs this twice over: it is the retained-consent tally reported back, and

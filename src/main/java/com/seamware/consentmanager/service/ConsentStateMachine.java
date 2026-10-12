@@ -50,6 +50,18 @@ public class ConsentStateMachine {
                             ConsentStatus.REFUSED,
                             ConsentStatus.TERMINATED));
 
+    /**
+     * The statuses in which a consent still stands between the parties: one in force, and one
+     * nobody has answered yet.
+     *
+     * <p>Here rather than on either reader, so the writer's filter over the rows it locked and the
+     * duplicate check that refuses a second request for the same pair cannot drift apart. Not
+     * derived from {@link #TRANSITIONS}: {@link ConsentStatus#DRAFT} is non-terminal there and
+     * still binds nobody.
+     */
+    public static final Set<ConsentStatus> OPEN_STATUSES =
+            Collections.unmodifiableSet(EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.PENDING));
+
     /** Every permitted move, by the status held. An empty entry is a terminal status. */
     private static final Map<ConsentStatus, Set<ConsentStatus>> TRANSITIONS = transitions();
 
