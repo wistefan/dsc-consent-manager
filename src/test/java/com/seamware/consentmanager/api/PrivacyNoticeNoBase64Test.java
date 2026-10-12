@@ -51,14 +51,26 @@ class PrivacyNoticeNoBase64Test {
     /** Everything the privacy-notice flows call upstream lives here. */
     private static final String CLIENT_PACKAGE = "client";
 
-    /** Name prefix of every privacy-notice source outside {@link #CLIENT_PACKAGE}. */
+    /** Name prefix of the notice's own sources, and of the two generation bodies' schemas. */
     private static final String MODULE_PREFIX = "PrivacyNotice";
+
+    /**
+     * What a privacy-notice source outside {@link #CLIENT_PACKAGE} carries in its name.
+     *
+     * <p>Matched anywhere in the name rather than as a prefix, because the module's service-side
+     * sources are named for what they do to a contract or a notice rather than for the notice type
+     * - {@code ContractContentExtractor}, {@code ResolvedNotice} - and a prefix match would leave
+     * exactly the file that derives an upstream contract id out of the scan.
+     */
+    private static final Set<String> MODULE_NAME_TOKENS = Set.of("Notice", "Contract");
 
     /** Sources the module cannot lose without the scan below quietly covering nothing. */
     private static final Set<String> REQUIRED_SOURCES =
             Set.of(
                     "ContractServiceClient" + JAVA_SUFFIX,
                     "SelfDescriptionClient" + JAVA_SUFFIX,
+                    "ContractContentExtractor" + JAVA_SUFFIX,
+                    "ContractPartyResolver" + JAVA_SUFFIX,
                     MODULE_PREFIX + "Service" + JAVA_SUFFIX,
                     MODULE_PREFIX + "Controller" + JAVA_SUFFIX);
 
@@ -109,7 +121,8 @@ class PrivacyNoticeNoBase64Test {
     }
 
     private static boolean belongsToTheModule(Path source) {
-        return source.getFileName().toString().startsWith(MODULE_PREFIX)
+        String name = source.getFileName().toString();
+        return MODULE_NAME_TOKENS.stream().anyMatch(name::contains)
                 || Stream.of(source.getParent())
                         .map(Path::toString)
                         .anyMatch(parent -> parent.contains(CLIENT_PACKAGE));
@@ -142,13 +155,15 @@ class PrivacyNoticeNoBase64Test {
             return false;
         }
         return NAMING_KEYS.contains(key) && ENCODED_NAME.matcher(text).matches()
-                || FORMAT_KEY.equals(key) && ENCODED_FORMATS.contains(text.toLowerCase(Locale.ROOT));
+                || FORMAT_KEY.equals(key)
+                        && ENCODED_FORMATS.contains(text.toLowerCase(Locale.ROOT));
     }
 
     private static Stream<Path> filesUnder(Path root, String suffix) {
         assertThat(root).as("the scan root exists").exists();
         try (Stream<Path> tree = Files.walk(root)) {
-            return tree.filter(Files::isRegularFile)
+            return tree
+                    .filter(Files::isRegularFile)
                     .filter(path -> path.toString().endsWith(suffix))
                     .sorted()
                     .toList()
