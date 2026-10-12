@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.service;
 
+import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -7,7 +8,6 @@ import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentEventState;
-import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
@@ -726,7 +726,7 @@ class UserServiceTest {
                 consumer.getId(),
                 null,
                 null,
-                new ConsentSnapshot(null, null, null, null, null));
+                noTerms());
     }
 
     /** A search naming nothing is refused outright rather than answered with the whole table. */

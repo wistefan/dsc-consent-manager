@@ -1,12 +1,12 @@
 package com.seamware.consentmanager.api;
 
+import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
 import static com.seamware.consentmanager.support.PrivacyNoticeFixtures.emptyPayload;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentEventState;
-import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
@@ -394,7 +394,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
                                 participantId(consumer),
                                 null,
                                 NOTICE_CONTRACT_URI,
-                                new ConsentSnapshot(null, null, null, null, null)))
+                                noTerms()))
                 .getId();
     }
 
