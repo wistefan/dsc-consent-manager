@@ -143,8 +143,12 @@ The whole grant path behind the API, driven by service-layer records.
 - `service/ConsentDecision.java` — record `(UUID privacyNoticeId, ConsentStatus decision,
   List<String> purposes, List<String> dataCategories)`; the status is `GRANTED` or `REFUSED` and the
   state machine is what enforces that, not the record.
-- `service/RecordedConsent.java` — record carrying the persisted `Consent` plus the provider and
-  consumer `Participant` identifiers the response renders.
+- `service/ConsentDetails.java` — record carrying the persisted `Consent` plus the provider and
+  consumer `Participant` identifiers the response renders. **Not** `RecordedConsent`: Step 1 already
+  owns that name for the write-side pair (`Consent` + its `ConsentEvent`, which are only ever saved
+  together), so the read-side projection takes a name of its own rather than widening a record whose
+  two fields are a write unit. `ConsentWriter` returns a `RecordedConsent`; `ConsentService` resolves
+  the participants around it and returns a `ConsentDetails`.
 - `service/ConsentService.java` — `decide(User subject, ConsentDecision)`:
   1. load the notice by id from `PrivacyNoticeRepository` — **not** through
      `PrivacyNoticeService.get`, which would trigger self-description resolution this flow has no use

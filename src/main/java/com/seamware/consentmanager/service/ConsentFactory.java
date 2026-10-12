@@ -3,11 +3,13 @@ package com.seamware.consentmanager.service;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentEventState;
+import com.seamware.consentmanager.domain.ConsentEventTrigger;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Map;
@@ -19,8 +21,9 @@ import java.util.UUID;
  *
  * <p>Funnelling both through here is what makes the records agree by construction: {@code
  * consented} is derived from the target status by {@link Consent#withStatus}, the event state is
- * derived from the same status by {@link #EVENT_STATES}, and the acting identity is a required
- * argument, so no path records a refusal as a grant or leaves a binding decision anonymous.
+ * derived from the same status by {@link #EVENT_STATES}, and the acting identity and the {@link
+ * ConsentEventTrigger} are required arguments, so no path records a refusal as a grant, leaves a
+ * binding decision anonymous, or files an automated change as a deliberate one.
  */
 @Singleton
 public class ConsentFactory {
@@ -40,7 +43,9 @@ public class ConsentFactory {
      * Creates a consent in {@code target} together with the event recording it.
      *
      * <p>Refuses with {@link com.seamware.consentmanager.error.BadRequestException} a status this
-     * service does not create. Neither record is persisted here.
+     * service does not create. Takes no trigger because every creatable status is by definition a
+     * deliberate act of {@code actor}; only {@link #transition} is reachable from a job. Neither
+     * record is persisted here.
      */
     @NonNull
     public RecordedConsent create(
@@ -64,24 +69,29 @@ public class ConsentFactory {
                         parentConsentId,
                         contractUri,
                         snapshot);
-        return new RecordedConsent(consent, event(consent, actor));
+        return new RecordedConsent(consent, event(consent, actor, ConsentEventTrigger.EXPLICIT));
     }
 
     /**
      * Moves an existing consent to {@code target} and returns it with the event recording the move.
      *
      * <p>Refuses with {@link com.seamware.consentmanager.error.BadRequestException} a move the
-     * lifecycle does not permit; the consent is left untouched in that case.
+     * lifecycle does not permit; the consent is left untouched in that case. {@code trigger}
+     * separates a person's revocation from a job's expiry, which share both the state table and
+     * this method.
      */
     @NonNull
     public RecordedConsent transition(
-            @NonNull Consent consent, @NonNull ConsentStatus target, @NonNull String actor) {
+            @NonNull Consent consent,
+            @NonNull ConsentStatus target,
+            @NonNull String actor,
+            @NonNull ConsentEventTrigger trigger) {
         lifecycle.requireTransition(consent.getStatus(), target);
         consent.updateStatus(target);
-        return new RecordedConsent(consent, event(consent, actor));
+        return new RecordedConsent(consent, event(consent, actor, trigger));
     }
 
-    private static ConsentEvent event(Consent consent, String actor) {
+    private static ConsentEvent event(Consent consent, String actor, ConsentEventTrigger trigger) {
         ConsentEventState state = EVENT_STATES.get(consent.getStatus());
         if (state == null) {
             throw new IllegalStateException(UNMAPPED_STATUS.formatted(consent.getStatus()));
@@ -89,7 +99,9 @@ public class ConsentFactory {
         return new ConsentEvent(
                 consent.getId(),
                 state,
+                trigger.eventType(),
                 Objects.requireNonNull(actor, "an event records who acted"),
+                Instant.now(),
                 null);
     }
 

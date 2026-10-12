@@ -45,7 +45,7 @@ class ConsentSnapshotTest {
 
     @ParameterizedTest(name = "electing {0} freezes {1}")
     @MethodSource("elections")
-    @DisplayName("an election narrows the notice's scope, electing nothing freezes it whole")
+    @DisplayName("an election narrows the notice's scope and never widens it")
     void anElectionNarrowsTheNoticesScope(
             List<String> electedPurposes, List<String> expectedPurposes) {
         ConsentSnapshot snapshot = ConsentSnapshot.of(notice(), electedPurposes, null);
@@ -93,7 +93,7 @@ class ConsentSnapshotTest {
         return Stream.of(
                 Arguments.of(List.of("analytics"), List.of("analytics")),
                 Arguments.of(null, DECLARED_PURPOSES),
-                Arguments.of(List.of(), DECLARED_PURPOSES));
+                Arguments.of(List.of(), List.of()));
     }
 
     private static PrivacyNotice notice() {

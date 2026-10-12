@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -68,6 +69,12 @@ class ConsentStateMachineTest {
                 .hasMessageContaining(to.name());
     }
 
+    @Test
+    @DisplayName("every status states its transitions, so a new one cannot slip through untested")
+    void everyStatusStatesItsTransitions() {
+        assertThat(PERMITTED.keySet()).isEqualTo(EnumSet.allOf(ConsentStatus.class));
+    }
+
     @ParameterizedTest(name = "{0} creatable: expected")
     @EnumSource(ConsentStatus.class)
     @DisplayName("only the three decision statuses may be created")
@@ -86,11 +93,10 @@ class ConsentStateMachineTest {
                 .flatMap(
                         from ->
                                 Stream.of(ConsentStatus.values())
-                                        .map(
-                                                to ->
-                                                        Arguments.of(
-                                                                from,
-                                                                to,
-                                                                PERMITTED.get(from).contains(to))));
+                                        .map(to -> Arguments.of(from, to, expected(from, to))));
+    }
+
+    private static boolean expected(ConsentStatus from, ConsentStatus to) {
+        return PERMITTED.getOrDefault(from, Set.of()).contains(to);
     }
 }

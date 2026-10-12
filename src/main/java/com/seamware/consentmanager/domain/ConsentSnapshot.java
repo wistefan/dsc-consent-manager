@@ -38,8 +38,11 @@ public record ConsentSnapshot(
     /**
      * Freezes {@code notice}'s terms, narrowed to the elected scope.
      *
-     * <p>Electing nothing - a null or empty list - freezes the notice's own list, which is what a
-     * decision that names no subset consents to. The non-scope terms are copied verbatim.
+     * <p>Only an absent (null) election takes the notice's own list, which is what a decision that
+     * names no subset consents to. An explicitly empty election freezes an empty scope rather than
+     * the whole list, so the narrowest reading of a malformed decision is the one recorded and the
+     * service's refusal of an empty election is a second guard rather than the only one. The
+     * non-scope terms are copied verbatim.
      */
     public static ConsentSnapshot of(
             PrivacyNotice notice,
@@ -62,6 +65,6 @@ public record ConsentSnapshot(
     @Nullable
     private static List<String> elected(
             @Nullable List<String> elected, @Nullable List<String> declared) {
-        return elected == null || elected.isEmpty() ? declared : List.copyOf(elected);
+        return elected == null ? declared : List.copyOf(elected);
     }
 }

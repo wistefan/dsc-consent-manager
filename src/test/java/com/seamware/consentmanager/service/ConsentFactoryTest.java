@@ -4,7 +4,10 @@ import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEventState;
+import com.seamware.consentmanager.domain.ConsentEventTrigger;
+import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.UuidGenerator;
 import com.seamware.consentmanager.error.BadRequestException;
@@ -25,7 +28,21 @@ class ConsentFactoryTest {
 
     private static final String PARTICIPANT_ACTOR = "did:example:participant";
 
+    private static final String SYSTEM_ACTOR = "consent-manager/expiry";
+
     private static final String CONTRACT_URI = "https://contracts.example/offer/1";
+
+    private static final UUID USER_ID = UuidGenerator.uuidV7();
+
+    private static final UUID PRIVACY_NOTICE_ID = UuidGenerator.uuidV7();
+
+    private static final UUID PROVIDER_ID = UuidGenerator.uuidV7();
+
+    private static final UUID CONSUMER_ID = UuidGenerator.uuidV7();
+
+    private static final UUID PARENT_CONSENT_ID = UuidGenerator.uuidV7();
+
+    private static final ConsentSnapshot SNAPSHOT = noTerms();
 
     private final ConsentFactory factory = new ConsentFactory(new ConsentStateMachine());
 
@@ -64,17 +81,54 @@ class ConsentFactoryTest {
     }
 
     @Test
+    @DisplayName("every argument reaches the field it names, so no two identifiers transpose")
+    void everyArgumentReachesTheFieldItNames() {
+        Consent consent = create(ConsentStatus.GRANTED).consent();
+
+        assertThat(consent.getUserId()).isEqualTo(USER_ID);
+        assertThat(consent.getPrivacyNoticeId()).isEqualTo(PRIVACY_NOTICE_ID);
+        assertThat(consent.getProviderId()).isEqualTo(PROVIDER_ID);
+        assertThat(consent.getConsumerId()).isEqualTo(CONSUMER_ID);
+        assertThat(consent.getParentConsentId()).isEqualTo(PARENT_CONSENT_ID);
+        assertThat(consent.getContractUri()).isEqualTo(CONTRACT_URI);
+        assertThat(consent.getSnapshot()).isSameAs(SNAPSHOT);
+    }
+
+    @Test
     @DisplayName("a permitted move re-statuses the consent and records who made it")
     void aPermittedMoveReStatusesTheConsentAndRecordsWhoMadeIt() {
         RecordedConsent granted = create(ConsentStatus.GRANTED);
 
         RecordedConsent revoked =
-                factory.transition(granted.consent(), ConsentStatus.REVOKED, PARTICIPANT_ACTOR);
+                factory.transition(
+                        granted.consent(),
+                        ConsentStatus.REVOKED,
+                        PARTICIPANT_ACTOR,
+                        ConsentEventTrigger.EXPLICIT);
 
         assertThat(revoked.consent().getStatus()).isEqualTo(ConsentStatus.REVOKED);
         assertThat(revoked.consent().isConsented()).isFalse();
         assertThat(revoked.event().getEventState()).isEqualTo(ConsentEventState.CONSENT_REVOKED);
         assertThat(revoked.event().getActor()).isEqualTo(PARTICIPANT_ACTOR);
+    }
+
+    @ParameterizedTest(name = "a {0} move is recorded as event type {0}")
+    @EnumSource(ConsentEventTrigger.class)
+    @DisplayName("the trigger decides the event type, so a job's expiry is not filed as explicit")
+    void theTriggerDecidesTheEventType(ConsentEventTrigger trigger) {
+        RecordedConsent granted = create(ConsentStatus.GRANTED);
+
+        RecordedConsent expired =
+                factory.transition(granted.consent(), ConsentStatus.EXPIRED, SYSTEM_ACTOR, trigger);
+
+        assertThat(expired.event().getEventType()).isEqualTo(trigger.eventType());
+    }
+
+    @Test
+    @DisplayName("a created consent is always explicit, since creation is never automated")
+    void aCreatedConsentIsAlwaysExplicit() {
+        assertThat(create(ConsentStatus.GRANTED).event().getEventType())
+                .isEqualTo(ConsentEventTrigger.EXPLICIT.eventType());
     }
 
     @Test
@@ -85,16 +139,26 @@ class ConsentFactoryTest {
         assertThatThrownBy(
                         () ->
                                 factory.transition(
-                                        refused.consent(), ConsentStatus.GRANTED, USER_ACTOR))
+                                        refused.consent(),
+                                        ConsentStatus.GRANTED,
+                                        USER_ACTOR,
+                                        ConsentEventTrigger.EXPLICIT))
                 .isInstanceOf(BadRequestException.class);
         assertThat(refused.consent().getStatus()).isEqualTo(ConsentStatus.REFUSED);
         assertThat(refused.consent().isConsented()).isFalse();
     }
 
     private RecordedConsent create(ConsentStatus target) {
-        UUID anyId = UuidGenerator.uuidV7();
         return factory.create(
-                target, anyId, anyId, anyId, anyId, null, CONTRACT_URI, noTerms(), USER_ACTOR);
+                target,
+                USER_ID,
+                PRIVACY_NOTICE_ID,
+                PROVIDER_ID,
+                CONSUMER_ID,
+                PARENT_CONSENT_ID,
+                CONTRACT_URI,
+                SNAPSHOT,
+                USER_ACTOR);
     }
 
     static Stream<Arguments> creations() {
