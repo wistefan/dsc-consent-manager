@@ -115,8 +115,11 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   concrete implementation, when `@Secured` disagrees with the spec, when a secured operation
   declares no `ConsentManagerPrincipal`-typed parameter, when the declared principal type
   cannot hold every admitted role, when it omits the shared 401/403 response refs, or when the
-  parsed operation count drifts from `SPECIFIED_OPERATION_COUNT` (**16** today). Raise that
-  constant in the same commit that adds an operation. `SpecReferenceResolutionTest` fails the
+  parsed operation count drifts from `SPECIFIED_OPERATION_COUNT` (**19** today). Raise that
+  constant in the same commit that adds an operation. `EndpointRoleMatrixIT` is total over the same
+  parsed operations, so an added operation also needs a row in its `Endpoint` enum, and a
+  PARTICIPANT-only route is additionally swept by `participantScopedEndpoints`, which demands the
+  route refuse an unregistered participant. `SpecReferenceResolutionTest` fails the
   build when a relative `$ref` does not resolve in either the authored `api/` tree or the
   `target/classes/static/` copy, or when a **path item is externalised** — so never create
   `api/paths/*.yaml`.
