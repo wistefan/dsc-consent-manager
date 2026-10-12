@@ -24,6 +24,11 @@ import java.util.UUID;
  * derived from the same status by {@link #EVENT_STATES}, and the acting identity and the {@link
  * ConsentEventTrigger} are required arguments, so no path records a refusal as a grant, leaves a
  * binding decision anonymous, or files an automated change as a deliberate one.
+ *
+ * <p>The exclusivity is enforced rather than asserted: {@code ConsentStatusInvariantTest} fails the
+ * build when any other source under {@code src/main/java} calls {@code withStatus} or {@code
+ * updateStatus}, so a transition cannot reach the entity without passing {@link
+ * ConsentStateMachine} first.
  */
 @Singleton
 public class ConsentFactory {
@@ -69,7 +74,8 @@ public class ConsentFactory {
                         parentConsentId,
                         contractUri,
                         snapshot);
-        return new RecordedConsent(consent, event(consent, actor, ConsentEventTrigger.EXPLICIT));
+        return new RecordedConsent(
+                consent, event(consent, actor, ConsentEventTrigger.EXPLICIT, null));
     }
 
     /**
@@ -86,12 +92,32 @@ public class ConsentFactory {
             @NonNull ConsentStatus target,
             @NonNull String actor,
             @NonNull ConsentEventTrigger trigger) {
-        lifecycle.requireTransition(consent.getStatus(), target);
-        consent.updateStatus(target);
-        return new RecordedConsent(consent, event(consent, actor, trigger));
+        return transition(consent, target, actor, trigger, null);
     }
 
-    private static ConsentEvent event(Consent consent, String actor, ConsentEventTrigger trigger) {
+    /**
+     * The same move, with {@code details} recorded on the event.
+     *
+     * <p>Used where the move needs a reason the state alone does not carry, such as the erasure or
+     * deregistration that closes a consent nobody acted on.
+     */
+    @NonNull
+    public RecordedConsent transition(
+            @NonNull Consent consent,
+            @NonNull ConsentStatus target,
+            @NonNull String actor,
+            @NonNull ConsentEventTrigger trigger,
+            @Nullable Map<String, Object> details) {
+        lifecycle.requireTransition(consent.getStatus(), target);
+        consent.updateStatus(target);
+        return new RecordedConsent(consent, event(consent, actor, trigger, details));
+    }
+
+    private static ConsentEvent event(
+            Consent consent,
+            String actor,
+            ConsentEventTrigger trigger,
+            Map<String, Object> details) {
         ConsentEventState state = EVENT_STATES.get(consent.getStatus());
         if (state == null) {
             throw new IllegalStateException(UNMAPPED_STATUS.formatted(consent.getStatus()));
@@ -102,7 +128,7 @@ public class ConsentFactory {
                 trigger.eventType(),
                 Objects.requireNonNull(actor, "an event records who acted"),
                 Instant.now(),
-                null);
+                details);
     }
 
     private static Map<ConsentStatus, ConsentEventState> eventStates() {

@@ -118,9 +118,18 @@ class UserServiceTest {
 
     private final ErasureVerifier erasureVerifier = verifierWith(VERIFICATION_SECRET);
 
+    private final ConsentFactory consentFactory = new ConsentFactory(new ConsentStateMachine());
+
     private final UserService service =
             new UserService(
-                    users, links, participants, consents, consentEvents, erasureVerifier, limits);
+                    users,
+                    links,
+                    participants,
+                    consents,
+                    consentEvents,
+                    consentFactory,
+                    erasureVerifier,
+                    limits);
 
     /** An identifier no row exists for is inserted from the claims, and reported as created. */
     @Test
@@ -690,6 +699,7 @@ class UserServiceTest {
                         participants,
                         consents,
                         consentEvents,
+                        consentFactory,
                         verifierWith(null),
                         limits);
         Participant alpha = participants.put(participant());

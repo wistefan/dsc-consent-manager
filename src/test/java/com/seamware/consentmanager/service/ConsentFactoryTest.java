@@ -11,12 +11,14 @@ import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.UuidGenerator;
 import com.seamware.consentmanager.error.BadRequestException;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -43,6 +45,9 @@ class ConsentFactoryTest {
     private static final UUID PARENT_CONSENT_ID = UuidGenerator.uuidV7();
 
     private static final ConsentSnapshot SNAPSHOT = noTerms();
+
+    private static final Map<String, Object> TERMINATION_DETAILS =
+            Map.of("reason", "participant-deregistered");
 
     private final ConsentFactory factory = new ConsentFactory(new ConsentStateMachine());
 
@@ -112,16 +117,56 @@ class ConsentFactoryTest {
         assertThat(revoked.event().getActor()).isEqualTo(PARTICIPANT_ACTOR);
     }
 
-    @ParameterizedTest(name = "a {0} move is recorded as event type {0}")
-    @EnumSource(ConsentEventTrigger.class)
+    @ParameterizedTest(name = "a {0} move is recorded as event type {1}")
+    @CsvSource({"EXPLICIT,explicit", "SYSTEM,system"})
     @DisplayName("the trigger decides the event type, so a job's expiry is not filed as explicit")
-    void theTriggerDecidesTheEventType(ConsentEventTrigger trigger) {
+    void theTriggerDecidesTheEventType(ConsentEventTrigger trigger, String expected) {
         RecordedConsent granted = create(ConsentStatus.GRANTED);
 
         RecordedConsent expired =
                 factory.transition(granted.consent(), ConsentStatus.EXPIRED, SYSTEM_ACTOR, trigger);
 
-        assertThat(expired.event().getEventType()).isEqualTo(trigger.eventType());
+        assertThat(expired.event().getEventType()).isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("no two triggers share an event type, so the distinction survives the write")
+    void noTwoTriggersShareAnEventType() {
+        assertThat(Stream.of(ConsentEventTrigger.values()).map(ConsentEventTrigger::eventType))
+                .doesNotHaveDuplicates();
+    }
+
+    @Test
+    @DisplayName("a move carrying a reason records it on the event")
+    void aMoveCarryingAReasonRecordsItOnTheEvent() {
+        RecordedConsent pending = create(ConsentStatus.PENDING);
+
+        RecordedConsent terminated =
+                factory.transition(
+                        pending.consent(),
+                        ConsentStatus.TERMINATED,
+                        SYSTEM_ACTOR,
+                        ConsentEventTrigger.SYSTEM,
+                        TERMINATION_DETAILS);
+
+        assertThat(terminated.event().getDetails()).isEqualTo(TERMINATION_DETAILS);
+        assertThat(terminated.event().getEventState())
+                .isEqualTo(ConsentEventState.CONSENT_TERMINATED);
+    }
+
+    @Test
+    @DisplayName("a move carrying no reason leaves the details absent")
+    void aMoveCarryingNoReasonLeavesTheDetailsAbsent() {
+        RecordedConsent granted = create(ConsentStatus.GRANTED);
+
+        RecordedConsent revoked =
+                factory.transition(
+                        granted.consent(),
+                        ConsentStatus.REVOKED,
+                        USER_ACTOR,
+                        ConsentEventTrigger.EXPLICIT);
+
+        assertThat(revoked.event().getDetails()).isNull();
     }
 
     @Test

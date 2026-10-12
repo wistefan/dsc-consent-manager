@@ -26,11 +26,15 @@ import org.junit.jupiter.params.provider.MethodSource;
 @DisplayName("Consent state machine")
 class ConsentStateMachineTest {
 
+    /** Where an unanswered offer may go: answered either way, or terminated with the offer. */
+    private static final Set<ConsentStatus> UNANSWERED_MOVES =
+            EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED, ConsentStatus.TERMINATED);
+
     /** The transitions this service permits, restated independently of the production table. */
     private static final Map<ConsentStatus, Set<ConsentStatus>> PERMITTED =
             Map.of(
-                    ConsentStatus.PENDING, EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED),
-                    ConsentStatus.DRAFT, EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED),
+                    ConsentStatus.PENDING, UNANSWERED_MOVES,
+                    ConsentStatus.DRAFT, UNANSWERED_MOVES,
                     ConsentStatus.GRANTED,
                             EnumSet.of(
                                     ConsentStatus.REVOKED,

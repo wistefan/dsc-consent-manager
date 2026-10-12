@@ -24,13 +24,31 @@ public class ConsentStateMachine {
     /**
      * The statuses a consent may be created in.
      *
-     * <p>{@link ConsentStatus#DRAFT} is deliberately absent - nothing in this service creates a
-     * draft yet, and the status survives only as a transition source for the ticket that adds one.
+     * <p>{@link ConsentStatus#DRAFT} is deliberately absent, although the ticket's state table
+     * lists it as a creation: nothing in this service prepares a draft, so admitting it would ship
+     * a state no endpoint can produce and none can answer. The status survives here only as a
+     * transition source, and the ticket that adds draft preparation adds it to this table and to
+     * the factory's event table together.
      */
     private static final Set<ConsentStatus> CREATABLE =
             Collections.unmodifiableSet(
                     EnumSet.of(
                             ConsentStatus.GRANTED, ConsentStatus.REFUSED, ConsentStatus.PENDING));
+
+    /**
+     * Where an unanswered offer may go: answered either way, or terminated.
+     *
+     * <p>{@link ConsentStatus#TERMINATED} is not decoration - an erasure closes the offers its
+     * subject can no longer answer, and a deregistration closes the ones naming the departing
+     * participant, so omitting the edge would make the table declare invalid a move the service
+     * performs.
+     */
+    private static final Set<ConsentStatus> UNANSWERED_MOVES =
+            Collections.unmodifiableSet(
+                    EnumSet.of(
+                            ConsentStatus.GRANTED,
+                            ConsentStatus.REFUSED,
+                            ConsentStatus.TERMINATED));
 
     /** Every permitted move, by the status held. An empty entry is a terminal status. */
     private static final Map<ConsentStatus, Set<ConsentStatus>> TRANSITIONS = transitions();
@@ -60,8 +78,8 @@ public class ConsentStateMachine {
 
     private static Map<ConsentStatus, Set<ConsentStatus>> transitions() {
         Map<ConsentStatus, Set<ConsentStatus>> table = new EnumMap<>(ConsentStatus.class);
-        table.put(ConsentStatus.PENDING, EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED));
-        table.put(ConsentStatus.DRAFT, EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED));
+        table.put(ConsentStatus.PENDING, UNANSWERED_MOVES);
+        table.put(ConsentStatus.DRAFT, UNANSWERED_MOVES);
         table.put(
                 ConsentStatus.GRANTED,
                 EnumSet.of(ConsentStatus.REVOKED, ConsentStatus.TERMINATED, ConsentStatus.EXPIRED));
