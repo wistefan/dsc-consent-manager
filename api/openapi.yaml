@@ -1388,6 +1388,18 @@ paths:
         at a time and the database enforces it, so two decisions submitted at
         once cannot both stand — the one that loses the race is answered `409`
         and is safe to resubmit against the record it can then read.
+
+
+        **Answering an open request returns that record, not a new one.** Where
+        a participant has already asked for this consent with
+        `POST /consents/requests` and the request is still `PENDING`, the
+        decision is written onto that record: the response carries the `id` the
+        request was created with and the `parentConsentId` the request already
+        had — re-pointed only where the same decision also closed a grant that
+        was still in force — so a client that answers a request must not expect
+        a fresh identifier or a new parent link. `createdAt` then dates the request — when consent
+        was asked for — and `updatedAt` is when the subject decided. Only where
+        no request is open does a decision create a record of its own.
       tags:
         - Consents
       security:

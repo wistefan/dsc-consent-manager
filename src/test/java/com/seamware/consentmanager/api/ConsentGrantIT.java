@@ -3,6 +3,7 @@ package com.seamware.consentmanager.api;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
@@ -91,6 +92,10 @@ class ConsentGrantIT extends KeycloakAndPostgresTestResource {
 
     private static final String PROPERTY_DATA = "data";
 
+    private static final String PROPERTY_ID = "id";
+
+    private static final String PROPERTY_PARENT = "parentConsentId";
+
     private static final String GRANTED = "GRANTED";
 
     private static final String REFUSED = "REFUSED";
@@ -172,11 +177,29 @@ class ConsentGrantIT extends KeycloakAndPostgresTestResource {
                 .containsEntry(PROPERTY_PURPOSES, NOTICE_PURPOSES)
                 .containsEntry(PROPERTY_DATA, NOTICE_CATEGORIES)
                 .as("the first link of a chain supersedes nothing")
-                .doesNotContainKey("parentConsentId");
+                .doesNotContainKey(PROPERTY_PARENT);
 
         assertThat(storedConsents())
                 .singleElement()
                 .satisfies(stored -> assertThat(stored.getUserId()).isEqualTo(callerId()));
+    }
+
+    @Test
+    @DisplayName("renders the record a decision superseded as the new one's parent")
+    void rendersTheSupersededRecordAsTheParent() {
+        Map<String, Object> first =
+                body(decide(Map.of(PROPERTY_NOTICE, noticeId(), PROPERTY_DECISION, GRANTED)));
+
+        Map<String, Object> second =
+                body(decide(Map.of(PROPERTY_NOTICE, noticeId(), PROPERTY_DECISION, REFUSED)));
+
+        assertThat(second)
+                .as("a chain is readable backwards over HTTP, not only in the table")
+                .containsEntry(PROPERTY_PARENT, first.get(PROPERTY_ID));
+        assertThat(second.get(PROPERTY_ID)).isNotEqualTo(first.get(PROPERTY_ID));
+        assertThat(storedConsents())
+                .extracting(Consent::getStatus)
+                .containsExactlyInAnyOrder(ConsentStatus.REVOKED, ConsentStatus.REFUSED);
     }
 
     @Test

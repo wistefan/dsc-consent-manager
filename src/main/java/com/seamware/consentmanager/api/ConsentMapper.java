@@ -16,7 +16,8 @@ import jakarta.inject.Singleton;
  * evidence of. {@code contractUri} comes off the consent's own column for the same reason.
  *
  * <p>{@code Consent} here is the generated API model; the stored row is named in full to keep the
- * two apart.
+ * two apart. Both enum bridges below go by name, which no compiler checks, so {@code
+ * ConsentEnumParityTest} fails the build when the served and the stored vocabularies drift.
  */
 @Singleton
 public class ConsentMapper {

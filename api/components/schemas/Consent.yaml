@@ -7,16 +7,20 @@
 # nothing simply carries no `parentConsentId`.
 type: object
 description: >
-  A consent record: what one data subject decided about one privacy notice, and
-  the terms that decision was frozen against.
+  A consent record: where one data subject stands on one privacy notice — a
+  decision taken, or a request still waiting for one — and the terms it is
+  decided against, frozen as the notice stated them.
 
 
   `status` is the record's own state and `consented` is derived from it, never
   from the request, so the two can never disagree. `purposes` and `data` are
-  what was elected when the decision was taken, copied off the notice at that
-  moment: they stay as they were even if the notice is later regenerated, which
-  is what makes a stored consent evidence of what was agreed rather than a view
-  of what the current notice says.
+  the scope the record was decided against, copied off the notice at the moment
+  it was created: they stay as they were even if the notice is later
+  regenerated, which is what makes a stored consent evidence of the terms in
+  play rather than a view of what the current notice says. They describe the
+  scope whatever the status — on a `REFUSED` or `PENDING` record they are what
+  was put to the subject, not what was agreed to; `consented` alone says
+  whether anything may be processed.
 properties:
   id:
     type: string
@@ -71,35 +75,42 @@ properties:
   purposes:
     type: array
     description: >
-      The purposes consented to, as the notice stated them when the decision was
-      taken. Absent when the notice declared none.
+      The purposes this record was decided against, as the notice stated them
+      when it was created — the elected subset where the decision narrowed the
+      notice, the notice's own list where it did not. Read with `consented`:
+      these are the purposes in play, not by themselves purposes agreed to.
+      Absent when the notice declared none.
     items:
       type: string
     example: ["Produce aggregated mobility insights for the city of Example."]
   data:
     type: array
     description: >
-      The categories of personal data consented to, as the notice stated them
-      when the decision was taken. The documents the notice names are not
-      repeated here; `GET /privacy-notices/{id}` serves those.
+      The categories of personal data this record was decided against, under the
+      same rule as `purposes` and read the same way. The documents the notice
+      names are not repeated here; `GET /privacy-notices/{id}` serves those.
     items:
       type: string
     example: ["Trip records"]
   contractUri:
     type: string
     description: >
-      URI of the contract this consent was given under, recorded on the consent
+      URI of the contract this record was decided under, recorded on the consent
       itself rather than read back off the notice, so the record keeps naming
       its contract whatever later happens to the notice.
     example: "https://contract.example.org/contracts/65d1f0a2b3c4d5e6f7a8b9c0"
   createdAt:
     type: string
     format: date-time
-    description: When this record was created.
+    description: >
+      When this record was created. Where the record began as a participant's
+      request, this dates the request rather than the subject's answer to it.
   updatedAt:
     type: string
     format: date-time
-    description: When this record last changed state.
+    description: >
+      When this record last changed state — the moment the subject decided, on a
+      record that answered an open request.
 required:
   - id
   - privacyNoticeId
