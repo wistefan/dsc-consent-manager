@@ -50,12 +50,39 @@ public class ConsentStateMachine {
                             ConsentStatus.REFUSED,
                             ConsentStatus.TERMINATED));
 
+    /**
+     * The statuses a data subject's decision may be recorded in.
+     *
+     * <p>Narrower than {@link #CREATABLE}, which also admits the {@code PENDING} a participant
+     * opens: a subject either consents or does not, so without this table a decision carried as a
+     * status would let a subject request consent from themselves or terminate an open request as a
+     * deliberate act of their own. The generated request enum narrows the HTTP surface the same
+     * way, but the service contract is enforced here rather than left to it.
+     */
+    private static final Set<ConsentStatus> DECISIONS =
+            Collections.unmodifiableSet(EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED));
+
+    /**
+     * The statuses in which a consent still stands between the parties: one in force, and one
+     * nobody has answered yet.
+     *
+     * <p>Here rather than on either reader, so the writer's filter over the rows it locked and the
+     * duplicate check that refuses a second request for the same pair cannot drift apart. Not
+     * derived from {@link #TRANSITIONS}: {@link ConsentStatus#DRAFT} is non-terminal there and
+     * still binds nobody.
+     */
+    public static final Set<ConsentStatus> OPEN_STATUSES =
+            Collections.unmodifiableSet(EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.PENDING));
+
     /** Every permitted move, by the status held. An empty entry is a terminal status. */
     private static final Map<ConsentStatus, Set<ConsentStatus>> TRANSITIONS = transitions();
 
     private static final String NOT_CREATABLE = "a consent cannot be created in state %s";
 
     private static final String NOT_PERMITTED = "a consent in state %s cannot move to state %s";
+
+    private static final String NOT_A_DECISION =
+            "state %s is not a decision a data subject can take; expected GRANTED or REFUSED";
 
     /** Whether a consent holding {@code from} may move to {@code to}. */
     public boolean permits(@NonNull ConsentStatus from, @NonNull ConsentStatus to) {
@@ -66,6 +93,13 @@ public class ConsentStateMachine {
     public void requireCreatable(@NonNull ConsentStatus target) {
         if (!CREATABLE.contains(target)) {
             throw new BadRequestException(NOT_CREATABLE.formatted(target));
+        }
+    }
+
+    /** Refuses a status that is not a subject's decision, naming it. */
+    public void requireDecision(@NonNull ConsentStatus target) {
+        if (!DECISIONS.contains(target)) {
+            throw new BadRequestException(NOT_A_DECISION.formatted(target));
         }
     }
 
