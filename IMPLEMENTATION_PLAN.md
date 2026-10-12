@@ -377,7 +377,18 @@ Tests:
   readable off the ticket:
   - a user's decision **adopts** an open `PENDING` request for the same (user, notice) rather than
     creating a second row beside it, so a request is always answered rather than stranded, and the
-    locking read is what keeps two concurrent decisions from adopting the same row twice;
+    locking read is what keeps two concurrent decisions from adopting the same row twice. Two
+    consequences to state explicitly: the decision closes **every** other open request for the pair
+    as `TERMINATED` with a `SYSTEM` trigger, because the locking read cannot block a concurrent
+    insert and no index covers `PENDING`, so a pair can hold two requests and answering only the
+    newest would strand the other and 409 every later request for the pair forever; and an adopted
+    row's `createdAt` dates the *offer*, not the answer — when the subject decided is the timestamp
+    of the `CONSENT_GIVEN`/`CONSENT_REFUSED` event, which is where TICKET-010's lineage walk and
+    TICKET-011's receipt must read it from rather than from the row;
+  - a decision is `GRANTED` or `REFUSED` and nothing else: `ConsentStateMachine.requireDecision`
+    refuses the rest in the service layer, so `CREATABLE` admitting `PENDING` (the status a
+    participant's request opens) does not let a subject request consent from themselves or
+    terminate an open request as a deliberate act of their own;
   - the `parentConsentId` of a new consent is the most recent consent for the pair **whatever its
     status**, so a grant after a refusal, an expiry or a termination extends the chain rather than
     starting a new one; revoking an open `GRANTED` is one case of that rule;

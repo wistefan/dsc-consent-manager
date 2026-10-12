@@ -54,14 +54,17 @@ public class ConsentService {
     private final PrivacyNoticeRepository notices;
     private final ParticipantRepository participants;
     private final ConsentWriter writer;
+    private final ConsentStateMachine lifecycle;
 
     public ConsentService(
             PrivacyNoticeRepository notices,
             ParticipantRepository participants,
-            ConsentWriter writer) {
+            ConsentWriter writer,
+            ConsentStateMachine lifecycle) {
         this.notices = notices;
         this.participants = participants;
         this.writer = writer;
+        this.lifecycle = lifecycle;
     }
 
     /**
@@ -70,11 +73,13 @@ public class ConsentService {
      *
      * <p>The subject comes from the token rather than from {@code decision}, which is what makes a
      * grant in someone else's name unrepresentable here. Refuses an unknown notice with {@code
-     * 404}, an archived or unconsentable one and an election outside its terms with {@code 400},
-     * and a decision overtaken by a concurrent grant with {@code 409}.
+     * 404}, a status that is not a decision, an archived or unconsentable notice and an election
+     * outside its terms with {@code 400}, and a decision overtaken by a concurrent grant with
+     * {@code 409}.
      */
     @NonNull
     public ConsentDetails decide(@NonNull User subject, @NonNull ConsentDecision decision) {
+        lifecycle.requireDecision(decision.decision());
         PrivacyNotice notice = consentable(decision.privacyNoticeId());
         PrivacyNoticePayload payload = notice.getPayload();
         requireWithinScope(PURPOSES, decision.purposes(), payload.purposes(), notice);

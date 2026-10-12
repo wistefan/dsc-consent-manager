@@ -51,6 +51,18 @@ public class ConsentStateMachine {
                             ConsentStatus.TERMINATED));
 
     /**
+     * The statuses a data subject's decision may be recorded in.
+     *
+     * <p>Narrower than {@link #CREATABLE}, which also admits the {@code PENDING} a participant
+     * opens: a subject either consents or does not, so without this table a decision carried as a
+     * status would let a subject request consent from themselves or terminate an open request as a
+     * deliberate act of their own. The generated request enum narrows the HTTP surface the same
+     * way, but the service contract is enforced here rather than left to it.
+     */
+    private static final Set<ConsentStatus> DECISIONS =
+            Collections.unmodifiableSet(EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED));
+
+    /**
      * The statuses in which a consent still stands between the parties: one in force, and one
      * nobody has answered yet.
      *
@@ -69,6 +81,9 @@ public class ConsentStateMachine {
 
     private static final String NOT_PERMITTED = "a consent in state %s cannot move to state %s";
 
+    private static final String NOT_A_DECISION =
+            "state %s is not a decision a data subject can take; expected GRANTED or REFUSED";
+
     /** Whether a consent holding {@code from} may move to {@code to}. */
     public boolean permits(@NonNull ConsentStatus from, @NonNull ConsentStatus to) {
         return TRANSITIONS.getOrDefault(from, Set.of()).contains(to);
@@ -78,6 +93,13 @@ public class ConsentStateMachine {
     public void requireCreatable(@NonNull ConsentStatus target) {
         if (!CREATABLE.contains(target)) {
             throw new BadRequestException(NOT_CREATABLE.formatted(target));
+        }
+    }
+
+    /** Refuses a status that is not a subject's decision, naming it. */
+    public void requireDecision(@NonNull ConsentStatus target) {
+        if (!DECISIONS.contains(target)) {
+            throw new BadRequestException(NOT_A_DECISION.formatted(target));
         }
     }
 

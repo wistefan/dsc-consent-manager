@@ -49,6 +49,10 @@ class ConsentStateMachineTest {
     private static final Set<ConsentStatus> CREATABLE =
             EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED, ConsentStatus.PENDING);
 
+    /** The statuses a data subject's own decision may be recorded in, restated independently. */
+    private static final Set<ConsentStatus> DECISIONS =
+            EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED);
+
     private final ConsentStateMachine lifecycle = new ConsentStateMachine();
 
     @ParameterizedTest(name = "{0} -> {1} permitted: {2}")
@@ -81,13 +85,27 @@ class ConsentStateMachineTest {
 
     @ParameterizedTest(name = "{0} creatable: expected")
     @EnumSource(ConsentStatus.class)
-    @DisplayName("only the three decision statuses may be created")
-    void onlyTheThreeDecisionStatusesMayBeCreated(ConsentStatus target) {
+    @DisplayName("only the three statuses this service opens may be created")
+    void onlyTheThreeOpenableStatusesMayBeCreated(ConsentStatus target) {
         if (CREATABLE.contains(target)) {
             assertThatCode(() -> lifecycle.requireCreatable(target)).doesNotThrowAnyException();
             return;
         }
         assertThatThrownBy(() -> lifecycle.requireCreatable(target))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining(target.name());
+    }
+
+    @ParameterizedTest(name = "{0} is a decision: expected")
+    @EnumSource(ConsentStatus.class)
+    @DisplayName("only granting and refusing are decisions a subject can take")
+    void onlyGrantingAndRefusingAreDecisions(ConsentStatus target) {
+        if (DECISIONS.contains(target)) {
+            assertThatCode(() -> lifecycle.requireDecision(target)).doesNotThrowAnyException();
+            return;
+        }
+        assertThatThrownBy(() -> lifecycle.requireDecision(target))
+                .as("creatable is wider than decidable: a participant opens PENDING, not a subject")
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining(target.name());
     }

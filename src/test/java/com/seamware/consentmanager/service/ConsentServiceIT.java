@@ -65,6 +65,9 @@ class ConsentServiceIT extends PostgresTestResource {
 
     private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
 
+    /** What {@code consent_events.event_type} reads for a move no actor asked for. */
+    private static final String SYSTEM_EVENT_TYPE = "system";
+
     @Inject ConsentService service;
 
     @Inject ConsentRepository consents;
@@ -366,6 +369,62 @@ class ConsentServiceIT extends PostgresTestResource {
                                 subject.getId(), notice.getId(), ConsentStateMachine.OPEN_STATUSES))
                 .as("a refusal reopens the pair to a new request; a grant stands in its way")
                 .isEqualTo(decision == ConsentStatus.GRANTED);
+    }
+
+    @ParameterizedTest(name = "deciding {0}")
+    @EnumSource(
+            value = ConsentStatus.class,
+            names = {"GRANTED", "REFUSED"},
+            mode = EnumSource.Mode.EXCLUDE)
+    @DisplayName("a status that is not a decision is refused by the service, not only by the spec")
+    void refusesAStatusThatIsNotADecision(ConsentStatus notADecision) {
+        User subject = user();
+        PrivacyNotice notice = notice(fullPayload());
+
+        assertThatThrownBy(() -> decide(subject, notice, notADecision, null, null))
+                .as("a subject consents or does not; nothing else is theirs to record")
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining(notADecision.name());
+        assertThat(consents.findByPrivacyNoticeId(notice.getId()))
+                .as("a refused decision writes nothing at all")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("a decision closes every open request for the pair, not only the one it answers")
+    void closesTheRequestsADecisionLeavesRedundant() {
+        User subject = user();
+        PrivacyNotice notice = notice(fullPayload());
+        List<UUID> requested = List.of(seedRequest(subject, notice), seedRequest(subject, notice));
+
+        ConsentDetails details = decide(subject, notice, ConsentStatus.GRANTED, null, null);
+
+        assertThat(details.consent().getId())
+                .as("the decision answers one of the requests rather than opening a third consent")
+                .isIn(requested);
+        assertThat(consents.findByPrivacyNoticeId(notice.getId()))
+                .as("the answered request stands; the duplicate is closed, never left stranded")
+                .extracting(Consent::getStatus)
+                .containsExactlyInAnyOrder(ConsentStatus.GRANTED, ConsentStatus.TERMINATED);
+        assertThat(
+                        consents.existsByUserIdAndPrivacyNoticeIdAndStatusIn(
+                                subject.getId(), notice.getId(), List.of(ConsentStatus.PENDING)))
+                .as("no request survives to block every later request for the pair")
+                .isFalse();
+        UUID closed =
+                requested.stream()
+                        .filter(id -> !id.equals(details.consent().getId()))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(events.findByConsentIdOrderByOccurredAtAsc(closed))
+                .as("the subject answered one offer; closing the rest is the system's doing")
+                .last()
+                .satisfies(
+                        event -> {
+                            assertThat(event.getEventState())
+                                    .isEqualTo(ConsentEventState.CONSENT_TERMINATED);
+                            assertThat(event.getEventType()).isEqualTo(SYSTEM_EVENT_TYPE);
+                        });
     }
 
     @Test

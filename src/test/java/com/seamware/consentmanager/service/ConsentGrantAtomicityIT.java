@@ -133,9 +133,10 @@ class ConsentGrantAtomicityIT extends PostgresTestResource {
 
         Outcomes outcomes = race();
 
-        assertThat(outcomes.refused())
-                .as("whatever the writer refuses here is a conflict, never a server error")
-                .allMatch(ConflictException.class::isInstance);
+        assertThat(outcomes.recorded())
+                .as("the lock serialises both decisions rather than making the second one fail")
+                .hasSize(RACERS);
+        assertThat(outcomes.refused()).isEmpty();
         assertThat(
                         consents.existsByUserIdAndPrivacyNoticeIdAndStatusIn(
                                 subject.getId(), notice.getId(), List.of(ConsentStatus.PENDING)))
