@@ -6,6 +6,7 @@ import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
+import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import io.micronaut.core.annotation.NonNull;
@@ -19,7 +20,8 @@ import java.util.UUID;
  * The transactional half of the grant flow, on its own bean because Micronaut AOP does not apply to
  * self-invocation, so {@link ConsentService} calling these methods on itself would run them with no
  * transaction at all - and a decision writes a consent and its event, and may close a prior consent
- * first, which only holds together as one unit. Mirrors {@link PrivacyNoticeWriter}.
+ * first, which only holds together as one unit. A request is the same unit minus the closing.
+ * Mirrors {@link PrivacyNoticeWriter}.
  */
 @Singleton
 public class ConsentWriter {
@@ -32,6 +34,10 @@ public class ConsentWriter {
      * who answered one offer rather than terminating the others.
      */
     private static final ConsentEventTrigger CLEANUP_TRIGGER = ConsentEventTrigger.SYSTEM;
+
+    private static final String ALREADY_OPEN =
+            "User '%s' has already been asked to decide on privacy notice '%s', or has already"
+                    + " decided. Read the consent back rather than requesting it again.";
 
     private final ConsentRepository consents;
     private final ConsentEventRepository events;
@@ -77,6 +83,36 @@ public class ConsentWriter {
             return answer(unanswered.getFirst(), decision, snapshot, superseded, actor);
         }
         return create(subject, notice, decision, snapshot, parentOf(held), actor);
+    }
+
+    /**
+     * Opens an unanswered request for the subject to decide on {@code notice}, in {@code actor}'s
+     * name.
+     *
+     * <p>Refuses with {@link ConflictException} a pair that already holds an open consent, so a
+     * user is neither asked twice nor asked for a decision already given. The duplicate check runs
+     * behind the same locking read the decision path takes, which is also what settles the parent,
+     * so two requests racing for a pair that already holds a row cannot both pass it. A pair
+     * holding none is the case no lock covers - there is no row to lock - and is what {@code
+     * decide} closes as redundant rather than leaving stranded.
+     */
+    @NonNull
+    @Transactional
+    public RecordedConsent request(
+            @NonNull User subject,
+            @NonNull PrivacyNotice notice,
+            @NonNull ConsentSnapshot snapshot,
+            @NonNull String actor) {
+        List<Consent> held =
+                consents.findByUserIdAndPrivacyNoticeIdForUpdate(subject.getId(), notice.getId());
+        if (held.stream()
+                .anyMatch(
+                        consent ->
+                                ConsentStateMachine.OPEN_STATUSES.contains(consent.getStatus()))) {
+            throw new ConflictException(
+                    ALREADY_OPEN.formatted(subject.getIdentifier(), notice.getId()));
+        }
+        return create(subject, notice, ConsentStatus.PENDING, snapshot, parentOf(held), actor);
     }
 
     /**

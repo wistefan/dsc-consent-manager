@@ -367,8 +367,7 @@ class ConsentGrantIT extends KeycloakAndPostgresTestResource {
      */
     private UUID seedOpenRequest() {
         decide(Map.of(PROPERTY_NOTICE, UUID.randomUUID().toString(), PROPERTY_DECISION, GRANTED));
-        return consents
-                .save(
+        return consents.save(
                         Consent.withStatus(
                                 ConsentStatus.PENDING,
                                 callerId(),
