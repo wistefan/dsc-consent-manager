@@ -143,8 +143,12 @@ The whole grant path behind the API, driven by service-layer records.
 - `service/ConsentDecision.java` — record `(UUID privacyNoticeId, ConsentStatus decision,
   List<String> purposes, List<String> dataCategories)`; the status is `GRANTED` or `REFUSED` and the
   state machine is what enforces that, not the record.
-- `service/RecordedConsent.java` — record carrying the persisted `Consent` plus the provider and
-  consumer `Participant` identifiers the response renders.
+- `service/ConsentDetails.java` — record carrying the persisted `Consent` plus the provider and
+  consumer `Participant` identifiers the response renders. **Not** `RecordedConsent`: Step 1 already
+  owns that name for the write-side pair (`Consent` + its `ConsentEvent`, which are only ever saved
+  together), so the read-side projection takes a name of its own rather than widening a record whose
+  two fields are a write unit. `ConsentWriter` returns a `RecordedConsent`; `ConsentService` resolves
+  the participants around it and returns a `ConsentDetails`.
 - `service/ConsentService.java` — `decide(User subject, ConsentDecision)`:
   1. load the notice by id from `PrivacyNoticeRepository` — **not** through
      `PrivacyNoticeService.get`, which would trigger self-description resolution this flow has no use
@@ -387,6 +391,24 @@ Tests:
   - `contractUri` is frozen once, in the `consents.contract_uri` column, and the snapshot does not
     duplicate it; every consent event carries an `actor`, so the decision is as attributable as the
     request.
+  - **`DRAFT` is not a creatable status here**, although the ticket's own state table lists
+    `- -> DRAFT` ("consent prepared, awaiting user action") beside `GRANTED`/`REFUSED`/`PENDING`.
+    Nothing in this ticket prepares a draft, so admitting the creation would ship a state no
+    endpoint can produce and no endpoint can answer; `DRAFT` keeps its *outgoing* edges and
+    TICKET-009 adds it to `CREATABLE` and to the factory's event table together. When Step 6 walks
+    the acceptance criteria, "the state machine rejects every invalid transition" is therefore read
+    as covering transitions, not as covering that deferred creation.
+  - **`PENDING`/`DRAFT` -> `TERMINATED` are edges in the table**, because erasure
+    (`UserService`) and deregistration (`ParticipantService`) already close the consents nobody
+    answered. The ticket's table is silent on the move rather than forbidding it, and a table that
+    declared invalid what the service performs would be worse than no table.
+  - **Every status change goes through `ConsentFactory`**, which is the only caller of
+    `Consent.withStatus`/`updateStatus`; `ConsentStatusInvariantTest` scans `src/main/java` and
+    fails the build on any other caller, so "no transition bypasses the guard" is enforced rather
+    than documented. Erasure and deregistration were rewritten onto the factory for that reason.
+  - **`ConsentEventTrigger` is the single decider of `consent_events.event_type`** (`EXPLICIT` ->
+    `"explicit"`, `SYSTEM` -> `"system"`), so a job's expiry or a counterparty's departure is not
+    filed as a deliberate act by the subject, and the string exists in one place.
 - `docs/security.md` — extend the `@Secured` convention and spec-layout sections with the two
   operations and with why the request route demands `requireActive()` while the grant route is a
   pure `USER` route.
