@@ -99,6 +99,9 @@ Implemented operations:
 | `POST /participants/me/users/bulk` | `PARTICIPANT` | `ParticipantUserController` |
 | `PATCH /participants/me/users/{identifier}` | `PARTICIPANT` | `ParticipantUserController` |
 | `DELETE /participants/me/users/{identifier}` | `PARTICIPANT` | `ParticipantUserController` |
+| `POST /privacy-notices` | `PARTICIPANT` | `PrivacyNoticeController` |
+| `POST /privacy-notices/by-contract` | `PARTICIPANT` | `PrivacyNoticeController` |
+| `GET /privacy-notices/{id}` | `USER`, `PARTICIPANT`, `CATALOG` | `PrivacyNoticeController` |
 
 `EndpointRoleMatrixIT` answers each of these with every role, with a token holding no role of this
 service and with no token at all, against a real Keycloak; it fails when an operation of the
@@ -161,6 +164,32 @@ printf '%s' "${VERIFIER%%.*}$IDENTIFIER" \
   | openssl dgst -sha256 -hmac "$ERASURE_VERIFICATION_SECRET" -binary \
   | basenc --base64url | tr -d '='   # equals ${VERIFIER#*.} iff that identifier consented
 ```
+
+## Outbound fetches
+
+Two clients leave this service. `ContractGateway` reaches one configured host — the Contract
+Service — so its only exposure is the one the operator chose, and an outage there is the single
+fatal one: `UpstreamServiceException` becomes `502`.
+
+`SelfDescriptionClient` is different in kind. It fetches absolute URLs this service reads out of
+a document it does not own, which is a server-side request forgery primitive unless it is
+fenced. `SelfDescriptionClient.permits` is that fence, applied before anything is sent: the scheme
+must be `https` (`http` only under `SELF_DESCRIPTION_ALLOW_PLAINTEXT_HTTP`), the host must appear
+in `SELF_DESCRIPTION_ALLOWED_HOSTS` when that list is non-empty, and every address the host
+resolves to must lie outside loopback, link-local and private ranges. Redirects are not followed,
+so an admitted host cannot hand the fetch on to one that was never admitted.
+
+A host named in `SELF_DESCRIPTION_ALLOWED_HOSTS` is waived from the private-address refusal, and
+only from that one: naming a host there is an operator's statement about their own network and
+outranks the address heuristic, which is what lets a deployment read a catalog it hosts itself. An
+empty list — the default — waives nothing. The list is operator configuration; no registration
+path writes it.
+
+The client never throws out of the service. A refusal, a failure and an unparseable document are
+all `Optional.empty()`, which surfaces as an `UNAVAILABLE` section of the resolved notice rather
+than an error, so an unreachable catalog can never become this service's `5xx`.
+`SelfDescriptionGuardTest` pins the fence and `SelfDescriptionCacheIT` pins that nothing a refusal
+or a failure produced is cached.
 
 ## Spec layout
 
