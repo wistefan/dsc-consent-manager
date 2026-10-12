@@ -136,15 +136,22 @@ class ConsentManagerConfigurationTest {
         }
     }
 
+    /**
+     * Pins that {@code application.yml} still carries the {@code ${CONTRACT_SERVICE_URL:...}}
+     * placeholder after the key move, which is the half of the deployment contract this repo owns.
+     *
+     * <p>The stand-in is deliberate: the placeholder is resolved against the whole environment, so
+     * supplying the name as an ordinary property exercises the same lookup without a real process
+     * variable, which an in-process context cannot set. Micronaut's env-var relaxed binding is the
+     * framework's to test, not this suite's.
+     */
     @Test
-    @DisplayName("CONTRACT_SERVICE_URL still reaches the contract-service bean")
-    void bindsContractServiceUrlFromTheEnvironmentVariable() {
+    @DisplayName("the contract-service url still resolves the CONTRACT_SERVICE_URL placeholder")
+    void resolvesTheContractServiceUrlPlaceholder() {
         try (ApplicationContext context =
                 startContext(Map.of(CONTRACT_SERVICE_URL_VARIABLE, CONFIGURED_URL))) {
             assertThat(bean(context, ConsentManagerConfiguration.ContractService.class).getUrl())
-                    .as(
-                            "%s is the one variable a deployment must set",
-                            CONTRACT_SERVICE_URL_VARIABLE)
+                    .as("%s is the one name a deployment must set", CONTRACT_SERVICE_URL_VARIABLE)
                     .isEqualTo(CONFIGURED_URL);
         }
     }

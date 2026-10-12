@@ -168,8 +168,10 @@ printf '%s' "${VERIFIER%%.*}$IDENTIFIER" \
 ## Outbound fetches
 
 Two clients leave this service. `ContractGateway` reaches one configured host — the Contract
-Service — so its only exposure is the one the operator chose, and an outage there is the single
-fatal one: `UpstreamServiceException` becomes `502`.
+Service — so its only exposure is the one the operator chose, and an outage there is fatal in one
+place only: generation, where `UpstreamServiceException` becomes `502`. A retrieval degrades
+instead — `PrivacyNoticeResolver` catches that exception so `GET /privacy-notices/{id}` reports
+`contract` and `purposes` as `UNAVAILABLE`, which is why that operation declares no `502`.
 
 `SelfDescriptionClient` is different in kind. It fetches absolute URLs this service reads out of
 a document it does not own, which is a server-side request forgery primitive unless it is
@@ -178,6 +180,21 @@ must be `https` (`http` only under `SELF_DESCRIPTION_ALLOW_PLAINTEXT_HTTP`), the
 in `SELF_DESCRIPTION_ALLOWED_HOSTS` when that list is non-empty, and every address the host
 resolves to must lie outside loopback, link-local and private ranges. Redirects are not followed,
 so an admitted host cannot hand the fetch on to one that was never admitted.
+
+One residual stays open, and naming it is the point of this paragraph. The address check resolves
+the host, and the connection resolves it again, so a name whose answer changes between the two is
+still followed — nothing short of connecting through the pre-resolved address closes that, and a
+catalog is named by DNS. `SELF_DESCRIPTION_ALLOWED_HOSTS` is the mitigation where it matters: a
+deployment that pins the hosts it reads from is not exposed to a name it never admitted in the
+first place.
+
+`SELF_DESCRIPTION_MAX_DOCUMENTS` and `SELF_DESCRIPTION_MAX_DURATION` bound the fan-out, and are a
+control rather than a tuning knob. The walk is over lists this service does not author — the
+offerings a contract names, and the resources each offering names — so without a ceiling one
+authenticated `GET /privacy-notices/{id}` reaches as far as whoever published them decided, and
+without a deadline its worst case is that ceiling times the read timeout. Either bound stops the
+walk and reports the `dataResources` section `UNAVAILABLE`, which is the same degradation every
+other failure takes.
 
 A host named in `SELF_DESCRIPTION_ALLOWED_HOSTS` is waived from the private-address refusal, and
 only from that one: naming a host there is an operator's statement about their own network and
