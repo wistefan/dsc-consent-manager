@@ -34,14 +34,18 @@ These override the ticket text where they disagree; the ticket was written again
   Every new operation needs a row in its `Endpoint` enum with the expected status per caller role,
   and a PARTICIPANT-only route is additionally swept by `participantScopedEndpoints`, which demands
   it refuse an unregistered participant.
-- **Generated-model name collision.** The response schema `Consent.yaml` generates
-  `api.generated.model.Consent`, which collides with `domain.Consent`; the mapper fully qualifies
-  one side, as `PrivacyNoticeMapper` already does for `PrivacyNotice`.
+- **Generated-model name collisions — two of them.** The response schema `Consent.yaml` generates
+  `api.generated.model.Consent`, which collides with `domain.Consent`; `ConsentMapper` fully
+  qualifies the generated side, as `PrivacyNoticeMapper` already does for `PrivacyNotice`. The
+  request schema `ConsentRequest.yaml` (Step 5) would collide the same way with a service record
+  named `ConsentRequest`, in a class — `ConsentRequestController` — that has to name both. Rather
+  than qualify twice, the service-layer record is named **`ConsentRequestCommand`** (Step 4), so the
+  second collision never arises and `ConsentRequest` means exactly one thing in Java.
 - **Response schemas declare no `nullable: true`** (it forces `JsonNullable`); optional means absent.
   A schema whose `items:` refs another named model must be declared inline in `openapi.yaml` with an
   internal `#/components/schemas/...` ref — not needed here if every array is an array of strings.
-- **Micronaut AOP does not apply to self-invocation**, so the one transaction that revokes and
-  re-grants lives on a separate bean, mirroring `PrivacyNoticeWriter`.
+- **Micronaut AOP does not apply to self-invocation**, so the transactions that revoke and re-grant
+  live on a separate bean, mirroring `PrivacyNoticeWriter`.
 - Doc comments stay terse, named constants only, parameterized tests where the shape repeats.
 
 ## Out of scope (explicit seams, no placeholder code)
@@ -73,15 +77,24 @@ The single transition guard and the single creation path, with no API surface ye
   consent cannot be created in this ticket, and TICKET-009 adds it to both tables together with its
   event mapping rather than bypassing either. `DRAFT` keeps its *outgoing* transitions
   (`DRAFT` → `{GRANTED, REFUSED}`), which is a statement about resuming a draft, not creating one.
+  **Every factory entry point takes the acting identity** and passes it to the `actor` argument
+  `ConsentEvent`'s constructor already declares (`consent_events.actor` is nullable `TEXT`): the
+  user's identifier on `CONSENT_GIVEN`/`CONSENT_REFUSED`/`CONSENT_REVOKED`, the requesting
+  participant's on `CONSENT_REQUESTED`. Because the factory is the single place an event is built,
+  there is no path that writes a null actor, and the audit log does not record who *asked* while
+  leaving the decision that actually binds the user anonymous.
 - `domain/ConsentSnapshot.java` — align the vocabulary with `PrivacyNoticePayload`, which its own
   javadoc defers to "the ticket that first writes a consent". The snapshot freezes the *effective*
   terms: `purposes` and `dataCategories` hold the elected subset (the notice's full lists when the
   decision elects none), and the non-scope terms — `dataReferences`, `recipients`,
   `retentionPeriod`, `controllerDetails`, `piiPrincipalRights`, `internationalTransfers`,
   `withdrawalOfConsent` — are copied verbatim from the payload, together with the notice's
-  `contractUri` and `title` so the record stands alone after the notice is archived. "Verbatim"
-  forces two shape changes worth naming
-  here: `recipients` becomes `List<PrivacyNoticePayload.Recipient>` rather than `List<String>`, and
+  `title` so the record stands alone after the notice is archived. The notice's `contractUri` is
+  deliberately **not** copied in: `consents.contract_uri` is already a column and
+  `Consent.withStatus(...)` already takes it, so a second copy in the snapshot JSONB would be two
+  sources of truth that can disagree. The column is the frozen one, and it is what Step 3 renders.
+  "Verbatim" forces two shape changes worth naming here: `recipients` becomes
+  `List<PrivacyNoticePayload.Recipient>` rather than `List<String>`, and
   the payload's `data` (`List<DataReference>`, the concrete offerings and resources) is **kept**,
   under the name `dataReferences` so it cannot be read as `dataCategories`. Keeping it is the point
   of the snapshot: the elected categories say what *kind* of data was consented to, the references
@@ -114,11 +127,19 @@ without being added to the test's expectation.
 
 The whole grant path behind the API, driven by service-layer records.
 
-- `repository/ConsentRepository.java` — add `Optional<Consent>
-  findByUserIdAndPrivacyNoticeIdAndStatus(UUID, UUID, ConsentStatus)` and
-  `List<Consent> findByUserIdAndPrivacyNoticeIdAndStatusIn(UUID, UUID, Collection<ConsentStatus>)`.
-  `idx_consents_user_id_status` already serves both; no migration. The writer below reads the open
-  consents for a pair through the second one with `OPEN_STATUSES = {GRANTED, PENDING}`.
+- `repository/ConsentRepository.java` — add exactly two methods, each with a named call site:
+  - `@Query("SELECT * FROM consents WHERE user_id = :userId AND privacy_notice_id ="
+    + " :privacyNoticeId ORDER BY created_at DESC FOR UPDATE")
+    List<Consent> findByUserIdAndPrivacyNoticeIdForUpdate(UUID userId, UUID privacyNoticeId)` — the
+    writer's single read, following the precedent `ParticipantRepository.findByIdForUpdate`
+    (`SELECT * FROM participants WHERE id = :id FOR UPDATE`) already sets. It locks **every** row
+    for the pair, not just the open ones, because the writer needs both: the open consents to
+    supersede and the most recent row of any status to link as parent. Newest first, so element 0
+    is the parent candidate and the open rows are a filter over the same result.
+  - `boolean existsByUserIdAndPrivacyNoticeIdAndStatusIn(UUID, UUID, Collection<ConsentStatus>)` —
+    Step 4 rule 4's duplicate check, and nothing else reads it.
+  `idx_consents_user_id_status` serves both; no migration. `OPEN_STATUSES = {GRANTED, PENDING}` is a
+  constant on the service side, passed to the second method and used to filter the first's result.
 - `service/ConsentDecision.java` — record `(UUID privacyNoticeId, ConsentStatus decision,
   List<String> purposes, List<String> dataCategories)`; the status is `GRANTED` or `REFUSED` and the
   state machine is what enforces that, not the record.
@@ -139,19 +160,38 @@ The whole grant path behind the API, driven by service-layer records.
      require a consumer (`require(consumerIdentifier)`, `require(derived.dataConsumer())`), so no
      notice this service writes can reach that branch; the 400 covers rows that predate the
      invariant, and it is what keeps the "no Flyway migration is required" claim above true;
-  4. scope check: an elected `purposes`/`data` list must be a non-empty subset of the notice's
-     `purposes`/`categoriesOfData`, otherwise 400 naming the offending values; absent means the
-     notice's full scope; an explicitly empty array is a 400, since electing nothing is not a
-     narrowing;
+  4. scope check against the notice's `purposes` and `categoriesOfData`. **Every component of
+     `PrivacyNoticePayload` is `@Nullable`** — a contract need not carry a source for every heading
+     — so a notice declaring no purposes or no categories is a branch, not an oversight, and a bare
+     `noticePurposes.containsAll(elected)` would NPE into a 500. The four cases, in this order:
+     - an election against a notice list that is null or empty → 400 ("nothing to narrow"),
+       evaluated *before* the subset test so it never dereferences null;
+     - an explicitly empty elected array → 400: electing nothing is not a narrowing. This diverges
+       from the ticket's literal "verify each is a subset" — an empty list *is* a subset — so it is
+       recorded in the Step 6 ADR alongside the other decisions rather than only here;
+     - an elected list that is not a subset of the notice's → 400 naming the offending values;
+     - an absent election takes the notice's full scope, and where that notice list is itself null
+       the frozen scope is recorded as **absent** (null), not as an empty list: a consent against a
+       notice that named no purposes says so, instead of claiming an empty set was elected. Both
+       snapshot components are `@Nullable` already, so this needs no shape change;
   5. freeze `ConsentSnapshot.of(notice, electedPurposes, electedData)`;
   6. hand the result to the writer below.
-- `service/ConsentWriter.java` — a separate `@Singleton` holding the one
-  `jakarta.transaction.Transactional` method, called across the bean boundary because Micronaut AOP
-  skips self-invocation. In one transaction it reads the **open** consents for (user, notice) —
-  `OPEN_STATUSES = {GRANTED, PENDING}` — and then:
+- `service/ConsentWriter.java` — a separate `@Singleton` holding this flow's
+  `jakarta.transaction.Transactional` methods — `decide(...)` here and `request(...)` in Step 4 —
+  called across the bean boundary because Micronaut AOP skips self-invocation. Its **first** statement is the locking read
+  `findByUserIdAndPrivacyNoticeIdForUpdate(userId, noticeId)` — every row for the pair, newest
+  first, locked for the transaction. The lock is not decoration: the create path is guarded by
+  `uq_consents_granted_per_user_notice`, but branch 2 below *updates a row in place* and no unique
+  index covers that, so without it two concurrent decisions against one open `PENDING` would both
+  pass `requireTransition(PENDING, GRANTED)` on their own stale read and both commit, leaving one
+  consent carrying two `CONSENT_GIVEN` events. With it the second transaction blocks and, under
+  `READ COMMITTED`, re-evaluates the row as the first left it, so it takes branch 1 or 3 against the
+  real state. (Two *first* decisions for a pair lock nothing — there is no row yet — which is
+  precisely the case the unique index and the 409 below cover.) `ParticipantRepository`'s
+  self-service write already uses this shape. Over that locked list, filtered by
+  `OPEN_STATUSES = {GRANTED, PENDING}`, the writer then:
   1. an existing `GRANTED` consent is revoked: `requireTransition(GRANTED, REVOKED)`,
-     `updateStatus(REVOKED)`, saved with its `CONSENT_REVOKED` event, and its id becomes the
-     `parentConsentId` of the consent the decision lands on;
+     `updateStatus(REVOKED)`, saved with its `CONSENT_REVOKED` event;
   2. an open `PENDING` consent for the same pair is **adopted, not left stranded**: the writer
      transitions that row in place through `requireTransition(PENDING, <decision>)`, replaces its
      snapshot with the one frozen now and appends its single `CONSENT_GIVEN`/`CONSENT_REFUSED`
@@ -164,6 +204,17 @@ The whole grant path behind the API, driven by service-layer records.
      since the partial unique index covers `GRANTED` alone) has the `GRANTED` revoked and the
      `PENDING` adopted and linked to the revoked id;
   3. with neither open, a new consent is saved with its single creation event.
+  **Lineage is the general rule, not the revoke branch's private business.** The ticket states that
+  `REVOKED`, `REFUSED`, `TERMINATED` and `EXPIRED` are terminal and "a new decision creates a new
+  consent with a parent link". So: the `parentConsentId` of a newly created consent is **the most
+  recent consent for (user, notice) whatever its status** — element 0 of the locked list, which is
+  why the read locks every row rather than only the open ones. Revoking an open `GRANTED` is one
+  case of that rule (the row it just revoked is also the most recent), not the only one: a user who
+  `REFUSED` and later grants, or whose consent reached `EXPIRED` or `TERMINATED`, gets a chain
+  TICKET-010 can walk back instead of a fresh root that loses the fact that the grant superseded a
+  refusal. An *adopted* `PENDING` row (branch 2) is not a new consent: it keeps the parent it was
+  requested with, except where branch 1 fired in the same transaction, in which case it is
+  re-pointed at the row just revoked — the chain still records what the decision superseded.
   A `23505` unique violation on `uq_consents_granted_per_user_notice` (a concurrent second grant) is
   **not** caught inside the transactional method. As `PrivacyNoticeWriter`'s javadoc spells out, the
   `DataAccessException` is let out so the caller handles it *outside* the rolled-back transaction:
@@ -181,10 +232,19 @@ Tests:
   `PENDING` request is open** adopts that row: same consent id, status equal to the decision, no
   second row for the pair, exactly one new event, and a later `POST /consents/requests` for the pair
   is admitted again rather than 409ing against a stranded `PENDING`. A consumer-less notice is
-  refused with 400.
-- `service/ConsentGrantAtomicityIT` — modelled on `service/ParticipantDeregistrationAtomicityIT`:
-  two concurrent grants for the same (user, notice) leave exactly one `GRANTED` consent, the loser
-  answering 409, and no state in which the user has zero or two.
+  refused with 400. **Lineage, parameterized over the terminal statuses** `REFUSED`, `REVOKED`,
+  `EXPIRED` and `TERMINATED`: a consent left in that status and a later grant produce a new consent
+  whose `parentConsentId` is that row, not `null` — grant-after-refuse is the case the plan
+  previously got wrong. A notice declaring null `purposes`/`categoriesOfData` is covered twice: an
+  election against it is 400, an absent election freezes an absent scope.
+- `service/ConsentGrantAtomicityIT` — modelled on `service/ParticipantDeregistrationAtomicityIT`,
+  with a case per concurrency hazard:
+  - two concurrent **first** grants for the same (user, notice) leave exactly one `GRANTED`
+    consent, the loser answering 409, and no state in which the user has zero or two;
+  - two concurrent **decisions against one open `PENDING`** — the hazard branch 2 introduces, which
+    the first case cannot reach — leave no row still `PENDING`, exactly one `GRANTED` consent for
+    the pair, and **no consent carrying two events of the same state**: the lock forces the second
+    decision into the revoke-and-create branch rather than a second adoption of the same row.
 
 ### Step 3: `POST /consents` — specification, controller and mapper
 
@@ -195,8 +255,9 @@ Tests:
   when there is no parent), `status` (enum of the seven states), `consented` (boolean), `provider`
   and `consumer` (participant identifiers), `purposes` and `data` (arrays of string — the snapshot's
   elected `purposes` and `dataCategories`; the snapshot's `dataReferences` are not rendered here,
-  the notice serves them), `contractUri`, `createdAt`, `updatedAt` (`date-time`). No
-  `nullable: true` anywhere.
+  the notice serves them), `contractUri` — read from the `consents.contract_uri` **column**, never
+  from the snapshot, per the single-source decision in Step 1 — `createdAt`, `updatedAt`
+  (`date-time`). No `nullable: true` anywhere.
 - `api/openapi.yaml` — add the `/consents` path item inline, copying the `registerParticipant`
   operation skeleton: `operationId: grantConsent`, `tags: [Consents]`, `security:
   - bearerAuth: [USER]`, `x-roles: [USER]`, `x-principal: UserPrincipal`, `requestBody` →
@@ -213,8 +274,13 @@ Tests:
 - `EndpointRoleMatrixIT` — add the `GRANT_CONSENT` row with the per-role expectations. The cell for
   the role a route serves carries that route's *own* status, and the fixture seeds users and
   participants but **no privacy notice** — so point the row at the existing `ABSENT_NOTICE` constant
-  and expect `404` for the `USER` cell, exactly as `RETRIEVE_PRIVACY_NOTICE` does. The matrix is an
-  authorization sweep; `ConsentGrantIT` owns the success path.
+  and expect `404` for the `USER` cell, exactly as `RETRIEVE_PRIVACY_NOTICE` does. For that `404` to
+  be the status reached, the body must first pass bean validation — `privacyNoticeId` and `decision`
+  are both required — so spell it out the way every body-carrying row already does (see
+  `SEARCH_USERS`, `GENERATE_PRIVACY_NOTICE`):
+  `HttpRequest.POST(PATH_CONSENTS, Map.of("privacyNoticeId", ABSENT_NOTICE, "decision", "GRANTED"))`.
+  A row with an incomplete body answers `400` and the sweep stops meaning what it claims. The matrix
+  is an authorization sweep; `ConsentGrantIT` owns the success path.
 
 Tests:
 - `api/ConsentGrantIT` (`@MicronautTest(transactional = false)` +
@@ -222,19 +288,25 @@ Tests:
   `KeycloakTestResource.accessToken(RealmPrincipal.USER)`) — 201 for `GRANTED` and for `REFUSED`
   (parameterized); the created consent belongs to the token's user even when the body also carries
   `userIdentifier`/`email`/`userKey` for a **different** user, and no consent exists for that other
-  user afterwards. Determine empirically whether serde rejects the unknown properties outright: if it
-  answers 400, assert that and record in the step's PR description that a rejected body cannot be
-  honoured either; if it ignores them, assert the subject is the token's user. Either way the
-  criterion "ignored, not honoured" is satisfied and the observed behaviour is documented.
+  user afterwards. **The expected behaviour is settled, not empirical:** Micronaut Serde ignores
+  unknown properties by default, and neither `application.yml` nor `application-test.yml` sets any
+  `deserialization` / `fail-on-unknown-properties` key — the only `micronaut.serde` block in the
+  repo is `serialization.inclusion: non-absent`. Three ITs already assert exactly this shape against
+  generated models (`ParticipantRegistrationIT.anIdentifierInTheBodyIsIgnored`,
+  `ParticipantSelfServiceIT`, `ParticipantUserRegistrationIT`), so model this test on them: expect
+  `201` and assert the subject is the token's user. If it ever answers `400`, that is a
+  configuration regression to fix rather than a behaviour to assert.
 - The same IT covers 404 unknown notice, 400 archived notice, 400 out-of-scope purposes/data over
   HTTP, and that a `PARTICIPANT` token is refused — there is no endpoint by which a participant can
   create a `GRANTED` consent.
 
 ### Step 4: Consent requests — the participant-initiated service rules
 
-- `service/ConsentRequest.java` — record `(UUID privacyNoticeId, String userIdentifier)`.
-- `service/ConsentService.java` — `request(Participant caller, ConsentRequest)`, with the check
-  order fixed because the status codes depend on it:
+- `service/ConsentRequestCommand.java` — record `(UUID privacyNoticeId, String userIdentifier)`.
+  Named `...Command` rather than `ConsentRequest` because Step 5's `ConsentRequest.yaml` generates
+  `api.generated.model.ConsentRequest`, and `ConsentRequestController` names both.
+- `service/ConsentService.java` — `request(Participant caller, ConsentRequestCommand)`, with the
+  check order fixed because the status codes depend on it:
   1. notice unknown → 404; archived → 400, for the same reason a grant against it is refused; a
      notice naming no consumer → 400, by the Step 2 decision, since the request would write the same
      `consents.consumer_id NOT NULL` column;
@@ -242,10 +314,17 @@ Tests:
   3. user unknown **or** not linked to the caller
      (`UserParticipantRepository.existsByIdUserIdAndIdParticipantId`) → `NotFoundException` (404)
      with a message that does not disclose whether the identifier exists;
-  4. a `GRANTED` or `PENDING` consent already exists for (user, notice) → `ConflictException` (409);
+  4. a `GRANTED` or `PENDING` consent already exists for (user, notice) → `ConflictException` (409),
+     through `existsByUserIdAndPrivacyNoticeIdAndStatusIn(userId, noticeId, OPEN_STATUSES)`;
   5. otherwise create via `ConsentFactory` with status `PENDING` (`consented = false`), the snapshot
-     frozen at the notice's full scope, and append the single `CONSENT_REQUESTED` event with
-     `actor` set to the requesting participant's identifier.
+     frozen at the notice's full scope (absent where the notice's own list is null, per Step 2's
+     check 4), the `parentConsentId` taken by the same most-recent-row rule the grant path uses, and
+     the single `CONSENT_REQUESTED` event with `actor` set to the requesting participant's
+     identifier — the factory argument, not a special case here.
+  Rules 4 and 5 run in a second `@Transactional` method on `ConsentWriter`, behind the same locking
+  read the grant path uses, so two concurrent requests for one pair cannot both pass rule 4 and
+  land two `PENDING` rows that no index would catch, and the parent rule is applied under that
+  lock.
   The caller is obtained with `ParticipantPrincipal.requireActive()`, not `requireRegistered()`: a
   request acts in the dataspace in the participant's name, so a deregistered participant must not be
   able to open new business.
@@ -265,10 +344,15 @@ Tests:
   `409` → shared responses, plus `default`.
 - `SpecSecurityConsistencyTest.SPECIFIED_OPERATION_COUNT` 20 → 21.
 - `api/ConsentRequestController.java` — `@Controller` subclass of the generated
-  `AbstractConsentRequestsController`, delegating to `ConsentService.request(...)`.
+  `AbstractConsentRequestsController`, mapping the generated `ConsentRequest` body to the service's
+  `ConsentRequestCommand` and delegating to `ConsentService.request(...)`. Because the service
+  record carries the `...Command` suffix, neither type has to be fully qualified here.
 - `EndpointRoleMatrixIT` — add the `REQUEST_CONSENT` row, again against `ABSENT_NOTICE` so the
-  `PARTICIPANT` cell is a deterministic `404` without seeding a notice; `ConsentRequestSurfaceIT`
-  owns the 201. `participantScopedEndpoints` picks the row up automatically and will fail unless the
+  `PARTICIPANT` cell is a deterministic `404` without seeding a notice, and again with the body
+  spelled out so validation is not what answers:
+  `HttpRequest.POST(PATH_CONSENT_REQUESTS, Map.of("privacyNoticeId", ABSENT_NOTICE,
+  "userIdentifier", LINKED_USER))`; `ConsentRequestSurfaceIT` owns the 201.
+  `participantScopedEndpoints` picks the row up automatically and will fail unless the
   route refuses an unregistered participant — which `requireActive()` does before the notice is
   looked up, so the sweep still sees a refusal rather than that `404`.
 
@@ -285,15 +369,30 @@ Tests:
 - `docs/adr/0009-only-the-data-subject-grants-consent.md` — records the decision the ticket turns on:
   a participant may ask and never answer, the `x-user-key` grant path is gone, `PENDING` confers
   nothing, and lineage is a single upward `parentConsentId` link with no reciprocal child column.
-  Record two further decisions this plan fixes: a user's decision **adopts** an open `PENDING`
-  request for the same (user, notice) rather than creating a second row beside it, so a request is
-  always answered rather than stranded; and a privacy notice naming no consumer is refused with a
-  400 rather than relaxing `consents.consumer_id`, which no notice this service generates can be.
+  Record the further decisions this plan fixes, each a point where the implementation is not simply
+  readable off the ticket:
+  - a user's decision **adopts** an open `PENDING` request for the same (user, notice) rather than
+    creating a second row beside it, so a request is always answered rather than stranded, and the
+    locking read is what keeps two concurrent decisions from adopting the same row twice;
+  - the `parentConsentId` of a new consent is the most recent consent for the pair **whatever its
+    status**, so a grant after a refusal, an expiry or a termination extends the chain rather than
+    starting a new one; revoking an open `GRANTED` is one case of that rule;
+  - a privacy notice naming no consumer is refused with a 400 rather than relaxing
+    `consents.consumer_id`, which no notice this service generates can be;
+  - an explicitly empty elected `purposes`/`data` array is a 400, which **diverges from the
+    ticket's literal "verify each is a subset"** — an empty list is a subset — because electing
+    nothing is not a narrowing; an election against a notice that declares no purposes or
+    categories is a 400 for the same reason, and an absent election against such a notice freezes
+    an absent scope rather than an empty one;
+  - `contractUri` is frozen once, in the `consents.contract_uri` column, and the snapshot does not
+    duplicate it; every consent event carries an `actor`, so the decision is as attributable as the
+    request.
 - `docs/security.md` — extend the `@Secured` convention and spec-layout sections with the two
   operations and with why the request route demands `requireActive()` while the grant route is a
   pure `USER` route.
 - `AGENTS.md` — update the structure listing with `ConsentService`, `ConsentWriter`,
-  `ConsentStateMachine`, `ConsentFactory`, the new controllers and schemas; raise the
+  `ConsentStateMachine`, `ConsentFactory`, `ConsentRequestCommand`, the new controllers and
+  schemas; raise the
   `SPECIFIED_OPERATION_COUNT` note (this plan's own commit already corrected it to **19**; it is
   **21** after Step 5); record the
   `ConsentSnapshot` vocabulary alignment and that the state machine is the only legal way to change a
