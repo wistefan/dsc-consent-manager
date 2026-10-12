@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.api;
 
+import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.domain.Consent;
@@ -203,6 +204,28 @@ class ConsentGrantIT extends KeycloakAndPostgresTestResource {
     }
 
     @Test
+    @DisplayName("answers a request that is still open with 200, because it creates nothing")
+    void answersAnOpenRequestInPlace() {
+        UUID requested = seedOpenRequest();
+
+        HttpResponse<String> response =
+                decide(Map.of(PROPERTY_NOTICE, noticeId(), PROPERTY_DECISION, GRANTED));
+
+        assertThat(response.code())
+                .as("a client answering a request is told the record was there already")
+                .isEqualTo(HttpStatus.OK.getCode());
+        assertThat(body(response))
+                .as("the body is the record the request opened, under the id it was given")
+                .containsEntry(PROPERTY_ID, requested.toString())
+                .containsEntry("status", GRANTED)
+                .containsEntry("consented", true);
+        assertThat(storedConsents())
+                .as("no second consent stands beside the one that was answered")
+                .singleElement()
+                .satisfies(stored -> assertThat(stored.getId()).isEqualTo(requested));
+    }
+
+    @Test
     @DisplayName("freezes only the elected part of the notice's terms")
     void freezesTheElectedScope() {
         Map<String, Object> created =
@@ -332,6 +355,30 @@ class ConsentGrantIT extends KeycloakAndPostgresTestResource {
                         Map.of(PROPERTY_NOTICE, noticeId(), PROPERTY_DECISION, GRANTED));
 
         assertThat(exchange(request, null).code()).isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+    }
+
+    /**
+     * A {@code PENDING} request for the caller and the seeded notice, as a participant's ask would
+     * have left it.
+     *
+     * <p>The subject's row is provisioned by an authenticated call first - the token is what
+     * creates it, and no case has made one yet at this point. The request is written straight to
+     * the table because {@code POST /consents/requests} is not part of this step.
+     */
+    private UUID seedOpenRequest() {
+        decide(Map.of(PROPERTY_NOTICE, UUID.randomUUID().toString(), PROPERTY_DECISION, GRANTED));
+        return consents
+                .save(
+                        Consent.withStatus(
+                                ConsentStatus.PENDING,
+                                callerId(),
+                                notice.getId(),
+                                notice.getProviderId(),
+                                notice.getConsumerId(),
+                                null,
+                                CONTRACT_URI,
+                                noTerms()))
+                .getId();
     }
 
     /** Writes a notice with both parties registered, archived when {@code archivedAt} is given. */

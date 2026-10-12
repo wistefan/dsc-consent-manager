@@ -62,6 +62,9 @@ class ConsentFactoryTest {
         assertThat(recorded.event().getEventState()).isEqualTo(expected);
         assertThat(recorded.event().getConsentId()).isEqualTo(recorded.consent().getId());
         assertThat(recorded.event().getActor()).isEqualTo(USER_ACTOR);
+        assertThat(recorded.created())
+                .as("a creation is an insert, which is what the API answers 201 for")
+                .isTrue();
     }
 
     @ParameterizedTest(name = "a consent created {0} is consented only when granted")
@@ -115,6 +118,9 @@ class ConsentFactoryTest {
         assertThat(revoked.consent().isConsented()).isFalse();
         assertThat(revoked.event().getEventState()).isEqualTo(ConsentEventState.CONSENT_REVOKED);
         assertThat(revoked.event().getActor()).isEqualTo(PARTICIPANT_ACTOR);
+        assertThat(revoked.created())
+                .as("a move writes no new row, so the API owes no 201 for it")
+                .isFalse();
     }
 
     @ParameterizedTest(name = "a {0} move is recorded as event type {1}")

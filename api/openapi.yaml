@@ -1382,12 +1382,15 @@ paths:
 
 
         A decision supersedes whatever the subject had already recorded for the
-        same notice: the previous record is closed in the same transaction and
-        the new one names it as its `parentConsentId`, which is what makes the
-        chain readable backwards. One record per subject and notice is in force
-        at a time and the database enforces it, so two decisions submitted at
-        once cannot both stand — the one that loses the race is answered `409`
-        and is safe to resubmit against the record it can then read.
+        same notice: a record still in force is revoked in the same transaction,
+        and the new record names the most recent previous record — whatever its
+        status — as its `parentConsentId`, which is what makes the chain
+        readable backwards. A predecessor that had already ended, as a refusal,
+        an expiry or a termination, is linked but not written to: its status
+        does not change. One record per subject and notice is in force at a time
+        and the database enforces it, so two decisions submitted at once cannot
+        both stand — the one that loses the race is answered `409` and is safe
+        to resubmit against the record it can then read.
 
 
         **Answering an open request returns that record, not a new one.** Where
@@ -1398,8 +1401,10 @@ paths:
         had — re-pointed only where the same decision also closed a grant that
         was still in force — so a client that answers a request must not expect
         a fresh identifier or a new parent link. `createdAt` then dates the request — when consent
-        was asked for — and `updatedAt` is when the subject decided. Only where
-        no request is open does a decision create a record of its own.
+        was asked for — and `updatedAt` is when the subject decided. The status
+        code says which of the two happened: `201` for a record this decision
+        created, `200` for a request it answered in place. Only where no request
+        is open does a decision create a record of its own.
       tags:
         - Consents
       security:
@@ -1413,6 +1418,14 @@ paths:
             schema:
               $ref: "#/components/schemas/GrantConsent"
       responses:
+        "200":
+          description: >
+            The decision answered a request that was already open; the body is
+            that record, carrying the identifier it was created with.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
         "201":
           description: >
             The decision was recorded; the body is the consent it created.

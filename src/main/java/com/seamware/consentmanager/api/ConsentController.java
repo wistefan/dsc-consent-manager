@@ -5,6 +5,7 @@ import com.seamware.consentmanager.api.generated.model.Consent;
 import com.seamware.consentmanager.api.generated.model.GrantConsent;
 import com.seamware.consentmanager.security.UserPrincipal;
 import com.seamware.consentmanager.service.ConsentDecision;
+import com.seamware.consentmanager.service.ConsentDetails;
 import com.seamware.consentmanager.service.ConsentService;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
@@ -16,8 +17,9 @@ import io.micronaut.http.annotation.Controller;
  * notice and a decision, so a user identifier sent alongside is deserialized into nothing and
  * cannot redirect the decision at another person.
  *
- * <p>{@code Consent} here is the generated API model; the stored row is named in full to keep the
- * two apart.
+ * <p>The status code reports which record the body is: {@code 201} for a consent this decision
+ * brought into being, {@code 200} where it answered a request a participant had already opened,
+ * whose identifier and parent link were there before this call.
  */
 @Controller
 public class ConsentController extends AbstractConsentsController {
@@ -39,7 +41,8 @@ public class ConsentController extends AbstractConsentsController {
                         mapper.toStatus(request.getDecision()),
                         request.getPurposes(),
                         request.getData());
-        return HttpResponse.created(
-                mapper.toRepresentation(consents.decide(principal.user(), decision)));
+        ConsentDetails recorded = consents.decide(principal.user(), decision);
+        Consent body = mapper.toRepresentation(recorded);
+        return recorded.created() ? HttpResponse.created(body) : HttpResponse.ok(body);
     }
 }
