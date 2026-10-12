@@ -27,6 +27,9 @@ import org.junit.jupiter.params.provider.MethodSource;
 @DisplayName("Consent Manager configuration binding")
 class ConsentManagerConfigurationTest {
 
+    private static final String CONFIGURED_URL = "https://contract.example.org";
+    private static final String CONTRACT_SERVICE_URL_VARIABLE = "CONTRACT_SERVICE_URL";
+
     /** One configured value per properties class, with the accessor that has to report it back. */
     static Stream<Arguments> boundSettings() {
         return Stream.of(
@@ -79,6 +82,23 @@ class ConsentManagerConfigurationTest {
                                         .getPageMaxSize()));
     }
 
+    /** The three settings application.yml forwards into the keys Micronaut's client reads. */
+    static Stream<Arguments> forwardedHttpClientSettings() {
+        return Stream.of(
+                Arguments.of(
+                        "consent-manager.contract-service.url",
+                        "micronaut.http.services.contract-service.url",
+                        CONFIGURED_URL),
+                Arguments.of(
+                        "consent-manager.contract-service.connect-timeout",
+                        "micronaut.http.services.contract-service.connect-timeout",
+                        "7s"),
+                Arguments.of(
+                        "consent-manager.contract-service.read-timeout",
+                        "micronaut.http.services.contract-service.read-timeout",
+                        "13s"));
+    }
+
     @ParameterizedTest(name = "{0} binds")
     @MethodSource("boundSettings")
     @DisplayName("a configured value reaches the bean through the generated setter")
@@ -102,6 +122,37 @@ class ConsentManagerConfigurationTest {
                     .isEqualTo(ConsentManagerConfiguration.ContractService.DEFAULT_RETRY_ATTEMPTS);
             assertThat(contractService.getCacheTtl())
                     .isEqualTo(ConsentManagerConfiguration.ContractService.DEFAULT_CACHE_TTL);
+        }
+    }
+
+    @ParameterizedTest(name = "{0} is forwarded to {1}")
+    @MethodSource("forwardedHttpClientSettings")
+    @DisplayName("a contract-service setting reaches the key the HTTP client actually reads")
+    void forwardsHttpClientSettings(String source, String target, String value) {
+        try (ApplicationContext context = startContext(Map.of(source, value))) {
+            assertThat(context.getEnvironment().getProperty(target, String.class))
+                    .as("the declarative client reads %s and nothing else", target)
+                    .hasValue(value);
+        }
+    }
+
+    /**
+     * Pins that {@code application.yml} still carries the {@code ${CONTRACT_SERVICE_URL:...}}
+     * placeholder after the key move, which is the half of the deployment contract this repo owns.
+     *
+     * <p>The stand-in is deliberate: the placeholder is resolved against the whole environment, so
+     * supplying the name as an ordinary property exercises the same lookup without a real process
+     * variable, which an in-process context cannot set. Micronaut's env-var relaxed binding is the
+     * framework's to test, not this suite's.
+     */
+    @Test
+    @DisplayName("the contract-service url still resolves the CONTRACT_SERVICE_URL placeholder")
+    void resolvesTheContractServiceUrlPlaceholder() {
+        try (ApplicationContext context =
+                startContext(Map.of(CONTRACT_SERVICE_URL_VARIABLE, CONFIGURED_URL))) {
+            assertThat(bean(context, ConsentManagerConfiguration.ContractService.class).getUrl())
+                    .as("%s is the one name a deployment must set", CONTRACT_SERVICE_URL_VARIABLE)
+                    .isEqualTo(CONFIGURED_URL);
         }
     }
 
