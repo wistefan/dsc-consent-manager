@@ -137,15 +137,6 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
     List<Consent> findByUserIdAndPrivacyNoticeIdForUpdate(UUID userId, UUID privacyNoticeId);
 
     /**
-     * Whether the pair already holds a consent in any of the given statuses.
-     *
-     * <p>Read with {@code ConsentStateMachine#OPEN_STATUSES} to refuse a request for a decision the
-     * user has already been asked for or has already given.
-     */
-    boolean existsByUserIdAndPrivacyNoticeIdAndStatusIn(
-            UUID userId, UUID privacyNoticeId, Collection<ConsentStatus> statuses);
-
-    /**
      * How many consents name the participant on either side, counting a self-dealing consent once.
      *
      * <p>Deregistration needs this twice over: it is the retained-consent tally reported back, and

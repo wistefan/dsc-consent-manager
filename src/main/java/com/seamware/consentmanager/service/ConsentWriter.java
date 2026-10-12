@@ -92,9 +92,13 @@ public class ConsentWriter {
      * <p>Refuses with {@link ConflictException} a pair that already holds an open consent, so a
      * user is neither asked twice nor asked for a decision already given. The duplicate check runs
      * behind the same locking read the decision path takes, which is also what settles the parent,
-     * so two requests racing for a pair that already holds a row cannot both pass it. A pair
-     * holding none is the case no lock covers - there is no row to lock - and is what {@code
-     * decide} closes as redundant rather than leaving stranded.
+     * and that lock is decisive only where the row already held is itself open: both racers read it
+     * and both refuse. It covers nothing beyond that. Under {@code READ COMMITTED} a locked row is
+     * re-read as its holder left it, but a row the holder <em>inserted</em> was never in this
+     * statement's snapshot and no lock makes it appear - so two asks for a pair holding only closed
+     * rows, and an ask racing a decision that opens one, can both land a {@code PENDING}. At most
+     * one open request is therefore a best effort here rather than an invariant, and it is settled
+     * where it is answered: {@code decide} closes every open request it does not adopt.
      */
     @NonNull
     @Transactional
@@ -156,10 +160,11 @@ public class ConsentWriter {
      * Terminates the open requests the answered one leaves redundant, so none is stranded.
      *
      * <p>Normally there are none: a pair holds at most one open request. But the locking read
-     * cannot block a concurrent insert and no index covers {@code PENDING}, so two requests racing
-     * for a pair that held no row can both land - and answering only the newest would leave the
-     * other open forever, permanently refusing every later request for the pair as a duplicate.
-     * Closing them here settles that without a second guard the duplicate check could drift from.
+     * cannot show a row another transaction inserted after this statement's snapshot, and no index
+     * covers {@code PENDING}, so two asks racing for a pair holding no open row - or an ask racing
+     * this very decision - can both land one. Answering only the newest would leave the other open
+     * forever, permanently refusing every later request for the pair as a duplicate. Closing them
+     * here settles that without a second guard the duplicate check could drift from.
      */
     private void closeRedundant(List<Consent> redundant, String actor) {
         redundant.forEach(

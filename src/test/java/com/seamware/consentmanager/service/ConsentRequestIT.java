@@ -149,13 +149,16 @@ class ConsentRequestIT extends PostgresTestResource {
                     noticeId = notice(fullPayload(), null, UNCLAIMED_CONTRACT_URI).getId();
             case CALLER_NAMED_BY_NO_NOTICE -> caller = participant(BYSTANDER);
             case UNKNOWN_USER -> userIdentifier = "urn:test:user:consent-request:absent";
-            case USER_OF_ANOTHER_PARTICIPANT -> userIdentifier = linkedUser().getIdentifier();
+            case USER_OF_ANOTHER_PARTICIPANT ->
+                    userIdentifier = linkedUser(BYSTANDER).getIdentifier();
         }
 
         Participant asking = caller;
         ConsentRequestCommand command = new ConsentRequestCommand(noticeId, userIdentifier);
         assertThatThrownBy(() -> service.request(asking, command)).isInstanceOf(refusal.expected);
-        assertThat(heldBy(subject)).as("a refused ask writes no consent").isEmpty();
+        assertThat(heldByAnyone())
+                .as("a refused ask writes no consent, for the user it named or for any other")
+                .isEmpty();
     }
 
     @ParameterizedTest(name = "the notice''s {0} may ask")
@@ -254,6 +257,15 @@ class ConsentRequestIT extends PostgresTestResource {
 
     private List<Consent> heldBy(User subject) {
         return consents.findByUserIdAndStatusIn(subject.getId(), ALL_STATUSES);
+    }
+
+    /**
+     * Everything held by every user this test seeded, which is what a refusal must leave empty: a
+     * refused ask names a user of its own, so asserting over one chosen user would pass even where
+     * the row was written against the user the command actually targeted.
+     */
+    private List<Consent> heldByAnyone() {
+        return seededUsers.stream().flatMap(user -> heldBy(user).stream()).toList();
     }
 
     /** A consent for the pair as some other flow would have left it, with no trail of its own. */

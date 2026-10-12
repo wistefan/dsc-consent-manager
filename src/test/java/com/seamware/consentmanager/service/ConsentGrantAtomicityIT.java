@@ -138,10 +138,10 @@ class ConsentGrantAtomicityIT extends PostgresTestResource {
                 .hasSize(RACERS);
         assertThat(outcomes.refused()).isEmpty();
         assertThat(
-                        consents.existsByUserIdAndPrivacyNoticeIdAndStatusIn(
-                                subject.getId(), notice.getId(), List.of(ConsentStatus.PENDING)))
+                        consents.findByUserIdAndStatusIn(
+                                subject.getId(), List.of(ConsentStatus.PENDING)))
                 .as("the request is answered once rather than adopted twice or left stranded")
-                .isFalse();
+                .isEmpty();
         assertThat(granted())
                 .as("the lock forces the second decision to supersede the first, not repeat it")
                 .hasSize(1);
