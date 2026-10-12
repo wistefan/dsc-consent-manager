@@ -59,8 +59,9 @@ public class PrivacyNotice {
     /**
      * JSONB-encoded payload containing the contract-derived privacy notice content.
      *
-     * <p>Includes purposes, data categories, recipients, controller details, retention period, PII
-     * principal rights, international transfers, and withdrawal method.
+     * <p>Includes purposes, categories of data, the data the contract names, recipients, controller
+     * details, retention period, PII principal rights, international transfers and withdrawal of
+     * consent.
      */
     @NonNull
     @TypeDef(type = DataType.JSON)

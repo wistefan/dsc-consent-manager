@@ -1,0 +1,31 @@
+{
+  "uid": "66d0e2f7a1b2c3d4e5f60012",
+  "profile": "mobility-data-space",
+  "ecosystem": "https://catalog.example.org/v1/catalog/ecosystems/mobility-data-space",
+  "serviceOfferings": [
+    {
+      "participant": "did:web:provider.example.org",
+      "serviceOffering": "https://catalog.example.org/v1/catalog/serviceofferings/trip-history",
+      "policies": []
+    }
+  ],
+  "members": [
+    {
+      "participant": "did:web:provider.example.org",
+      "signature": "hasSigned",
+      "date": "2026-09-03T09:00:00.000Z"
+    },
+    {
+      "participant": "did:web:consumer.example.org",
+      "signature": "hasSigned",
+      "date": "2026-09-03T09:05:00.000Z"
+    },
+    {
+      "participant": "did:web:other-consumer.example.org",
+      "signature": "hasSigned",
+      "date": "2026-09-03T09:10:00.000Z"
+    }
+  ],
+  "revokedMembers": [],
+  "status": "signed"
+}

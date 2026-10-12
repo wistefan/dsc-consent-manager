@@ -1,0 +1,38 @@
+# Schema: GenerateByContract — referenced from api/openapi.yaml as
+# components.schemas.GenerateByContract.
+#
+# The contract alone: the two parties are read off the contract itself rather
+# than declared, which is the whole difference between this request and
+# `GeneratePrivacyNotice`.
+type: object
+description: >
+  The contract a participant asks for a privacy notice from, with no parties
+  declared.
+
+
+  Use this when the contract itself says who the two parties are. A bilateral
+  contract always does. An ecosystem contract does whenever exactly one of its
+  still-bound members is on each side — the side being read off the role the
+  contract records for a member and, where it records none, off who offers a
+  service under it. An ecosystem contract that admits more than one party on
+  either side, or none, is answered `400`: it names N members and no two of them
+  inherently, and guessing would publish a legal document naming a party the
+  contract never put there. Declare the two parties with
+  `POST /privacy-notices` instead.
+properties:
+  contractUri:
+    type: string
+    minLength: 1
+    maxLength: 2048
+    # Rejects a value that is only whitespace, which `minLength` alone would let
+    # through. Bean validation matches the whole value.
+    pattern: '^(?!\s*$).+$'
+    description: >
+      URI of the contract the notice states. Stored verbatim: it is the key one
+      active notice per provider is held against, so this service never
+      normalises it. The contract itself is fetched from the Contract Service
+      this deployment is configured against, under the identifier the URI's last
+      path segment carries.
+    example: "https://contract.example.org/contracts/65d1f0a2b3c4d5e6f7a8b9c0"
+required:
+  - contractUri

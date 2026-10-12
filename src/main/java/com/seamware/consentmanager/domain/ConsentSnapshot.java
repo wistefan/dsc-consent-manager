@@ -9,8 +9,10 @@ import java.util.List;
  * as JSONB in the {@code snapshot} column of the {@code consents} table.
  *
  * <p>The snapshot preserves the exact terms that the user agreed to, ensuring that subsequent
- * changes to the privacy notice do not retroactively alter the record of what was consented. Its
- * structure mirrors the relevant subset of {@link PrivacyNoticePayload}.
+ * changes to the privacy notice do not retroactively alter the record of what was consented. It
+ * still carries the vocabulary {@link PrivacyNoticePayload} was written in before the payload was
+ * renamed to the headings a notice is published under; nothing writes either record yet, and
+ * aligning the two belongs to the ticket that first writes a consent.
  *
  * <p>All fields are nullable because the snapshot content depends on the specific privacy notice
  * configuration at the time of consent. This record is annotated with {@link Serdeable} to enable

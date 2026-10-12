@@ -1,0 +1,29 @@
+{
+  "uid": "66d0e2f7a1b2c3d4e5f60007",
+  "profile": "mobility-data-space",
+  "ecosystem": "https://catalog.example.org/v1/catalog/ecosystems/mobility-data-space",
+  "orchestrator": "did:web:orchestrator.example.org",
+  "serviceOfferings": [],
+  "purpose": [
+    {
+      "uid": "purpose-mobility-insights",
+      "purpose": "Produce aggregated mobility insights for the city of Example.",
+      "piiCategory": "Location data",
+      "consentType": "EXPLICIT",
+      "termination": "Processing ends when the PII principal withdraws consent.",
+      "thirdPartyDisclosure": true,
+      "thirdPartyName": "Example Statistics Office"
+    },
+    {
+      "uid": "purpose-road-maintenance",
+      "purpose": "Schedule road maintenance from observed traffic.",
+      "piiCategory": ["Location data", "Vehicle data"],
+      "consentType": "EXPLICIT",
+      "termination": "Processing ends five years after collection.",
+      "thirdPartyDisclosure": false,
+      "thirdPartyName": "Example Statistics Office"
+    }
+  ],
+  "members": [],
+  "status": "signed"
+}

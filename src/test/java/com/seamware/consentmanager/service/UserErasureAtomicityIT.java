@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.service;
 
+import static com.seamware.consentmanager.support.PrivacyNoticeFixtures.emptyPayload;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -8,7 +9,6 @@ import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
-import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
@@ -134,8 +134,7 @@ class UserErasureAtomicityIT extends PostgresTestResource {
                                 null,
                                 provider.getId(),
                                 consumer.getId(),
-                                new PrivacyNoticePayload(
-                                        null, null, null, null, null, null, null, null, null)));
+                                emptyPayload()));
         return consents.save(
                         Consent.withStatus(
                                 ConsentStatus.GRANTED,

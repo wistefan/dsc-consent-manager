@@ -1,0 +1,39 @@
+# Schema: PrivacyNoticeResolution — referenced from api/openapi.yaml as
+# components.schemas.PrivacyNoticeResolution.
+#
+# Three states rather than the two a successful resolution needs. A retrieval
+# that did not ask for resolution has to be able to say so: without
+# `NOT_REQUESTED` the block would either be omitted — leaving a client to guess
+# whether a section is unresolved or unresolvable — or report `UNAVAILABLE`,
+# which would claim an outage that never happened.
+type: object
+description: >
+  How far each part of the notice could be filled in from documents this service
+  does not own.
+
+
+  Generation never resolves, so a freshly generated notice reports
+  `NOT_REQUESTED` for all four. `GET /privacy-notices/{id}?resolve=true` is the
+  one place the other two values appear: a section whose external document could
+  not be read degrades to `UNAVAILABLE` and the notice is served anyway, because
+  a notice that cannot be displayed at all is worse than one displayed with a
+  section marked unavailable.
+properties:
+  # The contract document the notice was generated from.
+  contract:
+    $ref: "./ResolutionState.yaml"
+  # The catalog self-descriptions behind `data`, which a contract names only by
+  # URI and which a resolved retrieval dereferences.
+  dataResources:
+    $ref: "./ResolutionState.yaml"
+  # The purposes the notice states.
+  purposes:
+    $ref: "./ResolutionState.yaml"
+  # The recipients the notice names.
+  recipients:
+    $ref: "./ResolutionState.yaml"
+required:
+  - contract
+  - dataResources
+  - purposes
+  - recipients
