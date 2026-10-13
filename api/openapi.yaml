@@ -1450,6 +1450,80 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /consents/requests:
+    post:
+      operationId: requestConsent
+      summary: Ask a user to decide about a privacy notice
+      description: >
+        Opens a request that one of the calling participant's users decide on a
+        privacy notice, and returns the `PENDING` consent the request created.
+
+
+        **A request confers nothing.** The record it opens is `PENDING` and
+        `consented` is `false`; it states that the question was put, not that it
+        was answered, and no data may flow on the strength of it. Only the
+        subject can answer, with `POST /consents`, which writes the decision
+        onto this very record rather than creating a second one - so the
+        identifier returned here is the identifier the answered consent will
+        carry.
+
+
+        The request elects no scope. It is opened over the notice's full terms,
+        and narrowing them is the subject's to do when deciding: a scope
+        proposed by the party that wants the data would read back afterwards as
+        something the subject had agreed to.
+
+
+        **The asking participant is the token.** The body names a notice and a
+        subject, and there is no property by which one participant could put the
+        question in another's name. The notice must exist and still be the
+        active notice for its contract - `404` and `400` respectively - and must
+        name the caller as its provider or its consumer, since either has
+        business asking and nobody else does: `403` otherwise. The subject must
+        already be linked to the caller; an identifier naming no user and one
+        naming a user affiliated with somebody else are answered alike, with
+        `404`, so this route cannot be used to find out which users the service
+        holds. Where the pair already holds a record still in force - an open
+        request or a consent granted - the answer is `409`, and the existing
+        record is the one to read.
+      tags:
+        - Consent Requests
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConsentRequest"
+      responses:
+        "201":
+          description: >
+            The request was opened; the body is the `PENDING` consent it
+            created, which confers nothing until the subject decides.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1530,6 +1604,9 @@ components:
 
     GrantConsent:
       $ref: "./components/schemas/GrantConsent.yaml"
+
+    ConsentRequest:
+      $ref: "./components/schemas/ConsentRequest.yaml"
 
     # The three wrappers below are the only schemas written out here rather than
     # under components/schemas/, and the reason is a generator limitation rather
