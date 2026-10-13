@@ -11,6 +11,7 @@ import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.UuidGenerator;
 import com.seamware.consentmanager.error.BadRequestException;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -199,6 +200,64 @@ class ConsentFactoryTest {
         assertThat(refused.consent().isConsented()).isFalse();
     }
 
+    @Test
+    @DisplayName("an affirmation appends an event and leaves the status alone")
+    void anAffirmationAppendsAnEventAndLeavesTheStatusAlone() {
+        RecordedConsent granted = create(ConsentStatus.GRANTED);
+
+        RecordedConsent affirmed = factory.affirm(granted.consent(), USER_ACTOR);
+
+        assertThat(affirmed.consent())
+                .as("re-confirmation changes nothing about the record it affirms")
+                .isSameAs(granted.consent());
+        assertThat(affirmed.consent().getStatus()).isEqualTo(ConsentStatus.GRANTED);
+        assertThat(affirmed.consent().isConsented()).isTrue();
+        assertThat(affirmed.event().getEventState())
+                .isEqualTo(ConsentEventState.CONSENT_RE_CONFIRMED);
+        assertThat(affirmed.event().getActor()).isEqualTo(USER_ACTOR);
+        assertThat(affirmed.event().getEventType())
+                .isEqualTo(ConsentEventTrigger.EXPLICIT.eventType());
+        assertThat(affirmed.created()).isFalse();
+    }
+
+    @ParameterizedTest(name = "a consent in {0} cannot be affirmed unless it is in force")
+    @EnumSource(
+            value = ConsentStatus.class,
+            names = {"GRANTED"},
+            mode = EnumSource.Mode.EXCLUDE)
+    @DisplayName("only a consent in force may be affirmed")
+    void onlyAConsentInForceMayBeAffirmed(ConsentStatus held) {
+        Consent consent =
+                Consent.withStatus(
+                        held,
+                        USER_ID,
+                        PRIVACY_NOTICE_ID,
+                        PROVIDER_ID,
+                        CONSUMER_ID,
+                        PARENT_CONSENT_ID,
+                        CONTRACT_URI,
+                        SNAPSHOT);
+
+        assertThatThrownBy(() -> factory.affirm(consent, USER_ACTOR))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining(held.name());
+    }
+
+    @Test
+    @DisplayName("every status states which events it admits, so a new one cannot slip through")
+    void everyStatusStatesWhichEventsItAdmits() {
+        assertThat(ConsentFactory.ADMISSIBLE_EVENTS.keySet())
+                .as("a missing key is a null lookup, which no per-entry check would catch")
+                .isEqualTo(EnumSet.allOf(ConsentStatus.class));
+    }
+
+    @ParameterizedTest(name = "the event a move to {0} defaults to is admissible there")
+    @MethodSource("defaultedEvents")
+    @DisplayName("the two tables cannot drift apart")
+    void theTwoTablesCannotDriftApart(ConsentStatus status, ConsentEventState defaulted) {
+        assertThat(ConsentFactory.ADMISSIBLE_EVENTS.get(status)).contains(defaulted);
+    }
+
     private RecordedConsent create(ConsentStatus target) {
         return factory.create(
                 target,
@@ -210,6 +269,11 @@ class ConsentFactoryTest {
                 CONTRACT_URI,
                 SNAPSHOT,
                 USER_ACTOR);
+    }
+
+    static Stream<Arguments> defaultedEvents() {
+        return ConsentFactory.EVENT_STATES.entrySet().stream()
+                .map(entry -> Arguments.of(entry.getKey(), entry.getValue()));
     }
 
     static Stream<Arguments> creations() {

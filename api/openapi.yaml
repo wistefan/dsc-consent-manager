@@ -1723,6 +1723,69 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /consents/{id}/re-confirm:
+    post:
+      operationId: reConfirmConsent
+      summary: Re-confirm a consent in force
+      description: >
+        Records that the calling data subject still stands by a consent that is
+        already in force.
+
+
+        **Nothing about the consent changes.** The status stays `GRANTED`, the
+        terms stay as they were agreed, and `updatedAt` is left alone because it
+        dates state changes and this is not one. What the call produces is a
+        single `CONSENT_RE_CONFIRMED` entry in the audit trail, dated in its own
+        right, so a deployment that asks its subjects to reaffirm periodically
+        can show when each of them last did. The body read back is the record,
+        unchanged, so a client need not fetch it again.
+
+
+        Only the subject named by the consent reaches it; a consent belonging to
+        anyone else is a `404`, as on every other subject route here.
+        Re-confirmation is permitted from `GRANTED` and from nothing else — a
+        consent that was never given, or that has since been revoked, refused,
+        terminated or expired, is `400` naming the status it holds. A consent
+        revoked between the caller reading it and this call is refused for the
+        same reason, so an affirmation is never appended to a consent no longer
+        in force.
+      tags:
+        - Consent Lifecycle
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to re-confirm.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            The affirmation was recorded; the body is the consent, unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
