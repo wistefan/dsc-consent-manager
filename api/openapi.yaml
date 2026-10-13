@@ -1400,11 +1400,13 @@ paths:
         request was created with and the `parentConsentId` the request already
         had — re-pointed only where the same decision also closed a grant that
         was still in force — so a client that answers a request must not expect
-        a fresh identifier or a new parent link. `createdAt` then dates the request — when consent
-        was asked for — and `updatedAt` is when the subject decided. The status
-        code says which of the two happened: `201` for a record this decision
-        created, `200` for a request it answered in place. Only where no request
-        is open does a decision create a record of its own.
+        a fresh identifier or a new parent link. `createdAt` then dates the
+        request — when consent was asked for — and `updatedAt` dates the last
+        change to the record, which is the decision until a revocation, a
+        termination or an expiry re-dates it. The status code says which of the
+        two happened: `201` for a record this decision created, `200` for a
+        request it answered in place. Only where no request is open does a
+        decision create a record of its own.
       tags:
         - Consents
       security:

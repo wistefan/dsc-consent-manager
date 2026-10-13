@@ -102,6 +102,8 @@ Implemented operations:
 | `POST /privacy-notices` | `PARTICIPANT` | `PrivacyNoticeController` |
 | `POST /privacy-notices/by-contract` | `PARTICIPANT` | `PrivacyNoticeController` |
 | `GET /privacy-notices/{id}` | `USER`, `PARTICIPANT`, `CATALOG` | `PrivacyNoticeController` |
+| `POST /consents` | `USER` | `ConsentController` |
+| `POST /consents/requests` | `PARTICIPANT` | `ConsentRequestController` |
 
 `EndpointRoleMatrixIT` answers each of these with every role, with a token holding no role of this
 service and with no token at all, against a real Keycloak; it fails when an operation of the
@@ -109,6 +111,30 @@ specification has no row, so the table above cannot quietly fall behind the spec
 `KeycloakRoleMatrixIT` keeps proving the same of synthetic probe routes, which is where the
 mechanism itself — discovery, signature verification, claim mapping, principal resolution — is
 exercised independently of any published route.
+
+### The two consent routes are deliberately asymmetric
+
+`POST /consents` is a pure `USER` route and takes no participant into account at all. The data
+subject is read from the token's identifier claim and from nowhere else: the operation admits only
+`UserPrincipal`, the body names no user, and a `userIdentifier` or `email` sent in it anyway is
+ignored rather than honoured (`ConsentGrantIT` pins that). There is no header, no parameter and no
+role by which a participant can record a decision in a user's name — see
+[ADR 0009](adr/0009-only-the-data-subject-grants-consent.md).
+
+`POST /consents/requests` is the mirror image and is held to the stricter participant check.
+`ConsentRequestController` resolves the caller through `ParticipantPrincipal.requireActive()`, not
+`requireRegistered()`, because opening a request is acting in the dataspace in the participant's
+name rather than reading or writing the participant's own record. A participant carrying
+`deregistered_at` can still read itself back on `GET /participants/me` and is refused here with
+`403`, so a departed organisation cannot start asking for consents on the way out. `requireActive()`
+runs before the notice is looked up, which is also what lets `participantScopedEndpoints` sweep the
+route without seeding any fixture.
+
+Two further refusals on that route are security properties rather than validation. The caller must
+be named as the notice's provider or consumer — a participant that is party to neither gets `403`
+and cannot ask about a document it has no standing in. And an unknown user and a user the caller is
+not affiliated with are refused *identically*, both `404` with the same message, so the route
+cannot be used to enumerate the dataspace's users.
 
 ## Participant onboarding
 
@@ -214,6 +240,14 @@ or a failure produced is cached.
 `components/security.yaml` (the bearer token contract), `components/schemas/`, `components/responses/`.
 The `copy-openapi-spec` execution copies the whole `api/` tree into `target/classes/static/` so the
 relative `$ref`s resolve for Swagger UI.
+
+Path items are written **inline** in the root document; only schemas, responses and the security
+scheme are externalised. `SpecReferenceResolutionTest` fails the build on an externalised path item,
+because a path item behind a `$ref` hides its `security`, `x-roles` and `x-principal` from
+`SpecSecurityConsistencyTest` and so hides the route's access rule from the test that checks it.
+The consent flow follows the rule: `/consents` and `/consents/requests` are inline, while
+`GrantConsent`, `ConsentRequest` and the shared `Consent` response schema live under
+`components/schemas/`.
 
 ## Testing
 
