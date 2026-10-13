@@ -1786,6 +1786,107 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /consents/{id}/resume:
+    post:
+      operationId: resumeConsent
+      summary: Resume an unanswered consent as granted
+      description: >
+        Grants a consent that was requested but never answered, addressed by its
+        own identifier.
+
+
+        The move is `PENDING` or `DRAFT` to `GRANTED`; a consent already decided
+        — granted, revoked, refused, terminated or expired — is `400` naming the
+        status it holds. The record is answered in place, so the response
+        carries the identifier the request was created with and `createdAt`
+        still dates the ask.
+
+
+        **Two kinds of caller reach it.** A `USER` token resumes its own
+        consent and states nothing: the body may be omitted entirely, and a
+        `userIdentifier` sent anyway is ignored. A `CATALOG` token relays a
+        decision the subject took in the catalog's own flow — the flow this
+        operation resumes — and must name that subject with `userIdentifier`,
+        which is `400` when absent. The identifier is checked against the
+        consent this path addresses rather than used to find one: naming anybody
+        but that consent's subject is `404`, so a catalog cannot choose whose
+        consent it grants. Nor can it choose the notice or create a record: it
+        can only advance one that already exists and is still open. See
+        ADR-0010.
+
+
+        **The audit trail says which happened.** A relayed grant records the
+        relaying catalog as `catalog:<issuer>:<sub>`, a subject's own records
+        the subject's identifier, so a reader can always tell one from the
+        other.
+
+
+        The notice must still be the active notice for its contract. A request
+        can sit unanswered long enough for its notice to be regenerated, and
+        resuming against an archived one would record a grant under terms no
+        longer in force, so that is `400` — the same refusal `POST /consents`
+        gives — as is a notice naming no data consumer. The terms the record was
+        opened with are kept exactly as stored: a resume records a decision
+        taken elsewhere rather than electing scope here, and where the notice
+        has moved on the subject answers the new one through `POST /consents`.
+
+
+        Recording the grant supersedes whatever consent is in force for the same
+        subject and notice: that record is revoked in the same transaction, and
+        the resumed record's `parentConsentId` is re-pointed at it. Where
+        nothing was in force the link is left exactly as the request had it. One
+        record per subject and notice is in force at a time and the database
+        enforces it, so a grant recorded concurrently is answered `409` and is
+        safe to retry against the record it can then read.
+      tags:
+        - Consent Lifecycle
+      security:
+        - bearerAuth: [USER, CATALOG]
+      x-roles: [USER, CATALOG]
+      x-principal: ConsentManagerPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to resume.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        description: >
+          Required of a `CATALOG` caller, which must name the subject whose
+          decision it relays. A `USER` caller may omit it.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResumeConsent"
+      responses:
+        "200":
+          description: >
+            The consent was granted; the body is the record, carrying the
+            identifier it was requested with.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1869,6 +1970,9 @@ components:
 
     ConsentRequest:
       $ref: "./components/schemas/ConsentRequest.yaml"
+
+    ResumeConsent:
+      $ref: "./components/schemas/ResumeConsent.yaml"
 
     # The three wrappers below are the only schemas written out here rather than
     # under components/schemas/, and the reason is a generator limitation rather

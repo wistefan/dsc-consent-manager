@@ -130,6 +130,28 @@ public class ConsentFactory {
     }
 
     /**
+     * The same move, filed as {@code recordedAs} rather than as the event the target status
+     * defaults to.
+     *
+     * <p>For a move whose own meaning the status does not carry: a resumed request and a fresh
+     * decision both land in {@code GRANTED}, and {@link #EVENT_STATES} can only name one of them.
+     * The event is still checked against {@link #ADMISSIBLE_EVENTS}, so a status cannot be made to
+     * record an event it does not admit.
+     */
+    @NonNull
+    public RecordedConsent transitionRecordedAs(
+            @NonNull Consent consent,
+            @NonNull ConsentStatus target,
+            @NonNull ConsentEventState recordedAs,
+            @NonNull String actor,
+            @NonNull ConsentEventTrigger trigger) {
+        lifecycle.requireTransition(consent.getStatus(), target);
+        consent.updateStatus(target);
+        return new RecordedConsent(
+                consent, event(consent, recordedAs, actor, trigger, null), false);
+    }
+
+    /**
      * Records that {@code actor} affirms a consent in force, without moving it.
      *
      * <p>Refuses with {@link com.seamware.consentmanager.error.BadRequestException} a consent in

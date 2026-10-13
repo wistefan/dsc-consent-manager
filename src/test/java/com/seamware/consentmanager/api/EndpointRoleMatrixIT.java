@@ -362,7 +362,13 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 "post " + PATH_CONSENTS + "/{id}/terminate",
                 () ->
                         HttpRequest.POST(
-                                PATH_CONSENTS + "/" + ABSENT_CONSENT + "/terminate", NO_BODY));
+                                PATH_CONSENTS + "/" + ABSENT_CONSENT + "/terminate", NO_BODY)),
+        RESUME_CONSENT(
+                "post " + PATH_CONSENTS + "/{id}/resume",
+                () ->
+                        HttpRequest.POST(
+                                PATH_CONSENTS + "/" + ABSENT_CONSENT + "/resume",
+                                Map.of("userIdentifier", LINKED_USER)));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -608,6 +614,17 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 denied,
                                 unknownConsent,
                                 denied,
+                                denied,
+                                challenged),
+                        // Resuming is the one lifecycle route two roles reach, and both authorise
+                        // against the consent, so both stop at the same absent id. The body names
+                        // a user because a catalog must; the subject's own call has to ignore it
+                        // rather than refuse the request for carrying it.
+                        row(
+                                Endpoint.RESUME_CONSENT,
+                                unknownConsent,
+                                denied,
+                                unknownConsent,
                                 denied,
                                 challenged))
                 .flatMap(row -> row);

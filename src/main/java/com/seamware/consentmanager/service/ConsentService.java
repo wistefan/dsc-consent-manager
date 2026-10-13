@@ -9,7 +9,6 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
-import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import io.micronaut.core.annotation.NonNull;
@@ -17,7 +16,6 @@ import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
 import java.util.List;
-import java.util.UUID;
 
 /**
  * The two ways a consent comes into being: the data subject's own decision, and a participant's
@@ -31,12 +29,6 @@ import java.util.UUID;
 @Singleton
 public class ConsentService {
 
-    private static final String UNKNOWN_NOTICE = "No privacy notice exists with identifier '%s'.";
-    private static final String ARCHIVED_NOTICE =
-            "Privacy notice '%s' has been archived and can no longer be consented to. Request the"
-                    + " current notice for the contract.";
-    private static final String NO_CONSUMER =
-            "Privacy notice '%s' names no data consumer, so no consent can be recorded against it.";
     private static final String NOTHING_TO_NARROW =
             "Privacy notice '%s' declares no %s, so none can be elected.";
     private static final String EMPTY_ELECTION =
@@ -57,7 +49,7 @@ public class ConsentService {
     private static final String PURPOSES = "purposes";
     private static final String DATA_CATEGORIES = "categories of data";
 
-    private final PrivacyNoticeRepository notices;
+    private final ConsentNoticeGuard noticeGuard;
     private final UserRepository users;
     private final UserParticipantRepository links;
     private final ConsentWriter writer;
@@ -65,13 +57,13 @@ public class ConsentService {
     private final ConsentParties parties;
 
     public ConsentService(
-            PrivacyNoticeRepository notices,
+            ConsentNoticeGuard noticeGuard,
             UserRepository users,
             UserParticipantRepository links,
             ConsentWriter writer,
             ConsentStateMachine lifecycle,
             ConsentParties parties) {
-        this.notices = notices;
+        this.noticeGuard = noticeGuard;
         this.users = users;
         this.links = links;
         this.writer = writer;
@@ -96,7 +88,7 @@ public class ConsentService {
     @NonNull
     public ConsentDetails decide(@NonNull User subject, @NonNull ConsentDecision decision) {
         lifecycle.requireDecision(decision.decision());
-        PrivacyNotice notice = consentable(decision.privacyNoticeId());
+        PrivacyNotice notice = noticeGuard.consentable(decision.privacyNoticeId());
         PrivacyNoticePayload payload = notice.getPayload();
         requireWithinScope(PURPOSES, decision.purposes(), payload.purposes(), notice);
         requireWithinScope(
@@ -122,7 +114,7 @@ public class ConsentService {
     @NonNull
     public ConsentDetails request(
             @NonNull Participant caller, @NonNull ConsentRequestCommand command) {
-        PrivacyNotice notice = consentable(command.privacyNoticeId());
+        PrivacyNotice notice = noticeGuard.consentable(command.privacyNoticeId());
         requireParty(caller, notice);
         User subject = affiliated(caller, command.userIdentifier());
 
@@ -178,31 +170,6 @@ public class ConsentService {
             }
             throw new ConflictException(CONCURRENT_GRANT.formatted(notice.getId()), e);
         }
-    }
-
-    /**
-     * The notice a decision may be recorded against, or the reason it may not.
-     *
-     * <p>Read straight from the repository rather than through {@link PrivacyNoticeService}, whose
-     * read resolves self-descriptions this flow has no use for. A notice naming no consumer is
-     * refused rather than written through: {@code consents.consumer_id} is {@code NOT NULL}, so the
-     * alternative is a constraint violation surfacing as a {@code 500}. Both generation paths
-     * require a consumer, so only rows predating that invariant can reach it.
-     */
-    private PrivacyNotice consentable(UUID privacyNoticeId) {
-        PrivacyNotice notice =
-                notices.findById(privacyNoticeId)
-                        .orElseThrow(
-                                () ->
-                                        new NotFoundException(
-                                                UNKNOWN_NOTICE.formatted(privacyNoticeId)));
-        if (notice.getArchivedAt() != null) {
-            throw new BadRequestException(ARCHIVED_NOTICE.formatted(privacyNoticeId));
-        }
-        if (notice.getConsumerId() == null) {
-            throw new BadRequestException(NO_CONSUMER.formatted(privacyNoticeId));
-        }
-        return notice;
     }
 
     /**
