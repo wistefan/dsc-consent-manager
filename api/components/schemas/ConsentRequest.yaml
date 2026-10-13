@@ -1,0 +1,37 @@
+# Schema: ConsentRequest — referenced from api/openapi.yaml as
+# components.schemas.ConsentRequest.
+#
+# The body names no participant. The asking participant is taken from the token
+# alone, so there is no property here by which one participant could put the
+# question in another's name.
+type: object
+description: >
+  A participant's ask that one of its users decide on a privacy notice.
+
+
+  The ask elects nothing and confers nothing: it opens a `PENDING` record over
+  the notice's full terms, and only the subject's own decision can narrow or
+  answer it. There is deliberately no `purposes` or `data` here — a scope
+  proposed by the party that wants the data would be read back as something the
+  subject agreed to.
+properties:
+  privacyNoticeId:
+    type: string
+    format: uuid
+    description: >
+      The notice the subject is being asked to decide on. It must exist and must
+      still be the active notice for its contract — an archived one states terms
+      no longer in force — and it must name the caller as its provider or its
+      consumer.
+    example: "018f3a2b-9d5e-7a1b-8c2d-3e4f5a6b7c8d"
+  userIdentifier:
+    type: string
+    description: >
+      The global identifier of the subject to ask, who must already be linked to
+      the calling participant. An identifier naming no user and one naming a
+      user affiliated with somebody else are answered alike, so this property
+      cannot be used to find out which users the service holds.
+    example: "urn:example:user:7f3a1c2e"
+required:
+  - privacyNoticeId
+  - userIdentifier

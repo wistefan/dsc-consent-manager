@@ -2,8 +2,7 @@ package com.seamware.consentmanager.service;
 
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
-import com.seamware.consentmanager.domain.ConsentEvent;
-import com.seamware.consentmanager.domain.ConsentEventState;
+import com.seamware.consentmanager.domain.ConsentEventTrigger;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
@@ -25,7 +24,6 @@ import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
 import jakarta.transaction.Transactional;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -139,12 +137,11 @@ public class UserService {
     /**
      * Marks the trail entries an erasure appends as automated.
      *
-     * <p>Not {@link ConsentEvent#DEFAULT_EVENT_TYPE}: the subject asked to be erased, but no one
+     * <p>Not {@link ConsentEventTrigger#EXPLICIT}: the subject asked to be erased, but no one
      * answered the consent itself - least of all the {@code PENDING} offers this closes unanswered
-     * - so attributing the entry to the service and typing it {@code explicit} would contradict
-     * each other.
+     * - so attributing the entry to the service and typing it explicit would contradict each other.
      */
-    private static final String ERASURE_EVENT_TYPE = "system";
+    private static final ConsentEventTrigger ERASURE_TRIGGER = ConsentEventTrigger.SYSTEM;
 
     /** Says, in the retained audit trail, why a consent was revoked without naming anyone. */
     private static final String ERASURE_DETAIL_KEY = "reason";
@@ -161,6 +158,8 @@ public class UserService {
 
     private final ConsentEventRepository consentEvents;
 
+    private final ConsentFactory consentFactory;
+
     private final ErasureVerifier erasureVerifier;
 
     private final ConsentManagerConfiguration.Users configuration;
@@ -171,6 +170,7 @@ public class UserService {
             ParticipantRepository participants,
             ConsentRepository consents,
             ConsentEventRepository consentEvents,
+            ConsentFactory consentFactory,
             ErasureVerifier erasureVerifier,
             ConsentManagerConfiguration.Users configuration) {
         this.users = users;
@@ -178,6 +178,7 @@ public class UserService {
         this.participants = participants;
         this.consents = consents;
         this.consentEvents = consentEvents;
+        this.consentFactory = consentFactory;
         this.erasureVerifier = erasureVerifier;
         this.configuration = configuration;
     }
@@ -531,18 +532,8 @@ public class UserService {
     @Transactional
     public ErasureResult erase(User user) {
         UUID userId = user.getId();
-        int revoked =
-                close(
-                        userId,
-                        Set.of(ConsentStatus.GRANTED),
-                        ConsentStatus.REVOKED,
-                        ConsentEventState.CONSENT_REVOKED);
-        int terminated =
-                close(
-                        userId,
-                        UNANSWERED_STATUSES,
-                        ConsentStatus.TERMINATED,
-                        ConsentEventState.CONSENT_TERMINATED);
+        int revoked = close(userId, Set.of(ConsentStatus.GRANTED), ConsentStatus.REVOKED);
+        int terminated = close(userId, UNANSWERED_STATUSES, ConsentStatus.TERMINATED);
         long linksRemoved = links.deleteByIdUserId(userId);
         String pseudonym = pseudonymiseOrDelete(user);
 
@@ -557,43 +548,36 @@ public class UserService {
     }
 
     /**
-     * Moves every consent of the user in {@code from} to {@code to}, appending {@code event} to
-     * each trail, and reports how many moved.
+     * Moves every consent of the user in {@code from} to {@code to}, appending the matching trail
+     * entry to each, and reports how many moved.
      *
-     * <p>Batched rather than updated row by row: an erasure costs two statements however long the
-     * subject has been a member.
+     * <p>Through {@link ConsentFactory} like every other transition, so the lifecycle table is
+     * consulted and the event state is derived from {@code to} rather than restated here. Batched
+     * rather than updated row by row: an erasure costs two statements however long the subject has
+     * been a member.
      */
-    private int close(
-            UUID userId, Set<ConsentStatus> from, ConsentStatus to, ConsentEventState event) {
-        List<Consent> closed =
+    private int close(UUID userId, Set<ConsentStatus> from, ConsentStatus to) {
+        List<RecordedConsent> closed =
                 consents.findByUserIdAndStatusIn(userId, from).stream()
-                        .map(consent -> withStatus(consent, to))
+                        .map(consent -> terminate(consent, to))
                         .toList();
         if (closed.isEmpty()) {
             return 0;
         }
-        consents.updateAll(closed);
-        consentEvents.saveAll(
-                closed.stream().map(consent -> erasureEvent(consent, event)).toList());
+        consents.updateAll(closed.stream().map(RecordedConsent::consent).toList());
+        consentEvents.saveAll(closed.stream().map(RecordedConsent::event).toList());
         return closed.size();
     }
 
-    /** The same consent, moved to the given status. */
-    private static Consent withStatus(Consent consent, ConsentStatus status) {
-        consent.updateStatus(status);
-        return consent;
-    }
-
     /**
-     * The trail entry saying an erasure closed this consent, naming the service rather than one.
+     * The consent moved to {@code to}, with the trail entry saying an erasure is what closed it.
      */
-    private static ConsentEvent erasureEvent(Consent consent, ConsentEventState state) {
-        return new ConsentEvent(
-                consent.getId(),
-                state,
-                ERASURE_EVENT_TYPE,
+    private RecordedConsent terminate(Consent consent, ConsentStatus to) {
+        return consentFactory.transition(
+                consent,
+                to,
                 ERASURE_ACTOR,
-                Instant.now(),
+                ERASURE_TRIGGER,
                 Map.of(ERASURE_DETAIL_KEY, ERASURE_DETAIL_REASON));
     }
 

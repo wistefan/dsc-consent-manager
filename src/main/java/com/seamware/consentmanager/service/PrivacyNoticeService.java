@@ -15,11 +15,9 @@ import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
-import java.sql.SQLException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.stream.Stream;
 
 /**
  * Generates the privacy notice a contract yields, and decides whether it supersedes the one already
@@ -32,14 +30,6 @@ import java.util.stream.Stream;
  */
 @Singleton
 public class PrivacyNoticeService {
-
-    /**
-     * SQLState Postgres raises when a unique index rejects a write.
-     *
-     * <p>Here it means one thing only: {@code uq_privacy_notices_active_contract} already holds an
-     * active notice for this contract and provider, which is a lost race rather than a defect.
-     */
-    private static final String UNIQUE_VIOLATION = "23505";
 
     private final ParticipantRepository participants;
     private final PrivacyNoticeRepository notices;
@@ -341,14 +331,7 @@ public class PrivacyNoticeService {
      * not one however closely the row left behind resembles this call's.
      */
     private static boolean lostTheActiveSlot(DataAccessException e) {
-        return Stream.iterate(
-                        (Throwable) e,
-                        Objects::nonNull,
-                        cause -> cause.getCause() == cause ? null : cause.getCause())
-                .anyMatch(
-                        cause ->
-                                cause instanceof SQLException sql
-                                        && UNIQUE_VIOLATION.equals(sql.getSQLState()));
+        return UniqueViolation.rejected(e);
     }
 
     /** Whether the stored notice already says exactly what this contract yields now. */

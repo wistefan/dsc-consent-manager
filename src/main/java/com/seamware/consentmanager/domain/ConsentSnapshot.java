@@ -5,29 +5,66 @@ import io.micronaut.serde.annotation.Serdeable;
 import java.util.List;
 
 /**
- * Represents a frozen copy of privacy notice terms captured at the time consent was granted, stored
- * as JSONB in the {@code snapshot} column of the {@code consents} table.
+ * The terms a user actually decided on, frozen at decision time and stored as JSONB in the {@code
+ * snapshot} column of {@code consents}.
  *
- * <p>The snapshot preserves the exact terms that the user agreed to, ensuring that subsequent
- * changes to the privacy notice do not retroactively alter the record of what was consented. It
- * still carries the vocabulary {@link PrivacyNoticePayload} was written in before the payload was
- * renamed to the headings a notice is published under; nothing writes either record yet, and
- * aligning the two belongs to the ticket that first writes a consent.
+ * <p>Written in {@link PrivacyNoticePayload}'s vocabulary, so the notice and the consent do not
+ * disagree on what a term is called, with two deliberate differences. {@code purposes} and {@code
+ * dataCategories} hold the <em>elected</em> subset rather than the notice's full lists, because
+ * that is what was consented to. {@code dataReferences} keeps the payload's {@code data} under a
+ * name that cannot be read as a category: the elected categories say what kind of data was
+ * consented to, the references say which documents, and an auditor reading a consent whose notice
+ * has since been archived needs both.
  *
- * <p>All fields are nullable because the snapshot content depends on the specific privacy notice
- * configuration at the time of consent. This record is annotated with {@link Serdeable} to enable
- * automatic JSONB round-tripping via Micronaut Serde Jackson.
+ * <p>The notice's {@code contractUri} is not copied in. {@code consents.contract_uri} already
+ * freezes it, and a second copy here would be a second source of truth that can disagree.
  *
- * @param purposes the declared purposes for data processing at the time of consent
- * @param dataCategories the categories of personal data being processed at the time of consent
- * @param recipients the entities or categories of entities that receive the data
- * @param retentionPeriod the duration for which personal data will be retained
- * @param jurisdiction the legal jurisdiction governing the consent and data processing
+ * <p>Every component is nullable, mirroring the payload: a notice need not carry a source for every
+ * term, and an absent term is left out rather than written as an empty list.
  */
 @Serdeable
 public record ConsentSnapshot(
+        @Nullable String title,
         @Nullable List<String> purposes,
         @Nullable List<String> dataCategories,
-        @Nullable List<String> recipients,
+        @Nullable List<PrivacyNoticePayload.DataReference> dataReferences,
+        @Nullable List<PrivacyNoticePayload.Recipient> recipients,
+        @Nullable PrivacyNoticePayload.ControllerDetails controllerDetails,
         @Nullable String retentionPeriod,
-        @Nullable String jurisdiction) {}
+        @Nullable String piiPrincipalRights,
+        @Nullable List<String> internationalTransfers,
+        @Nullable String withdrawalOfConsent) {
+
+    /**
+     * Freezes {@code notice}'s terms, narrowed to the elected scope.
+     *
+     * <p>Only an absent (null) election takes the notice's own list, which is what a decision that
+     * names no subset consents to. An explicitly empty election freezes an empty scope rather than
+     * the whole list, so the narrowest reading of a malformed decision is the one recorded and the
+     * service's refusal of an empty election is a second guard rather than the only one. The
+     * non-scope terms are copied verbatim.
+     */
+    public static ConsentSnapshot of(
+            PrivacyNotice notice,
+            @Nullable List<String> electedPurposes,
+            @Nullable List<String> electedDataCategories) {
+        PrivacyNoticePayload payload = notice.getPayload();
+        return new ConsentSnapshot(
+                notice.getTitle(),
+                elected(electedPurposes, payload.purposes()),
+                elected(electedDataCategories, payload.categoriesOfData()),
+                payload.data(),
+                payload.recipients(),
+                payload.controllerDetails(),
+                payload.retentionPeriod(),
+                payload.piiPrincipalRights(),
+                payload.internationalTransfers(),
+                payload.withdrawalOfConsent());
+    }
+
+    @Nullable
+    private static List<String> elected(
+            @Nullable List<String> elected, @Nullable List<String> declared) {
+        return elected == null ? declared : List.copyOf(elected);
+    }
+}

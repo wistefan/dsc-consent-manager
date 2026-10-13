@@ -2,8 +2,7 @@ package com.seamware.consentmanager.service;
 
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
-import com.seamware.consentmanager.domain.ConsentEvent;
-import com.seamware.consentmanager.domain.ConsentEventState;
+import com.seamware.consentmanager.domain.ConsentEventTrigger;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
@@ -85,12 +84,12 @@ public class ParticipantService {
     private static final String DEREGISTRATION_ACTOR = "consent-manager";
 
     /**
-     * Event type recorded on the events deregistration appends.
+     * Trigger recorded on the events deregistration appends.
      *
-     * <p>Not {@link ConsentEvent#DEFAULT_EVENT_TYPE}: the counterparty left, so the consent was not
+     * <p>Not {@link ConsentEventTrigger#EXPLICIT}: the counterparty left, so the consent was not
      * closed by anyone acting on it.
      */
-    private static final String DEREGISTRATION_EVENT_TYPE = "system";
+    private static final ConsentEventTrigger DEREGISTRATION_TRIGGER = ConsentEventTrigger.SYSTEM;
 
     /** Key of the reason carried in a deregistration event's details. */
     private static final String DEREGISTRATION_DETAIL_KEY = "reason";
@@ -144,6 +143,8 @@ public class ParticipantService {
 
     private final ConsentEventRepository consentEvents;
 
+    private final ConsentFactory consentFactory;
+
     private final PrivacyNoticeRepository notices;
 
     private final UserParticipantRepository links;
@@ -154,12 +155,14 @@ public class ParticipantService {
             ParticipantRepository participants,
             ConsentRepository consents,
             ConsentEventRepository consentEvents,
+            ConsentFactory consentFactory,
             PrivacyNoticeRepository notices,
             UserParticipantRepository links,
             ConsentManagerConfiguration.Participants paging) {
         this.participants = participants;
         this.consents = consents;
         this.consentEvents = consentEvents;
+        this.consentFactory = consentFactory;
         this.notices = notices;
         this.links = links;
         this.paging = paging;
@@ -441,35 +444,29 @@ public class ParticipantService {
      * {@code CONSENT_TERMINATED} event to each trail, and reports how many moved.
      */
     private int terminateUnanswered(UUID participantId) {
-        List<Consent> closed =
-                naming(participantId, UNANSWERED_STATUSES).stream()
-                        .map(ParticipantService::terminated)
-                        .toList();
+        List<RecordedConsent> closed =
+                naming(participantId, UNANSWERED_STATUSES).stream().map(this::terminated).toList();
         if (closed.isEmpty()) {
             return 0;
         }
-        consents.updateAll(closed);
-        consentEvents.saveAll(closed.stream().map(ParticipantService::terminationEvent).toList());
+        consents.updateAll(closed.stream().map(RecordedConsent::consent).toList());
+        consentEvents.saveAll(closed.stream().map(RecordedConsent::event).toList());
         return closed.size();
     }
 
-    /** The same consent, moved to {@code TERMINATED}. */
-    private static Consent terminated(Consent consent) {
-        consent.updateStatus(ConsentStatus.TERMINATED);
-        return consent;
-    }
-
     /**
-     * The trail entry saying a deregistration closed this consent, naming the service rather than a
-     * person.
+     * The consent moved to {@code TERMINATED}, with the trail entry saying a deregistration closed
+     * it and naming the service rather than a person.
+     *
+     * <p>Through {@link ConsentFactory} like every other transition, so the move is checked against
+     * the lifecycle table rather than applied to the entity directly.
      */
-    private static ConsentEvent terminationEvent(Consent consent) {
-        return new ConsentEvent(
-                consent.getId(),
-                ConsentEventState.CONSENT_TERMINATED,
-                DEREGISTRATION_EVENT_TYPE,
+    private RecordedConsent terminated(Consent consent) {
+        return consentFactory.transition(
+                consent,
+                ConsentStatus.TERMINATED,
                 DEREGISTRATION_ACTOR,
-                Instant.now(),
+                DEREGISTRATION_TRIGGER,
                 Map.of(DEREGISTRATION_DETAIL_KEY, DEREGISTRATION_DETAIL_REASON));
     }
 

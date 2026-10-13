@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.service;
 
+import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -7,7 +8,6 @@ import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentEventState;
-import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
@@ -118,9 +118,18 @@ class UserServiceTest {
 
     private final ErasureVerifier erasureVerifier = verifierWith(VERIFICATION_SECRET);
 
+    private final ConsentFactory consentFactory = new ConsentFactory(new ConsentStateMachine());
+
     private final UserService service =
             new UserService(
-                    users, links, participants, consents, consentEvents, erasureVerifier, limits);
+                    users,
+                    links,
+                    participants,
+                    consents,
+                    consentEvents,
+                    consentFactory,
+                    erasureVerifier,
+                    limits);
 
     /** An identifier no row exists for is inserted from the claims, and reported as created. */
     @Test
@@ -690,6 +699,7 @@ class UserServiceTest {
                         participants,
                         consents,
                         consentEvents,
+                        consentFactory,
                         verifierWith(null),
                         limits);
         Participant alpha = participants.put(participant());
@@ -726,7 +736,7 @@ class UserServiceTest {
                 consumer.getId(),
                 null,
                 null,
-                new ConsentSnapshot(null, null, null, null, null));
+                noTerms());
     }
 
     /** A search naming nothing is refused outright rather than answered with the whole table. */
@@ -1269,6 +1279,12 @@ class UserServiceTest {
 
         @Override
         public List<Consent> findByPrivacyNoticeId(UUID privacyNoticeId) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findByUserIdAndPrivacyNoticeIdForUpdate(
+                UUID userId, UUID privacyNoticeId) {
             throw unsupported();
         }
 

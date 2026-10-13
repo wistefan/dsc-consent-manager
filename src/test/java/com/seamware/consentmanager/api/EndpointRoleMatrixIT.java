@@ -104,6 +104,13 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     private static final String PATH_PRIVACY_NOTICES_BY_CONTRACT =
             PATH_PRIVACY_NOTICES + "/by-contract";
 
+    private static final String PATH_CONSENTS = "/consents";
+
+    private static final String PATH_CONSENT_REQUESTS = PATH_CONSENTS + "/requests";
+
+    /** A decision the grant row states, so the body passes validation and the route is reached. */
+    private static final String GRANTED_DECISION = "GRANTED";
+
     /**
      * A notice id no case stores, so every admitted caller stops at the same {@code 404}.
      *
@@ -316,7 +323,23 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 Map.of("contractUri", UNSERVED_CONTRACT))),
         RETRIEVE_PRIVACY_NOTICE(
                 "get " + PATH_PRIVACY_NOTICES + "/{id}",
-                () -> HttpRequest.GET(PATH_PRIVACY_NOTICES + "/" + ABSENT_NOTICE));
+                () -> HttpRequest.GET(PATH_PRIVACY_NOTICES + "/" + ABSENT_NOTICE)),
+        GRANT_CONSENT(
+                "post " + PATH_CONSENTS,
+                () ->
+                        HttpRequest.POST(
+                                PATH_CONSENTS,
+                                Map.of(
+                                        "privacyNoticeId", ABSENT_NOTICE,
+                                        "decision", GRANTED_DECISION))),
+        REQUEST_CONSENT(
+                "post " + PATH_CONSENT_REQUESTS,
+                () ->
+                        HttpRequest.POST(
+                                PATH_CONSENT_REQUESTS,
+                                Map.of(
+                                        "privacyNoticeId", ABSENT_NOTICE,
+                                        "userIdentifier", LINKED_USER)));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -502,6 +525,28 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 unknownNotice,
                                 unknownNotice,
                                 unknownNotice,
+                                denied,
+                                challenged),
+                        // The body is complete, so the one caller this route admits gets past bean
+                        // validation and stops where the fixture leaves it: at a notice nothing
+                        // stored. An incomplete body would answer 400 for every caller and the
+                        // sweep would stop meaning anything. ConsentGrantIT owns the success path.
+                        row(
+                                Endpoint.GRANT_CONSENT,
+                                unknownNotice,
+                                denied,
+                                denied,
+                                denied,
+                                challenged),
+                        // Same shape as the row above, mirrored: the body names a user the fixture
+                        // links to the caller, so the one caller this route admits gets past
+                        // validation and the affiliation check and stops at the same absent
+                        // notice. ConsentRequestSurfaceIT owns the 201.
+                        row(
+                                Endpoint.REQUEST_CONSENT,
+                                denied,
+                                unknownNotice,
+                                denied,
                                 denied,
                                 challenged))
                 .flatMap(row -> row);
