@@ -1289,6 +1289,11 @@ class UserServiceTest {
         }
 
         @Override
+        public Optional<Consent> findByIdForUpdate(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
         public List<Consent> findByParentConsentId(UUID parentConsentId) {
             throw unsupported();
         }

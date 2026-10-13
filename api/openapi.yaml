@@ -1526,6 +1526,131 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /consents/{id}/revoke:
+    post:
+      operationId: revokeConsent
+      summary: Revoke a consent in force
+      description: >
+        Withdraws a consent the calling data subject has given, with effect from
+        the moment this call returns.
+
+
+        Only the subject named by the consent reaches it. A consent belonging to
+        anyone else is a `404` rather than a `403`, so the route cannot be used
+        to learn which consent identifiers exist.
+
+
+        Revocation is permitted from `GRANTED` and from nothing else: a consent
+        already revoked, refused, terminated or expired is `400` naming both the
+        status it holds and the one attempted, and an unanswered request is
+        declined with `POST /consents/{id}/refuse` rather than revoked. The move
+        and the audit event recording it are written in one transaction, so a
+        status without its event cannot occur, and two revocations sent at once
+        cannot both append one — the second reads the record as the first left
+        it and is answered `400`.
+
+
+        **`DELETE` is deliberately not the verb.** Nothing is deleted: the
+        record stays readable in status `REVOKED`, carrying the terms that were
+        agreed and the trail of who ended it, because that is what the consent
+        is evidence of.
+      tags:
+        - Consent Lifecycle
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to revoke.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            The consent was revoked; the body is the record in its new status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /consents/{id}/refuse:
+    post:
+      operationId: refuseConsent
+      summary: Decline an unanswered consent request
+      description: >
+        Records that the calling data subject declines a request a participant
+        opened with `POST /consents/requests`.
+
+
+        Only the subject named by the consent reaches it. A consent belonging to
+        anyone else is a `404` rather than a `403`, for the same reason
+        revocation is.
+
+
+        Refusal is permitted from `PENDING` and `DRAFT` — the two statuses in
+        which nothing has been answered yet — and from nothing else. A consent
+        in any other status, `GRANTED` included, is `400` naming both the status
+        it holds and the one attempted: consent already given is withdrawn with
+        `POST /consents/{id}/revoke`, which is the mirror image of this
+        operation and is permitted from `GRANTED` only. The move and its audit
+        event are written in one transaction, and a second refusal sent
+        concurrently reads the record as the first left it and is answered
+        `400`.
+      tags:
+        - Consent Lifecycle
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to refuse.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            The request was declined; the body is the record in its new status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
