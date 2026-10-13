@@ -352,7 +352,12 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 () -> HttpRequest.POST(PATH_CONSENTS + "/" + ABSENT_CONSENT + "/revoke", NO_BODY)),
         REFUSE_CONSENT(
                 "post " + PATH_CONSENTS + "/{id}/refuse",
-                () -> HttpRequest.POST(PATH_CONSENTS + "/" + ABSENT_CONSENT + "/refuse", NO_BODY));
+                () -> HttpRequest.POST(PATH_CONSENTS + "/" + ABSENT_CONSENT + "/refuse", NO_BODY)),
+        TERMINATE_CONSENT(
+                "post " + PATH_CONSENTS + "/{id}/terminate",
+                () ->
+                        HttpRequest.POST(
+                                PATH_CONSENTS + "/" + ABSENT_CONSENT + "/terminate", NO_BODY));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -578,6 +583,16 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 Endpoint.REFUSE_CONSENT,
                                 unknownConsent,
                                 denied,
+                                denied,
+                                denied,
+                                challenged),
+                        // Termination is the participant's counterpart, authorised against the
+                        // consent in the same way, so the registered caller the fixture seeds is
+                        // admitted and stops at the same absent id.
+                        row(
+                                Endpoint.TERMINATE_CONSENT,
+                                denied,
+                                unknownConsent,
                                 denied,
                                 denied,
                                 challenged))
