@@ -6,6 +6,7 @@ import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
+import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import io.micronaut.core.annotation.NonNull;
@@ -19,7 +20,8 @@ import java.util.UUID;
  * The transactional half of the grant flow, on its own bean because Micronaut AOP does not apply to
  * self-invocation, so {@link ConsentService} calling these methods on itself would run them with no
  * transaction at all - and a decision writes a consent and its event, and may close a prior consent
- * first, which only holds together as one unit. Mirrors {@link PrivacyNoticeWriter}.
+ * first, which only holds together as one unit. A request is the same unit minus the closing.
+ * Mirrors {@link PrivacyNoticeWriter}.
  */
 @Singleton
 public class ConsentWriter {
@@ -32,6 +34,10 @@ public class ConsentWriter {
      * who answered one offer rather than terminating the others.
      */
     private static final ConsentEventTrigger CLEANUP_TRIGGER = ConsentEventTrigger.SYSTEM;
+
+    private static final String ALREADY_OPEN =
+            "User '%s' has already been asked to decide on privacy notice '%s', or has already"
+                    + " decided. Read the consent back rather than requesting it again.";
 
     private final ConsentRepository consents;
     private final ConsentEventRepository events;
@@ -80,6 +86,40 @@ public class ConsentWriter {
     }
 
     /**
+     * Opens an unanswered request for the subject to decide on {@code notice}, in {@code actor}'s
+     * name.
+     *
+     * <p>Refuses with {@link ConflictException} a pair that already holds an open consent, so a
+     * user is neither asked twice nor asked for a decision already given. The duplicate check runs
+     * behind the same locking read the decision path takes, which is also what settles the parent,
+     * and that lock is decisive only where the row already held is itself open: both racers read it
+     * and both refuse. It covers nothing beyond that. Under {@code READ COMMITTED} a locked row is
+     * re-read as its holder left it, but a row the holder <em>inserted</em> was never in this
+     * statement's snapshot and no lock makes it appear - so two asks for a pair holding only closed
+     * rows, and an ask racing a decision that opens one, can both land a {@code PENDING}. At most
+     * one open request is therefore a best effort here rather than an invariant, and it is settled
+     * where it is answered: {@code decide} closes every open request it does not adopt.
+     */
+    @NonNull
+    @Transactional
+    public RecordedConsent request(
+            @NonNull User subject,
+            @NonNull PrivacyNotice notice,
+            @NonNull ConsentSnapshot snapshot,
+            @NonNull String actor) {
+        List<Consent> held =
+                consents.findByUserIdAndPrivacyNoticeIdForUpdate(subject.getId(), notice.getId());
+        if (held.stream()
+                .anyMatch(
+                        consent ->
+                                ConsentStateMachine.OPEN_STATUSES.contains(consent.getStatus()))) {
+            throw new ConflictException(
+                    ALREADY_OPEN.formatted(subject.getIdentifier(), notice.getId()));
+        }
+        return create(subject, notice, ConsentStatus.PENDING, snapshot, parentOf(held), actor);
+    }
+
+    /**
      * Revokes the consent in force, if there is one, and reports its id so the decision can link
      * what it superseded.
      */
@@ -120,10 +160,11 @@ public class ConsentWriter {
      * Terminates the open requests the answered one leaves redundant, so none is stranded.
      *
      * <p>Normally there are none: a pair holds at most one open request. But the locking read
-     * cannot block a concurrent insert and no index covers {@code PENDING}, so two requests racing
-     * for a pair that held no row can both land - and answering only the newest would leave the
-     * other open forever, permanently refusing every later request for the pair as a duplicate.
-     * Closing them here settles that without a second guard the duplicate check could drift from.
+     * cannot show a row another transaction inserted after this statement's snapshot, and no index
+     * covers {@code PENDING}, so two asks racing for a pair holding no open row - or an ask racing
+     * this very decision - can both land one. Answering only the newest would leave the other open
+     * forever, permanently refusing every later request for the pair as a duplicate. Closing them
+     * here settles that without a second guard the duplicate check could drift from.
      */
     private void closeRedundant(List<Consent> redundant, String actor) {
         redundant.forEach(

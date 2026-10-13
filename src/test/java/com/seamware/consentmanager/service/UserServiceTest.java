@@ -1289,12 +1289,6 @@ class UserServiceTest {
         }
 
         @Override
-        public boolean existsByUserIdAndPrivacyNoticeIdAndStatusIn(
-                UUID userId, UUID privacyNoticeId, Collection<ConsentStatus> statuses) {
-            throw unsupported();
-        }
-
-        @Override
         public List<Consent> findByParentConsentId(UUID parentConsentId) {
             throw unsupported();
         }

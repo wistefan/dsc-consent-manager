@@ -366,15 +366,15 @@ class ConsentServiceIT extends PostgresTestResource {
                 .as("the answer appends one event to the trail the request opened")
                 .hasSize(2);
         assertThat(
-                        consents.existsByUserIdAndPrivacyNoticeIdAndStatusIn(
-                                subject.getId(), notice.getId(), List.of(ConsentStatus.PENDING)))
+                        consents.findByUserIdAndStatusIn(
+                                subject.getId(), List.of(ConsentStatus.PENDING)))
                 .as("nothing is left unanswered, so no later request collides with it")
-                .isFalse();
+                .isEmpty();
         assertThat(
-                        consents.existsByUserIdAndPrivacyNoticeIdAndStatusIn(
-                                subject.getId(), notice.getId(), ConsentStateMachine.OPEN_STATUSES))
+                        consents.findByUserIdAndStatusIn(
+                                subject.getId(), ConsentStateMachine.OPEN_STATUSES))
                 .as("a refusal reopens the pair to a new request; a grant stands in its way")
-                .isEqualTo(decision == ConsentStatus.GRANTED);
+                .hasSize(decision == ConsentStatus.GRANTED ? 1 : 0);
     }
 
     @ParameterizedTest(name = "deciding {0}")
@@ -413,10 +413,10 @@ class ConsentServiceIT extends PostgresTestResource {
                 .extracting(Consent::getStatus)
                 .containsExactlyInAnyOrder(ConsentStatus.GRANTED, ConsentStatus.TERMINATED);
         assertThat(
-                        consents.existsByUserIdAndPrivacyNoticeIdAndStatusIn(
-                                subject.getId(), notice.getId(), List.of(ConsentStatus.PENDING)))
+                        consents.findByUserIdAndStatusIn(
+                                subject.getId(), List.of(ConsentStatus.PENDING)))
                 .as("no request survives to block every later request for the pair")
-                .isFalse();
+                .isEmpty();
         UUID closed =
                 requested.stream()
                         .filter(id -> !id.equals(details.consent().getId()))
