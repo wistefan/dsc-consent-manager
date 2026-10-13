@@ -5,7 +5,7 @@ Add the five operations that move a consent after it exists — `revoke`, `refus
 `re-confirm` and `resume` — as `POST /consents/{id}/<verb>` routes on top of the grant flow merged
 for ticket #71. Every one of them authorises the caller against the consent itself (never on role
 alone), guards its move through the existing `ConsentStateMachine`, and writes the status and its
-audit event in one transaction. No database migration and no new state-table edge are needed: the
+audit event in one transaction — `resume` closing the grant it supersedes in that same unit of work. No database migration and no new state-table edge are needed: the
 transitions, the `ConsentEventState` values and `consent_events.actor` are all already in place.
 
 ## Context the steps build on
@@ -21,8 +21,8 @@ Verified against the work branch, so no step below re-establishes it:
   in `V1__initial_schema.sql` and on the `ConsentEvent` entity. **No Flyway migration.**
 - `service/ConsentWriter` is the transactional half of every consent write and already holds the
   `(user, notice)` row lock (`findByUserIdAndPrivacyNoticeIdForUpdate`) that step 4 takes. Its
-  private `revokeOpenGrant` + `parentConsentId` supersede belongs to the *decision* flow and stays
-  there — step 4 explains why a resume must not reuse it.
+  private `revokeOpenGrant` + `parentConsentId` supersede is what `decide` already does to record a
+  decision over a grant in force, and step 4 reuses it rather than inventing a second shape.
 - `service/ConsentFactory` is the only source allowed to call `withStatus` / `updateStatus` —
   `ConsentStatusInvariantTest` fails the build otherwise, so every new transition in this ticket
   goes through the factory.
@@ -57,10 +57,13 @@ Verified against the work branch, so no step below re-establishes it:
   caller, so all of them record `ConsentEventTrigger.EXPLICIT` — `ConsentWriter`'s `SUBJECT_TRIGGER`
   — never the `SYSTEM` trigger reserved for the cleanup sweeps. The actor string is the caller's own
   identifier: the subject's `identifier` for `revoke`, `refuse`, `re-confirm` and a subject's
-  `resume`; the participant's `identifier` for `terminate`; and, for a `CATALOG`-relayed `resume`,
-  the catalog token's verified `sub` under a `catalog:` prefix constant, because `CatalogPrincipal`
-  carries no dataspace identifier and a relayed grant must not read in the trail as one the subject
-  made here directly (see step 4).
+  `resume`; the participant's `identifier` for `terminate`. A `CATALOG`-relayed `resume` has no
+  dataspace identifier to use, so it records the token's verified `iss` **and** `sub` through a named
+  format constant on `ConsentLifecycleService` — `CATALOG_ACTOR = "catalog:%s:%s"`. Not `sub` alone:
+  `ConsentManagerPrincipal.subject()` documents it as unique per issuer only, and the trust list
+  admits more than one issuer, so a `sub`-only actor would let two catalogs write the same string
+  into the single column AC 11 relies on. The `catalog:` prefix is also what keeps a relayed grant
+  from reading in the trail as one the subject made here directly (see step 4).
 - **Build green at every step:** `./mvnw spotless:apply && ./mvnw verify`.
 
 ---
@@ -183,7 +186,8 @@ PARTICIPANT `404` on an absent id, all others denied — and confirm the route i
 `participantScopedEndpoints`. Confirm `noWriteRouteLetsTheCallerNameTheRecord` still passes: `{id}`
 addresses a consent, not a participant.
 
-**Acceptance:** AC 3, 9.
+**Acceptance:** AC 9, and AC 3 in a wider form than it is written — see "Criteria deliberately not
+met as written".
 
 ### Step 3: Re-confirm — an affirmation, not a transition
 
@@ -199,13 +203,17 @@ for the same reason every other rule does.
 **Factory — `service/ConsentFactory`:** two additions, and they are deliberately one mechanism
 rather than a mechanism and an exception.
 
-- `ADMISSIBLE_EVENTS`, a table of every event state a consent in a given status may record:
-  `GRANTED → {CONSENT_GIVEN, CONSENT_RESUMED, CONSENT_RE_CONFIRMED}` and, for every other status,
-  the single entry `EVENT_STATES` already derives. `EVENT_STATES` keeps its job — the event a
-  *transition* defaults to — and this table answers the wider question "which events may a consent
-  in this status record", which is the one both `affirm` here and step 4's `transitionRecordedAs`
-  ask. Introducing it here rather than in step 4 is what keeps the factory to one table: a reader
-  never has to know that re-confirmation is filed outside it.
+- `ADMISSIBLE_EVENTS`, a table of every event state a consent in a given status may record, and
+  **total over `ConsentStatus`**: `GRANTED → {CONSENT_GIVEN, CONSENT_RESUMED, CONSENT_RE_CONFIRMED}`,
+  `DRAFT → {}` explicitly, and for every other status the single entry `EVENT_STATES` already
+  derives. `DRAFT`'s entry has to be written out because `EVENT_STATES` deliberately omits the key —
+  its own doc says "`DRAFT` records nothing" — and a missing key in a validation table is a null
+  lookup rather than a refusal. An empty set refuses every event, which is what the omission means.
+  `EVENT_STATES` keeps its job — the event a *transition* defaults to — and this table answers the
+  wider question "which events may a consent in this status record", which is the one both `affirm`
+  here and step 4's `transitionRecordedAs` ask. Introducing it here rather than in step 4 is what
+  keeps the factory to one table: a reader never has to know that re-confirmation is filed outside
+  it.
 - `affirm(Consent consent, String actor)` — calls `requireAffirmable`, validates
   `CONSENT_RE_CONFIRMED` against `ADMISSIBLE_EVENTS` for the consent's unchanged status, builds the
   event and returns `RecordedConsent(consent, event, false)`. It lives in the factory because the
@@ -225,9 +233,10 @@ does not move and what the operation is for — an affirmation recorded in the a
 **Service / API:** `ConsentLifecycleService.reConfirm(User subject, UUID consentId)` with the same
 `404`-on-foreign-consent rule; a `ConsentLifecycleController.reConfirmConsent` handler.
 
-**Tests:** `ConsentFactoryTest` — affirm appends `CONSENT_RE_CONFIRMED` and leaves the status alone,
-and every entry of `EVENT_STATES` is admissible under `ADMISSIBLE_EVENTS` for its own status, so the
-two tables cannot drift apart;
+**Tests:** `ConsentFactoryTest` — affirm appends `CONSENT_RE_CONFIRMED` and leaves the status alone;
+`ADMISSIBLE_EVENTS.keySet()` covers every `ConsentStatus` value, which a per-entry parity check
+cannot see, since a missing key has no entry to compare; and every entry of `EVENT_STATES` is
+admissible under `ADMISSIBLE_EVENTS` for its own status, so the two tables cannot drift apart;
 `ConsentStateMachineTest` — parameterized over every status, only `GRANTED` is affirmable;
 `ConsentLifecycleIT` — the stored status and `updatedAt` are untouched while exactly one event is
 appended (AC 4, 11); matrix row `RE_CONFIRM_CONSENT`.
@@ -252,9 +261,16 @@ the reconciliation does, so the ADR is part of this step's commit. What it recor
   addressed by its id, in a status that is still open. It cannot create one, cannot choose the
   notice, and cannot choose the subject: `userIdentifier` is checked *against* the stored row rather
   than used to select it, so a mismatch is `404` and never a grant recorded for someone else.
-- **How the trail distinguishes it.** The event records the relay, not the subject — see the actor
-  rule below — so a reader can always tell a relayed grant from one the subject made here directly.
+- **How the trail distinguishes it.** The event records the relay, not the subject — the actor rule
+  in "Conventions every step follows", `catalog:<issuer>:<sub>` — so a reader can always tell a relayed grant from one the subject made here directly.
   A relayed grant indistinguishable from a direct one is the part that would be indefensible.
+- **What a relayed resume may close.** Recording the grant supersedes whatever grant is in force
+  for the same (user, notice) pair — the same act `decide` performs when the subject calls here
+  directly. It stays inside the exception's bounds, because the catalog chooses neither the subject
+  nor the notice: the only consent it can close is the one its own relayed decision replaces. The
+  revocation carries the `catalog:` actor, so the trail shows who closed it. Refusing instead would
+  leave the relay no way forward at all, the route that adopts the request in place
+  (`POST /consents`) being `USER`-only.
 - **The remedy if the dataspace disagrees.** Dropping `CATALOG` from the route's `x-roles` removes
   the exception without touching the service, which is why the shape keeps that cheap.
 
@@ -314,29 +330,41 @@ a resumed grant can never carry terms that are out of force. Where the notice wa
 subject answers the new one through `POST /consents`, which is the route that elects scope.
 
 **Writer — `ConsentWriter.resume(UUID consentId, String actor)`:** `@Transactional`, and
-deliberately narrow. It takes `findByUserIdAndPrivacyNoticeIdForUpdate` on the consent's
-(user, notice) pair — the same lock the grant flow takes, so a resume and a concurrent grant of the
-same pair serialise instead of interleaving — reads the addressed row under that lock, then
-`transitionRecordedAs(… GRANTED, CONSENT_RESUMED …)` and saves the status with its event in one unit
-of work (AC 12).
+deliberately symmetric with `decide`. It takes `findByUserIdAndPrivacyNoticeIdForUpdate` on the
+consent's (user, notice) pair — the same lock the grant flow takes, so a resume and a concurrent
+grant of the same pair serialise instead of interleaving — and under that lock reuses the private
+`revokeOpenGrant` to close whatever grant is in force for the pair, moves the addressed row through
+`transitionRecordedAs(… GRANTED, CONSENT_RESUMED …)`, and — exactly as `answer` does, and only when
+this same call revoked something — sets its `parentConsentId` to the grant it closed. The
+revocation, the status, the event and the link are one unit of work (AC 6, AC 12).
 
-It does **not** revoke an open grant and does **not** write `parentConsentId`. An earlier draft of
-this plan had it reuse `revokeOpenGrant` and point the resumed row at the grant it closed; both are
-wrong. ADR-0009 fixes lineage as a single upward link walked from the newest end and forbids
-mutating a superseded row to point at its successor — and the resumed row is *older* than any grant
-it would be pointed at, so the link would run backwards. The pair that supersede would close is
-rare but not impossible, and the plan should not claim otherwise: `ConsentWriter.request` refuses a
-second row while an `OPEN_STATUSES` row stands and `decide` answers an open `PENDING` in place, but
-`request`'s own doc comment records that under `READ COMMITTED` "an ask racing a decision that opens
-one" can land a `PENDING` beside a freshly created `GRANTED`, because a row the racer inserted was
-never in this statement's snapshot and no lock makes it appear.
+An earlier revision of this plan dropped the supersede, arguing that the resumed row is *older* than
+the grant it would point at and that the link would therefore run backwards against ADR-0009. That
+argument does not hold, and `ConsentWriter.answer` on the branch is the counter-example:
+`decide` revokes the open grant and then points the adopted `PENDING` — likewise older than the
+grant it closes, since the only interleaving that produces the pair is the one below — at it, with
+the doc comment "It is re-pointed only when this same decision revoked a consent, because then that
+revocation is what it superseded." ADR-0009's rule is about pointer *direction*, not row age: "a
+superseded consent is never mutated to point at its successor". Writing `parentConsentId` on the row
+being moved, naming what that move closed, is precisely the single upward link the ADR prescribes,
+and the revoked row is not touched. The ADR already records that a consent's own row cannot date its
+decision, so a row being older than its parent is a shape it expects rather than one it forbids.
 
-When that pair exists, `uq_consents_granted_per_user_notice` refuses the second `GRANTED` and the
-caller is answered `409` — the honest answer, rather than a silent rewrite of a grant the subject
-gave elsewhere. The consequence is worth stating plainly: such a `PENDING` can never be resumed. It
-is answered through `POST /consents`, which adopts it in place and revokes the grant it supersedes,
-with the lineage running the right way round. That route exists, it is the one the subject uses
-anyway, and it is why the `409` strands nobody.
+The pair this closes is rare but reachable, and the plan should say how: `ConsentWriter.request`
+refuses a second row while an `OPEN_STATUSES` row stands and `decide` answers an open `PENDING` in
+place, but `request`'s own doc comment records that under `READ COMMITTED` "an ask racing a decision
+that opens one" can land a `PENDING` beside a freshly created `GRANTED`, because a row the racer
+inserted was never in this statement's snapshot and no lock makes it appear. Superseding means such
+a `PENDING` is resumable like any other, instead of dead-ending on the unique index — which matters
+most for a `CATALOG` caller, whose only escape would otherwise be `POST /consents`, a route it
+cannot reach.
+
+The `409` does not disappear; it stops being the ordinary case. A `GRANTED` inserted outside this
+statement's snapshot is invisible to the locking read and still collides with
+`uq_consents_granted_per_user_notice`, so the service catches `DataAccessException` outside the
+transaction as `ConsentService.record` does. And resume answers only the row it was addressed to: it
+leaves any other open request for the pair alone, because it is the answer to one identified request
+rather than to the pair, and `decide` already closes the stragglers.
 
 **Service — `ConsentLifecycleService.resume(ConsentManagerPrincipal caller, UUID consentId,
 @Nullable String userIdentifier)`:** an exhaustive `switch` over the sealed principal —
@@ -348,10 +376,13 @@ impossible branch. The writer's `DataAccessException` is caught **outside** the 
 turned into a `409` through `UniqueViolation.rejected`, exactly as `ConsentService.record` does.
 
 **Tests:** `ConsentLifecycleIT` — resume from `PENDING` and from `DRAFT` grants, flips `consented`
-and appends one `CONSENT_RESUMED` event, while `parentConsentId` is left exactly as stored (the
-lineage assertion that keeps the dropped supersede from returning); from every terminal status it is
-`400`; a `CATALOG` caller with a mismatched or absent `userIdentifier` is `404`/`400` (AC 10), and a
-relayed resume writes the `catalog:` actor while the subject's own writes the subject's identifier;
+and appends one `CONSENT_RESUMED` event; with a grant in force for the same pair, that grant is
+`REVOKED` with its own event and the resumed row's `parentConsentId` names it, while with no grant
+in force `parentConsentId` is left exactly as stored (the two halves of AC 6, and the assertion that
+keeps the link from being written unconditionally); from every terminal status it is `400`; a
+`CATALOG` caller with a mismatched or absent `userIdentifier` is `404`/`400` (AC 10), and a relayed
+resume writes the `catalog:<issuer>:<sub>` actor while the subject's own writes the subject's
+identifier;
 a consent whose notice has since been archived is `400` and writes nothing, as is one whose notice
 names no consumer — the guard above, asserted rather than assumed; and a resumed row keeps the
 snapshot it was opened with. `ConsentLifecycleSurfaceIT` — a `USER` token and a `CATALOG` token
@@ -361,8 +392,7 @@ sends a body, so it would not catch a non-nullable parameter). Matrix row `RESUM
 `404`, CATALOG `404`, PARTICIPANT/OUTSIDER denied, ANONYMOUS challenged; the row's body carries
 `userIdentifier`, which the USER case must ignore rather than reject.
 
-**Acceptance:** AC 5, 10. **AC 6 is deliberately not met as written** — see "Criteria deliberately
-not met as written" below.
+**Acceptance:** AC 5, 6, 10.
 
 ### Step 5: The total matrix and the concurrency the index has to settle
 
@@ -386,7 +416,8 @@ total and exercises the races.
   (`@MicronautTest(transactional = false)`, two threads on a latch): a revocation racing a re-grant
   of the same (user, notice) pair leaves exactly one `GRANTED` row, and a resume racing a grant of
   the same pair leaves exactly one, with the loser answered `409` rather than `500` (AC 16) — the
-  resume case is precisely what step 4 relies on in place of the supersede it dropped. A second
+  resume case exercises both halves of step 4's writer: the supersede when the grant is visible to
+  the locking read, and the `409` when it was inserted outside that statement's snapshot. A second
   case: two concurrent revocations of the same consent append exactly one event, the loser `400` —
   which is what the `findByIdForUpdate` re-read from step 1 buys.
 - An assertion, in the matrix IT or alongside it, that a refused operation leaves **no** event row —
@@ -426,26 +457,34 @@ silently.
   `NoticeContent`, `NoticeResolution`, `ResolvedNotice` and `RegistrationOutcome`. Every edit to
   `AGENTS.md` this ticket needs is gathered here, in the one step that performs them.
 
-**Acceptance:** AC 13, 14 scoped explicitly and traceable; the repository context file matches the
+**Acceptance:** the seam AC 13 and AC 14 attach to exists and is named; the criteria themselves are
+deviations — see "Criteria deliberately not met as written". The repository context file matches the
 merged state.
 
 ---
 
 ## Criteria deliberately not met as written
 
-AC 6 reads "Resume revokes and links any existing `GRANTED` consent in the same transaction". Step 4
-implements neither half, and answers `409` instead. The reasoning is in step 4 and is not repeated
-here; in short, the link ADR-0009 permits runs upward from the newest row, and the row a resume
-moves is *older* than any grant it would be pointed at, so writing it would invert the lineage the
-ADR fixes. What the criterion is reaching for — a resume and a concurrent grant of the same
-(user, notice) pair never both landing a `GRANTED` — *is* delivered, by the pair lock the writer
-takes and the `uq_consents_granted_per_user_notice` index behind it, and step 5 proves it under a
-real race.
+Two deviations, gathered here because this is the section a reader amending the ticket reads, rather
+than left argued only inside the step that causes them. (AC 6 was listed here in an earlier revision
+of this plan; it is not a deviation — step 4 implements the revoke-and-link as written.)
 
-This is a conscious deviation, and it needs the ticket amended rather than quietly reinterpreted.
-The alternative, if the dataspace insists on the revoke-and-link shape, is to raise an ADR
-superseding ADR-0009's lineage rule — which is a larger decision than this ticket, and the reason it
-is surfaced here rather than settled in passing.
+**AC 3 — `terminate` is wider than "moves `GRANTED` → `TERMINATED`".** Step 2 also admits `PENDING`
+and `DRAFT`, because `ConsentStateMachine.UNANSWERED_MOVES` contains `TERMINATED` for both and this
+plan changes no edge. Narrowing the operation to the criterion would mean either an `if` in the
+service that contradicts the one transition table, or removing an edge erasure and deregistration
+depend on — which "Out of scope" excludes. The consequence is real and worth the ticket's attention:
+a participant can unilaterally close a request the subject has not answered, which overlaps what
+`refuse` does from the subject's side. The alternative, if that is unwanted, is a narrower guard
+expressed as its own admissible-move set rather than as a special case, and it should be decided
+before step 2 lands.
+
+**AC 13 and AC 14 — the notifications.** "Termination notifies the data subject" and "revocation
+emits a participant notification" are not met: step 6 emits a structured log line per lifecycle move
+and nothing is delivered to anyone. No notification subsystem exists on the branch, TICKET-013 and
+TICKET-020 own it, and ticket #71 shipped on the same footing. `ConsentStateChangeLog` is named as
+the seam those tickets attach to, which makes the gap traceable — but traceable is not met, and the
+criteria need moving to those tickets rather than ticking here.
 
 ---
 
