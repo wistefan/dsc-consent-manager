@@ -106,6 +106,8 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_CONSENTS = "/consents";
 
+    private static final String PATH_CONSENT_REQUESTS = PATH_CONSENTS + "/requests";
+
     /** A decision the grant row states, so the body passes validation and the route is reached. */
     private static final String GRANTED_DECISION = "GRANTED";
 
@@ -329,7 +331,15 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 PATH_CONSENTS,
                                 Map.of(
                                         "privacyNoticeId", ABSENT_NOTICE,
-                                        "decision", GRANTED_DECISION)));
+                                        "decision", GRANTED_DECISION))),
+        REQUEST_CONSENT(
+                "post " + PATH_CONSENT_REQUESTS,
+                () ->
+                        HttpRequest.POST(
+                                PATH_CONSENT_REQUESTS,
+                                Map.of(
+                                        "privacyNoticeId", ABSENT_NOTICE,
+                                        "userIdentifier", LINKED_USER)));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -525,6 +535,17 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 Endpoint.GRANT_CONSENT,
                                 unknownNotice,
                                 denied,
+                                denied,
+                                denied,
+                                challenged),
+                        // Same shape as the row above, mirrored: the body names a user the fixture
+                        // links to the caller, so the one caller this route admits gets past
+                        // validation and the affiliation check and stops at the same absent
+                        // notice. ConsentRequestSurfaceIT owns the 201.
+                        row(
+                                Endpoint.REQUEST_CONSENT,
+                                denied,
+                                unknownNotice,
                                 denied,
                                 denied,
                                 challenged))
