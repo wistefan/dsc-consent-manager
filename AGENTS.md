@@ -29,7 +29,10 @@ api/
                                    # ParticipantRegistration, ParticipantUpdate,
                                    # DeregistrationSummary, ParticipantUserLink(+Update),
                                    # BulkUserRegistrationEntry, BulkRegistrationEntryResult,
-                                   # BulkRegistrationSummary
+                                   # BulkRegistrationSummary, PrivacyNotice,
+                                   # GeneratePrivacyNotice, GenerateByContract,
+                                   # PrivacyNoticeResolution, ResolutionState,
+                                   # Consent, GrantConsent, ConsentRequest
   components/responses/            # BadRequest, Unauthorized, Forbidden, NotFound, Conflict
                                    # — every operation $refs the shared 401/403 from here
   templates/server/controller.mustache   # Only override: emits the x-principal parameter
@@ -38,20 +41,31 @@ src/main/java/com/seamware/consentmanager/
   Application.java
   config/ConsentManagerConfiguration.java   # @ConfigurationProperties("consent-manager"),
                                    # nested Erasure / Users / Participants classes
+  client/                          # ContractGateway + ContractServiceClient,
+                                   # SelfDescriptionClient(+HttpClientFactory),
+                                   # UpstreamRetryPredicate, dto/
   domain/                          # User, Participant, UserParticipant, Consent,
-                                   # ConsentEvent, ConsentStatus, ConsentEventState,
-                                   # ConsentSnapshot, PrivacyNotice, PrivacyNoticePayload,
-                                   # UuidGenerator (UUIDv7), MicrosecondDateTimeProvider
+                                   # ConsentEvent, ConsentEventTrigger, ConsentStatus,
+                                   # ConsentEventState, ConsentSnapshot, PrivacyNotice,
+                                   # PrivacyNoticePayload, UuidGenerator (UUIDv7),
+                                   # MicrosecondDateTimeProvider
   repository/                      # Micronaut Data JDBC repositories (User, Participant,
                                    # UserParticipant, Consent, ConsentEvent, PrivacyNotice)
   service/                         # UserService (registration, JIT provisioning, search,
                                    # links, ADR-0007 erasure), ParticipantService
                                    # (registration, self-service, ADR-0008 deregistration),
+                                   # PrivacyNoticeService + PrivacyNoticeWriter /
+                                   # PrivacyNoticeResolver / ContractPartyResolver /
+                                   # ContractContentExtractor, ConsentService +
+                                   # ConsentWriter (the transactional half) +
+                                   # ConsentStateMachine (the one transition table) +
+                                   # ConsentFactory (consent + its event),
                                    # ErasureVerifier, CallerScope, and the service-layer
                                    # records (UserRegistration, ParticipantRegistration,
                                    # ParticipantUpdate, DeregistrationResult, ErasureResult,
                                    # ProvisionedUser, RegistrationResult, BulkEntryResult,
-                                   # UserSearchCriteria)
+                                   # UserSearchCriteria, ConsentDecision, ConsentDetails,
+                                   # ConsentRequestCommand, RecordedConsent, UniqueViolation)
   security/                        # IdentityProviderRegistry, ClaimMapper, token validator,
                                    # Role, sealed ConsentManagerPrincipal + UserPrincipal /
                                    # ParticipantPrincipal / CatalogPrincipal,
@@ -62,8 +76,10 @@ src/main/java/com/seamware/consentmanager/
                                    # ConstraintViolationProblemHandler,
                                    # ProblemErrorResponseProcessor
   api/                             # Concrete controllers extending generated Abstract*
-                                   # (ApiStatus, User, Participant, ParticipantUser),
-                                   # UserMapper, ParticipantMapper, JsonNullableSerde
+                                   # (ApiStatus, User, Participant, ParticipantUser,
+                                   # PrivacyNotice, Consent, ConsentRequest),
+                                   # UserMapper, ParticipantMapper, PrivacyNoticeMapper,
+                                   # ConsentMapper, JsonNullableSerde
 src/main/resources/
   application.yml, application-dev.yml, logback.xml
   static/swagger-ui/index.html     # makes the bundled Swagger UI work
@@ -73,7 +89,9 @@ src/test/java/com/seamware/consentmanager/
   support/                         # PostgresTestResource, KeycloakTestResource,
                                    # KeycloakAndPostgresTestResource, OidcDiscoveryStub, Await
   api/                             # SpecSecurityConsistencyTest, SpecReferenceResolutionTest,
-                                   # ParticipantSchemaParityTest,
+                                   # EndpointRoleMatrixIT (total over the parsed operations),
+                                   # ParticipantSchemaParityTest, PrivacyNoticeSpecParityTest,
+                                   # ConsentEnumParityTest,
                                    # ParticipantCredentialAbsenceTest — all build-failing
 docs/security.md, docs/user-identifiers.md, docs/adr/   # ADRs 0001-0008
 compose.yaml, docker/Dockerfile, .env.sample
@@ -115,7 +133,7 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   concrete implementation, when `@Secured` disagrees with the spec, when a secured operation
   declares no `ConsentManagerPrincipal`-typed parameter, when the declared principal type
   cannot hold every admitted role, when it omits the shared 401/403 response refs, or when the
-  parsed operation count drifts from `SPECIFIED_OPERATION_COUNT` (**19** today). Raise that
+  parsed operation count drifts from `SPECIFIED_OPERATION_COUNT` (**21** today). Raise that
   constant in the same commit that adds an operation. `EndpointRoleMatrixIT` is total over the same
   parsed operations, so an added operation also needs a row in its `Endpoint` enum, and a
   PARTICIPANT-only route is additionally swept by `participantScopedEndpoints`, which demands the
@@ -136,6 +154,20 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   `deregistered_at` — and is what every route acting in the dataspace in the participant's name
   uses (`ParticipantUserController`), so a departed participant cannot re-create the
   affiliations deregistration removed while still reading its own record back.
+- **The consent lifecycle is one table.** `ConsentStateMachine` holds every permitted move;
+  a pair absent from it is refused, and `requireTransition` raises `BadRequestException` naming
+  both the held and the attempted status. Never branch on status in a service — add the edge to
+  the table. `ConsentFactory` is the only place a `Consent` and its `ConsentEvent` are produced
+  together, and it derives the event state from the *target status*, so a move whose event the
+  status does not name needs the factory extended rather than an event hand-built.
+  `Consent.updateStatus` is the only way to change a stored status; it keeps the invariant
+  `consented == (status == GRANTED)`. Every consent write goes through `ConsentWriter`, which is
+  a separate bean precisely because Micronaut AOP skips self-invocation.
+- **One grant per (user, notice) is a database invariant,** held by the partial unique index
+  `uq_consents_granted_per_user_notice`. A writer that may create or move a row into `GRANTED`
+  takes `ConsentRepository.findByUserIdAndPrivacyNoticeIdForUpdate` first and answers the lost
+  race as `409` by catching `DataAccessException` *outside* the transaction — see
+  `ConsentService.decide`.
 - **Errors** are RFC 7807 problem details rendered as `application/problem+json` from the
   generated `ProblemDetail`; throw `NotFoundException`/`ConflictException`/… rather than
   returning an error response. `UpstreamServiceException` maps to `502`.
@@ -182,5 +214,6 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   nullable, null for every active participant, set only on deregistration's retain branch, with
   a partial index keeping the directory listing to active rows.
 - `src/main/resources/application.yml` — base config, incl. the identity-provider trust list
-- `docs/security.md`, `docs/adr/` — security model and recorded decisions
+- `docs/security.md`, `docs/adr/` — security model and recorded decisions; ADR-0009 is
+  why only the data subject grants and a request confers nothing
 - `IMPLEMENTATION_PLAN.md` — the plan for the ticket currently in flight
