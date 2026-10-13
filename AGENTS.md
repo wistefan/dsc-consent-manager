@@ -93,7 +93,7 @@ src/test/java/com/seamware/consentmanager/
                                    # ParticipantSchemaParityTest, PrivacyNoticeSpecParityTest,
                                    # ConsentEnumParityTest,
                                    # ParticipantCredentialAbsenceTest — all build-failing
-docs/security.md, docs/user-identifiers.md, docs/adr/   # ADRs 0001-0008
+docs/security.md, docs/user-identifiers.md, docs/adr/   # ADRs 0001-0009
 compose.yaml, docker/Dockerfile, .env.sample
 ```
 
