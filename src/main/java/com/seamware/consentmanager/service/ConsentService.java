@@ -1,6 +1,5 @@
 package com.seamware.consentmanager.service;
 
-import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
@@ -10,7 +9,6 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
-import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
@@ -39,8 +37,6 @@ public class ConsentService {
                     + " current notice for the contract.";
     private static final String NO_CONSUMER =
             "Privacy notice '%s' names no data consumer, so no consent can be recorded against it.";
-    private static final String UNKNOWN_PARTY =
-            "privacy notice %s names participant %s, which no longer exists";
     private static final String NOTHING_TO_NARROW =
             "Privacy notice '%s' declares no %s, so none can be elected.";
     private static final String EMPTY_ELECTION =
@@ -62,25 +58,25 @@ public class ConsentService {
     private static final String DATA_CATEGORIES = "categories of data";
 
     private final PrivacyNoticeRepository notices;
-    private final ParticipantRepository participants;
     private final UserRepository users;
     private final UserParticipantRepository links;
     private final ConsentWriter writer;
     private final ConsentStateMachine lifecycle;
+    private final ConsentParties parties;
 
     public ConsentService(
             PrivacyNoticeRepository notices,
-            ParticipantRepository participants,
             UserRepository users,
             UserParticipantRepository links,
             ConsentWriter writer,
-            ConsentStateMachine lifecycle) {
+            ConsentStateMachine lifecycle,
+            ConsentParties parties) {
         this.notices = notices;
-        this.participants = participants;
         this.users = users;
         this.links = links;
         this.writer = writer;
         this.lifecycle = lifecycle;
+        this.parties = parties;
     }
 
     /**
@@ -108,7 +104,7 @@ public class ConsentService {
 
         ConsentSnapshot snapshot =
                 ConsentSnapshot.of(notice, decision.purposes(), decision.dataCategories());
-        return details(record(subject, notice, decision, snapshot), notice);
+        return parties.details(record(subject, notice, decision, snapshot));
     }
 
     /**
@@ -131,7 +127,7 @@ public class ConsentService {
         User subject = affiliated(caller, command.userIdentifier());
 
         ConsentSnapshot snapshot = ConsentSnapshot.of(notice, null, null);
-        return details(writer.request(subject, notice, snapshot, caller.getIdentifier()), notice);
+        return parties.details(writer.request(subject, notice, snapshot, caller.getIdentifier()));
     }
 
     /**
@@ -237,28 +233,5 @@ public class ConsentService {
             throw new BadRequestException(
                     OUTSIDE_SCOPE.formatted(heading, outside, notice.getId()));
         }
-    }
-
-    /** The stored consent with both parties resolved to the identifiers the API renders. */
-    private ConsentDetails details(RecordedConsent recorded, PrivacyNotice notice) {
-        Consent consent = recorded.consent();
-        return new ConsentDetails(
-                consent,
-                party(notice, consent.getProviderId()).getIdentifier(),
-                party(notice, consent.getConsumerId()).getIdentifier(),
-                recorded.created());
-    }
-
-    /**
-     * A participant the notice names. Absence is corruption rather than a client error - the
-     * notice's foreign keys forbid it - so it fails loudly instead of as a {@code 404}.
-     */
-    private Participant party(PrivacyNotice notice, UUID participantId) {
-        return participants
-                .findById(participantId)
-                .orElseThrow(
-                        () ->
-                                new IllegalStateException(
-                                        UNKNOWN_PARTY.formatted(notice.getId(), participantId)));
     }
 }

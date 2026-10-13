@@ -7,6 +7,7 @@ import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.ConflictException;
+import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import io.micronaut.core.annotation.NonNull;
@@ -34,6 +35,8 @@ public class ConsentWriter {
      * who answered one offer rather than terminating the others.
      */
     private static final ConsentEventTrigger CLEANUP_TRIGGER = ConsentEventTrigger.SYSTEM;
+
+    private static final String UNKNOWN_CONSENT = "No consent exists with identifier '%s'.";
 
     private static final String ALREADY_OPEN =
             "User '%s' has already been asked to decide on privacy notice '%s', or has already"
@@ -117,6 +120,31 @@ public class ConsentWriter {
                     ALREADY_OPEN.formatted(subject.getIdentifier(), notice.getId()));
         }
         return create(subject, notice, ConsentStatus.PENDING, snapshot, parentOf(held), actor);
+    }
+
+    /**
+     * Moves one stored consent to {@code target} and appends the event recording the move.
+     *
+     * <p>Re-reads the row under {@link ConsentRepository#findByIdForUpdate} and guards the
+     * transition on <em>that</em> read, not on whatever the caller loaded to authorise itself, so
+     * two moves sent at once cannot both be written: the loser sees the status the winner left and
+     * {@link ConsentStateMachine} refuses it. Status and event are one unit of work, so neither can
+     * be stored without the other, and a refused move throws before anything is written.
+     *
+     * <p>Throws {@link NotFoundException} when the row vanished between the two reads.
+     */
+    @NonNull
+    @Transactional
+    public RecordedConsent move(
+            @NonNull UUID consentId,
+            @NonNull ConsentStatus target,
+            @NonNull String actor,
+            @NonNull ConsentEventTrigger trigger) {
+        Consent locked =
+                consents.findByIdForUpdate(consentId)
+                        .orElseThrow(
+                                () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
+        return saveUpdated(factory.transition(locked, target, actor, trigger));
     }
 
     /**

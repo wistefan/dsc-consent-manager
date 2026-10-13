@@ -10,6 +10,7 @@ import io.micronaut.data.model.query.builder.sql.Dialect;
 import io.micronaut.data.repository.PageableRepository;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -135,6 +136,17 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
                     + " AND privacy_notice_id = :privacyNoticeId"
                     + " ORDER BY created_at DESC, id DESC FOR UPDATE")
     List<Consent> findByUserIdAndPrivacyNoticeIdForUpdate(UUID userId, UUID privacyNoticeId);
+
+    /**
+     * One consent by id, locked against concurrent lifecycle moves.
+     *
+     * <p>Every lifecycle write re-reads its row through this inside its transaction and guards the
+     * transition on <em>that</em> read rather than on the one that authorised the caller, so two
+     * moves sent at once cannot both append an event: the loser waits, sees the status the winner
+     * left, and is refused by the state machine.
+     */
+    @Query("SELECT * FROM consents WHERE id = :id FOR UPDATE")
+    Optional<Consent> findByIdForUpdate(UUID id);
 
     /**
      * How many consents name the participant on either side, counting a self-dealing consent once.
