@@ -74,6 +74,16 @@ public class ConsentStateMachine {
     public static final Set<ConsentStatus> OPEN_STATUSES =
             Collections.unmodifiableSet(EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.PENDING));
 
+    /**
+     * The statuses an affirmation may be recorded against: a consent in force, and nothing else.
+     *
+     * <p>Re-confirmation moves no status, so it cannot be expressed as an entry in {@link
+     * #TRANSITIONS} and cannot go through {@link #requireTransition}. The rule still belongs in
+     * this table rather than as a branch in a service, for the same reason every other one does.
+     */
+    private static final Set<ConsentStatus> AFFIRMABLE =
+            Collections.unmodifiableSet(EnumSet.of(ConsentStatus.GRANTED));
+
     /** Every permitted move, by the status held. An empty entry is a terminal status. */
     private static final Map<ConsentStatus, Set<ConsentStatus>> TRANSITIONS = transitions();
 
@@ -83,6 +93,9 @@ public class ConsentStateMachine {
 
     private static final String NOT_A_DECISION =
             "state %s is not a decision a data subject can take; expected GRANTED or REFUSED";
+
+    private static final String NOT_AFFIRMABLE =
+            "a consent in state %s cannot be re-confirmed; re-confirmation requires one of %s";
 
     /** Whether a consent holding {@code from} may move to {@code to}. */
     public boolean permits(@NonNull ConsentStatus from, @NonNull ConsentStatus to) {
@@ -100,6 +113,13 @@ public class ConsentStateMachine {
     public void requireDecision(@NonNull ConsentStatus target) {
         if (!DECISIONS.contains(target)) {
             throw new BadRequestException(NOT_A_DECISION.formatted(target));
+        }
+    }
+
+    /** Refuses an affirmation of a consent not in force, naming both it and what is required. */
+    public void requireAffirmable(@NonNull ConsentStatus held) {
+        if (!AFFIRMABLE.contains(held)) {
+            throw new BadRequestException(NOT_AFFIRMABLE.formatted(held, AFFIRMABLE));
         }
     }
 

@@ -67,6 +67,19 @@ public class ConsentLifecycleService {
     }
 
     /**
+     * Records that the subject still stands by a consent in force, without moving it.
+     *
+     * <p>Permitted from {@code GRANTED} only; any other status is {@code 400} naming it. Nothing
+     * about the record changes, so the body read back is the consent as it already was and the
+     * affirmation shows only in the audit trail.
+     */
+    @NonNull
+    public ConsentDetails reConfirm(@NonNull User subject, @NonNull UUID consentId) {
+        Consent owned = ownedBy(subject, consentId);
+        return parties.details(writer.affirm(owned.getId(), subject.getIdentifier()));
+    }
+
+    /**
      * Ends an arrangement from the organisational side, in the name of a participant the consent
      * names as provider or as consumer.
      *
@@ -107,17 +120,20 @@ public class ConsentLifecycleService {
     }
 
     /**
-     * Moves the subject's own consent to {@code target}, in the subject's name.
+     * Resolves a consent the subject owns.
      *
      * <p>A consent that does not exist and one belonging to somebody else are the same {@code 404},
-     * so the route answers nothing about which identifiers are real.
+     * so the subject's routes answer nothing about which identifiers are real.
      */
+    private Consent ownedBy(User subject, UUID consentId) {
+        return consents.findById(consentId)
+                .filter(consent -> consent.getUserId().equals(subject.getId()))
+                .orElseThrow(() -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
+    }
+
+    /** Moves the subject's own consent to {@code target}, in the subject's name. */
     private ConsentDetails move(User subject, UUID consentId, ConsentStatus target) {
-        Consent owned =
-                consents.findById(consentId)
-                        .filter(consent -> consent.getUserId().equals(subject.getId()))
-                        .orElseThrow(
-                                () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
+        Consent owned = ownedBy(subject, consentId);
         RecordedConsent moved =
                 writer.move(owned.getId(), target, subject.getIdentifier(), EXPLICIT_TRIGGER);
         return parties.details(moved);

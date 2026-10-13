@@ -148,6 +148,29 @@ public class ConsentWriter {
     }
 
     /**
+     * Appends an affirmation of one stored consent, leaving the record itself alone.
+     *
+     * <p>Re-reads the row under {@link ConsentRepository#findByIdForUpdate} and checks the status
+     * on <em>that</em> read, so an affirmation racing a revocation is refused rather than written
+     * against a consent no longer in force. The consent row is deliberately not updated: {@code
+     * updatedAt} dates state changes, and a re-confirmation changes no state — it is dated by its
+     * own event.
+     *
+     * <p>Throws {@link NotFoundException} when the row vanished between the two reads.
+     */
+    @NonNull
+    @Transactional
+    public RecordedConsent affirm(@NonNull UUID consentId, @NonNull String actor) {
+        Consent locked =
+                consents.findByIdForUpdate(consentId)
+                        .orElseThrow(
+                                () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
+        RecordedConsent affirmed = factory.affirm(locked, actor);
+        events.save(affirmed.event());
+        return affirmed;
+    }
+
+    /**
      * Revokes the consent in force, if there is one, and reports its id so the decision can link
      * what it superseded.
      */

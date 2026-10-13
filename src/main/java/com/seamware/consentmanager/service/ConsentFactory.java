@@ -12,8 +12,10 @@ import jakarta.inject.Singleton;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -34,9 +36,23 @@ import java.util.UUID;
 public class ConsentFactory {
 
     /** The event each target status is recorded as. {@link ConsentStatus#DRAFT} records nothing. */
-    private static final Map<ConsentStatus, ConsentEventState> EVENT_STATES = eventStates();
+    static final Map<ConsentStatus, ConsentEventState> EVENT_STATES = eventStates();
+
+    /**
+     * Every event a consent holding a given status may record, total over {@link ConsentStatus}.
+     *
+     * <p>{@link #EVENT_STATES} answers the narrower question of which event a <em>move</em>
+     * defaults to; this one answers which events the status admits at all, which is what an event
+     * recorded without a move — an affirmation — must be checked against. {@code DRAFT} is written
+     * out as the empty set because {@code EVENT_STATES} omits the key deliberately, and a missing
+     * key here would be a null lookup rather than the refusal that omission means.
+     */
+    static final Map<ConsentStatus, Set<ConsentEventState>> ADMISSIBLE_EVENTS = admissibleEvents();
 
     private static final String UNMAPPED_STATUS = "no consent event is defined for state %s";
+
+    private static final String INADMISSIBLE_EVENT =
+            "event %s cannot be recorded against a consent in state %s";
 
     private final ConsentStateMachine lifecycle;
 
@@ -113,6 +129,27 @@ public class ConsentFactory {
         return new RecordedConsent(consent, event(consent, actor, trigger, details), false);
     }
 
+    /**
+     * Records that {@code actor} affirms a consent in force, without moving it.
+     *
+     * <p>Refuses with {@link com.seamware.consentmanager.error.BadRequestException} a consent in
+     * any other status. The consent is returned untouched — a re-confirmation is dated by its own
+     * event, so nothing about the record changes.
+     */
+    @NonNull
+    public RecordedConsent affirm(@NonNull Consent consent, @NonNull String actor) {
+        lifecycle.requireAffirmable(consent.getStatus());
+        return new RecordedConsent(
+                consent,
+                event(
+                        consent,
+                        ConsentEventState.CONSENT_RE_CONFIRMED,
+                        actor,
+                        ConsentEventTrigger.EXPLICIT,
+                        null),
+                false);
+    }
+
     private static ConsentEvent event(
             Consent consent,
             String actor,
@@ -121,6 +158,20 @@ public class ConsentFactory {
         ConsentEventState state = EVENT_STATES.get(consent.getStatus());
         if (state == null) {
             throw new IllegalStateException(UNMAPPED_STATUS.formatted(consent.getStatus()));
+        }
+        return event(consent, state, actor, trigger, details);
+    }
+
+    /** Builds the event, refusing one the consent's status does not admit. */
+    private static ConsentEvent event(
+            Consent consent,
+            ConsentEventState state,
+            String actor,
+            ConsentEventTrigger trigger,
+            Map<String, Object> details) {
+        if (!ADMISSIBLE_EVENTS.getOrDefault(consent.getStatus(), Set.of()).contains(state)) {
+            throw new IllegalStateException(
+                    INADMISSIBLE_EVENT.formatted(state, consent.getStatus()));
         }
         return new ConsentEvent(
                 consent.getId(),
@@ -140,5 +191,18 @@ public class ConsentFactory {
         states.put(ConsentStatus.TERMINATED, ConsentEventState.CONSENT_TERMINATED);
         states.put(ConsentStatus.EXPIRED, ConsentEventState.CONSENT_EXPIRED);
         return Collections.unmodifiableMap(states);
+    }
+
+    private static Map<ConsentStatus, Set<ConsentEventState>> admissibleEvents() {
+        Map<ConsentStatus, Set<ConsentEventState>> table = new EnumMap<>(ConsentStatus.class);
+        EVENT_STATES.forEach((status, state) -> table.put(status, EnumSet.of(state)));
+        table.put(
+                ConsentStatus.GRANTED,
+                EnumSet.of(
+                        ConsentEventState.CONSENT_GIVEN,
+                        ConsentEventState.CONSENT_RESUMED,
+                        ConsentEventState.CONSENT_RE_CONFIRMED));
+        table.put(ConsentStatus.DRAFT, EnumSet.noneOf(ConsentEventState.class));
+        return Collections.unmodifiableMap(table);
     }
 }

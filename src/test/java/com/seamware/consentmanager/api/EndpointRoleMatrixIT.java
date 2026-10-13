@@ -353,6 +353,11 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         REFUSE_CONSENT(
                 "post " + PATH_CONSENTS + "/{id}/refuse",
                 () -> HttpRequest.POST(PATH_CONSENTS + "/" + ABSENT_CONSENT + "/refuse", NO_BODY)),
+        RE_CONFIRM_CONSENT(
+                "post " + PATH_CONSENTS + "/{id}/re-confirm",
+                () ->
+                        HttpRequest.POST(
+                                PATH_CONSENTS + "/" + ABSENT_CONSENT + "/re-confirm", NO_BODY)),
         TERMINATE_CONSENT(
                 "post " + PATH_CONSENTS + "/{id}/terminate",
                 () ->
@@ -581,6 +586,15 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 challenged),
                         row(
                                 Endpoint.REFUSE_CONSENT,
+                                unknownConsent,
+                                denied,
+                                denied,
+                                denied,
+                                challenged),
+                        // Re-confirmation moves nothing, but it is the subject's act like the
+                        // other two, so it authorises the same way and stops at the same absent id.
+                        row(
+                                Endpoint.RE_CONFIRM_CONSENT,
                                 unknownConsent,
                                 denied,
                                 denied,

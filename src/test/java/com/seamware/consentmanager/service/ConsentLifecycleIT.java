@@ -22,6 +22,7 @@ import com.seamware.consentmanager.support.PostgresTestResource;
 import com.seamware.consentmanager.support.PrivacyNoticeFixtures;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -41,9 +42,10 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Proves what the lifecycle moves - the subject's revoke and refuse, and a party's terminate - are
- * checked against and what they leave behind: the status the record ends in, the single event
- * naming who ended it, and the statuses each move is refused from.
+ * Proves what the lifecycle moves - the subject's revoke and refuse, a party's terminate, and the
+ * subject's re-confirmation, which moves nothing - are checked against and what they leave behind:
+ * the status the record ends in, the single event naming who acted, and the statuses each is
+ * refused from.
  *
  * <p>Every assertion reads the database back rather than the returned projection where the two
  * could disagree, because what matters is what was committed.
@@ -303,6 +305,69 @@ class ConsentLifecycleIT extends PostgresTestResource {
         assertThatThrownBy(() -> lifecycle.terminate(stranger, absent))
                 .isInstanceOf(NotFoundException.class)
                 .hasMessageContaining(absent.toString());
+    }
+
+    @Test
+    @DisplayName("re-confirmation appends one event and leaves the record it affirms alone")
+    void reConfirmsWithoutTouchingTheRecord() {
+        User subject = user();
+        UUID consentId = seedConsent(subject, notice(), ConsentStatus.GRANTED);
+        Instant seededAt = consents.findById(consentId).orElseThrow().getUpdatedAt();
+
+        ConsentDetails affirmed = lifecycle.reConfirm(subject, consentId);
+
+        assertThat(affirmed.consent().getStatus()).isEqualTo(ConsentStatus.GRANTED);
+        assertThat(affirmed.created()).isFalse();
+        assertThat(consents.findById(consentId).orElseThrow())
+                .satisfies(
+                        stored -> {
+                            assertThat(stored.getStatus()).isEqualTo(ConsentStatus.GRANTED);
+                            assertThat(stored.isConsented()).isTrue();
+                            assertThat(stored.getUpdatedAt())
+                                    .as("updatedAt dates state changes, and this is not one")
+                                    .isEqualTo(seededAt);
+                        });
+        assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId))
+                .as("the affirmation shows only in the trail, dated in its own right")
+                .singleElement()
+                .satisfies(
+                        event -> {
+                            assertThat(event.getEventState())
+                                    .isEqualTo(ConsentEventState.CONSENT_RE_CONFIRMED);
+                            assertThat(event.getEventType()).isEqualTo(EXPLICIT_EVENT_TYPE);
+                            assertThat(event.getActor()).isEqualTo(subject.getIdentifier());
+                        });
+    }
+
+    @ParameterizedTest(name = "from {0}")
+    @EnumSource(value = ConsentStatus.class, names = "GRANTED", mode = EnumSource.Mode.EXCLUDE)
+    @DisplayName("a consent not in force cannot be re-confirmed and records no attempt")
+    void refusesReConfirmingAConsentNotInForce(ConsentStatus from) {
+        User subject = user();
+        UUID consentId = seedConsent(subject, notice(), from);
+
+        assertThatThrownBy(() -> lifecycle.reConfirm(subject, consentId))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining(from.name())
+                .hasMessageContaining(ConsentStatus.GRANTED.name());
+
+        assertThat(consents.findById(consentId).orElseThrow().getStatus()).isEqualTo(from);
+        assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("re-confirming another subject's consent is the 404 an unknown one is")
+    void refusesReConfirmingAnotherSubjectsConsent() {
+        User subject = user();
+        UUID theirs = seedConsent(user(), notice(), ConsentStatus.GRANTED);
+
+        assertThatThrownBy(() -> lifecycle.reConfirm(subject, theirs))
+                .isInstanceOf(NotFoundException.class)
+                .hasMessageContaining(theirs.toString());
+
+        assertThat(events.findByConsentIdOrderByOccurredAtAsc(theirs))
+                .as("the other subject's trail is untouched by the probe")
+                .isEmpty();
     }
 
     /** A consent for the pair as some other flow would have left it, with no trail of its own. */

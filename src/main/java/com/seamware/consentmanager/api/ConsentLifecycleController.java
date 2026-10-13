@@ -41,6 +41,11 @@ public class ConsentLifecycleController extends AbstractConsentLifecycleControll
     }
 
     @Override
+    public HttpResponse<Consent> reConfirmConsent(UserPrincipal principal, UUID id) {
+        return HttpResponse.ok(mapper.toRepresentation(lifecycle.reConfirm(principal.user(), id)));
+    }
+
+    @Override
     public HttpResponse<Consent> terminateConsent(ParticipantPrincipal principal, UUID id) {
         return HttpResponse.ok(
                 mapper.toRepresentation(lifecycle.terminate(principal.requireActive(), id)));
