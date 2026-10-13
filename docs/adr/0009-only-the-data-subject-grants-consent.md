@@ -2,7 +2,7 @@
 
 - **Status:** Accepted.
 - **Date:** 2026-10-13
-- **Ticket:** TICKET-006 (Taiga #71), step 6
+- **Ticket:** TICKET-007 (Taiga #71), step 6
 - **Relates to:** `POST /consents` (`grantConsent`) and `POST /consents/requests`
   (`requestConsent`) in `api/openapi.yaml`; `ConsentService`, `ConsentWriter`,
   `ConsentStateMachine` and `ConsentFactory` in `…consentmanager.service`;
@@ -85,14 +85,17 @@ A decision that supersedes a standing `GRANTED` does both things at once: the op
 
 Two consequences are worth stating because neither is visible from the endpoint:
 
-- **The decision closes every *other* open request for the pair** as `TERMINATED`, attributed to
-  this service rather than to the subject. The locking read cannot block a concurrent insert and no
-  index covers `PENDING`, so a pair really can come to hold two open requests; answering only one
-  of them would strand the other and reinstate exactly the permanent `409` adoption exists to
-  prevent.
-- **An adopted row's `createdAt` dates the offer, not the answer.** When the subject decided is the
-  timestamp of the `CONSENT_GIVEN` / `CONSENT_REFUSED` event. TICKET-010's lineage walk and
-  TICKET-011's receipt must read the moment of decision from the event, never from the row.
+- **The decision closes every *other* open request for the pair** as `TERMINATED`, recorded with a
+  `SYSTEM` trigger so it reads as housekeeping rather than as a deliberate act — the event still
+  names the deciding subject as its `actor`, because the subject's decision is what closed it. The
+  locking read cannot block a concurrent insert and no index covers `PENDING`, so a pair really can
+  come to hold two open requests; answering only one of them would strand the other and reinstate
+  exactly the permanent `409` adoption exists to prevent.
+- **An adopted row's `createdAt` dates the offer, not the answer.** The row's `updatedAt` does
+  date the decision, but only until the record next moves: a revocation, a termination or an expiry
+  re-dates it, and the specification says so in the same words. The `CONSENT_GIVEN` /
+  `CONSENT_REFUSED` event is the timestamp that stays true, so TICKET-010's lineage walk and
+  TICKET-011's receipt read the moment of decision from the event rather than from the row.
 
 ### What counts as a decision
 
@@ -118,10 +121,12 @@ request, and by nothing that redefines it locally.
   this ticket prepares a draft, so admitting the creation would ship a state that no endpoint can
   produce and no endpoint can answer. `DRAFT` keeps its *outgoing* edges, and TICKET-009 adds it to
   `CREATABLE` and to the factory's event table together — the two halves are one change, because
-  `DRAFT` has no entry in the factory's status-to-event mapping and creating one today would raise
-  an `IllegalStateException` rather than a refusal. The acceptance criterion "the state machine
-  rejects every invalid transition" is therefore read here as covering transitions, not as covering
-  that deferred creation.
+  `DRAFT` has no entry in the factory's status-to-event mapping, so adding it to `CREATABLE` alone
+  would reach the factory's unmapped-status `IllegalStateException` instead of a refusal. (Creating
+  a `DRAFT` *today* is a plain `400`: `ConsentFactory.create` consults `requireCreatable` before it
+  ever looks at the event mapping.) The acceptance criterion "the state machine rejects every
+  invalid transition" is therefore read here as covering transitions, not as covering that deferred
+  creation.
 - **`PENDING -> TERMINATED` and `DRAFT -> TERMINATED` are edges in the table**, because erasure and
   deregistration already close the consents nobody answered, and the adoption rule above closes
   them too. The ticket's table is silent on the move rather than forbidding it, and a table that

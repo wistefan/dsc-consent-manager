@@ -109,8 +109,10 @@ properties:
     type: string
     format: date-time
     description: >
-      When this record last changed state — the moment the subject decided, on a
-      record that answered an open request.
+      When this record last changed state. On a record that answered an open
+      request that is the moment the subject decided, until a later move — a
+      revocation, a termination, an expiry — re-dates it; the decision's own
+      consent event is the timestamp that stays true.
 required:
   - id
   - privacyNoticeId
