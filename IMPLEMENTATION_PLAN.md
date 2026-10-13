@@ -423,10 +423,19 @@ Tests:
 - `docs/security.md` — extend the `@Secured` convention and spec-layout sections with the two
   operations and with why the request route demands `requireActive()` while the grant route is a
   pure `USER` route.
-- `AGENTS.md` — **deferred, not done in this step.** A step agent may not edit `AGENTS.md`: it is
-  appended to the system prompt and cached, so an edit invalidates the cached prefix for every
-  later session. The content it still needs is carried on the Step 6 pull request and in the Taiga
-  comment, for a plan-mode agent or a human to apply:
+- `AGENTS.md` — **deferred, not done in this step, and the repo therefore knowingly ships a stale
+  `AGENTS.md` until someone applies the edits below.** Say that plainly rather than only that the
+  content is "carried on the pull request": as of this branch the file contradicts the code it
+  describes. Line 118 still states `SPECIFIED_OPERATION_COUNT` is **19** where
+  `SpecSecurityConsistencyTest.java:87` holds **21**, and the file names none of `ConsentService`,
+  `ConsentWriter`, `ConsentStateMachine`, `ConsentFactory`, `ConsentController`,
+  `ConsentRequestController`, `ConsentMapper`, `ConsentEventTrigger` or the three new schemas. An
+  agent that trusts it will raise the constant to the wrong number and look for consent code that
+  the listing says does not exist. The deferral is a constraint on *who* may apply the edit, not a
+  judgement that it can wait: a step or fix agent may not edit `AGENTS.md` because it is appended
+  to the system prompt and cached, so an edit invalidates the cached prefix for every later
+  session. The replacement content is carried on the Step 6 pull request and in the Taiga comment,
+  and a plan-mode agent or a human must apply it **before this ticket closes**:
   - add `ConsentService`, `ConsentWriter`, `ConsentStateMachine`, `ConsentFactory`,
     `ConsentDecision`, `ConsentRequestCommand`, `ConsentDetails` and `RecordedConsent` to the
     `service/` listing, and `ConsentEventTrigger` to `domain/`;

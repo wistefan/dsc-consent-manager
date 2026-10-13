@@ -78,7 +78,11 @@ and nothing answered twice.
 Adoption is why **`POST /consents` answers `200` as well as `201`**. A decision that opens a new
 record is a creation; a decision that writes onto a request already on the record is not, and
 saying so in the status code is the only way a client can tell which happened. The adopted row
-keeps its `id` and its own `parentConsentId`.
+keeps its `id` and its own `parentConsentId`. This diverges from the ticket, which gives
+`POST /consents` a single `201 Created` and names no second code: that response table was written
+for a flow in which every decision inserts a row, and adoption is what makes that untrue. A client
+walking the acceptance criteria should read the `200` as the adoption rule surfacing, not as a
+second creation semantic.
 
 A decision that supersedes a standing `GRANTED` does both things at once: the open grant moves to
 `REVOKED` as an `EXPLICIT` act of the subject, and the new or adopted row points at it.
@@ -175,8 +179,11 @@ the two strings exist in one place rather than at every call site that writes an
   permission has misread it, and a later feature that lets a counterparty act on one would undo the
   only thing the status says.
 - **The transition table is the single source of truth about consent states**, and it is total over
-  the flows in the service. A new flow that moves a consent adds its edge to the table or fails the
-  build on `ConsentStatusInvariantTest` — including the flows this ticket defers.
+  the flows in the service. The two guards catch different mistakes and are worth keeping apart: a
+  flow that goes through `ConsentFactory` but forgets to add its edge is refused at runtime by
+  `ConsentStateMachine` — a `400` from `requireTransition`, or the unmapped-status
+  `IllegalStateException` for a creation — while a flow that skips the factory altogether fails the
+  build on `ConsentStatusInvariantTest`. The flows this ticket defers are bound by both.
 - **Seams that are deliberately absent.** No placeholder code exists for any of them:
   - TICKET-009 — `POST /consents/{id}/resume` and refusing an open `PENDING` directly. It adds
     `DRAFT` to `CREATABLE` and to the factory's event table in one change.

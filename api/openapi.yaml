@@ -1403,11 +1403,10 @@ paths:
         a fresh identifier or a new parent link. `createdAt` then dates the
         request — when consent was asked for — and `updatedAt` dates the last
         change to the record, which is the decision until a revocation, a
-        termination or an expiry re-dates it; the decision's own consent event
-        is the timestamp that stays true. The status code says which of the two
-        happened: `201` for a record this decision created, `200` for a request
-        it answered in place. Only where no request is open does a decision
-        create a record of its own.
+        termination or an expiry re-dates it. The status code says which of the
+        two happened: `201` for a record this decision created, `200` for a
+        request it answered in place. Only where no request is open does a
+        decision create a record of its own.
       tags:
         - Consents
       security:
