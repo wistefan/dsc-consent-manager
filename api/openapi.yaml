@@ -1650,6 +1650,78 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
+  /consents/{id}/terminate:
+    post:
+      operationId: terminateConsent
+      summary: Terminate a consent as a participant party to it
+      description: >
+        Ends an arrangement from the organisational side: the calling
+        participant, named by the consent as provider or as consumer, records
+        that it no longer rests on this consent.
+
+
+        This is not the data subject withdrawing — that is `POST
+        /consents/{id}/revoke`, and only the subject reaches it. Termination
+        says the party has ended the arrangement, and the record stays readable
+        in status `TERMINATED` carrying the terms that applied and the trail of
+        who ended it.
+
+
+        A participant the consent names on neither side is `403`, not the `404`
+        a foreign *user* gets on the subject's routes: a participant that is
+        party to nothing may still legitimately know the consent exists through
+        its own records, so there is nothing to conceal from it, and the honest
+        answer is that it has no standing here. A participant whose registration
+        has been withdrawn is `403` for the same reason it reaches no other
+        route that acts in the dataspace in its name.
+
+
+        Termination is permitted from `GRANTED`, and equally from `PENDING` and
+        `DRAFT` — a party may end an arrangement whether or not the subject has
+        answered yet, and an unanswered request it ends is terminated rather
+        than refused, so a client must not expect a `400` there. The statuses
+        refused are exactly the terminal ones — `REVOKED`, `REFUSED`,
+        `TERMINATED` and `EXPIRED` — each `400` naming both the status held and
+        the one attempted. The move and its audit event are written in one
+        transaction, and a second termination sent concurrently reads the record
+        as the first left it and is answered `400`.
+      tags:
+        - Consent Lifecycle
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to terminate.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            The consent was terminated; the body is the record in its new
+            status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
 
 components:
   securitySchemes:

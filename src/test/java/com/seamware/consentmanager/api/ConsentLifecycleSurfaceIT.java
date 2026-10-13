@@ -32,6 +32,7 @@ import jakarta.inject.Inject;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -45,13 +46,15 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code POST /consents/{id}/revoke} and {@code POST /consents/{id}/refuse} end to end
+ * Exercises {@code POST /consents/{id}/revoke}, {@code /refuse} and {@code /terminate} end to end
  * against a real Keycloak and a real PostgreSQL.
  *
  * <p>What is under test is who reaches a move rather than what the state table permits, which
  * {@code ConsentLifecycleIT} owns: the subject is read off the token, a record belonging to anyone
- * else is indistinguishable from one that does not exist, and no role but {@code USER} reaches the
- * routes at all.
+ * else is indistinguishable from one that does not exist, and the subject's routes admit no role
+ * but {@code USER}. Termination is the participant's counterpart, so it is checked against the
+ * consent's two parties - including the case the role matrix cannot sweep, a caller whose record is
+ * deregistered rather than absent.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent lifecycle endpoints")
@@ -63,6 +66,11 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
 
     private static final String REFUSE = "refuse";
 
+    private static final String TERMINATE = "terminate";
+
+    /** Where a participant reads its own record back, which deregistration leaves open. */
+    private static final String PATH_PARTICIPANTS_ME = "/participants/me";
+
     /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
@@ -72,6 +80,18 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
 
     private static final String CONTRACT_URI =
             "https://contract.example.org/v1/contracts/lifecycle-1";
+
+    /**
+     * The identifier the {@code PARTICIPANT} token carries, registered by the cases that use it.
+     */
+    private static final String CALLER_PARTICIPANT = KeycloakTestResource.PARTICIPANT_IDENTIFIER;
+
+    /**
+     * The contract the termination cases record their notice against, distinct because the active
+     * notice index is unique per (contract, provider) and one of them names the same provider.
+     */
+    private static final String TERMINATION_CONTRACT_URI =
+            "https://contract.example.org/v1/contracts/lifecycle-2";
 
     private static final String NOTICE_TITLE = "Privacy notice the lifecycle moves act on";
 
@@ -127,6 +147,15 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
         return Stream.of(RealmPrincipal.PARTICIPANT, RealmPrincipal.CATALOG);
     }
 
+    static Stream<RealmPrincipal> nonPartyRoles() {
+        return Stream.of(RealmPrincipal.USER, RealmPrincipal.CATALOG);
+    }
+
+    /** Each side of a consent the calling participant may be named on; both may end it. */
+    static Stream<String> partySides() {
+        return Stream.of(PROVIDER, CONSUMER);
+    }
+
     @BeforeEach
     void seedTheNoticeTheConsentsNameAndProvisionTheCaller() {
         Await.until(
@@ -151,7 +180,7 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
         notices.deleteAll();
         users.findByIdentifier(identifier).ifPresent(users::delete);
         users.findByIdentifier(OTHER_USER).ifPresent(users::delete);
-        List.of(PROVIDER, CONSUMER)
+        List.of(PROVIDER, CONSUMER, CALLER_PARTICIPANT)
                 .forEach(
                         party ->
                                 participants
@@ -244,6 +273,93 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
         assertThat(move(REVOKE, consentId, userToken()).code())
                 .as("a revoked consent is not revocable again")
                 .isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+    }
+
+    @ParameterizedTest(name = "named as the {0}")
+    @MethodSource("partySides")
+    @DisplayName("terminates a consent the calling participant is a party to, on either side")
+    void terminatesAsEitherParty(String side) {
+        UUID consentId = seedConsentNaming(side, ConsentStatus.GRANTED);
+
+        HttpResponse<String> response = move(TERMINATE, consentId, participantToken());
+
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(body(response))
+                .containsEntry(PROPERTY_ID, consentId.toString())
+                .containsEntry(PROPERTY_STATUS, ConsentStatus.TERMINATED.name())
+                .containsEntry(PROPERTY_CONSENTED, false);
+        assertThat(consents.findById(consentId).orElseThrow().getStatus())
+                .isEqualTo(ConsentStatus.TERMINATED);
+    }
+
+    @Test
+    @DisplayName("refuses a participant the consent names on neither side with 403")
+    void refusesAParticipantThatIsNoParty() {
+        register(CALLER_PARTICIPANT);
+        UUID consentId = seedConsent(callerId(), ConsentStatus.GRANTED);
+
+        assertThat(move(TERMINATE, consentId, participantToken()).code())
+                .isEqualTo(HttpStatus.FORBIDDEN.getCode());
+        assertThat(consents.findById(consentId).orElseThrow().getStatus())
+                .isEqualTo(ConsentStatus.GRANTED);
+    }
+
+    /**
+     * The window the role matrix cannot sweep: its own case deletes the participants row, so it
+     * only ever exercises an unregistered caller. A retained record is registered and departed, and
+     * a consent can still arise against its notices after it leaves, so this is what keeps a
+     * departed participant from reaching into the dataspace to end one.
+     */
+    @Test
+    @DisplayName("refuses a deregistered participant with 403 while it still reads its own record")
+    void refusesADeregisteredParticipant() {
+        UUID consentId = seedConsentNaming(PROVIDER, ConsentStatus.GRANTED);
+        Participant caller = participants.findByIdentifier(CALLER_PARTICIPANT).orElseThrow();
+        caller.setDeregisteredAt(Instant.now());
+        participants.update(caller);
+
+        assertThat(move(TERMINATE, consentId, participantToken()).code())
+                .isEqualTo(HttpStatus.FORBIDDEN.getCode());
+        assertThat(consents.findById(consentId).orElseThrow().getStatus())
+                .as("the arrangement stands; only the subject can still end it")
+                .isEqualTo(ConsentStatus.GRANTED);
+        assertThat(exchange(HttpRequest.GET(PATH_PARTICIPANTS_ME), participantToken()).code())
+                .as("reading its own record back stays open to a departed participant")
+                .isEqualTo(HttpStatus.OK.getCode());
+    }
+
+    @ParameterizedTest(name = "as {0}")
+    @MethodSource("nonPartyRoles")
+    @DisplayName("refuses every role but PARTICIPANT on terminate, whoever the consent names")
+    void refusesEveryRoleButParticipantOnTerminate(RealmPrincipal role) {
+        UUID consentId = seedConsentNaming(PROVIDER, ConsentStatus.GRANTED);
+
+        assertThat(move(TERMINATE, consentId, KeycloakTestResource.accessToken(role)).code())
+                .isEqualTo(HttpStatus.FORBIDDEN.getCode());
+        assertThat(consents.findById(consentId).orElseThrow().getStatus())
+                .isEqualTo(ConsentStatus.GRANTED);
+    }
+
+    /**
+     * Re-points the notice at one naming the calling participant on {@code side}, and records a
+     * consent of the caller's own against it.
+     */
+    private UUID seedConsentNaming(String side, ConsentStatus status) {
+        Participant caller = register(CALLER_PARTICIPANT);
+        Participant counterparty = register(PROVIDER.equals(side) ? CONSUMER : PROVIDER);
+        notice =
+                notices.save(
+                        new PrivacyNotice(
+                                TERMINATION_CONTRACT_URI,
+                                NOTICE_TITLE,
+                                PROVIDER.equals(side) ? caller.getId() : counterparty.getId(),
+                                PROVIDER.equals(side) ? counterparty.getId() : caller.getId(),
+                                PrivacyNoticeFixtures.emptyPayload()));
+        return seedConsent(callerId(), status);
+    }
+
+    private static String participantToken() {
+        return KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT);
     }
 
     static Stream<String> verbs() {

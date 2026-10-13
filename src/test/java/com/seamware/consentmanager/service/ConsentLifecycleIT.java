@@ -11,6 +11,7 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
@@ -33,15 +34,16 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Proves what the subject's own lifecycle moves - revoke and refuse - are checked against and what
- * they leave behind: the status the record ends in, the single event naming who ended it, and the
- * statuses each move is refused from.
+ * Proves what the lifecycle moves - the subject's revoke and refuse, and a party's terminate - are
+ * checked against and what they leave behind: the status the record ends in, the single event
+ * naming who ended it, and the statuses each move is refused from.
  *
  * <p>Every assertion reads the database back rather than the returned projection where the two
  * could disagree, because what matters is what was committed.
@@ -54,6 +56,9 @@ class ConsentLifecycleIT extends PostgresTestResource {
 
     private static final String CONSUMER = "urn:test:participant:consent-lifecycle-consumer";
 
+    /** A participant the seeded consents name on neither side, so it has no standing to end one. */
+    private static final String STRANGER = "urn:test:participant:consent-lifecycle-stranger";
+
     private static final String CONTRACT_URI = "urn:test:contract:consent-lifecycle";
 
     private static final String NOTICE_TITLE = "Notice the lifecycle moves act on";
@@ -62,6 +67,16 @@ class ConsentLifecycleIT extends PostgresTestResource {
     private static final String EXPLICIT_EVENT_TYPE = "explicit";
 
     private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
+
+    /**
+     * The statuses a party may terminate from.
+     *
+     * <p>Not {@code GRANTED} alone: the table's entry for both unanswered statuses contains {@code
+     * TERMINATED}, because erasure and deregistration already close open offers through that edge,
+     * so a party may equally end a request the subject has not answered.
+     */
+    private static final Set<ConsentStatus> TERMINABLE =
+            EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.PENDING, ConsentStatus.DRAFT);
 
     @Inject ConsentLifecycleService lifecycle;
 
@@ -87,6 +102,17 @@ class ConsentLifecycleIT extends PostgresTestResource {
     /** Every (move, starting status) pair the state table does not permit. */
     static Stream<Arguments> refusedMoves() {
         return pairs(move -> EnumSet.complementOf(EnumSet.copyOf(move.permittedFrom)));
+    }
+
+    /** Each party to a consent, paired with every status termination is permitted from. */
+    static Stream<Arguments> terminations() {
+        return Stream.of(PROVIDER, CONSUMER)
+                .flatMap(party -> TERMINABLE.stream().map(from -> Arguments.of(party, from)));
+    }
+
+    /** The statuses termination is refused from: exactly the terminal ones. */
+    static Stream<ConsentStatus> terminalStatuses() {
+        return EnumSet.complementOf(EnumSet.copyOf(TERMINABLE)).stream();
     }
 
     private static Stream<Arguments> pairs(Function<Move, Set<ConsentStatus>> starts) {
@@ -115,7 +141,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
 
     @AfterAll
     void removeParticipants() {
-        List.of(PROVIDER, CONSUMER)
+        List.of(PROVIDER, CONSUMER, STRANGER)
                 .forEach(
                         identifier ->
                                 participants
@@ -202,6 +228,79 @@ class ConsentLifecycleIT extends PostgresTestResource {
         UUID absent = UUID.randomUUID();
 
         assertThatThrownBy(() -> move.apply(lifecycle, subject, absent))
+                .isInstanceOf(NotFoundException.class)
+                .hasMessageContaining(absent.toString());
+    }
+
+    @ParameterizedTest(name = "{0} terminates from {1}")
+    @MethodSource("terminations")
+    @DisplayName("either party terminates the consent and the trail names the one that did")
+    void terminatesAsEitherParty(String party, ConsentStatus from) {
+        User subject = user();
+        UUID consentId = seedConsent(subject, notice(), from);
+
+        ConsentDetails terminated = lifecycle.terminate(participant(party), consentId);
+
+        assertThat(terminated.consent().getStatus()).isEqualTo(ConsentStatus.TERMINATED);
+        assertThat(consents.findById(consentId).orElseThrow())
+                .satisfies(
+                        stored -> {
+                            assertThat(stored.getStatus()).isEqualTo(ConsentStatus.TERMINATED);
+                            assertThat(stored.isConsented()).isFalse();
+                        });
+        assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId))
+                .singleElement()
+                .satisfies(
+                        event -> {
+                            assertThat(event.getEventState())
+                                    .isEqualTo(ConsentEventState.CONSENT_TERMINATED);
+                            assertThat(event.getEventType()).isEqualTo(EXPLICIT_EVENT_TYPE);
+                            assertThat(event.getActor())
+                                    .as("the trail names the participant that ended it")
+                                    .isEqualTo(party);
+                        });
+    }
+
+    @ParameterizedTest(name = "from {0}")
+    @MethodSource("terminalStatuses")
+    @DisplayName("termination from a terminal status writes nothing and names both statuses")
+    void refusesTerminationFromATerminalStatus(ConsentStatus from) {
+        UUID consentId = seedConsent(user(), notice(), from);
+        Participant party = participant(PROVIDER);
+
+        assertThatThrownBy(() -> lifecycle.terminate(party, consentId))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining(from.name())
+                .hasMessageContaining(ConsentStatus.TERMINATED.name());
+
+        assertThat(consents.findById(consentId).orElseThrow().getStatus()).isEqualTo(from);
+        assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId)).isEmpty();
+    }
+
+    @Test
+    @DisplayName(
+            "a participant the consent names on neither side is refused, not told it is absent")
+    void refusesAParticipantThatIsNoParty() {
+        UUID consentId = seedConsent(user(), notice(), ConsentStatus.GRANTED);
+        Participant stranger = participant(STRANGER);
+
+        assertThatThrownBy(() -> lifecycle.terminate(stranger, consentId))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining(STRANGER)
+                .hasMessageContaining(consentId.toString());
+
+        assertThat(consents.findById(consentId).orElseThrow().getStatus())
+                .isEqualTo(ConsentStatus.GRANTED);
+        assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a consent nothing stores is a 404 before the caller's standing is weighed")
+    void refusesTerminatingAnUnknownConsent() {
+        UUID absent = UUID.randomUUID();
+        Participant stranger = participant(STRANGER);
+
+        assertThatThrownBy(() -> lifecycle.terminate(stranger, absent))
                 .isInstanceOf(NotFoundException.class)
                 .hasMessageContaining(absent.toString());
     }
