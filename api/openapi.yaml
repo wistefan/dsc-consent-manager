@@ -1838,6 +1838,13 @@ paths:
         record per subject and notice is in force at a time and the database
         enforces it, so a grant recorded concurrently is answered `409` and is
         safe to retry against the record it can then read.
+
+
+        Any other request for the same subject and notice that is still
+        unanswered is closed as redundant in that same transaction. A question
+        left standing once this one is answered would refuse every later request
+        for the pair as a duplicate, with no way back for a caller that cannot
+        reach `POST /consents`.
       tags:
         - Consent Lifecycle
       security:

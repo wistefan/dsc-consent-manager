@@ -1,6 +1,8 @@
 # ADR 0009 — Only the data subject grants consent, and a request confers nothing
 
-- **Status:** Accepted.
+- **Status:** Accepted, and bounded by
+  [ADR-0010](0010-a-catalog-relayed-resume-names-the-subject.md), which admits one narrow
+  relay and states its limits.
 - **Date:** 2026-10-13
 - **Ticket:** TICKET-007 (Taiga #71), step 6
 - **Relates to:** `POST /consents` (`grantConsent`) and `POST /consents/requests`
@@ -40,6 +42,13 @@ calls the setter directly, and nothing notices.
 from the token's identifier claim and from nowhere else, there is no parameter naming a user, and
 `UserPrincipal` is the only principal type the operation admits. A participant cannot reach the
 route at all.
+
+That rule is absolute for `POST /consents`. The one place a parameter names a user is
+`POST /consents/{id}/resume`, where a `CATALOG` caller relays a decision the subject took in the
+catalog's own flow: the name is checked *against* the consent the id addresses rather than used to
+select one, so it can advance no consent the catalog was not already pointed at, and the event
+records the relay rather than the subject. ADR-0010 sets out why that is admissible and how narrow
+it is; read the two together before widening either.
 
 **A participant may ask, and never answer.** `POST /consents/requests` opens a `PENDING` consent
 naming the asking participant — taken from the token, so no caller can put the question in
@@ -185,8 +194,8 @@ the two strings exist in one place rather than at every call site that writes an
   `IllegalStateException` for a creation — while a flow that skips the factory altogether fails the
   build on `ConsentStatusInvariantTest`. The flows this ticket defers are bound by both.
 - **Seams that are deliberately absent.** No placeholder code exists for any of them:
-  - TICKET-009 — `POST /consents/{id}/resume` and refusing an open `PENDING` directly. It adds
-    `DRAFT` to `CREATABLE` and to the factory's event table in one change.
+  - TICKET-009 — `POST /consents/{id}/resume` and refusing an open `PENDING` directly.
+    Delivered since, under the bounds ADR-0010 records.
   - TICKET-010 — the lineage endpoint. It walks `parentConsentId` upward and must read each
     decision's moment from the `CONSENT_GIVEN` / `CONSENT_REFUSED` event.
   - TICKET-011 — receipt signing and `GET /.well-known/jwks.json`. It reads the frozen snapshot and

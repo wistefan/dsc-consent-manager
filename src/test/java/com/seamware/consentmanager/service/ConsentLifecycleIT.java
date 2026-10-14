@@ -88,6 +88,9 @@ class ConsentLifecycleIT extends PostgresTestResource {
     /** What {@code consent_events.event_type} reads for a move an identified caller asked for. */
     private static final String EXPLICIT_EVENT_TYPE = "explicit";
 
+    /** What it reads for a move no one asked for, such as closing a question gone redundant. */
+    private static final String CLEANUP_EVENT_TYPE = "system";
+
     /** The provider of a token this suite never validates; only its shape matters here. */
     private static final String ISSUER = "https://issuer.test/realms/consent-lifecycle";
 
@@ -475,6 +478,61 @@ class ConsentLifecycleIT extends PostgresTestResource {
                             assertThat(event.getActor())
                                     .as("a relayed grant never reads as one the subject made here")
                                     .isEqualTo(CATALOG_ACTOR);
+                        });
+    }
+
+    @Test
+    @DisplayName("a relayed resume names the relaying catalog on the grant it closed too")
+    void relayedResumeNamesTheCatalogOnWhatItClosed() {
+        User subject = user();
+        PrivacyNotice notice = notice();
+        UUID inForce = seedConsent(subject, notice, ConsentStatus.GRANTED);
+        UUID requested = seedConsent(subject, notice, ConsentStatus.PENDING);
+
+        lifecycle.resume(
+                new CatalogPrincipal(ISSUER, CATALOG_SUBJECT), requested, subject.getIdentifier());
+
+        assertThat(consents.findById(requested).orElseThrow().getParentConsentId())
+                .as("the resumed record names the grant the relayed decision closed")
+                .isEqualTo(inForce);
+        assertThat(consents.findById(inForce).orElseThrow().getStatus())
+                .isEqualTo(ConsentStatus.REVOKED);
+        assertThat(events.findByConsentIdOrderByOccurredAtAsc(inForce))
+                .singleElement()
+                .satisfies(
+                        event -> {
+                            assertThat(event.getEventState())
+                                    .isEqualTo(ConsentEventState.CONSENT_REVOKED);
+                            assertThat(event.getActor())
+                                    .as("the trail shows the relay closed it, not the subject")
+                                    .isEqualTo(CATALOG_ACTOR);
+                        });
+    }
+
+    @Test
+    @DisplayName("resuming closes the open requests its answer leaves redundant")
+    void closesTheRequestsTheAnswerMakesRedundant() {
+        User subject = user();
+        PrivacyNotice notice = notice();
+        UUID straggler = seedConsent(subject, notice, ConsentStatus.PENDING);
+        UUID requested = seedConsent(subject, notice, ConsentStatus.PENDING);
+
+        lifecycle.resume(principalFor(subject), requested, null);
+
+        assertThat(consents.findById(requested).orElseThrow().getStatus())
+                .isEqualTo(ConsentStatus.GRANTED);
+        assertThat(consents.findById(straggler).orElseThrow().getStatus())
+                .as("a question left standing refuses every later request for the pair")
+                .isEqualTo(ConsentStatus.TERMINATED);
+        assertThat(events.findByConsentIdOrderByOccurredAtAsc(straggler))
+                .singleElement()
+                .satisfies(
+                        event -> {
+                            assertThat(event.getEventState())
+                                    .isEqualTo(ConsentEventState.CONSENT_TERMINATED);
+                            assertThat(event.getEventType())
+                                    .as("no one asked for this close; the answer made it redundant")
+                                    .isEqualTo(CLEANUP_EVENT_TYPE);
                         });
     }
 

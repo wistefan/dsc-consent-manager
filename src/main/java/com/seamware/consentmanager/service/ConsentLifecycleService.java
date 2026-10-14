@@ -64,6 +64,7 @@ public class ConsentLifecycleService {
 
     private final ConsentRepository consents;
     private final UserRepository users;
+    private final ConsentStateMachine states;
     private final ConsentNoticeGuard noticeGuard;
     private final ConsentWriter writer;
     private final ConsentParties parties;
@@ -71,11 +72,13 @@ public class ConsentLifecycleService {
     public ConsentLifecycleService(
             ConsentRepository consents,
             UserRepository users,
+            ConsentStateMachine states,
             ConsentNoticeGuard noticeGuard,
             ConsentWriter writer,
             ConsentParties parties) {
         this.consents = consents;
         this.users = users;
+        this.states = states;
         this.noticeGuard = noticeGuard;
         this.writer = writer;
         this.parties = parties;
@@ -156,6 +159,11 @@ public class ConsentLifecycleService {
      * was opened against, and granting under archived terms is refused exactly as {@code POST
      * /consents} refuses it. The stored snapshot is kept — a resume records a decision taken
      * elsewhere rather than electing scope here.
+     *
+     * <p>The record's own status is checked before the notice is, so a consent already decided is
+     * refused by naming both statuses rather than by naming something about a notice that was never
+     * the reason. {@link ConsentWriter#resume} checks it again under the row lock, which is the
+     * check that settles a race; this one only chooses which refusal the caller is told about.
      */
     @NonNull
     public ConsentDetails resume(
@@ -176,6 +184,7 @@ public class ConsentLifecycleService {
                             throw new ForbiddenException(PARTICIPANT_CANNOT_RESUME);
                 };
         Consent consent = resumable.consent();
+        states.requireTransition(consent.getStatus(), ConsentStatus.GRANTED);
         noticeGuard.consentable(consent.getPrivacyNoticeId());
         return parties.details(resumed(consent, resumable.actor()));
     }

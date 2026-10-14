@@ -51,6 +51,18 @@ public class ConsentLifecycleController extends AbstractConsentLifecycleControll
         return HttpResponse.ok(mapper.toRepresentation(lifecycle.reConfirm(principal.user(), id)));
     }
 
+    /**
+     * Grants an unanswered request, for the subject itself or for a catalog relaying its decision.
+     *
+     * <p>{@code request} is null when the caller sends no body at all, which the spec permits (its
+     * {@code requestBody} is not required, so the generated parameter is nullable) and which is the
+     * ordinary shape of a subject resuming its own consent: the token already states who decided,
+     * and the body has nothing to add. There is no response peculiar to a null body — it says
+     * exactly what a body naming no subject says, so both reach the service as a null identifier
+     * and are answered by the rule for the caller's role: a {@code USER} ignores it and is answered
+     * {@code 200}, a {@code CATALOG} must name the subject its relay is for and is answered {@code
+     * 400} without it.
+     */
     @Override
     public HttpResponse<Consent> resumeConsent(
             ConsentManagerPrincipal principal, UUID id, ResumeConsent request) {

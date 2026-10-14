@@ -181,11 +181,13 @@ public class ConsentWriter {
      * answered with nothing in force keeps the parent it was opened with. The revocation, the
      * status, the event and the link are one unit of work.
      *
-     * <p>Only the addressed row is answered; any other open request for the pair is left alone,
-     * because this is the answer to one identified request rather than to the pair, and {@code
-     * decide} closes the stragglers. The row itself is excluded from the supersede search: a
-     * consent cannot close itself, and one already {@code GRANTED} is refused by {@link
-     * ConsentStateMachine} rather than revoked in favour of itself.
+     * <p>Only the addressed row is <em>answered</em>, but the open requests it leaves redundant are
+     * closed here as {@code decide} closes them, and for the same reason: a stranded {@code
+     * PENDING} refuses every later request for the pair as a duplicate, forever. A relay cannot
+     * fall back on {@code decide} to clear one — {@code POST /consents} is {@code USER}-only — so
+     * the straggler would outlive the grant that made it redundant. The addressed row itself is
+     * excluded from both searches: a consent cannot close itself, and one already {@code GRANTED}
+     * is refused by {@link ConsentStateMachine} rather than revoked in favour of itself.
      *
      * <p>Throws {@link NotFoundException} when no such consent exists, and {@link
      * io.micronaut.data.exceptions.DataAccessException} when a grant inserted outside this
@@ -221,6 +223,7 @@ public class ConsentWriter {
         if (superseded != null) {
             target.setParentConsentId(superseded);
         }
+        closeRedundant(allHeld(open, ConsentStatus.PENDING), actor);
         return saveUpdated(
                 factory.transitionRecordedAs(
                         target,
