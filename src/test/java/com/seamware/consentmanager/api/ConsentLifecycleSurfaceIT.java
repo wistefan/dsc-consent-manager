@@ -56,8 +56,8 @@ import org.junit.jupiter.params.provider.MethodSource;
  * but {@code USER}. Termination is the participant's counterpart, so it is checked against the
  * consent's two parties - including the case the role matrix cannot sweep, a caller whose record is
  * deregistered rather than absent. Resuming is the one route two roles reach, so both are driven
- * over the wire - including the shape the role matrix cannot send, a subject's resume carrying no
- * request body at all.
+ * over the wire - including the shape the role matrix cannot send, a resume carrying no request
+ * body at all, which the subject's call is answered by and the relay's refused for.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent lifecycle endpoints")
@@ -111,6 +111,9 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
 
     /** What a relaying catalog names the subject with; ignored when the subject calls itself. */
     private static final String PROPERTY_USER_IDENTIFIER = "userIdentifier";
+
+    /** The media type every refusal is rendered as. */
+    private static final String PROBLEM_JSON = "application/problem+json";
 
     /** Routes carrying no request body still need one to post. */
     private static final Map<String, Object> NO_BODY = Map.of();
@@ -388,6 +391,27 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
                 .containsEntry(PROPERTY_ID, consentId.toString())
                 .containsEntry(PROPERTY_STATUS, ConsentStatus.GRANTED.name())
                 .containsEntry(PROPERTY_CONSENTED, true);
+    }
+
+    /**
+     * The other half of the body-less case: nothing about the absent body decides the answer, the
+     * caller's role does. The shape that is ordinary for a subject is a refusal for a relay, which
+     * has no other way to name the subject whose decision it carries.
+     */
+    @Test
+    @DisplayName("refuses a CATALOG resume sent with no request body at all as a 400 problem")
+    void refusesACatalogResumeWithoutABody() {
+        UUID consentId = seedConsent(callerId(), ConsentStatus.PENDING);
+
+        HttpResponse<String> response =
+                exchange(
+                        HttpRequest.create(HttpMethod.POST, resumePath(consentId)), catalogToken());
+
+        assertThat(response.code()).isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+        assertThat(response.getContentType().orElseThrow().toString()).startsWith(PROBLEM_JSON);
+        assertThat(consents.findById(consentId).orElseThrow().getStatus())
+                .as("a relay naming nobody writes nothing")
+                .isEqualTo(ConsentStatus.PENDING);
     }
 
     @Test
