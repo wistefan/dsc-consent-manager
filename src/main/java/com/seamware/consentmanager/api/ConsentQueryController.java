@@ -3,6 +3,7 @@ package com.seamware.consentmanager.api;
 import com.seamware.consentmanager.api.generated.AbstractConsentQueryController;
 import com.seamware.consentmanager.api.generated.model.ConsentPage;
 import com.seamware.consentmanager.api.generated.model.ConsentResponse;
+import com.seamware.consentmanager.security.ParticipantPrincipal;
 import com.seamware.consentmanager.security.UserPrincipal;
 import com.seamware.consentmanager.service.ConsentDetails;
 import com.seamware.consentmanager.service.ConsentQueryCriteria;
@@ -14,10 +15,14 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Serves the {@code /consents/me} query operations for a data subject reading their own decisions.
+ * Serves the consent query operations: {@code /consents/me} for a data subject reading their own
+ * decisions, and {@code /consents} (+ {@code /consents/id}) for a participant reading the ones it
+ * is a party to.
  *
- * <p>The subject is taken from {@link UserPrincipal#user()} and nowhere else, so the page carries
- * only the caller's own consents and one addressed by id resolves only when the caller owns it.
+ * <p>The subject is taken from {@link UserPrincipal#user()} and the participant from {@link
+ * ParticipantPrincipal#requireRegistered()}, never from the request, so each caller's page carries
+ * only consents in its own scope and one addressed by id resolves only within it. An unregistered
+ * participant is refused by {@code requireRegistered()} with a {@code 403} before any read.
  *
  * <p>{@code format} and {@code includeLineage} are accepted and ignored here: receipt rendering and
  * lineage traversal land in later steps, and every value renders the full representation meanwhile.
@@ -52,6 +57,28 @@ public class ConsentQueryController extends AbstractConsentQueryController {
     public HttpResponse<ConsentResponse> getMyConsent(
             UserPrincipal principal, UUID id, String format, Boolean includeLineage) {
         return HttpResponse.ok(mapper.toResponse(queries.getForUser(principal.user(), id)));
+    }
+
+    @Override
+    public HttpResponse<ConsentPage> listConsents(
+            ParticipantPrincipal principal,
+            String userIdentifier,
+            UUID privacyNoticeId,
+            List<String> status,
+            Integer page,
+            Integer size) {
+        ConsentQueryCriteria criteria =
+                new ConsentQueryCriteria(mapper.toStatuses(status), privacyNoticeId, page, size);
+        return HttpResponse.ok(
+                toPage(
+                        queries.listForParticipant(
+                                principal.requireRegistered(), userIdentifier, criteria)));
+    }
+
+    @Override
+    public HttpResponse<ConsentResponse> getConsent(ParticipantPrincipal principal, UUID id) {
+        return HttpResponse.ok(
+                mapper.toResponse(queries.getForParticipant(principal.requireRegistered(), id)));
     }
 
     private ConsentPage toPage(Page<ConsentDetails> page) {

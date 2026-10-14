@@ -2,6 +2,7 @@ package com.seamware.consentmanager.repository;
 
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentStatus;
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.annotation.Query;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
 import io.micronaut.data.model.Page;
@@ -223,4 +224,54 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
                     + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
                     + " AND status = :status ORDER BY id LIMIT :limit")
     List<UUID> findIdsByParticipantAndStatus(UUID participantId, ConsentStatus status, int limit);
+
+    /**
+     * One page of the consents the participant is a party to, filtered total included.
+     *
+     * <p>Backs {@code GET /consents}. The caller is scoped <em>in</em> the predicate - a consent
+     * naming it as neither provider nor consumer is never read - so a participant can see only
+     * consents it is party to and no window exists in which another's row is materialised. Backed
+     * by {@code idx_consents_provider_id} and {@code idx_consents_consumer_id}.
+     *
+     * <p>{@code statuses} is always non-empty: an absent {@code status} filter defaults to {@code
+     * GRANTED} in the service, so no empty {@code IN ()} reaches Postgres. {@code userId} and
+     * {@code privacyNoticeId} are each optional; a null narrows nothing, guarded with a {@code
+     * CAST(... AS uuid) IS NULL} rather than branching into a separate method per filter
+     * combination. The page's total is counted under the same predicate as its content (bug 18.3
+     * prevention). The table carries the {@code consent_} alias Micronaut appends its dynamic
+     * {@code ORDER BY} against, so the {@link Pageable}'s sort resolves on a native query.
+     */
+    @Query(
+            value =
+                    "SELECT * FROM consents consent_"
+                            + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
+                            + " AND status IN (:statuses)"
+                            + " AND (CAST(:userId AS uuid) IS NULL OR user_id = :userId)"
+                            + " AND (CAST(:privacyNoticeId AS uuid) IS NULL"
+                            + " OR privacy_notice_id = :privacyNoticeId)",
+            countQuery =
+                    "SELECT COUNT(*) FROM consents"
+                            + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
+                            + " AND status IN (:statuses)"
+                            + " AND (CAST(:userId AS uuid) IS NULL OR user_id = :userId)"
+                            + " AND (CAST(:privacyNoticeId AS uuid) IS NULL"
+                            + " OR privacy_notice_id = :privacyNoticeId)")
+    Page<Consent> findForParticipant(
+            UUID participantId,
+            Collection<ConsentStatus> statuses,
+            @Nullable UUID userId,
+            @Nullable UUID privacyNoticeId,
+            Pageable pageable);
+
+    /**
+     * One consent the participant is a party to, or empty when none with that id names it.
+     *
+     * <p>Party-ship is a predicate rather than a check after the read, so {@code GET /consents/id}
+     * cannot tell an unknown id from one the caller is no party to: both resolve to empty and the
+     * same {@code 404}, disclosing nothing about consents the caller may not see.
+     */
+    @Query(
+            "SELECT * FROM consents WHERE id = :id"
+                    + " AND (provider_id = :participantId OR consumer_id = :participantId)")
+    Optional<Consent> findByIdForParticipant(UUID id, UUID participantId);
 }

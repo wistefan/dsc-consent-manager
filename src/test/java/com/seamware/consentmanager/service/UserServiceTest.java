@@ -1348,6 +1348,21 @@ class UserServiceTest {
         }
 
         @Override
+        public Page<Consent> findForParticipant(
+                UUID participantId,
+                Collection<ConsentStatus> statuses,
+                UUID userId,
+                UUID privacyNoticeId,
+                Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Optional<Consent> findByIdForParticipant(UUID id, UUID participantId) {
+            throw unsupported();
+        }
+
+        @Override
         public int countByParticipant(UUID participantId) {
             throw unsupported();
         }
