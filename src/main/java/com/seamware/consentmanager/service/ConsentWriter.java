@@ -15,6 +15,7 @@ import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
 import jakarta.transaction.Transactional;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -80,7 +81,8 @@ public class ConsentWriter {
                         .toList();
         String actor = subject.getIdentifier();
 
-        UUID superseded = revokeOpenGrant(open, actor);
+        ConsentMove revoked = revokeOpenGrant(open, actor);
+        UUID superseded = revoked == null ? null : revoked.recorded().consent().getId();
         List<Consent> unanswered = allHeld(open, ConsentStatus.PENDING);
         if (!unanswered.isEmpty()) {
             closeRedundant(unanswered.subList(1, unanswered.size()), actor);
@@ -130,13 +132,15 @@ public class ConsentWriter {
      * transition on <em>that</em> read, not on whatever the caller loaded to authorise itself, so
      * two moves sent at once cannot both be written: the loser sees the status the winner left and
      * {@link ConsentStateMachine} refuses it. Status and event are one unit of work, so neither can
-     * be stored without the other, and a refused move throws before anything is written.
+     * be stored without the other, and a refused move throws before anything is written. The status
+     * reported back is the one that locked read held, which is what a caller reporting the move
+     * names rather than its own earlier read.
      *
      * <p>Throws {@link NotFoundException} when the row vanished between the two reads.
      */
     @NonNull
     @Transactional
-    public RecordedConsent move(
+    public ConsentMove move(
             @NonNull UUID consentId,
             @NonNull ConsentStatus target,
             @NonNull String actor,
@@ -145,7 +149,7 @@ public class ConsentWriter {
                 consents.findByIdForUpdate(consentId)
                         .orElseThrow(
                                 () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
-        return saveUpdated(factory.transition(locked, target, actor, trigger));
+        return moved(locked, target, actor, trigger);
     }
 
     /**
@@ -161,14 +165,15 @@ public class ConsentWriter {
      */
     @NonNull
     @Transactional
-    public RecordedConsent affirm(@NonNull UUID consentId, @NonNull String actor) {
+    public ConsentMove affirm(@NonNull UUID consentId, @NonNull String actor) {
         Consent locked =
                 consents.findByIdForUpdate(consentId)
                         .orElseThrow(
                                 () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
+        ConsentStatus held = locked.getStatus();
         RecordedConsent affirmed = factory.affirm(locked, actor);
         events.save(affirmed.event());
-        return affirmed;
+        return new ConsentMove(held, affirmed);
     }
 
     /**
@@ -189,6 +194,11 @@ public class ConsentWriter {
      * excluded from both searches: a consent cannot close itself, and one already {@code GRANTED}
      * is refused by {@link ConsentStateMachine} rather than revoked in favour of itself.
      *
+     * <p>Every one of those closings is reported back alongside the answered row, because each is a
+     * status change of its own and the caller is the one that reports moves onward. Returning only
+     * the addressed consent would leave a superseded grant looking as though it still stood to
+     * anything reading those reports.
+     *
      * <p>Throws {@link NotFoundException} when no such consent exists, and {@link
      * io.micronaut.data.exceptions.DataAccessException} when a grant inserted outside this
      * statement's snapshot holds {@code uq_consents_granted_per_user_notice} — invisible to the
@@ -196,7 +206,7 @@ public class ConsentWriter {
      */
     @NonNull
     @Transactional
-    public RecordedConsent resume(@NonNull UUID consentId, @NonNull String actor) {
+    public ResumedConsent resume(@NonNull UUID consentId, @NonNull String actor) {
         Consent addressed =
                 consents.findById(consentId)
                         .orElseThrow(
@@ -219,32 +229,37 @@ public class ConsentWriter {
                                         ConsentStateMachine.OPEN_STATUSES.contains(
                                                 consent.getStatus()))
                         .toList();
-        UUID superseded = revokeOpenGrant(open, actor);
+        List<ConsentMove> collateral = new ArrayList<>();
+        ConsentMove superseded = revokeOpenGrant(open, actor);
         if (superseded != null) {
-            target.setParentConsentId(superseded);
+            target.setParentConsentId(superseded.recorded().consent().getId());
+            collateral.add(superseded);
         }
-        closeRedundant(allHeld(open, ConsentStatus.PENDING), actor);
-        return saveUpdated(
-                factory.transitionRecordedAs(
-                        target,
-                        ConsentStatus.GRANTED,
-                        ConsentEventState.CONSENT_RESUMED,
-                        actor,
-                        SUBJECT_TRIGGER));
+        collateral.addAll(closeRedundant(allHeld(open, ConsentStatus.PENDING), actor));
+
+        ConsentStatus held = target.getStatus();
+        RecordedConsent answered =
+                saveUpdated(
+                        factory.transitionRecordedAs(
+                                target,
+                                ConsentStatus.GRANTED,
+                                ConsentEventState.CONSENT_RESUMED,
+                                actor,
+                                SUBJECT_TRIGGER));
+        return new ResumedConsent(new ConsentMove(held, answered), List.copyOf(collateral));
     }
 
     /**
-     * Revokes the consent in force, if there is one, and reports its id so the decision can link
-     * what it superseded.
+     * Revokes the consent in force, if there is one, and reports the move so the decision can link
+     * what it superseded and a caller can report what it closed.
      */
     @Nullable
-    private UUID revokeOpenGrant(List<Consent> open, String actor) {
+    private ConsentMove revokeOpenGrant(List<Consent> open, String actor) {
         Consent inForce = held(open, ConsentStatus.GRANTED);
         if (inForce == null) {
             return null;
         }
-        saveUpdated(factory.transition(inForce, ConsentStatus.REVOKED, actor, SUBJECT_TRIGGER));
-        return inForce.getId();
+        return moved(inForce, ConsentStatus.REVOKED, actor, SUBJECT_TRIGGER);
     }
 
     /**
@@ -279,16 +294,24 @@ public class ConsentWriter {
      * this very decision - can both land one. Answering only the newest would leave the other open
      * forever, permanently refusing every later request for the pair as a duplicate. Closing them
      * here settles that without a second guard the duplicate check could drift from.
+     *
+     * <p>Each termination is reported back; {@link #decide} has nobody to report to and discards
+     * them, while {@link #resume} passes them on to the lifecycle seam.
      */
-    private void closeRedundant(List<Consent> redundant, String actor) {
-        redundant.forEach(
-                consent ->
-                        saveUpdated(
-                                factory.transition(
-                                        consent,
-                                        ConsentStatus.TERMINATED,
-                                        actor,
-                                        CLEANUP_TRIGGER)));
+    private List<ConsentMove> closeRedundant(List<Consent> redundant, String actor) {
+        return redundant.stream()
+                .map(consent -> moved(consent, ConsentStatus.TERMINATED, actor, CLEANUP_TRIGGER))
+                .toList();
+    }
+
+    /**
+     * Applies one move, reading the status it leaves behind before the transition overwrites it.
+     */
+    private ConsentMove moved(
+            Consent consent, ConsentStatus target, String actor, ConsentEventTrigger trigger) {
+        ConsentStatus held = consent.getStatus();
+        return new ConsentMove(
+                held, saveUpdated(factory.transition(consent, target, actor, trigger)));
     }
 
     /** Stores the decision as a new consent, linked to whatever the pair last held. */

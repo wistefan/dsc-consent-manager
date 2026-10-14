@@ -456,10 +456,16 @@ silently.
   exhaustive while omitting six types already on the branch — `ContractParties`, `GeneratedNotice`,
   `NoticeContent`, `NoticeResolution`, `ResolvedNotice` and `RegistrationOutcome`. Every edit to
   `AGENTS.md` this ticket needs is gathered here, in the one step that performs them.
+  **Deferred, and deliberately so.** An implementation agent is forbidden from editing `AGENTS.md`
+  — it is appended to the agent system prompt and cached across sessions, so any edit invalidates
+  that cache for every later session. Step 6 therefore leaves the file untouched and leaves this
+  bullet standing as the exact delta for a plan-mode agent to apply. Nothing else in the step, and
+  nothing in the build, depends on it; the cost of the deferral is that `SPECIFIED_OPERATION_COUNT`
+  and the file list in `AGENTS.md` read stale until it is applied.
 
 **Acceptance:** the seam AC 13 and AC 14 attach to exists and is named; the criteria themselves are
-deviations — see "Criteria deliberately not met as written". The repository context file matches the
-merged state.
+deviations — see "Criteria deliberately not met as written". The repository context file is left to
+the deferred pass described above.
 
 ---
 
@@ -496,6 +502,13 @@ criteria need moving to those tickets rather than ticking here.
   step 2 describes. That guard belongs to `ConsentService.consentable` and to the grant flow, not to
   these five operations, and widening it here would change behaviour ticket #71 settled. It is named
   so the omission is a decision rather than an oversight.
+- Sweeping `consent_events.actor` when ADR-0007 erases a data subject. The lifecycle moves record
+  the subject's own identifier as the actor, but so does the grant flow merged for ticket #71 —
+  `ConsentWriter.decide` has always written `subject.getIdentifier()` there — so an erasure leaving
+  that string standing in the trail is a gap these five operations widen rather than open. Closing
+  it means a statement that rewrites the column, a verifier test and a decision on whether a
+  party's entries on the same consents are in scope; that belongs to a ticket of its own, not to
+  this one. It is named here so the omission is a decision rather than an oversight.
 - `GET /consents` / `GET /consents/{id}` and the consent history read side.
 - Any change to `ConsentStateMachine.TRANSITIONS`, to `ConsentEventState`, or to the database
   schema — all three already carry what these operations need.
