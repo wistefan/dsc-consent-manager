@@ -66,10 +66,15 @@ import org.junit.jupiter.api.Test;
  * {@link #refusesAResumeLosingToAGrantOutsideItsSnapshot} seeds that state directly rather than
  * racing for it, so the branch answering it is exercised rather than argued.
  *
- * <p>What the racing cases pin is therefore the property AC 16 is about - every racer is either
- * answered or refused, a refusal is a client error naming what the caller may do instead rather
- * than a server error, and the pair ends with one consent in force - rather than one particular
- * status a given interleaving happens to produce.
+ * <p>What the racing cases pin is therefore the end state - the pair holds one consent in force,
+ * and no consent records a state twice - rather than one particular status a given interleaving
+ * happens to produce. Which racer loses is not fixed by anything here: where the decision reaches
+ * the row first the other is refused, and where it does not both moves land legitimately, so the
+ * refusal assertions in those two cases hold only of the runs that produced a refusal. The AC 16
+ * property itself - a loser answered as a client error rather than a {@code 500} - is pinned where
+ * exactly one racer must lose: {@link #concurrentRevocationsAppendOneEvent}, two withdrawals of one
+ * consent, and {@link #refusesAResumeLosingToAGrantOutsideItsSnapshot}, whose conflict is seeded
+ * rather than raced for.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Concurrent consent lifecycle moves")
@@ -90,9 +95,19 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
     /** Long enough for a blocked statement to register as waiting, short enough to fail fast. */
     private static final Duration BLOCKED = Duration.ofSeconds(10);
 
-    /** A backend held up by another transaction's lock, which is the blocked resume. */
+    /**
+     * A backend of <em>this</em> database held up by another transaction while writing a consent.
+     *
+     * <p>Narrow on purpose: the container behind {@link PostgresTestResource} is shared by every
+     * suite in the JVM, so a cluster-wide {@code pg_locks} probe would be released by any unrelated
+     * backend waiting on anything, letting the held grant commit before the resume ever reached the
+     * index. The probe's own backend is excluded because this very statement names {@code
+     * consents}.
+     */
     private static final String WAITING_BACKENDS =
-            "SELECT count(*) FROM pg_locks WHERE NOT granted";
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"
+                    + " AND pid <> pg_backend_pid() AND wait_event_type = 'Lock'"
+                    + " AND query ILIKE '%consents%'";
 
     /** A grant for the pair, written outside anything the service's locking read can see. */
     private static final String INSERT_GRANT =
@@ -158,9 +173,8 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
 
         Outcomes outcomes = race(() -> revoke(inForce), this::grant);
 
-        assertEveryRacerAnswered(outcomes);
         assertThat(outcomes.refused())
-                .as("a revocation the decision beat to the row is refused as a 400, never a 500")
+                .as("where this interleaving refused a racer, it refused it as a 400, not a 500")
                 .allSatisfy(refusal -> assertThat(refusal).isInstanceOf(BadRequestException.class));
         assertThat(consents.findById(inForce).orElseThrow().getStatus())
                 .as("whoever got to it first, the consent the revocation named ends withdrawn")
@@ -179,9 +193,8 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
 
         Outcomes outcomes = race(() -> resume(requested), this::grant);
 
-        assertEveryRacerAnswered(outcomes);
         assertThat(outcomes.refused())
-                .as("a resume of a request the decision already answered is refused, not a 500")
+                .as("where this interleaving refused a racer, it refused it as a 4xx, not a 500")
                 .allSatisfy(ConsentLifecycleAtomicityIT::isClientError);
         assertThat(granted())
                 .as("the lock makes the second move supersede the first rather than double it")
@@ -202,8 +215,9 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
 
         Outcomes outcomes = race(() -> revoke(inForce), () -> revoke(inForce));
 
-        assertEveryRacerAnswered(outcomes);
-        assertThat(outcomes.moved()).containsExactly(inForce);
+        assertThat(outcomes.moved())
+                .as("one withdrawal of one consent: the other racer cannot also have moved it")
+                .containsExactly(inForce);
         assertThat(outcomes.refused())
                 .as("the re-read shows the loser the status the winner left, which is a 400")
                 .singleElement()
@@ -219,11 +233,27 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
                         ConsentEventState.CONSENT_GIVEN, ConsentEventState.CONSENT_REVOKED);
     }
 
+    /**
+     * The one interleaving the pair lock cannot cover, and the only reachable proof of AC 12.
+     *
+     * <p>The held grant is invisible to the resume's locking read, so the resume runs on: it
+     * terminates {@code straggler}, the open request its own grant would leave redundant, and only
+     * then does its own update reach {@code uq_consents_granted_per_user_notice} and fail. That
+     * ordering is what makes the case load-bearing twice over - every refusal elsewhere in these
+     * suites is thrown by {@link ConsentStateMachine} <em>before</em> the writer is entered, and
+     * would read the same with no transaction at all. Here a write has already landed when the
+     * failure comes, so a straggler still {@code PENDING} and still carrying no termination is the
+     * transaction unwinding rather than the guard refusing. That the close really is written on
+     * this fixture, rather than skipped before the conflict, is what {@code
+     * ConsentLifecycleIT.closesTheRequestsTheAnswerMakesRedundant} pins on the same two rows with
+     * nothing holding the index.
+     */
     @Test
-    @DisplayName("a resume losing to a grant outside its locking read is refused as a conflict")
+    @DisplayName("a resume losing to a grant outside its locking read is refused with nothing kept")
     void refusesAResumeLosingToAGrantOutsideItsSnapshot() throws Exception {
         seedPair();
         UUID requested = seedConsent(ConsentStatus.PENDING);
+        UUID straggler = seedConsent(ConsentStatus.PENDING);
         DataSource pool = dataSources.resolve(dataSource);
 
         try (ExecutorService resuming = Executors.newSingleThreadExecutor();
@@ -252,18 +282,15 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
                                 .toList())
                 .as("the ask it was opened with, and nothing the refused resume wrote")
                 .containsExactly(ConsentEventState.CONSENT_REQUESTED);
-    }
-
-    /** Fails unless every racer either moved a consent or was refused, and says which happened. */
-    private static void assertEveryRacerAnswered(Outcomes outcomes) {
-        assertThat(outcomes.moved().size() + outcomes.refused().size())
-                .as("a racer that neither moved a consent nor was refused would go unexamined")
-                .isEqualTo(RACERS);
-        if (outcomes.refused().isEmpty()) {
-            assertThat(outcomes.moved())
-                    .as("nothing was refused, so this interleaving landed both moves in turn")
-                    .doesNotHaveDuplicates();
-        }
+        assertThat(consents.findById(straggler).orElseThrow().getStatus())
+                .as("the termination the resume had already written is unwound with the rest")
+                .isEqualTo(ConsentStatus.PENDING);
+        assertThat(
+                        events.findByConsentIdOrderByOccurredAtAsc(straggler).stream()
+                                .map(ConsentEvent::getEventState)
+                                .toList())
+                .as("neither the status nor its event survives a transaction that failed later")
+                .containsExactly(ConsentEventState.CONSENT_REQUESTED);
     }
 
     /** Whether a backend is held up by another transaction, which is the resume blocked below. */

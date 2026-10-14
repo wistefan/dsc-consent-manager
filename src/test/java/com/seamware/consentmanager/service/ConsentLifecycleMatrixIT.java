@@ -44,12 +44,14 @@ import org.junit.jupiter.params.provider.MethodSource;
  * The lifecycle table proven total: every move the service offers, attempted from every status a
  * consent can hold, lands where {@link ConsentStateMachine} says and nowhere else.
  *
- * <p>This is the only suite asserting which statuses a move is permitted from, and {@link
- * Operation} the only restatement of {@link ConsentStateMachine} in the tests: {@code
+ * <p>This is the only suite asserting which statuses a <em>move</em> is permitted from, and {@link
+ * Operation} the only restatement of {@link ConsentStateMachine} among the lifecycle suites: {@code
  * ConsentLifecycleIT} proves each move's own rules instead — who may ask for it, what it
- * supersedes, which {@code 404} it gives — so an edge that changes is one edit there and one here.
- * This suite asserts the outcome and nothing else: the status the record ends in, the single event
- * naming who acted, and - for every refusal - that neither was written.
+ * supersedes, which {@code 404} it gives. {@code ConsentStateMachineTest} restates the table a
+ * second time, independently and without a database, to pin the machine itself; an edge that
+ * changes is therefore three edits — the production table, {@link Operation} here, and {@code
+ * PERMITTED} there. This suite asserts the outcome and nothing else: the status the record ends in,
+ * the single event naming who acted, and - for every refusal - that nothing was written.
  *
  * <p>Totality is held two ways, so a sixth move cannot slip past it. A move added to {@link
  * Operation} without its outcome fails to compile, because the switches that invoke it and name its
@@ -208,7 +210,7 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
 
         assertThat(consents.findById(consentId).orElseThrow().getStatus()).isEqualTo(from);
         assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId))
-                .as("status and event are written together or not at all")
+                .as("a refused move writes nothing, not even the event")
                 .isEmpty();
     }
 
