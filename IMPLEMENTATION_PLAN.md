@@ -19,10 +19,11 @@ load-bearing requirements.
   and the security scheme are externalised under `api/components/`.
 - **`SpecSecurityConsistencyTest.SPECIFIED_OPERATION_COUNT` is `26`** today
   (`src/test/java/com/seamware/consentmanager/api/SpecSecurityConsistencyTest.java:87`),
-  not the `21` AGENTS.md states. This ticket adds 7 operations → final value **33**.
-  Bump it in the same commit as each operation's spec addition, and add the matching
-  `EndpointRoleMatrixIT.Endpoint` row + `roleMatrix()` row for every new operation, or
-  both tests fail the build.
+  not the `21` AGENTS.md states. This ticket adds 8 operations → final value **34**
+  (the per-step bumps run 26→28→30→31→33→34: Step 1 +2, Step 2 +2, Step 3 +1, Step 4 +2,
+  Step 6 +1). Bump it in the same commit as each operation's spec addition, and add the
+  matching `EndpointRoleMatrixIT.Endpoint` row + `roleMatrix()` row for every new operation,
+  or both tests fail the build.
 - **Foundation already present on the base branch:** `domain/Consent` (with the frozen
   `snapshot` JSONB column + `domain/ConsentSnapshot` record and its
   `PrivacyNoticePayload` vocabulary), `domain/ConsentStatus`,
@@ -40,7 +41,13 @@ load-bearing requirements.
 - **Pagination convention:** there is no generic `Page` schema. `GET /participants` uses an
   inline `ParticipantPage` wrapper in `api/openapi.yaml` (`content[]`, `page`, `size`,
   `totalElements`, `totalPages`) with `page`/`size` query params, clamping an oversized
-  `size` to `200` rather than rejecting. Mirror this exactly for consents.
+  `size` to a **configured per-deployment ceiling** rather than rejecting — the property
+  `consent-manager.participants.page-max-size` (env `PARTICIPANTS_PAGE_MAX_SIZE`, default
+  `100` at `application.yml`), with **no `maximum` in the spec** so the YAML never drifts from
+  the configured value. Mirror this convention for consents: a sibling config property under
+  `consent-manager` (default documented in `.env.sample` + `application.yml`), clamp-not-reject,
+  the response reporting the size actually applied, and no `maximum` literal in the spec.
+  Do **not** bake a magic `100`/`200` into either spec or code.
 - **Controller convention:** concrete `@Controller` extends the generated
   `Abstract<Tag>Controller`; the principal (`UserPrincipal` / `ParticipantPrincipal`) is the
   handler's first parameter; handlers return `HttpResponse<GeneratedModel>`; errors are
@@ -146,6 +153,23 @@ A purpose-built, cache-hostile yes/no the participant asks before processing.
 Resolve the caller's participant links and list bilateral + ecosystem contracts, marking the
 caller's side.
 
+- **Source of the contract set (resolves the Step-4 feasibility gap).** The Contract Service
+  client cannot enumerate: `ContractServiceClient` exposes only `fetchContract(id)`
+  (`GET /contracts/{id}`) and `fetchBilateralContract(id)` (`GET /bilaterals/{id}`), and
+  `ContractGateway.fetch(uri)` wraps a single by-id lookup — there is **no** "list all
+  contracts this participant is party to" upstream call. Discovery therefore draws its
+  **candidate set of contract URIs from this service's own data**: the `contract_uri` column,
+  carried on both `privacy_notices` (`NOT NULL`, `V1__initial_schema.sql:72`) and `consents`
+  (nullable, `:107`), scoped to the caller's participant via `provider_id`/`consumer_id`.
+  `privacy_notices.contract_uri` is the primary source (always present); `consents.contract_uri`
+  is a secondary source for contracts under which a consent exists. **New repository capability
+  required:** neither `PrivacyNoticeRepository` nor `ConsentRepository` exposes a distinct-URI
+  projection today — add a `SELECT DISTINCT contract_uri ... WHERE provider_id = :id OR
+  consumer_id = :id` query (primarily on `privacy_notices`) returning the distinct URIs for a
+  participant. The flow is then: resolve the caller's participant(s) → gather distinct
+  `contract_uri`s for each from the repository → hydrate each via `ContractGateway.fetch(uri)`
+  → mark the caller's side. (If a future Contract Service listing endpoint lands, the candidate
+  set can switch to it without changing the response shape.)
 - **Spec:** add `AvailableContract.yaml` (contract id/uri, provider, consumer, shape
   bilateral/ecosystem, and which side the caller's participant(s) are on). Add
   `GET /contracts/available` (`x-roles: [USER]`, `x-principal: UserPrincipal`) and
