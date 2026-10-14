@@ -26,6 +26,9 @@ import lombok.Setter;
  *       consent-manager.participants.page-default-size}
  *   <li>{@code PARTICIPANTS_PAGE_MAX_SIZE} &rarr; {@code
  *       consent-manager.participants.page-max-size}
+ *   <li>{@code CONSENTS_PAGE_DEFAULT_SIZE} &rarr; {@code
+ *       consent-manager.consents.page-default-size}
+ *   <li>{@code CONSENTS_PAGE_MAX_SIZE} &rarr; {@code consent-manager.consents.page-max-size}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut
@@ -300,6 +303,37 @@ public class ConsentManagerConfiguration {
         /**
          * Most records one directory page may carry, bound to {@code PARTICIPANTS_PAGE_MAX_SIZE};
          * it caps the default too, since the clamp applies to that as well.
+         *
+         * <p>A larger requested size is clamped to this rather than refused, so raising or lowering
+         * the ceiling never turns a caller's working request into a {@code 400}.
+         */
+        private int pageMaxSize = DEFAULT_PAGE_MAX_SIZE;
+    }
+
+    /** Paging of a subject's consent listing, bound under {@code consent-manager.consents}. */
+    @Getter
+    @Setter
+    @ConfigurationProperties("consents")
+    public static class Consents {
+
+        /** Records a consent page carries when the caller asks for no size. */
+        public static final int DEFAULT_PAGE_DEFAULT_SIZE = 20;
+
+        /** Most records a consent page may carry when no ceiling is configured. */
+        public static final int DEFAULT_PAGE_MAX_SIZE = 100;
+
+        /**
+         * Page size applied when {@code GET /consents/me} names none, bound to {@code
+         * CONSENTS_PAGE_DEFAULT_SIZE}; a value below one would make every page answer empty.
+         *
+         * <p>Deliberately absent from the specification, which could not track a value configured
+         * per deployment; the response reports the size it applied instead.
+         */
+        private int pageDefaultSize = DEFAULT_PAGE_DEFAULT_SIZE;
+
+        /**
+         * Most records one consent page may carry, bound to {@code CONSENTS_PAGE_MAX_SIZE}; it caps
+         * the default too, since the clamp applies to that as well.
          *
          * <p>A larger requested size is clamped to this rather than refused, so raising or lowering
          * the ceiling never turns a caller's working request into a {@code 400}.

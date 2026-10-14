@@ -1278,6 +1278,32 @@ class UserServiceTest {
         }
 
         @Override
+        public Page<Consent> findByUserIdAndStatusIn(
+                UUID userId, Collection<ConsentStatus> statuses, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findByUserIdAndPrivacyNoticeId(
+                UUID userId, UUID privacyNoticeId, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findByUserIdAndStatusInAndPrivacyNoticeId(
+                UUID userId,
+                Collection<ConsentStatus> statuses,
+                UUID privacyNoticeId,
+                Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Optional<Consent> findByIdAndUserId(UUID id, UUID userId) {
+            throw unsupported();
+        }
+
+        @Override
         public List<Consent> findByPrivacyNoticeId(UUID privacyNoticeId) {
             throw unsupported();
         }

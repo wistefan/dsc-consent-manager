@@ -368,7 +368,12 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 () ->
                         HttpRequest.POST(
                                 PATH_CONSENTS + "/" + ABSENT_CONSENT + "/resume",
-                                Map.of("userIdentifier", LINKED_USER)));
+                                Map.of("userIdentifier", LINKED_USER))),
+        LIST_MY_CONSENTS(
+                "get " + PATH_CONSENTS + "/me", () -> HttpRequest.GET(PATH_CONSENTS + "/me")),
+        GET_MY_CONSENT(
+                "get " + PATH_CONSENTS + "/me/{id}",
+                () -> HttpRequest.GET(PATH_CONSENTS + "/me/" + ABSENT_CONSENT));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -625,6 +630,18 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 unknownConsent,
                                 denied,
                                 unknownConsent,
+                                denied,
+                                challenged),
+                        // The query side is the subject's alone: the seeded USER has no consent
+                        // yet, so the listing answers an empty page and the id lookup an absent
+                        // consent - the same 404 a consent owned by somebody else earns. Every
+                        // other role is refused outright. ConsentQueryIT owns the populated page.
+                        row(Endpoint.LIST_MY_CONSENTS, ok, denied, denied, denied, challenged),
+                        row(
+                                Endpoint.GET_MY_CONSENT,
+                                unknownConsent,
+                                denied,
+                                denied,
                                 denied,
                                 challenged))
                 .flatMap(row -> row);
