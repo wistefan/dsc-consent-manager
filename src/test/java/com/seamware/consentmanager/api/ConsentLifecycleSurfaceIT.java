@@ -19,6 +19,7 @@ import com.seamware.consentmanager.support.KeycloakTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
 import com.seamware.consentmanager.support.PrivacyNoticeFixtures;
 import io.micronaut.core.type.Argument;
+import io.micronaut.http.HttpMethod;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
@@ -54,7 +55,9 @@ import org.junit.jupiter.params.provider.MethodSource;
  * else is indistinguishable from one that does not exist, and the subject's routes admit no role
  * but {@code USER}. Termination is the participant's counterpart, so it is checked against the
  * consent's two parties - including the case the role matrix cannot sweep, a caller whose record is
- * deregistered rather than absent.
+ * deregistered rather than absent. Resuming is the one route two roles reach, so both are driven
+ * over the wire - including the shape the role matrix cannot send, a resume carrying no request
+ * body at all, which the subject's call is answered by and the relay's refused for.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent lifecycle endpoints")
@@ -67,6 +70,8 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
     private static final String REFUSE = "refuse";
 
     private static final String TERMINATE = "terminate";
+
+    private static final String RESUME = "resume";
 
     /** Where a participant reads its own record back, which deregistration leaves open. */
     private static final String PATH_PARTICIPANTS_ME = "/participants/me";
@@ -103,6 +108,12 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
     private static final String PROPERTY_STATUS = "status";
 
     private static final String PROPERTY_CONSENTED = "consented";
+
+    /** What a relaying catalog names the subject with; ignored when the subject calls itself. */
+    private static final String PROPERTY_USER_IDENTIFIER = "userIdentifier";
+
+    /** The media type every refusal is rendered as. */
+    private static final String PROBLEM_JSON = "application/problem+json";
 
     /** Routes carrying no request body still need one to post. */
     private static final Map<String, Object> NO_BODY = Map.of();
@@ -341,6 +352,80 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
+     * The form the role matrix cannot send: it always posts a body, so a body-less request is the
+     * only end-to-end proof that the generated parameter is nullable. Were it not, Micronaut would
+     * refuse the request with a {@code 400} before the handler ran, and a subject resuming their
+     * own consent - who has nothing to state - could never reach the route.
+     */
+    @Test
+    @DisplayName("resumes the caller's own consent sent with no request body at all")
+    void resumesTheCallersOwnConsentWithoutABody() {
+        UUID consentId = seedConsent(callerId(), ConsentStatus.PENDING);
+
+        HttpResponse<String> response =
+                exchange(HttpRequest.create(HttpMethod.POST, resumePath(consentId)), userToken());
+
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(body(response))
+                .containsEntry(PROPERTY_ID, consentId.toString())
+                .containsEntry(PROPERTY_STATUS, ConsentStatus.GRANTED.name())
+                .containsEntry(PROPERTY_CONSENTED, true);
+        assertThat(consents.findById(consentId).orElseThrow().getStatus())
+                .isEqualTo(ConsentStatus.GRANTED);
+    }
+
+    @Test
+    @DisplayName("resumes as a CATALOG caller relaying the decision of the subject it names")
+    void resumesAsACatalogRelayingTheSubject() {
+        UUID consentId = seedConsent(callerId(), ConsentStatus.PENDING);
+
+        HttpResponse<String> response =
+                exchange(
+                        HttpRequest.POST(
+                                resumePath(consentId),
+                                Map.of(PROPERTY_USER_IDENTIFIER, identifier)),
+                        catalogToken());
+
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(body(response))
+                .containsEntry(PROPERTY_ID, consentId.toString())
+                .containsEntry(PROPERTY_STATUS, ConsentStatus.GRANTED.name())
+                .containsEntry(PROPERTY_CONSENTED, true);
+    }
+
+    /**
+     * The other half of the body-less case: nothing about the absent body decides the answer, the
+     * caller's role does. The shape that is ordinary for a subject is a refusal for a relay, which
+     * has no other way to name the subject whose decision it carries.
+     */
+    @Test
+    @DisplayName("refuses a CATALOG resume sent with no request body at all as a 400 problem")
+    void refusesACatalogResumeWithoutABody() {
+        UUID consentId = seedConsent(callerId(), ConsentStatus.PENDING);
+
+        HttpResponse<String> response =
+                exchange(
+                        HttpRequest.create(HttpMethod.POST, resumePath(consentId)), catalogToken());
+
+        assertThat(response.code()).isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+        assertThat(response.getContentType().orElseThrow().toString()).startsWith(PROBLEM_JSON);
+        assertThat(consents.findById(consentId).orElseThrow().getStatus())
+                .as("a relay naming nobody writes nothing")
+                .isEqualTo(ConsentStatus.PENDING);
+    }
+
+    @Test
+    @DisplayName("refuses a PARTICIPANT resuming with 403, whatever the consent names it as")
+    void refusesAParticipantResuming() {
+        UUID consentId = seedConsentNaming(PROVIDER, ConsentStatus.PENDING);
+
+        assertThat(move(RESUME, consentId, participantToken()).code())
+                .isEqualTo(HttpStatus.FORBIDDEN.getCode());
+        assertThat(consents.findById(consentId).orElseThrow().getStatus())
+                .isEqualTo(ConsentStatus.PENDING);
+    }
+
+    /**
      * Re-points the notice at one naming the calling participant on {@code side}, and records a
      * consent of the caller's own against it.
      */
@@ -360,6 +445,14 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
 
     private static String participantToken() {
         return KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT);
+    }
+
+    private static String catalogToken() {
+        return KeycloakTestResource.accessToken(RealmPrincipal.CATALOG);
+    }
+
+    private static String resumePath(UUID consentId) {
+        return PATH_CONSENTS + "/" + consentId + "/" + RESUME;
     }
 
     static Stream<String> verbs() {

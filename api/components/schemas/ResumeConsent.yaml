@@ -1,0 +1,26 @@
+# Schema: ResumeConsent — referenced from api/openapi.yaml as
+# components.schemas.ResumeConsent.
+#
+# Nothing here selects the consent: the consent is addressed by its path
+# identifier, and `userIdentifier` is only ever checked against the record that
+# identifier resolves to. A catalog caller therefore cannot choose the subject,
+# and a mismatch is a `404` rather than a grant recorded for someone else.
+type: object
+description: >
+  What a caller relaying a decision states about whose decision it is.
+
+
+  A `USER` caller states nothing: the token already names the subject, so the
+  body may be omitted entirely and a `userIdentifier` sent anyway is ignored,
+  exactly as `POST /consents` ignores a user named in the body. A `CATALOG`
+  caller is relaying somebody else's decision and must name them.
+properties:
+  userIdentifier:
+    type: string
+    description: >
+      The global identifier of the data subject whose decision is being relayed.
+      Required of a `CATALOG` caller — omitting it is `400` — and ignored for a
+      `USER` caller, whose token is the only statement of who decided. It is
+      checked against the consent the path addresses rather than used to find
+      one, so an identifier naming anybody but that consent's subject is `404`.
+    example: "urn:example:user:7f3a1c2e"

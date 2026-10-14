@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.service;
 
 import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentEventState;
 import com.seamware.consentmanager.domain.ConsentEventTrigger;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
@@ -168,6 +169,68 @@ public class ConsentWriter {
         RecordedConsent affirmed = factory.affirm(locked, actor);
         events.save(affirmed.event());
         return affirmed;
+    }
+
+    /**
+     * Grants the addressed request, closing whatever grant the pair already holds.
+     *
+     * <p>Deliberately symmetric with {@link #decide}: it takes the same {@code (user, notice)} lock
+     * before reading, so a resume and a concurrent decision on the same pair serialise instead of
+     * interleaving, and it reuses the same supersede — the grant in force is revoked and the
+     * resumed row is re-pointed at it, but only where this call revoked something, so a request
+     * answered with nothing in force keeps the parent it was opened with. The revocation, the
+     * status, the event and the link are one unit of work.
+     *
+     * <p>Only the addressed row is <em>answered</em>, but the open requests it leaves redundant are
+     * closed here as {@code decide} closes them, and for the same reason: a stranded {@code
+     * PENDING} refuses every later request for the pair as a duplicate, forever. A relay cannot
+     * fall back on {@code decide} to clear one — {@code POST /consents} is {@code USER}-only — so
+     * the straggler would outlive the grant that made it redundant. The addressed row itself is
+     * excluded from both searches: a consent cannot close itself, and one already {@code GRANTED}
+     * is refused by {@link ConsentStateMachine} rather than revoked in favour of itself.
+     *
+     * <p>Throws {@link NotFoundException} when no such consent exists, and {@link
+     * io.micronaut.data.exceptions.DataAccessException} when a grant inserted outside this
+     * statement's snapshot holds {@code uq_consents_granted_per_user_notice} — invisible to the
+     * locking read, so the caller answers it outside the transaction as {@code decide}'s does.
+     */
+    @NonNull
+    @Transactional
+    public RecordedConsent resume(@NonNull UUID consentId, @NonNull String actor) {
+        Consent addressed =
+                consents.findById(consentId)
+                        .orElseThrow(
+                                () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
+        List<Consent> locked =
+                consents.findByUserIdAndPrivacyNoticeIdForUpdate(
+                        addressed.getUserId(), addressed.getPrivacyNoticeId());
+        Consent target =
+                locked.stream()
+                        .filter(consent -> consent.getId().equals(consentId))
+                        .findFirst()
+                        .orElseThrow(
+                                () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
+
+        List<Consent> open =
+                locked.stream()
+                        .filter(consent -> !consent.getId().equals(consentId))
+                        .filter(
+                                consent ->
+                                        ConsentStateMachine.OPEN_STATUSES.contains(
+                                                consent.getStatus()))
+                        .toList();
+        UUID superseded = revokeOpenGrant(open, actor);
+        if (superseded != null) {
+            target.setParentConsentId(superseded);
+        }
+        closeRedundant(allHeld(open, ConsentStatus.PENDING), actor);
+        return saveUpdated(
+                factory.transitionRecordedAs(
+                        target,
+                        ConsentStatus.GRANTED,
+                        ConsentEventState.CONSENT_RESUMED,
+                        actor,
+                        SUBJECT_TRIGGER));
     }
 
     /**
