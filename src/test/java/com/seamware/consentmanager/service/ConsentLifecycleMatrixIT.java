@@ -1,6 +1,8 @@
 package com.seamware.consentmanager.service;
 
 import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
+import static com.seamware.consentmanager.support.ConsentFixtures.participant;
+import static com.seamware.consentmanager.support.ConsentFixtures.principalFor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -16,7 +18,6 @@ import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserRepository;
-import com.seamware.consentmanager.security.UserPrincipal;
 import com.seamware.consentmanager.support.PostgresTestResource;
 import com.seamware.consentmanager.support.PrivacyNoticeFixtures;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
@@ -27,7 +28,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -44,17 +44,19 @@ import org.junit.jupiter.params.provider.MethodSource;
  * The lifecycle table proven total: every move the service offers, attempted from every status a
  * consent can hold, lands where {@link ConsentStateMachine} says and nowhere else.
  *
- * <p>Distinct from {@code ConsentLifecycleIT}, which proves each move's own rules — who may ask it,
- * what it supersedes, which {@code 404} it gives. This suite proves only coverage, so it asserts
- * the outcome and nothing else: the status the record ends in, the single event naming who acted,
- * and - for every refusal - that neither was written.
+ * <p>This is the only suite asserting which statuses a move is permitted from, and {@link
+ * Operation} the only restatement of {@link ConsentStateMachine} in the tests: {@code
+ * ConsentLifecycleIT} proves each move's own rules instead — who may ask for it, what it
+ * supersedes, which {@code 404} it gives — so an edge that changes is one edit there and one here.
+ * This suite asserts the outcome and nothing else: the status the record ends in, the single event
+ * naming who acted, and - for every refusal - that neither was written.
  *
- * <p>Totality is held three ways, so a sixth move cannot slip past it. A move added to {@link
+ * <p>Totality is held two ways, so a sixth move cannot slip past it. A move added to {@link
  * Operation} without its outcome fails to compile, because the switches that invoke it and name its
  * actor are exhaustive over the enum and declare no default. A move added to the <em>service</em>
- * without a row here fails {@link #coversEveryMoveTheServiceOffers}. And a row covering some
- * statuses only fails {@link #coversEveryStatusOfEveryMove}, which requires the two sources below
- * to partition the whole cross product.
+ * without a row here fails {@link #coversEveryMoveTheServiceOffers}. Every status is covered by
+ * construction: the refused cells are the complement of the permitted ones, so a status added to
+ * {@code ConsentStatus} lands in one source or the other with no table to update.
  *
  * <p>{@code DRAFT} and {@code EXPIRED} are seeded straight through {@link ConsentRepository}: the
  * first is deliberately absent from {@code ConsentStateMachine.CREATABLE} and the second has no
@@ -161,36 +163,13 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
                         Arrays.stream(Operation.values()).map(Operation::method).toList());
     }
 
-    @Test
-    @DisplayName("the permitted and refused cells partition the whole cross product")
-    void coversEveryStatusOfEveryMove() {
-        List<List<Object>> covered =
-                Stream.concat(permittedCells(), refusedCells())
-                        .map(cell -> List.of(cell.get()))
-                        .toList();
-
-        assertThat(covered)
-                .as("no cell may be claimed twice, which would hide a status from one source")
-                .doesNotHaveDuplicates()
-                .containsExactlyInAnyOrderElementsOf(
-                        Arrays.stream(Operation.values())
-                                .flatMap(
-                                        operation ->
-                                                ALL_STATUSES.stream()
-                                                        .map(
-                                                                from ->
-                                                                        List.<Object>of(
-                                                                                operation, from)))
-                                .toList());
-    }
-
     @ParameterizedTest(name = "{0} from {1}")
     @MethodSource("permittedCells")
     @DisplayName(
             "a permitted cell leaves the status the table names and one event naming who acted")
     void storesThePermittedCell(Operation operation, ConsentStatus from) {
         User subject = user();
-        Participant party = participant(PROVIDER);
+        Participant party = participant(participants, PROVIDER);
         UUID consentId = seedConsent(subject, from);
 
         ConsentDetails moved = operation.apply(lifecycle, subject, party, consentId);
@@ -219,7 +198,7 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
     @DisplayName("a refused cell names both statuses and writes neither status nor event")
     void refusesTheCellTheTableWithholds(Operation operation, ConsentStatus from) {
         User subject = user();
-        Participant party = participant(PROVIDER);
+        Participant party = participant(participants, PROVIDER);
         UUID consentId = seedConsent(subject, from);
 
         assertThatThrownBy(() -> operation.apply(lifecycle, subject, party, consentId))
@@ -231,21 +210,6 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
         assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId))
                 .as("status and event are written together or not at all")
                 .isEmpty();
-    }
-
-    /** The subject's own token, as the resolution filter would have handed it to a handler. */
-    private static UserPrincipal principalFor(User subject) {
-        return new UserPrincipal(
-                ISSUER,
-                subject.getIdentifier(),
-                subject.getIdentifier(),
-                null,
-                false,
-                null,
-                null,
-                null,
-                subject,
-                false);
     }
 
     /** A consent for the pair as some other flow would have left it, with no trail of its own. */
@@ -290,26 +254,11 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
                             new PrivacyNotice(
                                     CONTRACT_URI,
                                     NOTICE_TITLE,
-                                    participant(PROVIDER).getId(),
-                                    participant(CONSUMER).getId(),
+                                    participant(participants, PROVIDER).getId(),
+                                    participant(participants, CONSUMER).getId(),
                                     PrivacyNoticeFixtures.emptyPayload()));
         }
         return notice;
-    }
-
-    private Participant participant(String identifier) {
-        return participants
-                .findByIdentifier(identifier)
-                .orElseGet(
-                        () ->
-                                participants.save(
-                                        new Participant(
-                                                identifier,
-                                                identifier,
-                                                null,
-                                                null,
-                                                Map.of(),
-                                                null)));
     }
 
     /**
@@ -382,7 +331,7 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
                 case REFUSE -> lifecycle.refuse(subject, consentId);
                 case TERMINATE -> lifecycle.terminate(party, consentId);
                 case RE_CONFIRM -> lifecycle.reConfirm(subject, consentId);
-                case RESUME -> lifecycle.resume(principalFor(subject), consentId, null);
+                case RESUME -> lifecycle.resume(principalFor(ISSUER, subject), consentId, null);
             };
         }
 

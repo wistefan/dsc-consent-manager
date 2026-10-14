@@ -1,31 +1,39 @@
 package com.seamware.consentmanager.service;
 
 import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
+import static com.seamware.consentmanager.support.ConsentFixtures.participant;
+import static com.seamware.consentmanager.support.ConsentFixtures.principalFor;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentEventState;
 import com.seamware.consentmanager.domain.ConsentStatus;
-import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.ApiException;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ProblemType;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserRepository;
-import com.seamware.consentmanager.security.UserPrincipal;
+import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.PostgresTestResource;
 import com.seamware.consentmanager.support.PrivacyNoticeFixtures;
+import io.micronaut.jdbc.DataSourceResolver;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
@@ -33,6 +41,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,12 +58,18 @@ import org.junit.jupiter.api.Test;
  * ConsentService.decide} takes - so a resume and a decision for one pair serialise, and the second
  * sees what the first left rather than racing it to {@code uq_consents_granted_per_user_notice}.
  *
- * <p>That lock is why no case here expects the {@code 409} {@code ConsentWriter#resume} documents:
- * every writer that can insert a grant for the pair takes it, and a resume always locks at least
- * the row it addresses, so the index is a backstop rather than the arbiter. What the assertions
- * therefore pin is the property AC 16 is about - a loser is answered by a client error naming what
- * it may do instead, never by a server error - rather than one particular status the interleaving
- * happens to produce.
+ * <p>That lock is why neither racing pair here produces the {@code 409} {@code
+ * ConsentWriter#resume} documents: both writers take it, and a decision answers the request a
+ * resume addresses in place rather than inserting beside it, so the loser is refused on the status
+ * the winner left. The index is the backstop for the one interleaving no lock can cover - a grant
+ * committed outside the locking read's snapshot, which that read can neither see nor lock - and
+ * {@link #refusesAResumeLosingToAGrantOutsideItsSnapshot} seeds that state directly rather than
+ * racing for it, so the branch answering it is exercised rather than argued.
+ *
+ * <p>What the racing cases pin is therefore the property AC 16 is about - every racer is either
+ * answered or refused, a refusal is a client error naming what the caller may do instead rather
+ * than a server error, and the pair ends with one consent in force - rather than one particular
+ * status a given interleaving happens to produce.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Concurrent consent lifecycle moves")
@@ -72,6 +87,18 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
     /** The provider of a token this suite never validates; only its shape matters here. */
     private static final String ISSUER = "https://issuer.test/realms/lifecycle-atomicity";
 
+    /** Long enough for a blocked statement to register as waiting, short enough to fail fast. */
+    private static final Duration BLOCKED = Duration.ofSeconds(10);
+
+    /** A backend held up by another transaction's lock, which is the blocked resume. */
+    private static final String WAITING_BACKENDS =
+            "SELECT count(*) FROM pg_locks WHERE NOT granted";
+
+    /** A grant for the pair, written outside anything the service's locking read can see. */
+    private static final String INSERT_GRANT =
+            "INSERT INTO consents (id, user_id, privacy_notice_id, provider_id, consumer_id,"
+                    + " status, consented) VALUES (?, ?, ?, ?, ?, 'GRANTED', true)";
+
     @Inject ConsentLifecycleService lifecycle;
 
     @Inject ConsentService consentService;
@@ -85,6 +112,10 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
     @Inject ParticipantRepository participants;
 
     @Inject UserRepository users;
+
+    @Inject DataSource dataSource;
+
+    @Inject DataSourceResolver dataSources;
 
     private User subject;
 
@@ -127,10 +158,13 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
 
         Outcomes outcomes = race(() -> revoke(inForce), this::grant);
 
+        assertEveryRacerAnswered(outcomes);
         assertThat(outcomes.refused())
-                .as("a revocation the decision beat to the row is refused, never a server error")
-                .allSatisfy(ConsentLifecycleAtomicityIT::isClientError)
+                .as("a revocation the decision beat to the row is refused as a 400, never a 500")
                 .allSatisfy(refusal -> assertThat(refusal).isInstanceOf(BadRequestException.class));
+        assertThat(consents.findById(inForce).orElseThrow().getStatus())
+                .as("whoever got to it first, the consent the revocation named ends withdrawn")
+                .isEqualTo(ConsentStatus.REVOKED);
         assertThat(granted())
                 .as("whichever order they land in, the pair ends with one consent in force")
                 .hasSize(1);
@@ -145,6 +179,7 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
 
         Outcomes outcomes = race(() -> resume(requested), this::grant);
 
+        assertEveryRacerAnswered(outcomes);
         assertThat(outcomes.refused())
                 .as("a resume of a request the decision already answered is refused, not a 500")
                 .allSatisfy(ConsentLifecycleAtomicityIT::isClientError);
@@ -167,6 +202,7 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
 
         Outcomes outcomes = race(() -> revoke(inForce), () -> revoke(inForce));
 
+        assertEveryRacerAnswered(outcomes);
         assertThat(outcomes.moved()).containsExactly(inForce);
         assertThat(outcomes.refused())
                 .as("the re-read shows the loser the status the winner left, which is a 400")
@@ -181,6 +217,81 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
                 .as("the seeded grant, then one withdrawal: the loser appends nothing")
                 .containsExactly(
                         ConsentEventState.CONSENT_GIVEN, ConsentEventState.CONSENT_REVOKED);
+    }
+
+    @Test
+    @DisplayName("a resume losing to a grant outside its locking read is refused as a conflict")
+    void refusesAResumeLosingToAGrantOutsideItsSnapshot() throws Exception {
+        seedPair();
+        UUID requested = seedConsent(ConsentStatus.PENDING);
+        DataSource pool = dataSources.resolve(dataSource);
+
+        try (ExecutorService resuming = Executors.newSingleThreadExecutor();
+                Connection uncommitted = pool.getConnection()) {
+            uncommitted.setAutoCommit(false);
+            insertGrant(uncommitted);
+            Future<UUID> resumed = resuming.submit(() -> resume(requested));
+            Await.until(
+                    "the resume to block on the index entry the held grant has not committed",
+                    BLOCKED,
+                    () -> isWaitingOnALock(pool));
+
+            uncommitted.commit();
+
+            assertThatThrownBy(resumed::get)
+                    .as("the grant the locking read could not see is answered as a 409, not a 500")
+                    .hasCauseInstanceOf(ConflictException.class);
+        }
+
+        assertThat(consents.findById(requested).orElseThrow().getStatus())
+                .as("the request the resume could not answer is left exactly as it was")
+                .isEqualTo(ConsentStatus.PENDING);
+        assertThat(
+                        events.findByConsentIdOrderByOccurredAtAsc(requested).stream()
+                                .map(ConsentEvent::getEventState)
+                                .toList())
+                .as("the ask it was opened with, and nothing the refused resume wrote")
+                .containsExactly(ConsentEventState.CONSENT_REQUESTED);
+    }
+
+    /** Fails unless every racer either moved a consent or was refused, and says which happened. */
+    private static void assertEveryRacerAnswered(Outcomes outcomes) {
+        assertThat(outcomes.moved().size() + outcomes.refused().size())
+                .as("a racer that neither moved a consent nor was refused would go unexamined")
+                .isEqualTo(RACERS);
+        if (outcomes.refused().isEmpty()) {
+            assertThat(outcomes.moved())
+                    .as("nothing was refused, so this interleaving landed both moves in turn")
+                    .doesNotHaveDuplicates();
+        }
+    }
+
+    /** Whether a backend is held up by another transaction, which is the resume blocked below. */
+    private static boolean isWaitingOnALock(DataSource pool) {
+        try (Connection probe = pool.getConnection();
+                PreparedStatement statement = probe.prepareStatement(WAITING_BACKENDS);
+                ResultSet rows = statement.executeQuery()) {
+            return rows.next() && rows.getLong(1) > 0;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not read what the backends are waiting on", e);
+        }
+    }
+
+    /**
+     * Inserts a grant for the pair on a transaction the caller has not committed.
+     *
+     * <p>Raw SQL on a held connection rather than the repository, because the point is a row the
+     * resume's locking read cannot see: a committed one is found and superseded instead.
+     */
+    private void insertGrant(Connection held) throws SQLException {
+        try (PreparedStatement statement = held.prepareStatement(INSERT_GRANT)) {
+            statement.setObject(1, UUID.randomUUID());
+            statement.setObject(2, subject.getId());
+            statement.setObject(3, notice.getId());
+            statement.setObject(4, notice.getProviderId());
+            statement.setObject(5, notice.getConsumerId());
+            statement.executeUpdate();
+        }
     }
 
     /** Fails unless the refusal is one the API renders as a client error the caller can act on. */
@@ -238,7 +349,7 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
     }
 
     private UUID resume(UUID consentId) {
-        return lifecycle.resume(principalFor(subject), consentId, null).consent().getId();
+        return lifecycle.resume(principalFor(ISSUER, subject), consentId, null).consent().getId();
     }
 
     private UUID grant() {
@@ -254,21 +365,6 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
         return consents.findByUserIdAndStatus(subject.getId(), ConsentStatus.GRANTED);
     }
 
-    /** The subject's own token, as the resolution filter would have handed it to a handler. */
-    private static UserPrincipal principalFor(User subject) {
-        return new UserPrincipal(
-                ISSUER,
-                subject.getIdentifier(),
-                subject.getIdentifier(),
-                null,
-                false,
-                null,
-                null,
-                null,
-                subject,
-                false);
-    }
-
     private void seedPair() {
         subject = users.save(new User("urn:test:user:lifecycle-atomicity", null, null, null));
         notice =
@@ -276,8 +372,8 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
                         new PrivacyNotice(
                                 CONTRACT_URI,
                                 null,
-                                participant(PROVIDER).getId(),
-                                participant(CONSUMER).getId(),
+                                participant(participants, PROVIDER).getId(),
+                                participant(participants, CONSUMER).getId(),
                                 PrivacyNoticeFixtures.emptyPayload()));
     }
 
@@ -305,20 +401,5 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
                         PROVIDER,
                         null));
         return seeded.getId();
-    }
-
-    private Participant participant(String identifier) {
-        return participants
-                .findByIdentifier(identifier)
-                .orElseGet(
-                        () ->
-                                participants.save(
-                                        new Participant(
-                                                identifier,
-                                                identifier,
-                                                null,
-                                                null,
-                                                Map.of(),
-                                                null)));
     }
 }
