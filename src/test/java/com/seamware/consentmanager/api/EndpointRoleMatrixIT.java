@@ -120,6 +120,13 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     private static final String ABSENT_NOTICE = "0199a4f2-0000-7000-8000-000000000000";
 
     /**
+     * A consent id no case stores. Every lifecycle route answers an unknown consent and one
+     * belonging to somebody else with the same {@code 404}, so this is what an admitted caller
+     * stops at.
+     */
+    private static final String ABSENT_CONSENT = "0199a4f2-0001-7000-8000-000000000000";
+
+    /**
      * A contract identifier no case serves. Generation resolves its two named participants before
      * it fetches anything, so paired with {@link #UNREGISTERED_PARTY} it never leaves this process.
      */
@@ -339,7 +346,29 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 PATH_CONSENT_REQUESTS,
                                 Map.of(
                                         "privacyNoticeId", ABSENT_NOTICE,
-                                        "userIdentifier", LINKED_USER)));
+                                        "userIdentifier", LINKED_USER))),
+        REVOKE_CONSENT(
+                "post " + PATH_CONSENTS + "/{id}/revoke",
+                () -> HttpRequest.POST(PATH_CONSENTS + "/" + ABSENT_CONSENT + "/revoke", NO_BODY)),
+        REFUSE_CONSENT(
+                "post " + PATH_CONSENTS + "/{id}/refuse",
+                () -> HttpRequest.POST(PATH_CONSENTS + "/" + ABSENT_CONSENT + "/refuse", NO_BODY)),
+        RE_CONFIRM_CONSENT(
+                "post " + PATH_CONSENTS + "/{id}/re-confirm",
+                () ->
+                        HttpRequest.POST(
+                                PATH_CONSENTS + "/" + ABSENT_CONSENT + "/re-confirm", NO_BODY)),
+        TERMINATE_CONSENT(
+                "post " + PATH_CONSENTS + "/{id}/terminate",
+                () ->
+                        HttpRequest.POST(
+                                PATH_CONSENTS + "/" + ABSENT_CONSENT + "/terminate", NO_BODY)),
+        RESUME_CONSENT(
+                "post " + PATH_CONSENTS + "/{id}/resume",
+                () ->
+                        HttpRequest.POST(
+                                PATH_CONSENTS + "/" + ABSENT_CONSENT + "/resume",
+                                Map.of("userIdentifier", LINKED_USER)));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -438,6 +467,7 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         HttpStatus challenged = HttpStatus.UNAUTHORIZED;
         HttpStatus upstreamDown = HttpStatus.BAD_GATEWAY;
         HttpStatus unknownNotice = HttpStatus.NOT_FOUND;
+        HttpStatus unknownConsent = HttpStatus.NOT_FOUND;
         return Stream.of(
                         row(Endpoint.API_STATUS, ok, ok, ok, ok, ok),
                         row(Endpoint.REGISTER_USER, created, denied, denied, denied, challenged),
@@ -547,6 +577,54 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 denied,
                                 unknownNotice,
                                 denied,
+                                denied,
+                                challenged),
+                        // The lifecycle routes authorise against the consent, so the subject the
+                        // fixture seeds is admitted and stops at an id nothing stored - the same
+                        // 404 a consent owned by somebody else answers. ConsentLifecycleSurfaceIT
+                        // owns the moves that land.
+                        row(
+                                Endpoint.REVOKE_CONSENT,
+                                unknownConsent,
+                                denied,
+                                denied,
+                                denied,
+                                challenged),
+                        row(
+                                Endpoint.REFUSE_CONSENT,
+                                unknownConsent,
+                                denied,
+                                denied,
+                                denied,
+                                challenged),
+                        // Re-confirmation moves nothing, but it is the subject's act like the
+                        // other two, so it authorises the same way and stops at the same absent id.
+                        row(
+                                Endpoint.RE_CONFIRM_CONSENT,
+                                unknownConsent,
+                                denied,
+                                denied,
+                                denied,
+                                challenged),
+                        // Termination is the participant's counterpart, authorised against the
+                        // consent in the same way, so the registered caller the fixture seeds is
+                        // admitted and stops at the same absent id.
+                        row(
+                                Endpoint.TERMINATE_CONSENT,
+                                denied,
+                                unknownConsent,
+                                denied,
+                                denied,
+                                challenged),
+                        // Resuming is the one lifecycle route two roles reach, and both authorise
+                        // against the consent, so both stop at the same absent id. The body names
+                        // a user because a catalog must; the subject's own call has to ignore it
+                        // rather than refuse the request for carrying it.
+                        row(
+                                Endpoint.RESUME_CONSENT,
+                                unknownConsent,
+                                denied,
+                                unknownConsent,
                                 denied,
                                 challenged))
                 .flatMap(row -> row);

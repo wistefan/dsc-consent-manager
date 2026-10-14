@@ -136,6 +136,41 @@ and cannot ask about a document it has no standing in. And an unknown user and a
 not affiliated with are refused *identically*, both `404` with the same message, so the route
 cannot be used to enumerate the dataspace's users.
 
+### A lifecycle move is authorised against the consent, never on the role
+
+The five `POST /consents/{id}/<verb>` routes are authorised against the record rather than the
+role, as `POST /consents/requests` and `PATCH`/`DELETE /participants/me/users/{identifier}` already
+are: holding the admitted role and a well-formed identifier still gets a caller nowhere on its own.
+`@Secured` decides which kind of caller may reach the handler; which *record* that caller may move
+is decided in `ConsentLifecycleService` against the consent itself, and the two refusals are
+deliberately different.
+
+A `USER` operation — `revoke`, `refuse`, `re-confirm`, and a subject's own `resume` — resolves the
+record through the subject's own id and answers `404`. A consent that does not exist and a consent
+belonging to somebody else are the same `404` with the same message, so a user walking identifiers
+learns nothing about which ones are real, exactly as `POST /consents/requests` refuses an unknown
+and an unaffiliated user identically. The consent id is never the authority: it selects the record,
+the token selects whose records are selectable.
+
+A `PARTICIPANT` operation — `terminate` — reads the consent and then requires the caller to be
+named as its provider or its consumer, and answers `403` when it is neither. Both parties may end
+it: the provider holds the terms and the consumer is where the data would flow, so each has an
+arrangement to end and a stranger has none. The refusal is `403` rather than `404` because a
+participant is a registered, accountable identity acting in the dataspace under its own name, and a
+party that *should* be a party has to be able to tell a mistyped id from a consent recorded against
+a notice it is not on — a uniform `404` would collapse those two into one unactionable answer. The
+caller is additionally resolved through `ParticipantPrincipal.requireActive()`, so a deregistered
+participant is refused before the consent is read at all.
+
+A `CATALOG` relay on `resume` is held to the `USER` shape rather than the participant one: an
+unknown consent and a consent whose subject is not the one the body names are the same `404`, so a
+catalog cannot learn whose consent an identifier addresses — see
+[ADR 0010](adr/0010-a-catalog-relayed-resume-names-the-subject.md).
+
+`EndpointRoleMatrixIT` sweeps only the role dimension of these routes; that a consent of the wrong
+owner or the wrong party is refused is pinned by the lifecycle integration tests, because no role
+matrix can express it.
+
 ## Participant onboarding
 
 A participant is onboarded by its identity provider, not by this service. The provider's operator

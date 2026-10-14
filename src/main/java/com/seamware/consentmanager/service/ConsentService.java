@@ -1,6 +1,5 @@
 package com.seamware.consentmanager.service;
 
-import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
@@ -10,8 +9,6 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
-import com.seamware.consentmanager.repository.ParticipantRepository;
-import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import io.micronaut.core.annotation.NonNull;
@@ -19,7 +16,6 @@ import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
 import java.util.List;
-import java.util.UUID;
 
 /**
  * The two ways a consent comes into being: the data subject's own decision, and a participant's
@@ -33,14 +29,6 @@ import java.util.UUID;
 @Singleton
 public class ConsentService {
 
-    private static final String UNKNOWN_NOTICE = "No privacy notice exists with identifier '%s'.";
-    private static final String ARCHIVED_NOTICE =
-            "Privacy notice '%s' has been archived and can no longer be consented to. Request the"
-                    + " current notice for the contract.";
-    private static final String NO_CONSUMER =
-            "Privacy notice '%s' names no data consumer, so no consent can be recorded against it.";
-    private static final String UNKNOWN_PARTY =
-            "privacy notice %s names participant %s, which no longer exists";
     private static final String NOTHING_TO_NARROW =
             "Privacy notice '%s' declares no %s, so none can be elected.";
     private static final String EMPTY_ELECTION =
@@ -61,26 +49,26 @@ public class ConsentService {
     private static final String PURPOSES = "purposes";
     private static final String DATA_CATEGORIES = "categories of data";
 
-    private final PrivacyNoticeRepository notices;
-    private final ParticipantRepository participants;
+    private final ConsentNoticeGuard noticeGuard;
     private final UserRepository users;
     private final UserParticipantRepository links;
     private final ConsentWriter writer;
     private final ConsentStateMachine lifecycle;
+    private final ConsentParties parties;
 
     public ConsentService(
-            PrivacyNoticeRepository notices,
-            ParticipantRepository participants,
+            ConsentNoticeGuard noticeGuard,
             UserRepository users,
             UserParticipantRepository links,
             ConsentWriter writer,
-            ConsentStateMachine lifecycle) {
-        this.notices = notices;
-        this.participants = participants;
+            ConsentStateMachine lifecycle,
+            ConsentParties parties) {
+        this.noticeGuard = noticeGuard;
         this.users = users;
         this.links = links;
         this.writer = writer;
         this.lifecycle = lifecycle;
+        this.parties = parties;
     }
 
     /**
@@ -100,7 +88,7 @@ public class ConsentService {
     @NonNull
     public ConsentDetails decide(@NonNull User subject, @NonNull ConsentDecision decision) {
         lifecycle.requireDecision(decision.decision());
-        PrivacyNotice notice = consentable(decision.privacyNoticeId());
+        PrivacyNotice notice = noticeGuard.consentable(decision.privacyNoticeId());
         PrivacyNoticePayload payload = notice.getPayload();
         requireWithinScope(PURPOSES, decision.purposes(), payload.purposes(), notice);
         requireWithinScope(
@@ -108,7 +96,7 @@ public class ConsentService {
 
         ConsentSnapshot snapshot =
                 ConsentSnapshot.of(notice, decision.purposes(), decision.dataCategories());
-        return details(record(subject, notice, decision, snapshot), notice);
+        return parties.details(record(subject, notice, decision, snapshot));
     }
 
     /**
@@ -126,12 +114,12 @@ public class ConsentService {
     @NonNull
     public ConsentDetails request(
             @NonNull Participant caller, @NonNull ConsentRequestCommand command) {
-        PrivacyNotice notice = consentable(command.privacyNoticeId());
+        PrivacyNotice notice = noticeGuard.consentable(command.privacyNoticeId());
         requireParty(caller, notice);
         User subject = affiliated(caller, command.userIdentifier());
 
         ConsentSnapshot snapshot = ConsentSnapshot.of(notice, null, null);
-        return details(writer.request(subject, notice, snapshot, caller.getIdentifier()), notice);
+        return parties.details(writer.request(subject, notice, snapshot, caller.getIdentifier()));
     }
 
     /**
@@ -185,31 +173,6 @@ public class ConsentService {
     }
 
     /**
-     * The notice a decision may be recorded against, or the reason it may not.
-     *
-     * <p>Read straight from the repository rather than through {@link PrivacyNoticeService}, whose
-     * read resolves self-descriptions this flow has no use for. A notice naming no consumer is
-     * refused rather than written through: {@code consents.consumer_id} is {@code NOT NULL}, so the
-     * alternative is a constraint violation surfacing as a {@code 500}. Both generation paths
-     * require a consumer, so only rows predating that invariant can reach it.
-     */
-    private PrivacyNotice consentable(UUID privacyNoticeId) {
-        PrivacyNotice notice =
-                notices.findById(privacyNoticeId)
-                        .orElseThrow(
-                                () ->
-                                        new NotFoundException(
-                                                UNKNOWN_NOTICE.formatted(privacyNoticeId)));
-        if (notice.getArchivedAt() != null) {
-            throw new BadRequestException(ARCHIVED_NOTICE.formatted(privacyNoticeId));
-        }
-        if (notice.getConsumerId() == null) {
-            throw new BadRequestException(NO_CONSUMER.formatted(privacyNoticeId));
-        }
-        return notice;
-    }
-
-    /**
      * Refuses an election the notice cannot honour, naming the heading at fault.
      *
      * <p>Every heading of a notice is optional, so an election against one the notice never
@@ -237,28 +200,5 @@ public class ConsentService {
             throw new BadRequestException(
                     OUTSIDE_SCOPE.formatted(heading, outside, notice.getId()));
         }
-    }
-
-    /** The stored consent with both parties resolved to the identifiers the API renders. */
-    private ConsentDetails details(RecordedConsent recorded, PrivacyNotice notice) {
-        Consent consent = recorded.consent();
-        return new ConsentDetails(
-                consent,
-                party(notice, consent.getProviderId()).getIdentifier(),
-                party(notice, consent.getConsumerId()).getIdentifier(),
-                recorded.created());
-    }
-
-    /**
-     * A participant the notice names. Absence is corruption rather than a client error - the
-     * notice's foreign keys forbid it - so it fails loudly instead of as a {@code 404}.
-     */
-    private Participant party(PrivacyNotice notice, UUID participantId) {
-        return participants
-                .findById(participantId)
-                .orElseThrow(
-                        () ->
-                                new IllegalStateException(
-                                        UNKNOWN_PARTY.formatted(notice.getId(), participantId)));
     }
 }

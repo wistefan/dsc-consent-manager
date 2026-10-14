@@ -292,12 +292,12 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Logstash Logback Encoder (JSON structured logging) -->
+        <!-- Logstash Logback Encoder (JSON structured logging). Compile scope: the lifecycle
+             seam (ConsentStateChangeLog) uses StructuredArguments to emit named JSON fields. -->
         <dependency>
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
             <version>${logstash-logback-encoder.version}</version>
-            <scope>runtime</scope>
         </dependency>
 
         <!-- ===== OpenAPI Generated Code Dependencies ===== -->

@@ -49,6 +49,9 @@ class ConsentStateMachineTest {
     private static final Set<ConsentStatus> CREATABLE =
             EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED, ConsentStatus.PENDING);
 
+    /** The statuses an affirmation may be recorded against, restated independently. */
+    private static final Set<ConsentStatus> AFFIRMABLE = EnumSet.of(ConsentStatus.GRANTED);
+
     /** The statuses a data subject's own decision may be recorded in, restated independently. */
     private static final Set<ConsentStatus> DECISIONS =
             EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED);
@@ -94,6 +97,21 @@ class ConsentStateMachineTest {
         assertThatThrownBy(() -> lifecycle.requireCreatable(target))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining(target.name());
+    }
+
+    @ParameterizedTest(name = "{0} is affirmable: expected")
+    @EnumSource(ConsentStatus.class)
+    @DisplayName("only a consent in force may be re-confirmed")
+    void onlyAConsentInForceMayBeReConfirmed(ConsentStatus held) {
+        if (AFFIRMABLE.contains(held)) {
+            assertThatCode(() -> lifecycle.requireAffirmable(held)).doesNotThrowAnyException();
+            return;
+        }
+        assertThatThrownBy(() -> lifecycle.requireAffirmable(held))
+                .as("re-confirmation moves nothing, so the unanswered statuses are refused too")
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining(held.name())
+                .hasMessageContaining(ConsentStatus.GRANTED.name());
     }
 
     @ParameterizedTest(name = "{0} is a decision: expected")

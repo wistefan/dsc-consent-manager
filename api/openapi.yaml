@@ -1526,6 +1526,374 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /consents/{id}/revoke:
+    post:
+      operationId: revokeConsent
+      summary: Revoke a consent in force
+      description: >
+        Withdraws a consent the calling data subject has given, with effect from
+        the moment this call returns.
+
+
+        Only the subject named by the consent reaches it. A consent belonging to
+        anyone else is a `404` rather than a `403`, so the route cannot be used
+        to learn which consent identifiers exist.
+
+
+        Revocation is permitted from `GRANTED` and from nothing else: a consent
+        already revoked, refused, terminated or expired is `400` naming both the
+        status it holds and the one attempted, and an unanswered request is
+        declined with `POST /consents/{id}/refuse` rather than revoked. The move
+        and the audit event recording it are written in one transaction, so a
+        status without its event cannot occur, and two revocations sent at once
+        cannot both append one — the second reads the record as the first left
+        it and is answered `400`.
+
+
+        **`DELETE` is deliberately not the verb.** Nothing is deleted: the
+        record stays readable in status `REVOKED`, carrying the terms that were
+        agreed and the trail of who ended it, because that is what the consent
+        is evidence of.
+      tags:
+        - Consent Lifecycle
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to revoke.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            The consent was revoked; the body is the record in its new status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /consents/{id}/refuse:
+    post:
+      operationId: refuseConsent
+      summary: Decline an unanswered consent request
+      description: >
+        Records that the calling data subject declines a request a participant
+        opened with `POST /consents/requests`.
+
+
+        Only the subject named by the consent reaches it. A consent belonging to
+        anyone else is a `404` rather than a `403`, for the same reason
+        revocation is.
+
+
+        Refusal is permitted from `PENDING` and `DRAFT` — the two statuses in
+        which nothing has been answered yet — and from nothing else. A consent
+        in any other status, `GRANTED` included, is `400` naming both the status
+        it holds and the one attempted: consent already given is withdrawn with
+        `POST /consents/{id}/revoke`, which is the mirror image of this
+        operation and is permitted from `GRANTED` only. The move and its audit
+        event are written in one transaction, and a second refusal sent
+        concurrently reads the record as the first left it and is answered
+        `400`.
+      tags:
+        - Consent Lifecycle
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to refuse.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            The request was declined; the body is the record in its new status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /consents/{id}/terminate:
+    post:
+      operationId: terminateConsent
+      summary: Terminate a consent as a participant party to it
+      description: >
+        Ends an arrangement from the organisational side: the calling
+        participant, named by the consent as provider or as consumer, records
+        that it no longer rests on this consent.
+
+
+        This is not the data subject withdrawing — that is `POST
+        /consents/{id}/revoke`, and only the subject reaches it. Termination
+        says the party has ended the arrangement, and the record stays readable
+        in status `TERMINATED` carrying the terms that applied and the trail of
+        who ended it.
+
+
+        A participant the consent names on neither side is `403`, not the `404`
+        a foreign *user* gets on the subject's routes: a participant that is
+        party to nothing may still legitimately know the consent exists through
+        its own records, so there is nothing to conceal from it, and the honest
+        answer is that it has no standing here. A participant whose registration
+        has been withdrawn is `403` for the same reason it reaches no other
+        route that acts in the dataspace in its name.
+
+
+        Termination is permitted from `GRANTED`, and equally from `PENDING` and
+        `DRAFT` — a party may end an arrangement whether or not the subject has
+        answered yet, and an unanswered request it ends is terminated rather
+        than refused, so a client must not expect a `400` there. The statuses
+        refused are exactly the terminal ones — `REVOKED`, `REFUSED`,
+        `TERMINATED` and `EXPIRED` — each `400` naming both the status held and
+        the one attempted. The move and its audit event are written in one
+        transaction, and a second termination sent concurrently reads the record
+        as the first left it and is answered `400`.
+      tags:
+        - Consent Lifecycle
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to terminate.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            The consent was terminated; the body is the record in its new
+            status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /consents/{id}/re-confirm:
+    post:
+      operationId: reConfirmConsent
+      summary: Re-confirm a consent in force
+      description: >
+        Records that the calling data subject still stands by a consent that is
+        already in force.
+
+
+        **Nothing about the consent changes.** The status stays `GRANTED`, the
+        terms stay as they were agreed, and `updatedAt` is left alone because it
+        dates state changes and this is not one. What the call produces is a
+        single `CONSENT_RE_CONFIRMED` entry in the audit trail, dated in its own
+        right, so a deployment that asks its subjects to reaffirm periodically
+        can show when each of them last did. The body read back is the record,
+        unchanged, so a client need not fetch it again.
+
+
+        Only the subject named by the consent reaches it; a consent belonging to
+        anyone else is a `404`, as on every other subject route here.
+        Re-confirmation is permitted from `GRANTED` and from nothing else — a
+        consent that was never given, or that has since been revoked, refused,
+        terminated or expired, is `400` naming the status it holds. A consent
+        revoked between the caller reading it and this call is refused for the
+        same reason, so an affirmation is never appended to a consent no longer
+        in force.
+      tags:
+        - Consent Lifecycle
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to re-confirm.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            The affirmation was recorded; the body is the consent, unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /consents/{id}/resume:
+    post:
+      operationId: resumeConsent
+      summary: Resume an unanswered consent as granted
+      description: >
+        Grants a consent that was requested but never answered, addressed by its
+        own identifier.
+
+
+        The move is `PENDING` or `DRAFT` to `GRANTED`; a consent already decided
+        — granted, revoked, refused, terminated or expired — is `400` naming the
+        status it holds. The record is answered in place, so the response
+        carries the identifier the request was created with and `createdAt`
+        still dates the ask.
+
+
+        **Two kinds of caller reach it.** A `USER` token resumes its own
+        consent and states nothing: the body may be omitted entirely, and a
+        `userIdentifier` sent anyway is ignored. A `CATALOG` token relays a
+        decision the subject took in the catalog's own flow — the flow this
+        operation resumes — and must name that subject with `userIdentifier`,
+        which is `400` when absent. The identifier is checked against the
+        consent this path addresses rather than used to find one: naming anybody
+        but that consent's subject is `404`, so a catalog cannot choose whose
+        consent it grants. Nor can it choose the notice or create a record: it
+        can only advance one that already exists and is still open. See
+        ADR-0010.
+
+
+        **The audit trail says which happened.** A relayed grant records the
+        relaying catalog as `catalog:<issuer>:<sub>`, a subject's own records
+        the subject's identifier, so a reader can always tell one from the
+        other.
+
+
+        The notice must still be the active notice for its contract. A request
+        can sit unanswered long enough for its notice to be regenerated, and
+        resuming against an archived one would record a grant under terms no
+        longer in force, so that is `400` — the same refusal `POST /consents`
+        gives — as is a notice naming no data consumer. The terms the record was
+        opened with are kept exactly as stored: a resume records a decision
+        taken elsewhere rather than electing scope here, and where the notice
+        has moved on the subject answers the new one through `POST /consents`.
+
+
+        Recording the grant supersedes whatever consent is in force for the same
+        subject and notice: that record is revoked in the same transaction, and
+        the resumed record's `parentConsentId` is re-pointed at it. Where
+        nothing was in force the link is left exactly as the request had it. One
+        record per subject and notice is in force at a time and the database
+        enforces it, so a grant recorded concurrently is answered `409` and is
+        safe to retry against the record it can then read.
+
+
+        Any other request for the same subject and notice that is still
+        unanswered is closed as redundant in that same transaction. A question
+        left standing once this one is answered would refuse every later request
+        for the pair as a duplicate, with no way back for a caller that cannot
+        reach `POST /consents`.
+      tags:
+        - Consent Lifecycle
+      security:
+        - bearerAuth: [USER, CATALOG]
+      x-roles: [USER, CATALOG]
+      x-principal: ConsentManagerPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to resume.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        description: >
+          Required of a `CATALOG` caller, which must name the subject whose
+          decision it relays. A `USER` caller may omit it.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResumeConsent"
+      responses:
+        "200":
+          description: >
+            The consent was granted; the body is the record, carrying the
+            identifier it was requested with.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Consent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1609,6 +1977,9 @@ components:
 
     ConsentRequest:
       $ref: "./components/schemas/ConsentRequest.yaml"
+
+    ResumeConsent:
+      $ref: "./components/schemas/ResumeConsent.yaml"
 
     # The three wrappers below are the only schemas written out here rather than
     # under components/schemas/, and the reason is a generator limitation rather
