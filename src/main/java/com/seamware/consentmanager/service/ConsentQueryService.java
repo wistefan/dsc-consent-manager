@@ -118,7 +118,7 @@ public class ConsentQueryService {
         if (userIdentifier != null) {
             Optional<User> subject = users.findByIdentifier(userIdentifier);
             if (subject.isEmpty()) {
-                return Page.empty();
+                return Page.of(List.of(), pageable, 0L);
             }
             return participantPage(caller, subject.get().getId(), criteria, pageable);
         }

@@ -214,6 +214,34 @@ class ConsentParticipantQueryServiceIT extends PostgresTestResource {
     }
 
     @Test
+    @DisplayName("a multi-value status filter returns every consent in any of the given statuses")
+    void aMultiValueStatusFilterExpandsTheInClause() {
+        Fixtures f = fixtures();
+        UUID granted = seed(f.subject, f.provider, f.consumer, ConsentStatus.GRANTED);
+        UUID revoked = seed(f.subject, f.provider, f.consumer, ConsentStatus.REVOKED);
+        // A third status left out of the filter must stay out of the page.
+        seed(f.subject, f.provider, f.consumer, ConsentStatus.PENDING);
+
+        Page<ConsentDetails> page =
+                queries.listForParticipant(
+                        f.provider,
+                        null,
+                        new ConsentQueryCriteria(
+                                List.of(ConsentStatus.GRANTED, ConsentStatus.REVOKED),
+                                ANY_NOTICE,
+                                0,
+                                WIDE_PAGE));
+
+        assertThat(page.getContent())
+                .as("the IN(:statuses) expansion returns both named statuses and no other")
+                .extracting(details -> details.consent().getId())
+                .containsExactlyInAnyOrder(granted, revoked);
+        assertThat(page.getTotalSize())
+                .as("the filtered total counts both named statuses")
+                .isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("userIdentifier narrows the page to one subject's consents")
     void narrowsToOneSubject() {
         Fixtures f = fixtures();
