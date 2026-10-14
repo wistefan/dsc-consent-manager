@@ -20,6 +20,7 @@ import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * The moves a consent makes after it exists: who is allowed to make each one, and what it reads
@@ -68,6 +69,7 @@ public class ConsentLifecycleService {
     private final ConsentNoticeGuard noticeGuard;
     private final ConsentWriter writer;
     private final ConsentParties parties;
+    private final ConsentStateChangeLog changeLog;
 
     public ConsentLifecycleService(
             ConsentRepository consents,
@@ -75,13 +77,15 @@ public class ConsentLifecycleService {
             ConsentStateMachine states,
             ConsentNoticeGuard noticeGuard,
             ConsentWriter writer,
-            ConsentParties parties) {
+            ConsentParties parties,
+            ConsentStateChangeLog changeLog) {
         this.consents = consents;
         this.users = users;
         this.states = states;
         this.noticeGuard = noticeGuard;
         this.writer = writer;
         this.parties = parties;
+        this.changeLog = changeLog;
     }
 
     /**
@@ -116,7 +120,7 @@ public class ConsentLifecycleService {
     @NonNull
     public ConsentDetails reConfirm(@NonNull User subject, @NonNull UUID consentId) {
         Consent owned = ownedBy(subject, consentId);
-        return parties.details(writer.affirm(owned.getId(), subject.getIdentifier()));
+        return record(owned, () -> writer.affirm(owned.getId(), subject.getIdentifier()));
     }
 
     /**
@@ -136,13 +140,14 @@ public class ConsentLifecycleService {
                         .orElseThrow(
                                 () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
         requireParty(caller, consent);
-        RecordedConsent moved =
-                writer.move(
-                        consent.getId(),
-                        ConsentStatus.TERMINATED,
-                        caller.getIdentifier(),
-                        EXPLICIT_TRIGGER);
-        return parties.details(moved);
+        return record(
+                consent,
+                () ->
+                        writer.move(
+                                consent.getId(),
+                                ConsentStatus.TERMINATED,
+                                caller.getIdentifier(),
+                                EXPLICIT_TRIGGER));
     }
 
     /**
@@ -186,7 +191,7 @@ public class ConsentLifecycleService {
         Consent consent = resumable.consent();
         states.requireTransition(consent.getStatus(), ConsentStatus.GRANTED);
         noticeGuard.consentable(consent.getPrivacyNoticeId());
-        return parties.details(resumed(consent, resumable.actor()));
+        return record(consent, () -> resumed(consent, resumable.actor()));
     }
 
     /** A consent a resume may move, and the actor its event records. */
@@ -255,8 +260,25 @@ public class ConsentLifecycleService {
     /** Moves the subject's own consent to {@code target}, in the subject's name. */
     private ConsentDetails move(User subject, UUID consentId, ConsentStatus target) {
         Consent owned = ownedBy(subject, consentId);
-        RecordedConsent moved =
-                writer.move(owned.getId(), target, subject.getIdentifier(), EXPLICIT_TRIGGER);
-        return parties.details(moved);
+        return record(
+                owned,
+                () ->
+                        writer.move(
+                                owned.getId(), target, subject.getIdentifier(), EXPLICIT_TRIGGER));
+    }
+
+    /**
+     * Performs a resolved move, reports it, and renders the result.
+     *
+     * <p>The one place every lifecycle write passes through, so {@link ConsentStateChangeLog} — and
+     * whatever notification grows from it — cannot be left off a route added later. {@code held} is
+     * read before the write for the status the move left behind.
+     */
+    private ConsentDetails record(Consent held, Supplier<RecordedConsent> write) {
+        ConsentStatus heldStatus = held.getStatus();
+        RecordedConsent written = write.get();
+        ConsentDetails details = parties.details(written);
+        changeLog.recorded(heldStatus, details, written.event());
+        return details;
     }
 }
