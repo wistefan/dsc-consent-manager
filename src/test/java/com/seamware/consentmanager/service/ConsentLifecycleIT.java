@@ -1,6 +1,8 @@
 package com.seamware.consentmanager.service;
 
 import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
+import static com.seamware.consentmanager.support.ConsentFixtures.participant;
+import static com.seamware.consentmanager.support.ConsentFixtures.principalFor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -21,37 +23,30 @@ import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.CatalogPrincipal;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
-import com.seamware.consentmanager.security.UserPrincipal;
 import com.seamware.consentmanager.support.PostgresTestResource;
 import com.seamware.consentmanager.support.PrivacyNoticeFixtures;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Proves what the lifecycle moves - the subject's revoke, refuse and resume, a party's terminate,
- * and the subject's re-confirmation, which moves nothing - are checked against and what they leave
- * behind: the status the record ends in, the single event naming who acted, and the statuses each
- * is refused from.
+ * Proves each lifecycle move's own rules: who may ask for it, what it supersedes, and which {@code
+ * 404} or {@code 403} a caller with no standing gets.
+ *
+ * <p>Which starting statuses each move is permitted from is <em>not</em> asserted here. {@code
+ * ConsentLifecycleMatrixIT} owns that cross product in one table, so the transition rules are
+ * restated in one suite rather than two that could drift apart.
  *
  * <p>Resume carries more than the others, because it is the second route into {@code GRANTED}: it
  * is reachable by a catalog relaying the subject's decision, it answers the notice guard {@code
@@ -101,16 +96,6 @@ class ConsentLifecycleIT extends PostgresTestResource {
 
     private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
 
-    /**
-     * The statuses a party may terminate from.
-     *
-     * <p>Not {@code GRANTED} alone: the table's entry for both unanswered statuses contains {@code
-     * TERMINATED}, because erasure and deregistration already close open offers through that edge,
-     * so a party may equally end a request the subject has not answered.
-     */
-    private static final Set<ConsentStatus> TERMINABLE =
-            EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.PENDING, ConsentStatus.DRAFT);
-
     @Inject ConsentLifecycleService lifecycle;
 
     @Inject ConsentRepository consents;
@@ -126,32 +111,6 @@ class ConsentLifecycleIT extends PostgresTestResource {
     private final List<User> seededUsers = new ArrayList<>();
 
     private final List<UUID> seededNotices = new ArrayList<>();
-
-    /** Every (move, starting status) pair the state table permits. */
-    static Stream<Arguments> permittedMoves() {
-        return pairs(move -> move.permittedFrom);
-    }
-
-    /** Every (move, starting status) pair the state table does not permit. */
-    static Stream<Arguments> refusedMoves() {
-        return pairs(move -> EnumSet.complementOf(EnumSet.copyOf(move.permittedFrom)));
-    }
-
-    /** Each party to a consent, paired with every status termination is permitted from. */
-    static Stream<Arguments> terminations() {
-        return Stream.of(PROVIDER, CONSUMER)
-                .flatMap(party -> TERMINABLE.stream().map(from -> Arguments.of(party, from)));
-    }
-
-    /** The statuses termination is refused from: exactly the terminal ones. */
-    static Stream<ConsentStatus> terminalStatuses() {
-        return EnumSet.complementOf(EnumSet.copyOf(TERMINABLE)).stream();
-    }
-
-    private static Stream<Arguments> pairs(Function<Move, Set<ConsentStatus>> starts) {
-        return Arrays.stream(Move.values())
-                .flatMap(move -> starts.apply(move).stream().map(from -> Arguments.of(move, from)));
-    }
 
     /** Rows these cases commit outlive their transaction, and a notice holds its parties. */
     @AfterEach
@@ -180,59 +139,6 @@ class ConsentLifecycleIT extends PostgresTestResource {
                                 participants
                                         .findByIdentifier(identifier)
                                         .ifPresent(participants::delete));
-    }
-
-    @ParameterizedTest(name = "{0} from {1}")
-    @MethodSource("permittedMoves")
-    @DisplayName("a permitted move stores the new status and the one event naming who made it")
-    void storesThePermittedMoveWithItsTrail(Move move, ConsentStatus from) {
-        User subject = user();
-        UUID consentId = seedConsent(subject, notice(), from);
-
-        ConsentDetails moved = move.apply(lifecycle, subject, consentId);
-
-        assertThat(moved.consent().getStatus()).isEqualTo(move.target);
-        assertThat(moved.created())
-                .as("a lifecycle move writes a record that was already there")
-                .isFalse();
-        assertThat(moved.providerIdentifier()).isEqualTo(PROVIDER);
-        assertThat(moved.consumerIdentifier()).isEqualTo(CONSUMER);
-        assertThat(consents.findById(consentId).orElseThrow())
-                .satisfies(
-                        stored -> {
-                            assertThat(stored.getStatus()).isEqualTo(move.target);
-                            assertThat(stored.isConsented())
-                                    .as("the flag follows the status the move landed in")
-                                    .isEqualTo(move.target.isConsented());
-                        });
-        assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId))
-                .singleElement()
-                .satisfies(
-                        event -> {
-                            assertThat(event.getEventState()).isEqualTo(move.state);
-                            assertThat(event.getEventType()).isEqualTo(EXPLICIT_EVENT_TYPE);
-                            assertThat(event.getActor())
-                                    .as("the trail names the subject who acted")
-                                    .isEqualTo(subject.getIdentifier());
-                        });
-    }
-
-    @ParameterizedTest(name = "{0} from {1}")
-    @MethodSource("refusedMoves")
-    @DisplayName("a move the table does not permit writes nothing and names both statuses")
-    void refusesAMoveTheTableDoesNotPermit(Move move, ConsentStatus from) {
-        User subject = user();
-        UUID consentId = seedConsent(subject, notice(), from);
-
-        assertThatThrownBy(() -> move.apply(lifecycle, subject, consentId))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining(from.name())
-                .hasMessageContaining(move.target.name());
-
-        assertThat(consents.findById(consentId).orElseThrow().getStatus()).isEqualTo(from);
-        assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId))
-                .as("a refused move leaves no trace of having been attempted")
-                .isEmpty();
     }
 
     @ParameterizedTest(name = "{0}")
@@ -265,14 +171,15 @@ class ConsentLifecycleIT extends PostgresTestResource {
                 .hasMessageContaining(absent.toString());
     }
 
-    @ParameterizedTest(name = "{0} terminates from {1}")
-    @MethodSource("terminations")
+    @ParameterizedTest(name = "{0} terminates")
+    @ValueSource(strings = {PROVIDER, CONSUMER})
     @DisplayName("either party terminates the consent and the trail names the one that did")
-    void terminatesAsEitherParty(String party, ConsentStatus from) {
+    void terminatesAsEitherParty(String party) {
         User subject = user();
-        UUID consentId = seedConsent(subject, notice(), from);
+        UUID consentId = seedConsent(subject, notice(), ConsentStatus.GRANTED);
 
-        ConsentDetails terminated = lifecycle.terminate(participant(party), consentId);
+        ConsentDetails terminated =
+                lifecycle.terminate(participant(participants, party), consentId);
 
         assertThat(terminated.consent().getStatus()).isEqualTo(ConsentStatus.TERMINATED);
         assertThat(consents.findById(consentId).orElseThrow())
@@ -294,28 +201,12 @@ class ConsentLifecycleIT extends PostgresTestResource {
                         });
     }
 
-    @ParameterizedTest(name = "from {0}")
-    @MethodSource("terminalStatuses")
-    @DisplayName("termination from a terminal status writes nothing and names both statuses")
-    void refusesTerminationFromATerminalStatus(ConsentStatus from) {
-        UUID consentId = seedConsent(user(), notice(), from);
-        Participant party = participant(PROVIDER);
-
-        assertThatThrownBy(() -> lifecycle.terminate(party, consentId))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining(from.name())
-                .hasMessageContaining(ConsentStatus.TERMINATED.name());
-
-        assertThat(consents.findById(consentId).orElseThrow().getStatus()).isEqualTo(from);
-        assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId)).isEmpty();
-    }
-
     @Test
     @DisplayName(
             "a participant the consent names on neither side is refused, not told it is absent")
     void refusesAParticipantThatIsNoParty() {
         UUID consentId = seedConsent(user(), notice(), ConsentStatus.GRANTED);
-        Participant stranger = participant(STRANGER);
+        Participant stranger = participant(participants, STRANGER);
 
         assertThatThrownBy(() -> lifecycle.terminate(stranger, consentId))
                 .isInstanceOf(ForbiddenException.class)
@@ -331,7 +222,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
     @DisplayName("a consent nothing stores is a 404 before the caller's standing is weighed")
     void refusesTerminatingAnUnknownConsent() {
         UUID absent = UUID.randomUUID();
-        Participant stranger = participant(STRANGER);
+        Participant stranger = participant(participants, STRANGER);
 
         assertThatThrownBy(() -> lifecycle.terminate(stranger, absent))
                 .isInstanceOf(NotFoundException.class)
@@ -370,22 +261,6 @@ class ConsentLifecycleIT extends PostgresTestResource {
                         });
     }
 
-    @ParameterizedTest(name = "from {0}")
-    @EnumSource(value = ConsentStatus.class, names = "GRANTED", mode = EnumSource.Mode.EXCLUDE)
-    @DisplayName("a consent not in force cannot be re-confirmed and records no attempt")
-    void refusesReConfirmingAConsentNotInForce(ConsentStatus from) {
-        User subject = user();
-        UUID consentId = seedConsent(subject, notice(), from);
-
-        assertThatThrownBy(() -> lifecycle.reConfirm(subject, consentId))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining(from.name())
-                .hasMessageContaining(ConsentStatus.GRANTED.name());
-
-        assertThat(consents.findById(consentId).orElseThrow().getStatus()).isEqualTo(from);
-        assertThat(events.findByConsentIdOrderByOccurredAtAsc(consentId)).isEmpty();
-    }
-
     @Test
     @DisplayName("re-confirming another subject's consent is the 404 an unknown one is")
     void refusesReConfirmingAnotherSubjectsConsent() {
@@ -409,7 +284,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
         UUID inForce = seedConsent(subject, notice, ConsentStatus.GRANTED);
         UUID requested = seedConsent(subject, notice, ConsentStatus.PENDING);
 
-        lifecycle.resume(principalFor(subject), requested, null);
+        lifecycle.resume(principalFor(ISSUER, subject), requested, null);
 
         assertThat(consents.findById(requested).orElseThrow())
                 .satisfies(
@@ -444,7 +319,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
         UUID closed = seedConsent(subject, notice, ConsentStatus.REFUSED);
         UUID requested = seedConsent(subject, notice, ConsentStatus.PENDING, closed, noTerms());
 
-        lifecycle.resume(principalFor(subject), requested, null);
+        lifecycle.resume(principalFor(ISSUER, subject), requested, null);
 
         assertThat(consents.findById(requested).orElseThrow().getParentConsentId())
                 .as("the link records what a decision closed, so nothing closed writes nothing")
@@ -517,7 +392,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
         UUID straggler = seedConsent(subject, notice, ConsentStatus.PENDING);
         UUID requested = seedConsent(subject, notice, ConsentStatus.PENDING);
 
-        lifecycle.resume(principalFor(subject), requested, null);
+        lifecycle.resume(principalFor(ISSUER, subject), requested, null);
 
         assertThat(consents.findById(requested).orElseThrow().getStatus())
                 .isEqualTo(ConsentStatus.GRANTED);
@@ -583,7 +458,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
         User subject = user();
         UUID theirs = seedConsent(user(), notice(), ConsentStatus.PENDING);
 
-        assertThatThrownBy(() -> lifecycle.resume(principalFor(subject), theirs, null))
+        assertThatThrownBy(() -> lifecycle.resume(principalFor(ISSUER, subject), theirs, null))
                 .isInstanceOf(NotFoundException.class)
                 .hasMessageContaining(theirs.toString());
 
@@ -595,7 +470,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
     void refusesAParticipantResuming() {
         User subject = user();
         UUID consentId = seedConsent(subject, notice(), ConsentStatus.PENDING);
-        Participant party = participant(PROVIDER);
+        Participant party = participant(participants, PROVIDER);
 
         assertThatThrownBy(
                         () ->
@@ -616,7 +491,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
         PrivacyNotice notice = unconsentable(kind);
         UUID consentId = seedConsent(subject, notice, ConsentStatus.PENDING);
 
-        assertThatThrownBy(() -> lifecycle.resume(principalFor(subject), consentId, null))
+        assertThatThrownBy(() -> lifecycle.resume(principalFor(ISSUER, subject), consentId, null))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining(notice.getId().toString());
 
@@ -643,7 +518,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
                         null);
         UUID consentId = seedConsent(subject, notice(), ConsentStatus.PENDING, null, opened);
 
-        lifecycle.resume(principalFor(subject), consentId, null);
+        lifecycle.resume(principalFor(ISSUER, subject), consentId, null);
 
         assertThat(consents.findById(consentId).orElseThrow().getSnapshot())
                 .as("a resume records a decision taken elsewhere rather than electing scope here")
@@ -665,10 +540,10 @@ class ConsentLifecycleIT extends PostgresTestResource {
                             case NAMES_NO_CONSUMER -> UNNAMED_CONSUMER_CONTRACT_URI;
                         },
                         NOTICE_TITLE,
-                        participant(PROVIDER).getId(),
+                        participant(participants, PROVIDER).getId(),
                         kind == Unconsentable.NAMES_NO_CONSUMER
                                 ? null
-                                : participant(CONSUMER).getId(),
+                                : participant(participants, CONSUMER).getId(),
                         PrivacyNoticeFixtures.emptyPayload());
         if (kind == Unconsentable.HAS_BEEN_ARCHIVED) {
             notice.setArchivedAt(Instant.now());
@@ -676,21 +551,6 @@ class ConsentLifecycleIT extends PostgresTestResource {
         PrivacyNotice saved = notices.save(notice);
         seededNotices.add(saved.getId());
         return saved;
-    }
-
-    /** The subject's own token, as the resolution filter would have handed it to a handler. */
-    private static UserPrincipal principalFor(User subject) {
-        return new UserPrincipal(
-                ISSUER,
-                subject.getIdentifier(),
-                subject.getIdentifier(),
-                null,
-                false,
-                null,
-                null,
-                null,
-                subject,
-                false);
     }
 
     /** A consent for the pair as some other flow would have left it, with no trail of its own. */
@@ -713,7 +573,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
             ConsentSnapshot snapshot) {
         UUID consumerId =
                 notice.getConsumerId() == null
-                        ? participant(CONSUMER).getId()
+                        ? participant(participants, CONSUMER).getId()
                         : notice.getConsumerId();
         return consents.save(
                         Consent.withStatus(
@@ -746,63 +606,31 @@ class ConsentLifecycleIT extends PostgresTestResource {
                         new PrivacyNotice(
                                 CONTRACT_URI,
                                 NOTICE_TITLE,
-                                participant(PROVIDER).getId(),
-                                participant(CONSUMER).getId(),
+                                participant(participants, PROVIDER).getId(),
+                                participant(participants, CONSUMER).getId(),
                                 PrivacyNoticeFixtures.emptyPayload()));
         seededNotices.add(notice.getId());
         return notice;
     }
 
-    private Participant participant(String identifier) {
-        return participants
-                .findByIdentifier(identifier)
-                .orElseGet(
-                        () ->
-                                participants.save(
-                                        new Participant(
-                                                identifier,
-                                                identifier,
-                                                null,
-                                                null,
-                                                Map.of(),
-                                                null)));
-    }
-
     /**
-     * The moves a subject makes, each with what it is permitted from and what it records.
+     * The moves a subject asks for, as the cases sweeping the caller's standing invoke them.
      *
-     * <p>{@code RESUME} is here as the subject's own, which is one of the two ways it is reached;
-     * the relayed way has its own cases, because only the actor and who may call differ.
+     * <p>It carries no transition data: what each move is permitted from is {@code
+     * ConsentLifecycleMatrixIT}'s table, and a second copy here would be one more thing to keep in
+     * step with it. {@code RESUME} is the subject's own, which is one of the two ways it is
+     * reached; the relayed way has its own cases, because only the actor and who may call differ.
      */
     private enum Move {
-        REVOKE(
-                ConsentStatus.REVOKED,
-                ConsentEventState.CONSENT_REVOKED,
-                EnumSet.of(ConsentStatus.GRANTED)),
-        REFUSE(
-                ConsentStatus.REFUSED,
-                ConsentEventState.CONSENT_REFUSED,
-                EnumSet.of(ConsentStatus.PENDING, ConsentStatus.DRAFT)),
-        RESUME(
-                ConsentStatus.GRANTED,
-                ConsentEventState.CONSENT_RESUMED,
-                EnumSet.of(ConsentStatus.PENDING, ConsentStatus.DRAFT));
-
-        private final ConsentStatus target;
-        private final ConsentEventState state;
-        private final Set<ConsentStatus> permittedFrom;
-
-        Move(ConsentStatus target, ConsentEventState state, Set<ConsentStatus> permittedFrom) {
-            this.target = target;
-            this.state = state;
-            this.permittedFrom = permittedFrom;
-        }
+        REVOKE,
+        REFUSE,
+        RESUME;
 
         ConsentDetails apply(ConsentLifecycleService lifecycle, User subject, UUID consentId) {
             return switch (this) {
                 case REVOKE -> lifecycle.revoke(subject, consentId);
                 case REFUSE -> lifecycle.refuse(subject, consentId);
-                case RESUME -> lifecycle.resume(principalFor(subject), consentId, null);
+                case RESUME -> lifecycle.resume(principalFor(ISSUER, subject), consentId, null);
             };
         }
     }
