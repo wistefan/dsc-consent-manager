@@ -1,12 +1,16 @@
 package com.seamware.consentmanager.api;
 
 import com.seamware.consentmanager.api.generated.model.Consent.StatusEnum;
+import com.seamware.consentmanager.api.generated.model.ConsentResponse;
 import com.seamware.consentmanager.api.generated.model.GrantConsent;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
+import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.service.ConsentDetails;
 import io.micronaut.core.annotation.NonNull;
+import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
+import java.util.List;
 
 /**
  * Translates between the API's consent types and the domain's.
@@ -21,6 +25,8 @@ import jakarta.inject.Singleton;
  */
 @Singleton
 public class ConsentMapper {
+
+    private static final String UNKNOWN_STATUS = "Unknown consent status '%s'.";
 
     /** The stored consent as the API publishes it, with its two parties named globally. */
     @NonNull
@@ -41,6 +47,52 @@ public class ConsentMapper {
                 .purposes(snapshot.purposes())
                 .data(snapshot.dataCategories())
                 .contractUri(consent.getContractUri());
+    }
+
+    /**
+     * The stored consent as a query returns it, with its two parties named globally.
+     *
+     * <p>{@code purposes} and {@code data} are read off the stored snapshot - the scope elected
+     * when the decision was taken - and {@code contractUri} off the consent's own column, so a
+     * later regeneration of the notice cannot alter what a query reports. {@code StatusEnum}
+     * bridges by name, which {@code ConsentEnumParityTest} guards against drift.
+     */
+    @NonNull
+    public ConsentResponse toResponse(@NonNull ConsentDetails details) {
+        com.seamware.consentmanager.domain.Consent consent = details.consent();
+        ConsentSnapshot snapshot = consent.getSnapshot();
+        return new ConsentResponse(
+                        consent.getId(),
+                        consent.getPrivacyNoticeId(),
+                        ConsentResponse.StatusEnum.fromValue(consent.getStatus().name()),
+                        consent.isConsented(),
+                        details.providerIdentifier(),
+                        details.consumerIdentifier(),
+                        ParticipantMapper.atUtc(consent.getCreatedAt()),
+                        ParticipantMapper.atUtc(consent.getUpdatedAt()))
+                .parentConsentId(consent.getParentConsentId())
+                .purposes(snapshot.purposes())
+                .data(snapshot.dataCategories())
+                .contractUri(consent.getContractUri());
+    }
+
+    /**
+     * The lifecycle states a {@code status} query filter names, or null when it named none.
+     *
+     * <p>The query carries raw strings - the generated parameter is unconstrained - so an
+     * unrecognised state is refused here as a {@code 400} rather than silently dropped.
+     */
+    @Nullable
+    public List<ConsentStatus> toStatuses(@Nullable List<String> statuses) {
+        return statuses == null ? null : statuses.stream().map(ConsentMapper::toStatus).toList();
+    }
+
+    private static ConsentStatus toStatus(String value) {
+        try {
+            return ConsentStatus.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestException(UNKNOWN_STATUS.formatted(value), e);
+        }
     }
 
     /**

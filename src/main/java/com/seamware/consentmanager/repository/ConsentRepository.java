@@ -36,6 +36,48 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
     Page<Consent> findByUserId(UUID userId, Pageable pageable);
 
     /**
+     * One page of the user's consents in any of the given statuses, filtered total included.
+     *
+     * <p>Backs the status-only filter of {@code GET /consents/me}. The page's total is counted
+     * under the same predicate as its content, so it is the number of the user's consents in these
+     * statuses rather than their whole history (bug 18.3 prevention). Called only for a non-empty
+     * status set, so no empty {@code IN ()} ever reaches Postgres.
+     */
+    Page<Consent> findByUserIdAndStatusIn(
+            UUID userId, Collection<ConsentStatus> statuses, Pageable pageable);
+
+    /**
+     * One page of the user's consents decided against the given notice, filtered total included.
+     *
+     * <p>Backs the notice-only filter of {@code GET /consents/me}, with the same filtered-total
+     * guarantee as the status variants.
+     */
+    Page<Consent> findByUserIdAndPrivacyNoticeId(
+            UUID userId, UUID privacyNoticeId, Pageable pageable);
+
+    /**
+     * One page of the user's consents matching both the status set and the notice, filtered total
+     * included.
+     *
+     * <p>Backs the combined filter of {@code GET /consents/me}; called only for a non-empty status
+     * set.
+     */
+    Page<Consent> findByUserIdAndStatusInAndPrivacyNoticeId(
+            UUID userId,
+            Collection<ConsentStatus> statuses,
+            UUID privacyNoticeId,
+            Pageable pageable);
+
+    /**
+     * One consent the given user owns, or empty when no such consent exists.
+     *
+     * <p>Ownership is a predicate rather than a check after the read, so {@code GET
+     * /consents/me/id} cannot tell an unknown id from one owned by another subject: both resolve to
+     * empty and the same {@code 404}, disclosing nothing about consents the caller does not own.
+     */
+    Optional<Consent> findByIdAndUserId(UUID id, UUID userId);
+
+    /**
      * Finds all consents for the given user with the specified status.
      *
      * @param userId the UUID of the user

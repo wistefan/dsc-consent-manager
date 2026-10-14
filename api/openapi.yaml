@@ -1894,6 +1894,209 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /consents/me:
+    get:
+      operationId: listMyConsents
+      summary: List the calling subject's consents
+      description: >
+        Returns a page of the consents that name the calling data subject, so a
+        person can see every decision recorded about them and where each one
+        stands.
+
+
+        **The subject is the token.** The page carries only consents whose
+        `user_id` is the one the token resolved; there is no parameter by which a
+        caller could read another person's decisions, and one sent alongside is
+        ignored rather than honoured.
+
+
+        `status` narrows the page to the lifecycle states it names - repeat it to
+        admit several - and `privacyNoticeId` to the decisions taken against one
+        notice. Both are counted under the same filter as the content, so
+        `totalElements` is the number of the caller's consents the filter
+        matches and never the size of their whole history.
+
+
+        Neither the default page size nor the largest one accepted is written in
+        this document, because a literal here could not track a value each
+        deployment configures. Omitting `size` applies the configured default,
+        and a `size` above the configured ceiling is clamped to it and answered
+        `200` rather than rejected; the `size` of the response always reports the
+        value actually applied.
+
+
+        `format` and `includeLineage` are accepted and shape a later elaboration
+        of the response - a consent receipt, and the chain a decision
+        supersedes. Until those land, every value renders the same full
+        representation with no lineage.
+      tags:
+        - ConsentQuery
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      parameters:
+        - name: page
+          in: query
+          required: false
+          description: Zero-based index of the page to return.
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          required: false
+          description: >
+            How many records the page may carry. Omitted, this deployment's
+            configured default applies; above its configured ceiling, the
+            ceiling applies.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+        - name: status
+          in: query
+          required: false
+          description: >
+            Return only consents in these lifecycle states. Repeat the parameter
+            to admit several; omitted, every state is included.
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - PENDING
+                - DRAFT
+                - GRANTED
+                - REVOKED
+                - EXPIRED
+                - TERMINATED
+                - REFUSED
+        - name: privacyNoticeId
+          in: query
+          required: false
+          description: Return only consents decided against this privacy notice.
+          schema:
+            type: string
+            format: uuid
+        - name: format
+          in: query
+          required: false
+          description: >
+            The representation each consent is returned in. `full` is the
+            consent as a query renders it; `receipt` and `receipt-kantara` are
+            the signed consent receipts a later step adds.
+          schema:
+            type: string
+            enum:
+              - full
+              - receipt
+              - receipt-kantara
+            default: full
+        - name: includeLineage
+          in: query
+          required: false
+          description: >
+            Whether to include the chain of consents each record supersedes. A
+            later step wires it; until then the lineage is always absent.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: The requested page of the caller's consents.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /consents/me/{id}:
+    get:
+      operationId: getMyConsent
+      summary: Read one of the calling subject's consents
+      description: >
+        Returns one consent the calling data subject owns, identified by its id.
+
+
+        **The subject is the token.** A consent the caller does not own is
+        answered `404` exactly as an unknown id is, so the response never lets a
+        caller learn that a consent exists while refusing to show it.
+
+
+        `format` and `includeLineage` are accepted and shape a later elaboration
+        of the response, as on the listing; until those land, every value
+        renders the same full representation with no lineage.
+      tags:
+        - ConsentQuery
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the consent to read.
+          schema:
+            type: string
+            format: uuid
+        - name: format
+          in: query
+          required: false
+          description: >
+            The representation the consent is returned in, as on the listing.
+          schema:
+            type: string
+            enum:
+              - full
+              - receipt
+              - receipt-kantara
+            default: full
+        - name: includeLineage
+          in: query
+          required: false
+          description: >
+            Whether to include the chain of consents this record supersedes, as
+            on the listing.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: The requested consent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1971,6 +2174,9 @@ components:
 
     Consent:
       $ref: "./components/schemas/Consent.yaml"
+
+    ConsentResponse:
+      $ref: "./components/schemas/ConsentResponse.yaml"
 
     GrantConsent:
       $ref: "./components/schemas/GrantConsent.yaml"
@@ -2059,6 +2265,55 @@ components:
           format: int32
           description: >
             Pages the matching records occupy at the applied `size`; zero when
+            nothing matches.
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+
+    # Declared inline, with `items` an internal ref, because that is the only
+    # form proven to generate a typed `List<ConsentResponse>` rather than a
+    # `List<Object>`; see the note ParticipantPage carries.
+    ConsentPage:
+      type: object
+      description: >
+        One page of a subject's consents, with enough of the whole to page
+        through it without a second request.
+      properties:
+        content:
+          type: array
+          description: >
+            The consents of this page. Empty when the requested page lies past
+            the end of the result, which is a `200` rather than a `404` - the
+            page is a view of a collection, not a record that does or does not
+            exist.
+          items:
+            $ref: "#/components/schemas/ConsentResponse"
+        page:
+          type: integer
+          format: int32
+          description: Zero-based index of this page, as requested.
+        size:
+          type: integer
+          format: int32
+          description: >
+            Records this page was allowed to carry, which is the value actually
+            applied: the configured default when `size` was omitted, and the
+            configured ceiling when the requested `size` exceeded it.
+        totalElements:
+          type: integer
+          format: int64
+          description: >
+            Consents the query matches across every page, counted under the same
+            filter the content was - so narrowed by `status` and
+            `privacyNoticeId` when either was given.
+        totalPages:
+          type: integer
+          format: int32
+          description: >
+            Pages the matching consents occupy at the applied `size`; zero when
             nothing matches.
       required:
         - content
