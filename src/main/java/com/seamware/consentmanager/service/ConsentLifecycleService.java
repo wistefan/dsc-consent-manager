@@ -20,7 +20,6 @@ import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
 import java.util.UUID;
-import java.util.function.Supplier;
 
 /**
  * The moves a consent makes after it exists: who is allowed to make each one, and what it reads
@@ -120,7 +119,7 @@ public class ConsentLifecycleService {
     @NonNull
     public ConsentDetails reConfirm(@NonNull User subject, @NonNull UUID consentId) {
         Consent owned = ownedBy(subject, consentId);
-        return record(owned, () -> writer.affirm(owned.getId(), subject.getIdentifier()));
+        return report(writer.affirm(owned.getId(), subject.getIdentifier()));
     }
 
     /**
@@ -140,14 +139,12 @@ public class ConsentLifecycleService {
                         .orElseThrow(
                                 () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
         requireParty(caller, consent);
-        return record(
-                consent,
-                () ->
-                        writer.move(
-                                consent.getId(),
-                                ConsentStatus.TERMINATED,
-                                caller.getIdentifier(),
-                                EXPLICIT_TRIGGER));
+        return report(
+                writer.move(
+                        consent.getId(),
+                        ConsentStatus.TERMINATED,
+                        caller.getIdentifier(),
+                        EXPLICIT_TRIGGER));
     }
 
     /**
@@ -191,7 +188,9 @@ public class ConsentLifecycleService {
         Consent consent = resumable.consent();
         states.requireTransition(consent.getStatus(), ConsentStatus.GRANTED);
         noticeGuard.consentable(consent.getPrivacyNoticeId());
-        return record(consent, () -> resumed(consent, resumable.actor()));
+        ResumedConsent written = resumed(consent, resumable.actor());
+        written.collateral().forEach(this::report);
+        return report(written.answered());
     }
 
     /** A consent a resume may move, and the actor its event records. */
@@ -218,8 +217,11 @@ public class ConsentLifecycleService {
                 .orElseThrow(() -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
     }
 
-    /** The resumed record, with a race on the one-grant-per-notice index answered as 409. */
-    private RecordedConsent resumed(Consent consent, String actor) {
+    /**
+     * The resumed record and every row the resume closed to answer it, with a race on the
+     * one-grant-per-notice index answered as 409.
+     */
+    private ResumedConsent resumed(Consent consent, String actor) {
         try {
             return writer.resume(consent.getId(), actor);
         } catch (DataAccessException e) {
@@ -260,25 +262,23 @@ public class ConsentLifecycleService {
     /** Moves the subject's own consent to {@code target}, in the subject's name. */
     private ConsentDetails move(User subject, UUID consentId, ConsentStatus target) {
         Consent owned = ownedBy(subject, consentId);
-        return record(
-                owned,
-                () ->
-                        writer.move(
-                                owned.getId(), target, subject.getIdentifier(), EXPLICIT_TRIGGER));
+        return report(
+                writer.move(owned.getId(), target, subject.getIdentifier(), EXPLICIT_TRIGGER));
     }
 
     /**
-     * Performs a resolved move, reports it, and renders the result.
+     * Reports a committed move to the lifecycle seam and renders it for the caller.
      *
-     * <p>The one place every lifecycle write passes through, so {@link ConsentStateChangeLog} — and
-     * whatever notification grows from it — cannot be left off a route added later. {@code held} is
-     * read before the write for the status the move left behind.
+     * <p>The one path every lifecycle write passes through — including the revocation and the
+     * terminations a resume performs collaterally, which {@link #resume} hands here one at a time —
+     * so {@link ConsentStateChangeLog}, and whatever notification grows from it, cannot be left off
+     * a route or a collateral write added later. The held status is the one {@link ConsentWriter}
+     * read under the row lock, not an earlier unlocked read, so a concurrent move cannot leave the
+     * reported {@code held} naming a status the write did not actually move from.
      */
-    private ConsentDetails record(Consent held, Supplier<RecordedConsent> write) {
-        ConsentStatus heldStatus = held.getStatus();
-        RecordedConsent written = write.get();
-        ConsentDetails details = parties.details(written);
-        changeLog.recorded(heldStatus, details, written.event());
+    private ConsentDetails report(ConsentMove move) {
+        ConsentDetails details = parties.details(move.recorded());
+        changeLog.recorded(move.held(), details, move.recorded().event());
         return details;
     }
 }

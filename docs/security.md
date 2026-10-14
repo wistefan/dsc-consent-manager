@@ -138,11 +138,12 @@ cannot be used to enumerate the dataspace's users.
 
 ### A lifecycle move is authorised against the consent, never on the role
 
-The five `POST /consents/{id}/<verb>` routes are the only operations of this service where holding
-the admitted role and a well-formed identifier still gets a caller nowhere. `@Secured` decides
-which kind of caller may reach the handler; which *record* that caller may move is decided in
-`ConsentLifecycleService` against the consent itself, and the two refusals are deliberately
-different.
+The five `POST /consents/{id}/<verb>` routes are authorised against the record rather than the
+role, as `POST /consents/requests` and `PATCH`/`DELETE /participants/me/users/{identifier}` already
+are: holding the admitted role and a well-formed identifier still gets a caller nowhere on its own.
+`@Secured` decides which kind of caller may reach the handler; which *record* that caller may move
+is decided in `ConsentLifecycleService` against the consent itself, and the two refusals are
+deliberately different.
 
 A `USER` operation — `revoke`, `refuse`, `re-confirm`, and a subject's own `resume` — resolves the
 record through the subject's own id and answers `404`. A consent that does not exist and a consent

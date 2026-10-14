@@ -34,9 +34,13 @@ processor stops processing. A subject who revokes gets `200` because the revocat
 not because anyone has yet acted on it.
 
 **Delivery is deferred to TICKET-013 and TICKET-020, and the seam they attach to is named.**
-`ConsentLifecycleService.record` is the one path every lifecycle write passes through: it reads the
-held status, performs the write, renders the result and calls `ConsentStateChangeLog.recorded`. A
-route added later cannot miss the seam without going around that method. `ConsentStateChangeLog`
+`ConsentLifecycleService.report` is the one path every lifecycle move passes through: it takes the
+committed write together with the status it moved from, renders the result and calls
+`ConsentStateChangeLog.recorded`. Every move reaches it — not only the one a caller addressed, but
+the revocation and the terminations a `resume` performs in the same transaction, which the writer
+returns as collateral moves and `report` is handed one at a time — so a superseded grant's closing
+is reported through the seam rather than lost. A route or a collateral write added later cannot miss
+the seam without going around that method. `ConsentStateChangeLog`
 emits one structured line per move through the Logback JSON encoder and does nothing else — it is
 not a queue, buffers nothing, retries nothing, and is deliberately shaped so that a reader cannot
 mistake it for a delivery guarantee.
@@ -77,7 +81,8 @@ moves nothing, and would silently re-date a record whose authorisation is unchan
   nor `updated_at` changes. Anything that needs to show when a subject last affirmed a consent in
   force must read the trail — which is the same place the rest of the lifecycle lives, so no reader
   gains a second source.
-- **The held status in the line is the caller's read, not the locked one.** A concurrent move can
-  leave it one step behind what the write actually moved from. The trail settles that; the line
-  does not pretend to, and a consumer reconstructing the lifecycle from the stream rather than from
-  `consent_events` is reading the wrong source.
+- **The held status in the line is the one the write locked, not an earlier unlocked read.**
+  `ConsentWriter` returns the status it read under the row lock alongside the move, and `report`
+  logs *that*, so a concurrent move of the same record cannot leave the line naming a status the
+  write did not move from. The trail remains the authority a consumer reconstructing the lifecycle
+  should read from, but the line no longer risks disagreeing with it.

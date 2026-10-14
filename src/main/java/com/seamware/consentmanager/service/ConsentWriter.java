@@ -300,13 +300,13 @@ public class ConsentWriter {
      */
     private List<ConsentMove> closeRedundant(List<Consent> redundant, String actor) {
         return redundant.stream()
-                .map(
-                        consent ->
-                                moved(consent, ConsentStatus.TERMINATED, actor, CLEANUP_TRIGGER))
+                .map(consent -> moved(consent, ConsentStatus.TERMINATED, actor, CLEANUP_TRIGGER))
                 .toList();
     }
 
-    /** Applies one move, reading the status it leaves behind before the transition overwrites it. */
+    /**
+     * Applies one move, reading the status it leaves behind before the transition overwrites it.
+     */
     private ConsentMove moved(
             Consent consent, ConsentStatus target, String actor, ConsentEventTrigger trigger) {
         ConsentStatus held = consent.getStatus();

@@ -1,5 +1,7 @@
 package com.seamware.consentmanager.service;
 
+import static net.logstash.logback.argument.StructuredArguments.v;
+
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentStatus;
@@ -23,7 +25,8 @@ public class ConsentStateChangeLog {
     private static final Logger LOG = LoggerFactory.getLogger(ConsentStateChangeLog.class);
 
     /**
-     * The one line a move leaves on stdout, rendered as JSON by the configured Logback encoder.
+     * The human-readable half of the one line a move leaves on stdout; the values it interpolates
+     * are also emitted as discrete JSON fields (see {@link #recorded}).
      *
      * <p>Held and new status are both named because a reader of the stream reconstructs the
      * lifecycle from them without joining back to the database, which is what makes the line worth
@@ -36,15 +39,20 @@ public class ConsentStateChangeLog {
     /**
      * Records a move that has been written, naming what it concerns and the trail entry it left.
      *
+     * <p>Each value is passed through {@link net.logstash.logback.argument.StructuredArguments#v}
+     * so the configured {@code LogstashEncoder} emits it as a named JSON field as well as
+     * interpolating it into the message, which is what lets a consumer read {@code consentId} or
+     * {@code newStatus} as data rather than regexing the prose — the stated point of the line.
+     *
      * <p>The subject is named by its opaque {@code userId}, never by its identifier, and the actor
      * is left to {@code consent_events.actor}: an erasure rewrites the database and cannot reach a
      * log line already shipped, so ADR-0007's boundary holds only if the identifiers stay out of
      * here. The {@code event} argument carries both regardless, because a notification growing from
      * this seam needs to know who acted even though the log line does not say.
      *
-     * <p>{@code held} is the status the caller's read saw. A concurrent move of the same record can
-     * leave it one step behind what the locked write actually moved from; the trail is what settles
-     * that, and this line does not pretend to.
+     * <p>{@code held} is the status {@link ConsentWriter} read under the row lock, not an earlier
+     * unlocked read, so a concurrent move of the same record cannot leave it naming a status the
+     * write did not actually move from.
      */
     public void recorded(
             @NonNull ConsentStatus held,
@@ -53,13 +61,13 @@ public class ConsentStateChangeLog {
         Consent consent = moved.consent();
         LOG.info(
                 MOVED,
-                consent.getId(),
-                consent.getUserId(),
-                moved.providerIdentifier(),
-                moved.consumerIdentifier(),
-                held,
-                consent.getStatus(),
-                event.getEventState(),
-                event.getEventType());
+                v("consentId", consent.getId()),
+                v("subjectUserId", consent.getUserId()),
+                v("provider", moved.providerIdentifier()),
+                v("consumer", moved.consumerIdentifier()),
+                v("heldStatus", held),
+                v("newStatus", consent.getStatus()),
+                v("eventState", event.getEventState()),
+                v("eventType", event.getEventType()));
     }
 }
