@@ -359,7 +359,7 @@ public class ConsentManagerConfiguration {
 
         /**
          * Most superseded records one {@code includeLineage} walk reads, bound to {@code
-         * CONSENTS_LINEAGE_MAX_DEPTH}; it bounds the reads per rendered consent, not just the
+         * CONSENTS_LINEAGE_MAX_DEPTH}; it bounds the rows read per rendered consent, not just the
          * output.
          */
         private int lineageMaxDepth = DEFAULT_LINEAGE_MAX_DEPTH;

@@ -120,7 +120,10 @@ properties:
       asked for, and then empty for a chain's first record. The walk stops at
       the deployment's configured depth, at a record the caller may not read,
       and at a record it has already visited, so a chain is never longer than
-      the configured depth and never repeats a link.
+      the configured depth and never repeats a link. A record the caller may
+      not read is not rendered, but its id still appears as the
+      `parentConsentId` of the last link, just as this record's own
+      `parentConsentId` names its predecessor.
     items:
       title: ConsentLineageLink
       type: object

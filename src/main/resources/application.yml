@@ -453,7 +453,9 @@ consent-manager:
 
     # Most superseded records one includeLineage walk reads and renders per consent. The
     # walk also stops on a record it has already visited, so a cycle across rows ends
-    # rather than hanging; this caps the cost of a long but acyclic history.
+    # rather than hanging; this caps the cost of a long but acyclic history. Each chain is
+    # one recursive query, so a GET /consents/me?includeLineage=true page costs one query
+    # per entry and reads at most page-max-size x lineage-max-depth superseded rows.
     lineage-max-depth: ${CONSENTS_LINEAGE_MAX_DEPTH:20}
 
   contract-discovery:

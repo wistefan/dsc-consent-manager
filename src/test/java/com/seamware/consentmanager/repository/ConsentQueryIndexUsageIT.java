@@ -71,6 +71,14 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
     private static final String GRANT_INDEX = "uq_consents_granted_per_user_notice";
 
     /** A subject's consents, reached by either index keyed on the subject. */
+    private static final String PRIMARY_KEY = "consents_pkey";
+
+    /** A lineage entry point no seeded row has, so the walk starts from the probe's consent. */
+    private static final String DETACHED_START = "'00000000-0000-0000-0000-000000000000'::uuid";
+
+    /** Lineage depth bound into the planned walk; the plan does not depend on its value. */
+    private static final String LINEAGE_DEPTH = "20";
+
     private static final Set<String> BY_SUBJECT = Set.of(USER_INDEX, GRANT_INDEX);
 
     /** The sort and limit Micronaut appends to a page query ordered newest first. */
@@ -151,6 +159,7 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
         String subject = uuid(probe.userId());
         String participant = uuid(probe.participantId());
         String notice = uuid(probe.noticeId());
+        String consent = uuid(probe.consentId());
         String granted = "'GRANTED'";
         return List.of(
                 Arguments.of(
@@ -166,6 +175,52 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
                         positional(query("findByUserIdAndStatusIn"), subject, granted)
                                 + NEWEST_FIRST_PAGE,
                         List.of(BY_SUBJECT)),
+                Arguments.of(
+                        "subject listing by notice",
+                        positional(query("findByUserIdAndPrivacyNoticeId"), subject, notice)
+                                + NEWEST_FIRST_PAGE,
+                        List.of(BY_SUBJECT)),
+                Arguments.of(
+                        "subject listing by notice count",
+                        positional(countQuery("findByUserIdAndPrivacyNoticeId"), subject, notice),
+                        List.of(BY_SUBJECT)),
+                Arguments.of(
+                        "subject listing by status and notice",
+                        positional(
+                                        query("findByUserIdAndStatusInAndPrivacyNoticeId"),
+                                        subject,
+                                        granted,
+                                        notice)
+                                + NEWEST_FIRST_PAGE,
+                        List.of(BY_SUBJECT)),
+                Arguments.of(
+                        "subject listing by status and notice count",
+                        positional(
+                                countQuery("findByUserIdAndStatusInAndPrivacyNoticeId"),
+                                subject,
+                                granted,
+                                notice),
+                        List.of(BY_SUBJECT)),
+                Arguments.of(
+                        "subject lineage",
+                        named(
+                                query("findLineageForUser"),
+                                Map.of(
+                                        "startId", DETACHED_START,
+                                        "parentId", consent,
+                                        "userId", subject,
+                                        "maxDepth", LINEAGE_DEPTH)),
+                        List.of(Set.of(PRIMARY_KEY))),
+                Arguments.of(
+                        "participant lineage",
+                        named(
+                                query("findLineageForParticipant"),
+                                Map.of(
+                                        "startId", DETACHED_START,
+                                        "parentId", consent,
+                                        "participantId", participant,
+                                        "maxDepth", LINEAGE_DEPTH)),
+                        List.of(Set.of(PRIMARY_KEY))),
                 Arguments.of(
                         "participant listing",
                         named(query("findForParticipant"), participantFilters(participant, "NULL"))
@@ -218,21 +273,28 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
                 "NULL");
     }
 
-    /** A subject, a participant party to its consents, and one notice it holds a grant under. */
+    /**
+     * A subject, a participant party to its consents, one notice it holds a grant under, and that
+     * grant.
+     */
     private Probe probe() throws SQLException {
         try (Connection connection = connect();
                 Statement statement = connection.createStatement();
                 ResultSet row =
                         statement.executeQuery(
                                 "SELECT u.identifier, c.user_id, c.provider_id,"
-                                        + " c.privacy_notice_id FROM consents c"
+                                        + " c.privacy_notice_id, c.id FROM consents c"
                                         + " JOIN users u ON u.id = c.user_id"
                                         + " WHERE c.status = 'GRANTED' AND u.identifier LIKE '"
                                         + PREFIX
                                         + "%' LIMIT 1")) {
             assertThat(row.next()).isTrue();
             return new Probe(
-                    row.getString(1), row.getObject(2), row.getObject(3), row.getObject(4));
+                    row.getString(1),
+                    row.getObject(2),
+                    row.getObject(3),
+                    row.getObject(4),
+                    row.getObject(5));
         }
     }
 
@@ -301,5 +363,9 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
 
     /** The rows a plan is taken for; ids are kept as JDBC returns them. */
     private record Probe(
-            String userIdentifier, Object userId, Object participantId, Object noticeId) {}
+            String userIdentifier,
+            Object userId,
+            Object participantId,
+            Object noticeId,
+            Object consentId) {}
 }
