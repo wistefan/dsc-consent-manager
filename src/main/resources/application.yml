@@ -463,6 +463,12 @@ consent-manager:
     # purpose: an upstream that slow is answered as unavailable rather than waited out.
     max-duration: ${CONTRACT_DISCOVERY_MAX_DURATION:30s}
 
+  receipts:
+    # Jurisdiction a Kantara consent receipt (format=receipt-kantara) names as governing
+    # the processing. KI-CR-v1.1.0 requires one and neither a notice nor a contract
+    # carries it, so it is stated per deployment.
+    jurisdiction: ${RECEIPTS_JURISDICTION:EU}
+
   erasure:
     # Key of the salted HMAC an erased record keeps instead of its identifier, so
     # that the operator - and nobody else, since the key is not in the database -

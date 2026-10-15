@@ -1,0 +1,151 @@
+# Schema: ConsentReceipt — referenced from api/openapi.yaml as
+# components.schemas.ConsentReceipt.
+#
+# The `format=receipt` representation: an ISO/IEC 29184 consent record. Every
+# term below is read off the snapshot the consent froze when the decision was
+# taken, never off the live notice, so archiving or regenerating the notice
+# cannot rewrite a receipt already issued. The term properties carry the
+# snapshot's own names, which keeps the mapping one accessor per field.
+#
+# No property is `nullable`, for the reason `Consent` states; a term the notice
+# did not carry is absent.
+type: object
+description: >
+  An ISO/IEC 29184 record of one consent decision: who decided, on what notice,
+  in what state the record stands, and the terms presented, as they stood when
+  the decision was taken.
+properties:
+  receiptId:
+    type: string
+    format: uuid
+    description: >
+      Identifier of this receipt. The consent's own id, so every rendering of
+      one consent is the same receipt.
+    example: "018f3a2b-7c4d-7e8f-9a0b-1c2d3e4f5a6b"
+  standard:
+    type: string
+    description: The standard this receipt follows.
+    enum:
+      - ISO/IEC 29184:2020
+  consentId:
+    type: string
+    format: uuid
+    description: The consent this receipt records.
+  privacyNoticeId:
+    type: string
+    format: uuid
+    description: The notice the decision was taken on.
+  piiPrincipalId:
+    type: string
+    description: Identifier of the data subject who decided.
+    example: "did:example:alice"
+  status:
+    type: string
+    description: The state the consent stands in, as on `ConsentResponse`.
+    enum:
+      - PENDING
+      - DRAFT
+      - GRANTED
+      - REVOKED
+      - EXPIRED
+      - TERMINATED
+      - REFUSED
+  consented:
+    type: boolean
+    description: Whether data may be processed under this consent right now.
+  provider:
+    type: string
+    description: Global identifier of the participant providing the data.
+  consumer:
+    type: string
+    description: Global identifier of the participant consuming the data.
+  contractUri:
+    type: string
+    description: The contract the decision was taken under, as frozen on the consent.
+  createdAt:
+    type: string
+    format: date-time
+    description: When the consent was recorded.
+  updatedAt:
+    type: string
+    format: date-time
+    description: When the consent record was last written; not necessarily a change of state.
+  title:
+    type: string
+    description: Title of the notice as presented.
+  controllerDetails:
+    type: object
+    description: The PII controller the notice named.
+    properties:
+      name:
+        type: string
+      contact:
+        type: string
+      identifier:
+        type: string
+      selfDescriptionUri:
+        type: string
+  purposes:
+    type: array
+    description: The purposes elected in the decision.
+    items:
+      type: string
+  dataCategories:
+    type: array
+    description: The categories of personal data elected in the decision.
+    items:
+      type: string
+  dataReferences:
+    type: array
+    description: The catalog documents the notice covered.
+    items:
+      type: object
+      properties:
+        uri:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        partOf:
+          type: string
+  recipients:
+    type: array
+    description: The participants the notice named as recipients.
+    items:
+      type: object
+      properties:
+        identifier:
+          type: string
+        name:
+          type: string
+        contact:
+          type: string
+        selfDescriptionUri:
+          type: string
+  retentionPeriod:
+    type: string
+    description: How long the data is kept, as the notice stated it.
+  piiPrincipalRights:
+    type: string
+    description: The data subject's rights, as the notice stated them.
+  internationalTransfers:
+    type: array
+    description: The third-party disclosures the notice declared.
+    items:
+      type: string
+  withdrawalOfConsent:
+    type: string
+    description: How consent may be withdrawn, as the notice stated it.
+required:
+  - receiptId
+  - standard
+  - consentId
+  - privacyNoticeId
+  - piiPrincipalId
+  - status
+  - consented
+  - provider
+  - consumer
+  - createdAt
+  - updatedAt

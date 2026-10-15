@@ -1744,6 +1744,10 @@ paths:
         answered `404` exactly as an unknown id is, so the response never lets a
         participant learn that a consent it is no party to exists while refusing
         to show it.
+
+
+        `format` selects the representation: the full consent, or a consent
+        receipt rendered from the terms frozen when the decision was taken.
       tags:
         - ConsentQuery
       security:
@@ -1758,13 +1762,34 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: format
+          in: query
+          required: false
+          description: >
+            The representation the consent is returned in. `full` is the consent
+            as a query renders it. `receipt` is an ISO/IEC 29184 consent record
+            and `receipt-kantara` a Kantara Initiative KI-CR-v1.1.0 receipt, both
+            rendered from the terms frozen when the decision was taken, so a
+            receipt reads the same after its notice is archived or regenerated.
+            A Kantara receipt attests that consent was given and is therefore
+            refused with `400` for a consent that is not `GRANTED`; an ISO/IEC
+            29184 record carries the status and is rendered for every one. Any
+            other value is refused with `400`.
+          schema:
+            type: string
+            enum:
+              - full
+              - receipt
+              - receipt-kantara
+            default: full
       responses:
         "200":
-          description: The requested consent.
+          description: >
+            The requested consent, in the representation `format` names.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ConsentResponse"
+                $ref: "#/components/schemas/ConsentRepresentation"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -2179,10 +2204,10 @@ paths:
         value actually applied.
 
 
-        `format` and `includeLineage` are accepted and shape a later elaboration
-        of the response - a consent receipt, and the chain a decision
-        supersedes. Until those land, every value renders the same full
-        representation with no lineage.
+        A listing renders the full representation alone; a consent receipt is
+        read one consent at a time from `/consents/me/{id}`. `includeLineage` is
+        accepted and shapes a later elaboration of the response - the chain a
+        decision supersedes; until that lands, no lineage is rendered.
       tags:
         - ConsentQuery
       security:
@@ -2239,15 +2264,14 @@ paths:
           in: query
           required: false
           description: >
-            The representation each consent is returned in. `full` is the
-            consent as a query renders it; `receipt` and `receipt-kantara` are
-            the signed consent receipts a later step adds.
+            The representation each consent is returned in. A listing renders
+            `full` alone: a receipt is evidence of one decision and is read one
+            consent at a time from `/consents/me/{id}`, so any other value is
+            refused with `400` rather than silently rendered in full.
           schema:
             type: string
             enum:
               - full
-              - receipt
-              - receipt-kantara
             default: full
         - name: includeLineage
           in: query
@@ -2291,9 +2315,10 @@ paths:
         caller learn that a consent exists while refusing to show it.
 
 
-        `format` and `includeLineage` are accepted and shape a later elaboration
-        of the response, as on the listing; until those land, every value
-        renders the same full representation with no lineage.
+        `format` selects the representation: the full consent, or a consent
+        receipt rendered from the terms frozen when the decision was taken.
+        `includeLineage` is accepted as on the listing; until lineage lands, no
+        lineage is rendered.
       tags:
         - ConsentQuery
       security:
@@ -2312,7 +2337,15 @@ paths:
           in: query
           required: false
           description: >
-            The representation the consent is returned in, as on the listing.
+            The representation the consent is returned in. `full` is the consent
+            as a query renders it. `receipt` is an ISO/IEC 29184 consent record
+            and `receipt-kantara` a Kantara Initiative KI-CR-v1.1.0 receipt, both
+            rendered from the terms frozen when the decision was taken, so a
+            receipt reads the same after its notice is archived or regenerated.
+            A Kantara receipt attests that consent was given and is therefore
+            refused with `400` for a consent that is not `GRANTED`; an ISO/IEC
+            29184 record carries the status and is rendered for every one. Any
+            other value is refused with `400`.
           schema:
             type: string
             enum:
@@ -2331,11 +2364,12 @@ paths:
             default: false
       responses:
         "200":
-          description: The requested consent.
+          description: >
+            The requested consent, in the representation `format` names.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ConsentResponse"
+                $ref: "#/components/schemas/ConsentRepresentation"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -2552,6 +2586,12 @@ components:
     ConsentValidity:
       $ref: "./components/schemas/ConsentValidity.yaml"
 
+    ConsentReceipt:
+      $ref: "./components/schemas/ConsentReceipt.yaml"
+
+    ConsentReceiptKantara:
+      $ref: "./components/schemas/ConsentReceiptKantara.yaml"
+
     AvailableContract:
       $ref: "./components/schemas/AvailableContract.yaml"
 
@@ -2649,6 +2689,20 @@ components:
         - size
         - totalElements
         - totalPages
+
+    # Written out here so its members are same-document refs. With
+    # `useOneOfInterfaces` the generator turns it into an interface the three
+    # representations implement, which is what lets one handler return any of
+    # them; `format` alone selects which, so no discriminator is declared.
+    ConsentRepresentation:
+      description: >
+        One consent in the representation the request's `format` selected:
+        `ConsentResponse` for `full`, `ConsentReceipt` for `receipt`,
+        `ConsentReceiptKantara` for `receipt-kantara`.
+      oneOf:
+        - $ref: "#/components/schemas/ConsentResponse"
+        - $ref: "#/components/schemas/ConsentReceipt"
+        - $ref: "#/components/schemas/ConsentReceiptKantara"
 
     # Declared inline, with `items` an internal ref, because that is the only
     # form proven to generate a typed `List<ConsentResponse>` rather than a

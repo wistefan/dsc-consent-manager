@@ -39,6 +39,11 @@ public class ConsentFactory {
     static final Map<ConsentStatus, ConsentEventState> EVENT_STATES = eventStates();
 
     /**
+     * The event that affirms a grant already in force; admissible in GRANTED, but dates nothing.
+     */
+    static final ConsentEventState AFFIRMATION = ConsentEventState.CONSENT_RE_CONFIRMED;
+
+    /**
      * Every event a consent holding a given status may record, total over {@link ConsentStatus}.
      *
      * <p>{@link #EVENT_STATES} answers the narrower question of which event a <em>move</em>
@@ -48,6 +53,13 @@ public class ConsentFactory {
      * key here would be a null lookup rather than the refusal that omission means.
      */
     static final Map<ConsentStatus, Set<ConsentEventState>> ADMISSIBLE_EVENTS = admissibleEvents();
+
+    /**
+     * The events that move a consent <em>into</em> {@link ConsentStatus#GRANTED}: everything {@code
+     * GRANTED} admits except the {@link #AFFIRMATION}, derived so a new granting event cannot
+     * drift.
+     */
+    static final Set<ConsentEventState> GRANTING_EVENTS = grantingEvents();
 
     private static final String UNMAPPED_STATUS = "no consent event is defined for state %s";
 
@@ -163,12 +175,7 @@ public class ConsentFactory {
         lifecycle.requireAffirmable(consent.getStatus());
         return new RecordedConsent(
                 consent,
-                event(
-                        consent,
-                        ConsentEventState.CONSENT_RE_CONFIRMED,
-                        actor,
-                        ConsentEventTrigger.EXPLICIT,
-                        null),
+                event(consent, AFFIRMATION, actor, ConsentEventTrigger.EXPLICIT, null),
                 false);
     }
 
@@ -223,8 +230,15 @@ public class ConsentFactory {
                 EnumSet.of(
                         ConsentEventState.CONSENT_GIVEN,
                         ConsentEventState.CONSENT_RESUMED,
-                        ConsentEventState.CONSENT_RE_CONFIRMED));
+                        AFFIRMATION));
         table.put(ConsentStatus.DRAFT, EnumSet.noneOf(ConsentEventState.class));
         return Collections.unmodifiableMap(table);
+    }
+
+    private static Set<ConsentEventState> grantingEvents() {
+        Set<ConsentEventState> granting =
+                EnumSet.copyOf(ADMISSIBLE_EVENTS.get(ConsentStatus.GRANTED));
+        granting.remove(AFFIRMATION);
+        return Collections.unmodifiableSet(granting);
     }
 }

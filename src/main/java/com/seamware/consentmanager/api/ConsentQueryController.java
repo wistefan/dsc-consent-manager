@@ -2,13 +2,14 @@ package com.seamware.consentmanager.api;
 
 import com.seamware.consentmanager.api.generated.AbstractConsentQueryController;
 import com.seamware.consentmanager.api.generated.model.ConsentPage;
-import com.seamware.consentmanager.api.generated.model.ConsentResponse;
+import com.seamware.consentmanager.api.generated.model.ConsentRepresentation;
 import com.seamware.consentmanager.api.generated.model.ConsentValidity;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
 import com.seamware.consentmanager.security.UserPrincipal;
 import com.seamware.consentmanager.service.ConsentDetails;
 import com.seamware.consentmanager.service.ConsentQueryCriteria;
 import com.seamware.consentmanager.service.ConsentQueryService;
+import com.seamware.consentmanager.service.ConsentReceiptService;
 import io.micronaut.data.model.Page;
 import io.micronaut.http.HttpHeaders;
 import io.micronaut.http.HttpResponse;
@@ -31,8 +32,9 @@ import java.util.UUID;
  * dataspace, so a deregistered participant whose grants were retained is refused rather than told
  * {@code valid: true}.
  *
- * <p>{@code format} and {@code includeLineage} are accepted and ignored here: receipt rendering and
- * lineage traversal land in later steps, and every value renders the full representation meanwhile.
+ * <p>{@code format} selects the representation of a single-consent read through {@link
+ * ConsentFormat}; a listing renders {@code full} alone and refuses any other value with a {@code
+ * 400}. {@code includeLineage} is accepted and ignored until lineage traversal lands.
  */
 @Controller
 public class ConsentQueryController extends AbstractConsentQueryController {
@@ -44,9 +46,13 @@ public class ConsentQueryController extends AbstractConsentQueryController {
 
     private final ConsentMapper mapper;
 
-    public ConsentQueryController(ConsentQueryService queries, ConsentMapper mapper) {
+    private final ConsentReceiptService receipts;
+
+    public ConsentQueryController(
+            ConsentQueryService queries, ConsentMapper mapper, ConsentReceiptService receipts) {
         this.queries = queries;
         this.mapper = mapper;
+        this.receipts = receipts;
     }
 
     @Override
@@ -58,15 +64,17 @@ public class ConsentQueryController extends AbstractConsentQueryController {
             UUID privacyNoticeId,
             String format,
             Boolean includeLineage) {
+        ConsentFormat.requireListable(format);
         ConsentQueryCriteria criteria =
                 new ConsentQueryCriteria(mapper.toStatuses(status), privacyNoticeId, page, size);
         return HttpResponse.ok(toPage(queries.listForUser(principal.user(), criteria)));
     }
 
     @Override
-    public HttpResponse<ConsentResponse> getMyConsent(
+    public HttpResponse<ConsentRepresentation> getMyConsent(
             UserPrincipal principal, UUID id, String format, Boolean includeLineage) {
-        return HttpResponse.ok(mapper.toResponse(queries.getForUser(principal.user(), id)));
+        ConsentFormat selected = ConsentFormat.of(format);
+        return HttpResponse.ok(render(queries.getForUser(principal.user(), id), selected));
     }
 
     @Override
@@ -86,9 +94,11 @@ public class ConsentQueryController extends AbstractConsentQueryController {
     }
 
     @Override
-    public HttpResponse<ConsentResponse> getConsent(ParticipantPrincipal principal, UUID id) {
+    public HttpResponse<ConsentRepresentation> getConsent(
+            ParticipantPrincipal principal, UUID id, String format) {
+        ConsentFormat selected = ConsentFormat.of(format);
         return HttpResponse.ok(
-                mapper.toResponse(queries.getForParticipant(principal.requireRegistered(), id)));
+                render(queries.getForParticipant(principal.requireRegistered(), id), selected));
     }
 
     @Override
@@ -105,6 +115,17 @@ public class ConsentQueryController extends AbstractConsentQueryController {
                                 privacyNoticeId,
                                 purpose));
         return HttpResponse.ok(body).header(HttpHeaders.CACHE_CONTROL, NO_STORE);
+    }
+
+    /**
+     * {@code details} in {@code format}; every receipt is read off the consent's frozen snapshot.
+     */
+    private ConsentRepresentation render(ConsentDetails details, ConsentFormat format) {
+        return switch (format) {
+            case FULL -> mapper.toResponse(details);
+            case RECEIPT -> receipts.toIso29184(details);
+            case RECEIPT_KANTARA -> receipts.toKantara(details);
+        };
     }
 
     private ConsentPage toPage(Page<ConsentDetails> page) {
