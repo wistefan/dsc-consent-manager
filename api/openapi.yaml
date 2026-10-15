@@ -2351,6 +2351,115 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /contracts/available:
+    get:
+      operationId: listMyAvailableContracts
+      summary: List the contracts the calling subject's participants take part in
+      description: >
+        Returns every contract a participant the calling data subject is linked
+        to takes part in, so a person can see under which agreements their data
+        may be asked for. A contract several of the subject's participants share
+        is listed once, with `roles` naming every side they take in it.
+
+
+        **The candidate set is this service's own.** The Contract Service offers
+        no listing, so the contracts considered are those a participant has an
+        active privacy notice for here; each is then read from the Contract
+        Service. One the Contract Service no longer knows is left out.
+
+
+        **Never a partial list.** If the Contract Service fails for any contract
+        the answer is `502` and no list at all, because a truncated list would
+        read as a complete one.
+      tags:
+        - ContractDiscovery
+      security:
+        - bearerAuth: [USER]
+      x-roles: [USER]
+      x-principal: UserPrincipal
+      responses:
+        "200":
+          description: >
+            The contracts, ordered by `contractUri`. Empty when the subject is
+            linked to no participant, or to none that takes part in a contract.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AvailableContract"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
+  /contracts/available/{role}:
+    get:
+      operationId: listAvailableContracts
+      summary: List the contracts the calling participant takes part in on one side
+      description: >
+        Returns every contract the calling participant takes part in on the side
+        `role` names - `provider` for those it publishes privacy notices under,
+        `consumer` for those naming it as the recipient. Any other `role` is
+        `400`.
+
+
+        The candidate set and the no-partial-list rule are those of
+        `GET /contracts/available`: contracts the participant has an active
+        privacy notice for here, each read from the Contract Service, and a
+        Contract Service failure answered `502` with no list.
+      tags:
+        - ContractDiscovery
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      parameters:
+        - name: role
+          in: path
+          required: true
+          description: The side of the contracts to list.
+          schema:
+            type: string
+            enum:
+              - provider
+              - consumer
+      responses:
+        "200":
+          description: >
+            The contracts, ordered by `contractUri`, each with `roles` holding
+            the requested side in upper case (`PROVIDER` or `CONSUMER`), as
+            every enum in a response is spelt. Empty when the participant takes
+            that side in no contract.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AvailableContract"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2434,6 +2543,9 @@ components:
 
     ConsentValidity:
       $ref: "./components/schemas/ConsentValidity.yaml"
+
+    AvailableContract:
+      $ref: "./components/schemas/AvailableContract.yaml"
 
     GrantConsent:
       $ref: "./components/schemas/GrantConsent.yaml"
@@ -2600,3 +2712,6 @@ components:
 
     Conflict:
       $ref: "./components/responses/Conflict.yaml"
+
+    BadGateway:
+      $ref: "./components/responses/BadGateway.yaml"

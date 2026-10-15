@@ -74,4 +74,21 @@ public interface PrivacyNoticeRepository extends PageableRepository<PrivacyNotic
             "SELECT COUNT(*) FROM privacy_notices"
                     + " WHERE provider_id = :participantId OR consumer_id = :participantId")
     int countByParticipant(UUID participantId);
+
+    /**
+     * Distinct contract URIs the participant publishes an active notice under, as provider.
+     *
+     * <p>The candidate set of contract discovery: the Contract Service cannot enumerate contracts,
+     * so the ones this service holds notices for are the ones it can name.
+     */
+    @Query(
+            "SELECT DISTINCT contract_uri FROM privacy_notices"
+                    + " WHERE provider_id = :participantId AND archived_at IS NULL")
+    List<String> findActiveContractUrisByProvider(UUID participantId);
+
+    /** Distinct contract URIs of the active notices naming the participant as consumer. */
+    @Query(
+            "SELECT DISTINCT contract_uri FROM privacy_notices"
+                    + " WHERE consumer_id = :participantId AND archived_at IS NULL")
+    List<String> findActiveContractUrisByConsumer(UUID participantId);
 }

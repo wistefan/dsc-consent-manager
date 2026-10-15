@@ -600,6 +600,16 @@ class PrivacyNoticeServiceTest {
         public int countByParticipant(UUID participantId) {
             throw unsupported();
         }
+
+        @Override
+        public List<String> findActiveContractUrisByProvider(UUID participantId) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<String> findActiveContractUrisByConsumer(UUID participantId) {
+            throw unsupported();
+        }
     }
 
     /**

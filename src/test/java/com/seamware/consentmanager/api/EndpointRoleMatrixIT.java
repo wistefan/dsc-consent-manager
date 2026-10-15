@@ -108,6 +108,11 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_CONSENT_REQUESTS = PATH_CONSENTS + "/requests";
 
+    private static final String PATH_CONTRACTS_AVAILABLE = "/contracts/available";
+
+    /** A side contract discovery accepts, so the role row is decided by role and not by input. */
+    private static final String PROVIDER_ROLE = "provider";
+
     /** A decision the grant row states, so the body passes validation and the route is reached. */
     private static final String GRANTED_DECISION = "GRANTED";
 
@@ -386,7 +391,12 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                         + "/check?userIdentifier="
                                         + LINKED_USER
                                         + "&privacyNoticeId="
-                                        + ABSENT_NOTICE));
+                                        + ABSENT_NOTICE)),
+        LIST_MY_AVAILABLE_CONTRACTS(
+                "get " + PATH_CONTRACTS_AVAILABLE, () -> HttpRequest.GET(PATH_CONTRACTS_AVAILABLE)),
+        LIST_AVAILABLE_CONTRACTS(
+                "get " + PATH_CONTRACTS_AVAILABLE + "/{role}",
+                () -> HttpRequest.GET(PATH_CONTRACTS_AVAILABLE + "/" + PROVIDER_ROLE));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -675,7 +685,25 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                         // admits is answered 200 with valid:false - the same shape an unknown
                         // subject earns - while every other role is refused. ConsentValidityIT owns
                         // the true answer and the no-disclosure proof.
-                        row(Endpoint.CHECK_CONSENT, denied, ok, denied, denied, challenged))
+                        row(Endpoint.CHECK_CONSENT, denied, ok, denied, denied, challenged),
+                        // Contract discovery reads its candidates from the notices held here, and
+                        // the fixture seeds none for either caller, so the one role each route
+                        // admits is answered an empty list without the Contract Service being
+                        // asked. ContractDiscoveryIT owns the populated list and the 502.
+                        row(
+                                Endpoint.LIST_MY_AVAILABLE_CONTRACTS,
+                                ok,
+                                denied,
+                                denied,
+                                denied,
+                                challenged),
+                        row(
+                                Endpoint.LIST_AVAILABLE_CONTRACTS,
+                                denied,
+                                ok,
+                                denied,
+                                denied,
+                                challenged))
                 .flatMap(row -> row);
     }
 
