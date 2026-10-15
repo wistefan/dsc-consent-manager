@@ -29,6 +29,10 @@ import lombok.Setter;
  *   <li>{@code CONSENTS_PAGE_DEFAULT_SIZE} &rarr; {@code
  *       consent-manager.consents.page-default-size}
  *   <li>{@code CONSENTS_PAGE_MAX_SIZE} &rarr; {@code consent-manager.consents.page-max-size}
+ *   <li>{@code CONTRACT_DISCOVERY_MAX_CONCURRENCY} &rarr; {@code
+ *       consent-manager.contract-discovery.max-concurrency}
+ *   <li>{@code CONTRACT_DISCOVERY_MAX_DURATION} &rarr; {@code
+ *       consent-manager.contract-discovery.max-duration}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut
@@ -339,5 +343,35 @@ public class ConsentManagerConfiguration {
          * the ceiling never turns a caller's working request into a {@code 400}.
          */
         private int pageMaxSize = DEFAULT_PAGE_MAX_SIZE;
+    }
+
+    /**
+     * Bounds on one contract-discovery listing, bound under {@code
+     * consent-manager.contract-discovery}.
+     */
+    @Getter
+    @Setter
+    @ConfigurationProperties("contract-discovery")
+    public static class ContractDiscovery {
+
+        /**
+         * Contracts one listing reads from the Contract Service at once when none is configured.
+         */
+        public static final int DEFAULT_MAX_CONCURRENCY = 8;
+
+        /** Longest one listing waits on the Contract Service when none is configured. */
+        public static final Duration DEFAULT_MAX_DURATION = Duration.ofSeconds(30);
+
+        /**
+         * Contracts one listing reads from the Contract Service at once, bound to {@code
+         * CONTRACT_DISCOVERY_MAX_CONCURRENCY}; at least one.
+         */
+        private int maxConcurrency = DEFAULT_MAX_CONCURRENCY;
+
+        /**
+         * Longest one listing waits on the Contract Service before answering {@code 502}, bound to
+         * {@code CONTRACT_DISCOVERY_MAX_DURATION}; a single uncached fetch alone may take ~47s.
+         */
+        private Duration maxDuration = DEFAULT_MAX_DURATION;
     }
 }

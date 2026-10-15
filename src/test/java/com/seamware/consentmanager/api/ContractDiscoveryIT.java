@@ -98,7 +98,7 @@ class ContractDiscoveryIT extends PrivacyNoticeApiTestSupport {
     @DisplayName("a contract two of the subject's participants share is listed once, both sides")
     void subjectSeesEachContractOnceWithEverySide() {
         String shared = serveEcosystem("discovery-a-shared");
-        String bilateral = serveRawBilateral("discovery-b-bilateral");
+        String bilateral = serveBilateralConsumedByCaller("discovery-b-bilateral");
         String unrelated = serveEcosystem("discovery-c-unrelated");
         seed(shared, NOTICE_TITLE, CALLER, CONSUMER, payload());
         seed(bilateral, NOTICE_TITLE, FIXTURE_PROVIDER, CALLER, payload());
@@ -118,7 +118,7 @@ class ContractDiscoveryIT extends PrivacyNoticeApiTestSupport {
                 .containsEntry("shape", "BILATERAL")
                 .containsEntry("roles", List.of("CONSUMER"))
                 .containsEntry("dataProvider", FIXTURE_PROVIDER)
-                .containsEntry("dataConsumer", CONSUMER)
+                .containsEntry("dataConsumer", CALLER)
                 .containsEntry("status", "signed")
                 .doesNotContainKey("ecosystem");
         assertThat(contracts.ecosystemRequestCount(contractId(unrelated)))
@@ -148,7 +148,7 @@ class ContractDiscoveryIT extends PrivacyNoticeApiTestSupport {
     @DisplayName("a participant sees the contracts it takes the requested side in, marked so")
     void participantSeesOneSide(String path, String role, String prefix) {
         String provided = serveEcosystem(prefix + "-provided");
-        String consumed = serveRawBilateral(prefix + "-consumed");
+        String consumed = serveBilateralConsumedByCaller(prefix + "-consumed");
         seed(provided, NOTICE_TITLE, CALLER, CONSUMER, payload());
         seed(consumed, NOTICE_TITLE, FIXTURE_PROVIDER, CALLER, payload());
         String expected = "provider".equals(role) ? provided : consumed;
@@ -192,6 +192,34 @@ class ContractDiscoveryIT extends PrivacyNoticeApiTestSupport {
         assertThat(list(response)).extracting("contractUri").containsExactly(known);
     }
 
+    static Stream<Arguments> unconfirmedSides() {
+        return Stream.of(
+                Arguments.of(PATH_PROVIDER, "discovery-unconfirmed-p", CALLER, CONSUMER),
+                Arguments.of(PATH_CONSUMER, "discovery-unconfirmed-c", FIXTURE_PROVIDER, CALLER));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unconfirmedSides")
+    @DisplayName("a contract whose document no longer names the caller on the side is left out")
+    void sideTheDocumentNoLongerConfirmsIsLeftOut(
+            String path, String prefix, String provider, String consumer) {
+        String confirmed = serveEcosystem(prefix + "-a-confirmed");
+        String unconfirmed =
+                serveRawBilateral(
+                        prefix + "-b-unconfirmed",
+                        ContractFixtures.body(ContractFixtures.BILATERAL));
+        seed(confirmed, NOTICE_TITLE, CALLER, CONSUMER, payload());
+        seed(unconfirmed, NOTICE_TITLE, provider, consumer, payload());
+
+        HttpResponse<String> response = get(path);
+
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        assertThat(list(response))
+                .extracting("contractUri")
+                .as("the notice still claims the side, but the document names someone else")
+                .doesNotContain(unconfirmed);
+    }
+
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"garbage", "Provider", "PROVIDER"})
     @DisplayName("a role other than provider or consumer is refused with 400")
@@ -233,10 +261,16 @@ class ContractDiscoveryIT extends PrivacyNoticeApiTestSupport {
                 .startsWith("{");
     }
 
-    /** Serves the bilateral fixture verbatim, so neither of its parties is the caller. */
-    private String serveRawBilateral(String contractId) {
-        contracts.serveBilateralContract(
-                contractId, ContractFixtures.body(ContractFixtures.BILATERAL));
+    /** Serves the bilateral fixture with the caller standing in as its consumer. */
+    private String serveBilateralConsumedByCaller(String contractId) {
+        return serveRawBilateral(
+                contractId,
+                ContractFixtures.body(ContractFixtures.BILATERAL).replace(CONSUMER, CALLER));
+    }
+
+    /** Serves a document on the bilateral endpoint alone, returning the URI it is held under. */
+    private String serveRawBilateral(String contractId, String document) {
+        contracts.serveBilateralContract(contractId, document);
         return uri(contractId);
     }
 

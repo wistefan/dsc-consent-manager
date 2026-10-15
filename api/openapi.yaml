@@ -2365,12 +2365,19 @@ paths:
         **The candidate set is this service's own.** The Contract Service offers
         no listing, so the contracts considered are those a participant has an
         active privacy notice for here; each is then read from the Contract
-        Service. One the Contract Service no longer knows is left out.
+        Service. One the Contract Service no longer knows is left out, and a
+        side a notice claims is kept only while the fetched document still puts
+        the participant on it - a revoked member or signature, or a document
+        naming someone else, drops that side, and a contract left with none is
+        omitted.
 
 
         **Never a partial list.** If the Contract Service fails for any contract
         the answer is `502` and no list at all, because a truncated list would
-        read as a complete one.
+        read as a complete one. Contracts are read concurrently, up to
+        `CONTRACT_DISCOVERY_MAX_CONCURRENCY` at once, and a listing still
+        unanswered after `CONTRACT_DISCOVERY_MAX_DURATION` (default 30s) is
+        likewise `502`.
       tags:
         - ContractDiscovery
       security:
@@ -2414,8 +2421,9 @@ paths:
 
         The candidate set and the no-partial-list rule are those of
         `GET /contracts/available`: contracts the participant has an active
-        privacy notice for here, each read from the Contract Service, and a
-        Contract Service failure answered `502` with no list.
+        privacy notice for here, each read from the Contract Service and kept
+        only while its document still puts the participant on that side, and a
+        Contract Service failure or overrun deadline answered `502` with no list.
       tags:
         - ContractDiscovery
       security:
