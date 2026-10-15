@@ -13,7 +13,12 @@ that work:
 
 The configuration contract stays as it is (`consent-manager.receipts.signing-key` /
 `retired-verification-keys` / `ephemeral-signing-key`, inline JWK). The ticket's PEM `keys[]` /
-`active-key-id` contract is **not** added; the human decided this on the ticket.
+`active-key-id` contract is **not** added. The human (@wistefan) confirmed this decision on PR #25
+("I confirm the decision", review comment 5792, replying to the question in 5787). Every acceptance
+criterion that names a PEM file therefore applies to the variable instead: a startup failure names
+`RECEIPTS_SIGNING_KEY` or `RECEIPTS_RETIRED_VERIFICATION_KEYS`. `SigningConfiguration` and
+`JwksController` from the ticket's file list are not created, because `ConsentManagerConfiguration.Receipts`
+and `ReceiptSigningController` already fill those roles.
 
 ### Design decisions (recorded in ADR-0014 in Step 5)
 1. **Detached means beside the receipt, not inside it.** `format=receipt|receipt-kantara` answers a
@@ -27,8 +32,14 @@ The configuration contract stays as it is (`consent-manager.receipts.signing-key
      transaction that moves a row to `GRANTED`: a decision via `ConsentWriter.decide` (create, or
      answer a `PENDING`) and a resume via `ConsentWriter.resume`. Its canonical text and JWS are stored
      in `consent_receipts`, and `format=receipt-kantara` serves those stored bytes. A row reaches
-     `GRANTED` at most once (`ConsentStateMachine`: only `PENDING → GRANTED` or created `GRANTED`), so
-     the table is keyed by `consent_id`.
+     `GRANTED` at most once, so the table is keyed by `consent_id`. `ConsentStateMachine` admits three
+     routes into `GRANTED`: creation, `PENDING → GRANTED` and `DRAFT → GRANTED`. `DRAFT` cannot be
+     created today, so that third edge is unreachable, but it is still in the table.
+   - Issuance is **structural**, not tied to a call site. It happens in `ConsentWriter`'s two private
+     persistence helpers (`saveNew`, `saveUpdated`), which every consent write passes through, and is
+     triggered by the *recorded* status being `GRANTED`. Any present or future route into `GRANTED`,
+     including `move(…, GRANTED, …)` or a later `DRAFT` answer, therefore issues a receipt without
+     further wiring.
    - The ISO/IEC 29184 record carries the live `status` and `updatedAt` and is rendered for every
      status. It therefore stays rendered at read time and is signed on each read.
    - The ADR-0012 refusal (`400` for Kantara on a non-`GRANTED` consent) is unchanged.
@@ -150,10 +161,13 @@ configuration stay as they are.
   3. `ConsentSigningService.sign`;
   4. save an `IssuedReceipt`.
   It is a separate bean, called from inside the writer's transaction.
-- `ConsentWriter`: after the consent and its event are saved, call the issuer whenever the recorded
-  status is `GRANTED`, in `decide` (both the `create` and the `answer` branch) and in `resume`.
-  REFUSED/PENDING write nothing. A `ReceiptSigningException` propagates out of the `@Transactional`
-  method, so the consent, its event, any supersede-revocation and the receipt all roll back.
+- `ConsentWriter`: call the issuer in the private helpers `saveNew` and `saveUpdated`, after the
+  consent and its event are saved, whenever `recorded.consent().getStatus() == GRANTED`. Do **not**
+  call it from `decide`, `resume` or `move` themselves; one structural point covers every route into
+  `GRANTED` (see decision 2). `affirm` saves only an event and changes no status, so it issues
+  nothing. Any other recorded status writes nothing. A `ReceiptSigningException` propagates out of
+  the `@Transactional` method, so the consent, its event, any supersede-revocation and the receipt
+  all roll back.
   `ConsentService.record` and `ConsentLifecycleService.resume` catch only `DataAccessException`, so
   the failure becomes `500`; confirm that and leave it so.
 - Read side: `format=receipt-kantara` keeps the ADR-0012 `400` for non-`GRANTED`. It then loads the
@@ -171,9 +185,18 @@ configuration stay as they are.
     - Each path stores exactly one row, and its `jws` verifies over `canonical_receipt` through
       `verifyCanonical`.
     - A `REFUSED` decision stores none.
-    - Two consecutive `receipt-kantara` reads return the identical `jws`. ECDSA is randomised, so
-      equal values prove the receipt was not re-signed.
+    - A Kantara read does not sign. The IT replaces `JwsConsentSigningService` with a delegating
+      bean that counts `sign` calls. The bean is gated by its own `@Requires` property, so it
+      activates only in this IT. After a grant, two `receipt-kantara` reads leave the count
+      unchanged and return the identical `jws`. Unlike comparing `jws` values, the count works for
+      every algorithm: RS256 (PKCS#1 v1.5) is deterministic, so equal `jws` values alone would not
+      prove that nothing was re-signed.
     - `JCS(served receipt)` equals the stored `canonical_receipt`.
+  - `ConsentWriterTest` (unit, mocked repositories and issuer), parameterized over every edge into
+    `GRANTED` that `ConsentStateMachine` lists: creation, `PENDING → GRANTED` through `decide`, through
+    `resume`, and through `move`. Each issues exactly once. A parameterized row for each non-`GRANTED`
+    target (`REFUSED`, `PENDING`, `REVOKED`, …) issues nothing. This pins the structural hook, so a new
+    caller cannot produce a grant without a receipt.
   - `SigningFailureIT` uses a `@Replaces(JwsConsentSigningService.class)` failing bean gated by
     `@Requires(property = "test.signing.fail", value = "true")`, so it activates only there.
     - `POST /consents` GRANTED → `500` problem detail, with no consent, event or receipt row left
@@ -216,7 +239,10 @@ configuration stay as they are.
   the five design decisions in the Overview: the wrapper versus the embedded member, Kantara persisted
   versus ISO signed on read, the unchanged grant response, erasure deleting stored receipts, and no
   backfill. Alternatives: persisting the ISO record (it would go stale on the next move), a response
-  header, signing on every read, and the PEM `keys[]` contract (declined, with the human's reason).
+  header, signing on every read, and the PEM `keys[]` contract. The PEM contract was declined, and the
+  ADR cites the human's confirmation on PR #25 (review comment 5792). The ADR also records the
+  two-deploy rotation, explaining why the JWKS cache forces it and why the retired-keys variable
+  carries upcoming keys too.
   Add a "Superseded in part by ADR-0014" note to ADR-0013's receipt-signature bullet. Do not rewrite
   ADR-0013's decision.
 - `docs/security.md` "Receipt signing" paragraph:
@@ -224,20 +250,42 @@ configuration stay as they are.
   - `typ: JOSE`;
   - the wrapper;
   - grant-time issuance and that a failure fails the grant;
-  - JWKS caching, and that a rotation becomes visible to verifiers within `max-age`. This is why a
-    retired key must stay published, and a new key should be added a cache lifetime before it
-    signs.
+  - JWKS caching, and that a verifier may hold a JWKS up to `max-age` (one hour) old. Two things
+    follow: a retired key must stay published, and a new key must be published one cache lifetime
+    before it signs. Use the two-deploy rotation described below.
   Also update the endpoint table, the `security` package listing and the erasure section.
 - `.env.sample` + `application.yml` comments on `RECEIPTS_SIGNING_KEY`: document generating a key.
   ES256 is preferred and RS256 is for compatibility. Give the ticket's `openssl` commands plus a
   conversion to the private JWK the variable takes (e.g. `step crypto key format --jwk` or
   `step crypto jwk create … --kty EC --crv P-256 --alg ES256 --use sig --kid … --no-password
-  --insecure`; verify the exact flags). Also document the rotation procedure: move the old public JWK
-  to `RECEIPTS_RETIRED_VERIFICATION_KEYS`, set the new key, redeploy, and retire the old key only
-  when no receipt needs it. No generation scripts are shipped.
+  --insecure`; verify the exact flags). No generation scripts are shipped.
+- Document the rotation procedure in `.env.sample`, `application.yml`, `docs/security.md` and
+  ADR-0014. It takes **two deploys**, because the JWKS is cacheable for `max-age` (3600 s):
+  1. **Pre-publish.** Generate the new key. Add its *public* JWK to
+     `RECEIPTS_RETIRED_VERIFICATION_KEYS`, leave `RECEIPTS_SIGNING_KEY` unchanged, and deploy. The new
+     key now appears in the JWKS but signs nothing.
+  2. **Wait** at least one `max-age` (one hour), so that every cached JWKS includes the new key.
+  3. **Switch.** Set `RECEIPTS_SIGNING_KEY` to the new private JWK. In the same change, remove the new
+     key's entry from `RECEIPTS_RETIRED_VERIFICATION_KEYS`, because a `kid` present in both fails
+     startup with the duplicate-key-id message, and add the old key's public JWK there. Deploy.
+  4. **Retire** the old public JWK only when no stored or distributed receipt still needs it.
+     Receipts are long-lived, so normally it stays.
+  If the procedure is skipped and a single deploy switches the key directly, receipts signed by the
+  new key fail verification for up to an hour at any verifier holding a cached JWKS.
+
+  The variable name is narrower than its role. `RECEIPTS_RETIRED_VERIFICATION_KEYS` holds every
+  published key that does not sign, which includes keys that are *upcoming* (step 1) as well as
+  retired ones. Document this next to the variable. Do not rename it: renaming it would change the
+  configuration contract that the human decided to keep.
+- `SigningKeyStore` (Step 2) must accept an upcoming key in the retired list exactly as it accepts a
+  retired one. The Step 4 `JwksIT` row "every retired key is published" covers this, so the
+  procedure needs no extra code.
 - `AGENTS.md`: update the project structure for the `signing/` package, `IssuedReceipt`,
   `ConsentReceiptIssuer`, V5 and ADR-0014, and add a Key Conventions bullet on receipt issuance:
-  - the Kantara receipt is issued once, in the grant transaction;
+  - the Kantara receipt is issued once, in the grant transaction, from `ConsentWriter.saveNew` /
+    `saveUpdated` keyed on the recorded status; never wire issuance at a call site;
+  - key rotation is the two-deploy procedure (pre-publish through the retired list, wait `max-age`,
+    then switch);
   - a signing failure fails the grant;
   - never re-sign a stored receipt.
 - Acceptance: docs are consistent with the code, `./mvnw verify` (Spotless included) is green, and no
