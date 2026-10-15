@@ -1,11 +1,8 @@
-package com.seamware.consentmanager.security;
+package com.seamware.consentmanager.signing;
 
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
-import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.JWSObject;
 import com.nimbusds.jose.JWSSigner;
-import com.nimbusds.jose.Payload;
 import com.nimbusds.jose.crypto.factories.DefaultJWSSignerFactory;
 import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.ECKey;
@@ -18,33 +15,26 @@ import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import io.micronaut.context.annotation.Context;
 import io.micronaut.core.annotation.NonNull;
-import io.micronaut.json.JsonMapper;
-import io.micronaut.json.tree.JsonNode;
-import java.io.IOException;
-import java.io.UncheckedIOException;
+import io.micronaut.core.annotation.Nullable;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
-import org.erdtman.jcs.JsonCanonicalizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Signs consent receipts with this deployment's receipt key and holds the public keys it publishes.
+ * This deployment's receipt signing key and the public keys a receipt verifies against.
  *
- * <p>A signature is a detached compact JWS (RFC 7515 Appendix F) over the RFC 8785 canonical form
- * of the receipt without its {@value #SIGNATURE_MEMBER} member. A {@link Context} bean, so a
- * missing or unusable key fails startup rather than the first receipt read.
+ * <p>A {@link Context} bean, so a missing or unusable key fails startup rather than the first
+ * signature. A startup message names the variable at fault and never quotes key material.
  */
 @Context
-public class ReceiptSigner {
-
-    /** Receipt member carrying the signature, which is never part of what it signs. */
-    public static final String SIGNATURE_MEMBER = "signature";
+public class SigningKeyStore {
 
     /** Curve of the key generated when none is configured and an ephemeral one is allowed. */
     static final Curve EPHEMERAL_CURVE = Curve.P_256;
@@ -86,77 +76,67 @@ public class ReceiptSigner {
             "RECEIPTS_RETIRED_VERIFICATION_KEYS must hold public keys only, since it is published.";
 
     private static final String DUPLICATE_KEY_ID =
-            "Receipt verification key id %s is published more than once.";
+            "RECEIPTS_RETIRED_VERIFICATION_KEYS publishes receipt verification key id %s more than"
+                    + " once.";
 
     private static final String EPHEMERAL_KEY =
             "Signing receipts with a key generated at startup (kid {}): every receipt it signs"
                     + " stops verifying when this instance restarts. Set RECEIPTS_SIGNING_KEY.";
 
-    private static final Logger LOG = LoggerFactory.getLogger(ReceiptSigner.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SigningKeyStore.class);
 
-    private final JsonMapper json;
-    private final JWSHeader header;
     private final JWSSigner signer;
-    private final JWK publicKey;
+    private final JWSAlgorithm algorithm;
+    private final String keyId;
     private final List<JWK> verificationKeys;
 
-    public ReceiptSigner(ConsentManagerConfiguration.Receipts settings, JsonMapper json) {
-        this.json = json;
+    public SigningKeyStore(ConsentManagerConfiguration.Receipts settings) {
         JWK key = load(settings);
-        JWSAlgorithm algorithm = algorithmFor(key, SIGNING_KEY_VARIABLE);
-        String keyId = keyIdOf(key);
+        this.algorithm = algorithmFor(key, SIGNING_KEY_VARIABLE);
+        this.keyId = keyIdOf(key);
+        JWK publicKey;
         try {
             this.signer = new DefaultJWSSignerFactory().createJWSSigner(key, algorithm);
-            this.publicKey = publish(key, algorithm, keyId);
-        } catch (JOSEException | ParseException e) {
-            throw new IllegalStateException(UNUSABLE_KEY.formatted(algorithm), e);
+            publicKey = publish(key, algorithm, keyId);
+        } catch (JOSEException | ParseException | IllegalArgumentException e) {
+            // Nimbus refuses a short RSA key with IllegalArgumentException. The cause is dropped:
+            // nothing proves a JOSE error never quotes the key it rejected.
+            throw new IllegalStateException(UNUSABLE_KEY.formatted(algorithm));
         }
-        this.header = new JWSHeader.Builder(algorithm).keyID(keyId).build();
         this.verificationKeys = verificationKeys(publicKey, settings.getRetiredVerificationKeys());
     }
 
-    /**
-     * The detached JWS of {@code receipt}; a {@value #SIGNATURE_MEMBER} it already carries is
-     * ignored.
-     */
+    /** Signs with the active private key, which never leaves this bean. */
     @NonNull
-    public String sign(@NonNull Object receipt) {
-        JWSObject jws = new JWSObject(header, new Payload(canonicalForm(receipt)));
-        try {
-            jws.sign(signer);
-        } catch (JOSEException e) {
-            throw new IllegalStateException("Could not sign a consent receipt", e);
-        }
-        return jws.serialize(true);
+    public JWSSigner signer() {
+        return signer;
     }
 
-    /** The public half of the signing key, naming the {@code kid}, {@code use} and {@code alg}. */
+    /** The algorithm the active key signs with, as its published JWK names it. */
     @NonNull
-    public JWK publicKey() {
-        return publicKey;
+    public JWSAlgorithm algorithm() {
+        return algorithm;
+    }
+
+    /** The active key's {@code kid}: configured, else its RFC 7638 thumbprint. */
+    @NonNull
+    public String keyId() {
+        return keyId;
     }
 
     /**
-     * Every key a receipt may verify against: {@link #publicKey()} first, then the retired ones.
+     * Every public key a receipt may verify against, naming {@code kid}, {@code use} and {@code
+     * alg}: the active key first, then the retired ones.
      */
     @NonNull
     public List<JWK> verificationKeys() {
         return verificationKeys;
     }
 
-    private byte[] canonicalForm(Object receipt) {
-        try {
-            Map<String, JsonNode> members = new LinkedHashMap<>();
-            for (Map.Entry<String, JsonNode> member : json.writeValueToTree(receipt).entries()) {
-                if (!SIGNATURE_MEMBER.equals(member.getKey())) {
-                    members.put(member.getKey(), member.getValue());
-                }
-            }
-            return new JsonCanonicalizer(json.writeValueAsBytes(JsonNode.createObjectNode(members)))
-                    .getEncodedUTF8();
-        } catch (IOException e) {
-            throw new UncheckedIOException("Could not canonicalize a consent receipt", e);
-        }
+    /** The published key whose {@code kid} is {@code keyId}; empty for an unknown or null one. */
+    @NonNull
+    public Optional<JWK> verificationKey(@Nullable String keyId) {
+        return verificationKeys.stream().filter(key -> key.getKeyID().equals(keyId)).findFirst();
     }
 
     private static JWK load(ConsentManagerConfiguration.Receipts settings) {
@@ -209,7 +189,7 @@ public class ReceiptSigner {
             try {
                 keys.add(publish(key, algorithmFor(key, RETIRED_KEYS_VARIABLE), keyId));
             } catch (ParseException e) {
-                throw new IllegalStateException(MALFORMED_RETIRED_KEYS, e);
+                throw new IllegalStateException(MALFORMED_RETIRED_KEYS);
             }
         }
         return List.copyOf(keys);

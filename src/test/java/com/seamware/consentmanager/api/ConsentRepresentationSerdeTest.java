@@ -8,6 +8,8 @@ import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiC
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiControllersInnerAddress;
 import com.seamware.consentmanager.api.generated.model.ConsentRepresentation;
 import com.seamware.consentmanager.api.generated.model.ConsentResponse;
+import com.seamware.consentmanager.api.generated.model.SignedConsentReceipt;
+import com.seamware.consentmanager.api.generated.model.SignedConsentReceiptKantara;
 import com.seamware.consentmanager.support.TestJson;
 import io.micronaut.core.type.Argument;
 import java.io.IOException;
@@ -40,6 +42,8 @@ class ConsentRepresentationSerdeTest {
     private static final String POLICY_URL = "https://contract.example.org/v1/contracts/1";
     private static final String NOT_STATED = "";
     private static final String SIGNATURE = "eyJhbGciOiJFUzI1NiJ9..c2lnbmF0dXJl";
+    private static final String RECEIPT = "receipt";
+    private static final String JWS = "jws";
 
     static Stream<ConsentRepresentation> representations() {
         return Stream.of(
@@ -52,37 +56,39 @@ class ConsentRepresentationSerdeTest {
                         CONSUMER,
                         AT,
                         AT),
-                new ConsentReceipt(
-                        ID,
-                        ConsentReceipt.StandardEnum.ISO_IEC_29184_2020,
-                        ID,
-                        ID,
-                        SUBJECT,
-                        ConsentReceipt.StatusEnum.GRANTED,
-                        true,
-                        PROVIDER,
-                        CONSUMER,
-                        AT,
-                        AT,
+                new SignedConsentReceipt(
+                        new ConsentReceipt(
+                                ID,
+                                ConsentReceipt.StandardEnum.ISO_IEC_29184_2020,
+                                ID,
+                                ID,
+                                SUBJECT,
+                                ConsentReceipt.StatusEnum.GRANTED,
+                                true,
+                                PROVIDER,
+                                CONSUMER,
+                                AT,
+                                AT),
                         SIGNATURE),
-                new ConsentReceiptKantara(
-                        ConsentReceiptKantara.VersionEnum.KI_CR_V1_1_0,
-                        JURISDICTION,
-                        EPOCH_SECONDS,
-                        COLLECTION_METHOD,
-                        ID.toString(),
-                        POLICY_URL,
-                        SUBJECT,
-                        List.of(
-                                new ConsentReceiptKantaraPiiControllersInner(
-                                        PROVIDER,
-                                        PROVIDER,
-                                        new ConsentReceiptKantaraPiiControllersInnerAddress(),
-                                        NOT_STATED,
-                                        NOT_STATED)),
-                        List.of(),
-                        false,
-                        List.of(),
+                new SignedConsentReceiptKantara(
+                        new ConsentReceiptKantara(
+                                ConsentReceiptKantara.VersionEnum.KI_CR_V1_1_0,
+                                JURISDICTION,
+                                EPOCH_SECONDS,
+                                COLLECTION_METHOD,
+                                ID.toString(),
+                                POLICY_URL,
+                                SUBJECT,
+                                List.of(
+                                        new ConsentReceiptKantaraPiiControllersInner(
+                                                PROVIDER,
+                                                PROVIDER,
+                                                new ConsentReceiptKantaraPiiControllersInnerAddress(),
+                                                NOT_STATED,
+                                                NOT_STATED)),
+                                List.of(),
+                                false,
+                                List.of()),
                         SIGNATURE));
     }
 
@@ -106,10 +112,17 @@ class ConsentRepresentationSerdeTest {
     /** An enum whose value is no Java identifier must reach the wire as its value, not its name. */
     @ParameterizedTest
     @MethodSource("versionMarkers")
+    @SuppressWarnings("unchecked")
     void writesAnEnumAsItsValue(ConsentRepresentation value, String property, String wire)
             throws IOException {
         assertThat(tree(Argument.of(ConsentRepresentation.class), value))
-                .containsEntry(property, wire);
+                .containsOnlyKeys(RECEIPT, JWS)
+                .containsEntry(JWS, SIGNATURE)
+                .extractingByKey(RECEIPT)
+                .satisfies(
+                        receipt ->
+                                assertThat((Map<String, Object>) receipt)
+                                        .containsEntry(property, wire));
     }
 
     @SuppressWarnings("unchecked")

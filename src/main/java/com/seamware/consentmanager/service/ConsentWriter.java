@@ -47,12 +47,17 @@ public class ConsentWriter {
     private final ConsentRepository consents;
     private final ConsentEventRepository events;
     private final ConsentFactory factory;
+    private final ConsentReceiptIssuer issuer;
 
     public ConsentWriter(
-            ConsentRepository consents, ConsentEventRepository events, ConsentFactory factory) {
+            ConsentRepository consents,
+            ConsentEventRepository events,
+            ConsentFactory factory,
+            ConsentReceiptIssuer issuer) {
         this.consents = consents;
         this.events = events;
         this.factory = factory;
+        this.issuer = issuer;
     }
 
     /**
@@ -339,13 +344,25 @@ public class ConsentWriter {
     private RecordedConsent saveNew(RecordedConsent recorded) {
         consents.save(recorded.consent());
         events.save(recorded.event());
-        return recorded;
+        return issueIfGranted(recorded);
     }
 
     /** Applies a move to a stored consent and appends the event recording it. */
     private RecordedConsent saveUpdated(RecordedConsent recorded) {
         consents.update(recorded.consent());
         events.save(recorded.event());
+        return issueIfGranted(recorded);
+    }
+
+    /**
+     * Issues the grant receipt of a write that recorded {@code GRANTED}. Hooked here rather than at
+     * any caller, so every route into {@code GRANTED} - present or future - issues one; a signing
+     * failure throws and rolls the whole write back.
+     */
+    private RecordedConsent issueIfGranted(RecordedConsent recorded) {
+        if (recorded.consent().getStatus() == ConsentStatus.GRANTED) {
+            issuer.issue(recorded);
+        }
         return recorded;
     }
 

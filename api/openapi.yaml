@@ -1786,8 +1786,10 @@ paths:
             receipt reads the same after its notice is archived or regenerated.
             A Kantara receipt attests that consent was given and is therefore
             refused with `400` for a consent that is not `GRANTED`; an ISO/IEC
-            29184 record carries the status and is rendered for every one. Any
-            other value is refused with `400`.
+            29184 record carries the status and is rendered for every one. A
+            receipt is answered as `{receipt, jws}`: the receipt itself and,
+            beside it, the detached JWS over it. Any other value is refused
+            with `400`.
           schema:
             type: string
             enum:
@@ -2370,8 +2372,10 @@ paths:
             receipt reads the same after its notice is archived or regenerated.
             A Kantara receipt attests that consent was given and is therefore
             refused with `400` for a consent that is not `GRANTED`; an ISO/IEC
-            29184 record carries the status and is rendered for every one. Any
-            other value is refused with `400`.
+            29184 record carries the status and is rendered for every one. A
+            receipt is answered as `{receipt, jws}`: the receipt itself and,
+            beside it, the detached JWS over it. Any other value is refused
+            with `400`.
           schema:
             type: string
             enum:
@@ -2540,8 +2544,8 @@ paths:
       summary: Publish the keys consent receipts are signed with
       description: >
         Returns the JSON Web Key Set (RFC 7517) holding the public half of the
-        key every consent receipt's `signature` is made with, so anyone holding
-        a receipt - the data subject, a participant, an auditor - can verify it
+        key every consent receipt's `jws` is made with, so anyone holding a
+        receipt - the data subject, a participant, an auditor - can verify it
         without a credential. Each key names its `kid`, which a receipt's JWS
         header repeats. The active key comes first, followed by any retired keys
         earlier receipts were signed with, so a receipt saved before a key
@@ -2554,6 +2558,15 @@ paths:
       responses:
         "200":
           description: The published signing keys.
+          headers:
+            Cache-Control:
+              description: >
+                Always `public, max-age=3600`, so verifiers and intermediaries may
+                hold the set for an hour. A rotation signs with the new key at once,
+                so a verifier meeting a `kid` its cached set lacks should refetch.
+              schema:
+                type: string
+                enum: ["public, max-age=3600"]
           content:
             application/json:
               schema:
@@ -2753,6 +2766,48 @@ components:
         - totalElements
         - totalPages
 
+    # The signed receipt wrappers are declared inline so `receipt` is a
+    # same-document ref and generates as the typed model. The JWS sits beside
+    # the receipt rather than inside it, so the receipt is signed whole and
+    # verifies without removing anything from it (ADR-0013).
+    SignedConsentReceipt:
+      type: object
+      description: An ISO/IEC 29184 consent record and the detached JWS over it.
+      properties:
+        receipt:
+          $ref: "#/components/schemas/ConsentReceipt"
+        jws:
+          type: string
+          description: >
+            Detached compact JWS (RFC 7515 Appendix F, `header..signature`) over
+            the RFC 8785 (JCS) canonical form of `receipt`. Verify it against
+            the key `GET /.well-known/jwks.json` publishes under the header's
+            `kid`. An ECDSA signature is randomized, so two reads of one receipt
+            may carry different signatures over the same content.
+          example: "eyJraWQiOiJyZWNlaXB0cyIsImFsZyI6IkVTMjU2In0..MEUCIQ"
+      required:
+        - receipt
+        - jws
+
+    SignedConsentReceiptKantara:
+      type: object
+      description: A Kantara KI-CR-v1.1.0 consent receipt and the detached JWS over it.
+      properties:
+        receipt:
+          $ref: "#/components/schemas/ConsentReceiptKantara"
+        jws:
+          type: string
+          description: >
+            Detached compact JWS (RFC 7515 Appendix F, `header..signature`) over
+            the RFC 8785 (JCS) canonical form of `receipt`. Verify it against
+            the key `GET /.well-known/jwks.json` publishes under the header's
+            `kid`. Signed once, when the consent was granted, and served as
+            stored, so every read of one receipt carries the same signature.
+          example: "eyJraWQiOiJyZWNlaXB0cyIsImFsZyI6IkVTMjU2In0..MEUCIQ"
+      required:
+        - receipt
+        - jws
+
     # Written out here so its members are same-document refs. With
     # `useOneOfInterfaces` the generator turns it into an interface the three
     # representations implement, which is what lets one handler return any of
@@ -2760,12 +2815,12 @@ components:
     ConsentRepresentation:
       description: >
         One consent in the representation the request's `format` selected:
-        `ConsentResponse` for `full`, `ConsentReceipt` for `receipt`,
-        `ConsentReceiptKantara` for `receipt-kantara`.
+        `ConsentResponse` for `full`, `SignedConsentReceipt` for `receipt`,
+        `SignedConsentReceiptKantara` for `receipt-kantara`.
       oneOf:
         - $ref: "#/components/schemas/ConsentResponse"
-        - $ref: "#/components/schemas/ConsentReceipt"
-        - $ref: "#/components/schemas/ConsentReceiptKantara"
+        - $ref: "#/components/schemas/SignedConsentReceipt"
+        - $ref: "#/components/schemas/SignedConsentReceiptKantara"
 
     JsonWebKey:
       $ref: "./components/schemas/JsonWebKey.yaml"

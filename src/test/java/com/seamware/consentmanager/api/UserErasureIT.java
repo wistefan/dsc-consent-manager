@@ -7,13 +7,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentEventState;
+import com.seamware.consentmanager.domain.ConsentEventTrigger;
 import com.seamware.consentmanager.domain.ConsentStatus;
+import com.seamware.consentmanager.domain.IssuedReceipt;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
+import com.seamware.consentmanager.repository.IssuedReceiptRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
@@ -38,6 +41,8 @@ import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.io.IOException;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -84,6 +89,13 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
     private static final String BYSTANDER_IDENTIFIER = "urn:test:user:erasure-bystander";
 
     /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Stand-ins for a stored receipt's content, which erasure never reads. */
+    private static final String PLACEHOLDER_RECEIPT = "{}";
+
+    private static final String PLACEHOLDER_JWS = "e30..c2ln";
+
+    private static final String PLACEHOLDER_KEY_ID = "erasure-it";
+
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject
@@ -103,6 +115,8 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
     @Inject ConsentRepository consents;
 
     @Inject ConsentEventRepository events;
+
+    @Inject IssuedReceiptRepository issuedReceipts;
 
     @Inject PrivacyNoticeRepository notices;
 
@@ -157,7 +171,13 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
                 grant(caller, ConsentStatus.PENDING, PROVIDER_PARTICIPANT, CONSUMER_PARTICIPANT);
         UUID alreadyRevoked =
                 grant(caller, ConsentStatus.REVOKED, PROVIDER_PARTICIPANT, CONSUMER_PARTICIPANT);
+        issueReceipt(outbound, caller);
         User bystander = bystander();
+        UUID bystanderGrant =
+                consents.findByUserIdAndStatus(bystander.getId(), ConsentStatus.GRANTED)
+                        .getFirst()
+                        .getId();
+        issueReceipt(bystanderGrant, bystander);
 
         HttpResponse<String> response = erase();
 
@@ -196,7 +216,12 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
                 .extracting(Consent::getId)
                 .containsExactlyInAnyOrder(outbound, inbound, unanswered, alreadyRevoked);
         assertThat(consents.findByUserIdAndStatus(callerId, ConsentStatus.GRANTED)).isEmpty();
-        assertThat(eventStatesOf(outbound)).containsExactly(ConsentEventState.CONSENT_REVOKED);
+        assertThat(eventStatesOf(outbound))
+                .containsExactly(
+                        ConsentEventState.CONSENT_GIVEN, ConsentEventState.CONSENT_REVOKED);
+        assertThat(issuedReceipts.findById(outbound))
+                .as("a signed receipt names the subject, so erasure deletes it")
+                .isEmpty();
         assertThat(eventStatesOf(inbound)).containsExactly(ConsentEventState.CONSENT_REVOKED);
         assertThat(eventStatesOf(unanswered)).containsExactly(ConsentEventState.CONSENT_TERMINATED);
         assertThat(eventStatesOf(alreadyRevoked))
@@ -209,6 +234,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo(BYSTANDER_IDENTIFIER);
         assertThat(links.findByIdUserId(bystanderId)).hasSize(1);
         assertThat(consents.findByUserIdAndStatus(bystanderId, ConsentStatus.GRANTED)).hasSize(1);
+        assertThat(issuedReceipts.findById(bystanderGrant)).isPresent();
     }
 
     @Test
@@ -396,6 +422,31 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
                                 NOTICE_CONTRACT_URI,
                                 noTerms()))
                 .getId();
+    }
+
+    /**
+     * Stores a grant receipt for a seeded consent, with the granting event it is dated by. Its
+     * content is a placeholder: erasure deletes the row and never reads it.
+     */
+    private void issueReceipt(UUID consentId, User subject) {
+        Instant grantedAt = Instant.now().minus(1, ChronoUnit.HOURS).truncatedTo(ChronoUnit.MICROS);
+        ConsentEvent given =
+                events.save(
+                        new ConsentEvent(
+                                consentId,
+                                ConsentEventState.CONSENT_GIVEN,
+                                ConsentEventTrigger.EXPLICIT.eventType(),
+                                subject.getIdentifier(),
+                                grantedAt,
+                                null));
+        issuedReceipts.save(
+                new IssuedReceipt(
+                        consentId,
+                        given.getId(),
+                        PLACEHOLDER_RECEIPT,
+                        PLACEHOLDER_JWS,
+                        PLACEHOLDER_KEY_ID,
+                        grantedAt));
     }
 
     /**

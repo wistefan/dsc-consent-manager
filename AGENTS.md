@@ -2,7 +2,7 @@
 
 ## Overview
 Reimplemented Consent Manager service: consent lifecycle management (creation, revocation,
-querying) as a stateless OAuth2 **resource server**. API-first — code is generated from the
+querying, signed receipts) as a stateless OAuth2 **resource server**. API-first — code is generated from the
 hand-authored OpenAPI specification.
 
 ## Tech Stack
@@ -32,7 +32,9 @@ api/
                                    # BulkRegistrationSummary, PrivacyNotice,
                                    # GeneratePrivacyNotice, GenerateByContract,
                                    # PrivacyNoticeResolution, ResolutionState,
-                                   # Consent, GrantConsent, ConsentRequest
+                                   # Consent, GrantConsent, ConsentRequest, ResumeConsent,
+                                   # ConsentResponse, ConsentValidity, ConsentReceipt,
+                                   # ConsentReceiptKantara, JsonWebKey, AvailableContract
   components/responses/            # BadRequest, Unauthorized, Forbidden, NotFound, Conflict
                                    # — every operation $refs the shared 401/403 from here
   templates/server/controller.mustache   # Only override: emits the x-principal parameter
@@ -66,10 +68,15 @@ src/main/java/com/seamware/consentmanager/
                                    # ProvisionedUser, RegistrationResult, BulkEntryResult,
                                    # UserSearchCriteria, ConsentDecision, ConsentDetails,
                                    # ConsentRequestCommand, RecordedConsent, UniqueViolation)
+                                   # Also ConsentLifecycleService, ConsentQueryService,
+                                   # ConsentLineageService, ConsentReceiptService (ISO 29184 /
+                                   # Kantara rendering), ConsentParties, ContractDiscoveryService
   security/                        # IdentityProviderRegistry, ClaimMapper, token validator,
                                    # Role, sealed ConsentManagerPrincipal + UserPrincipal /
                                    # ParticipantPrincipal / CatalogPrincipal,
-                                   # PrincipalResolutionFilter + argument binders
+                                   # PrincipalResolutionFilter + argument binders,
+                                   # ReceiptSigner (receipt JWS + published keys; ticket #77
+                                   # moves it to a new signing/ package)
   error/                           # ApiException + BadRequest/NotFound/Forbidden/Conflict/
                                    # UpstreamService, ProblemType, ApiExceptionHandler,
                                    # GlobalExceptionHandler, AuthorizationProblemHandler,
@@ -77,23 +84,26 @@ src/main/java/com/seamware/consentmanager/
                                    # ProblemErrorResponseProcessor
   api/                             # Concrete controllers extending generated Abstract*
                                    # (ApiStatus, User, Participant, ParticipantUser,
-                                   # PrivacyNotice, Consent, ConsentRequest),
+                                   # PrivacyNotice, Consent, ConsentRequest, ConsentLifecycle,
+                                   # ConsentQuery, ContractDiscovery, ReceiptSigning = JWKS),
+                                   # ConsentFormat, @OriginRoot (route outside API_PREFIX),
                                    # UserMapper, ParticipantMapper, PrivacyNoticeMapper,
                                    # ConsentMapper, JsonNullableSerde
 src/main/resources/
   application.yml, application-dev.yml, logback.xml
   static/swagger-ui/index.html     # makes the bundled Swagger UI work
   db/migration/V0__baseline.sql, V1__initial_schema.sql, V2__user_erasure_verifier.sql,
-               V3__participant_deregistration.sql
+               V3__participant_deregistration.sql, V4__privacy_notice_participant_contracts.sql
 src/test/java/com/seamware/consentmanager/
   support/                         # PostgresTestResource, KeycloakTestResource,
-                                   # KeycloakAndPostgresTestResource, OidcDiscoveryStub, Await
+                                   # KeycloakAndPostgresTestResource, OidcDiscoveryStub, Await,
+                                   # ConsentFixtures, ReceiptSignatures (JWS verify helper)
   api/                             # SpecSecurityConsistencyTest, SpecReferenceResolutionTest,
                                    # EndpointRoleMatrixIT (total over the parsed operations),
                                    # ParticipantSchemaParityTest, PrivacyNoticeSpecParityTest,
                                    # ConsentEnumParityTest,
                                    # ParticipantCredentialAbsenceTest — all build-failing
-docs/security.md, docs/user-identifiers.md, docs/adr/   # ADRs 0001-0009
+docs/security.md, docs/user-identifiers.md, docs/adr/   # ADRs 0001-0013
 compose.yaml, docker/Dockerfile, .env.sample
 ```
 
@@ -133,7 +143,7 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   concrete implementation, when `@Secured` disagrees with the spec, when a secured operation
   declares no `ConsentManagerPrincipal`-typed parameter, when the declared principal type
   cannot hold every admitted role, when it omits the shared 401/403 response refs, or when the
-  parsed operation count drifts from `SPECIFIED_OPERATION_COUNT` (**21** today). Raise that
+  parsed operation count drifts from `SPECIFIED_OPERATION_COUNT` (**34** today). Raise that
   constant in the same commit that adds an operation. `EndpointRoleMatrixIT` is total over the same
   parsed operations, so an added operation also needs a row in its `Endpoint` enum, and a
   PARTICIPANT-only route is additionally swept by `participantScopedEndpoints`, which demands the
@@ -168,6 +178,11 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   takes `ConsentRepository.findByUserIdAndPrivacyNoticeIdForUpdate` first and answers the lost
   race as `409` by catching `DataAccessException` *outside* the transaction — see
   `ConsentService.decide`.
+- **Receipts.** `format=receipt|receipt-kantara` renders from the frozen `consents.snapshot`,
+  never the live notice (ADR-0012/0013). Signing key config is `consent-manager.receipts.*`
+  (inline private JWK in `RECEIPTS_SIGNING_KEY`, public JWKS in
+  `RECEIPTS_RETIRED_VERIFICATION_KEYS`). Startup fails on a missing or bad key, and no message may
+  quote key material. `GET /.well-known/jwks.json` is anonymous and served at the origin root.
 - **Errors** are RFC 7807 problem details rendered as `application/problem+json` from the
   generated `ProblemDetail`; throw `NotFoundException`/`ConflictException`/… rather than
   returning an error response. `UpstreamServiceException` maps to `502`.
@@ -215,5 +230,6 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   a partial index keeping the directory listing to active rows.
 - `src/main/resources/application.yml` — base config, incl. the identity-provider trust list
 - `docs/security.md`, `docs/adr/` — security model and recorded decisions; ADR-0009 is
-  why only the data subject grants and a request confers nothing
+  why only the data subject grants and a request confers nothing; ADR-0012/0013 decide what a
+  receipt says and how it is signed
 - `IMPLEMENTATION_PLAN.md` — the plan for the ticket currently in flight

@@ -1,15 +1,12 @@
 package com.seamware.consentmanager.repository;
 
 import com.seamware.consentmanager.domain.ConsentEvent;
-import com.seamware.consentmanager.domain.ConsentEventState;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
 import io.micronaut.data.model.Page;
 import io.micronaut.data.model.Pageable;
 import io.micronaut.data.model.query.builder.sql.Dialect;
 import io.micronaut.data.repository.CrudRepository;
-import java.util.Collection;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -45,11 +42,4 @@ public interface ConsentEventRepository extends CrudRepository<ConsentEvent, UUI
      * @return a page of events for the specified consent
      */
     Page<ConsentEvent> findByConsentId(UUID consentId, Pageable pageable);
-
-    /**
-     * The latest event of {@code consentId} recorded as one of {@code eventStates}, served by
-     * {@code idx_consent_events_consent_id_occurred_at}.
-     */
-    Optional<ConsentEvent> findFirstByConsentIdAndEventStateInOrderByOccurredAtDesc(
-            UUID consentId, Collection<ConsentEventState> eventStates);
 }

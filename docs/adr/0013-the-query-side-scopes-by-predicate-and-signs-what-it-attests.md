@@ -1,6 +1,6 @@
 # ADR 0013 — The query side scopes by predicate and signs what it attests
 
-- **Status:** Accepted.
+- **Status:** Accepted. Superseded in part by [ADR-0014](0014-a-grant-receipt-is-signed-once-and-travels-beside-its-signature.md) (receipt signing).
 - **Date:** 2026-10-15
 - **Ticket:** TICKET-010 (Taiga #74), step 8
 - **Relates to:** `GET /consents/me`, `GET /consents/me/{id}`, `GET /consents`, `GET /consents/{id}`,
@@ -66,6 +66,13 @@ regenerating a notice therefore cannot change what a subject was shown when they
 decides what the receipt contains.
 
 **A receipt carries a detached JWS, and the key is published at the origin root.**
+
+> **Superseded in part by [ADR-0014](0014-a-grant-receipt-is-signed-once-and-travels-beside-its-signature.md).**
+> The JWS now travels beside the receipt as `{receipt, jws}` rather than as a `signature` member,
+> the header adds `typ: JOSE`, `ReceiptSigner` became the `signing` package, a Kantara receipt is
+> signed once at grant time and stored, and rotation takes two deploys because the JWKS is
+> cacheable. The bullets below record the decision as it was taken.
+
 - **What is signed.** `ReceiptSigner` signs the RFC 8785 canonical form of the receipt's other
   members. The compact JWS with an empty payload is added as the receipt's `signature` member.
   The receipt therefore stays plain JSON that conforms to its vocabulary, and a reader that

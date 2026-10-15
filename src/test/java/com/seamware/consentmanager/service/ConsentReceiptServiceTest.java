@@ -7,30 +7,30 @@ import com.nimbusds.jose.jwk.JWKSet;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantara;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiControllersInner;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInnerPurposesInner;
+import com.seamware.consentmanager.api.generated.model.SignedConsentReceiptKantara;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
-import com.seamware.consentmanager.domain.ConsentEvent;
-import com.seamware.consentmanager.domain.ConsentEventState;
-import com.seamware.consentmanager.domain.ConsentEventTrigger;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
+import com.seamware.consentmanager.domain.IssuedReceipt;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.ControllerDetails;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.BadRequestException;
-import com.seamware.consentmanager.repository.ConsentEventRepository;
+import com.seamware.consentmanager.repository.IssuedReceiptRepository;
 import com.seamware.consentmanager.repository.UserRepository;
-import com.seamware.consentmanager.security.ReceiptSigner;
+import com.seamware.consentmanager.signing.CanonicalJsonSerializer;
+import com.seamware.consentmanager.signing.ConsentSigningService;
+import com.seamware.consentmanager.signing.JwsConsentSigningService;
+import com.seamware.consentmanager.signing.SignedReceipt;
+import com.seamware.consentmanager.signing.SigningKeyStore;
 import com.seamware.consentmanager.support.ReceiptSignatures;
 import com.seamware.consentmanager.support.TestJson;
 import io.micronaut.core.type.Argument;
 import java.io.IOException;
 import java.lang.reflect.Proxy;
-import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -77,12 +77,8 @@ class ConsentReceiptServiceTest {
 
     private static final String OTHER_RECIPIENT_ID = "did:web:archive.example.org";
 
-    private static final String ACTOR = SUBJECT;
-
     /** When the seeded grant was given, a day before the row was last written. */
     private static final Instant GRANTED_AT = Instant.parse("2026-01-01T00:00:00Z");
-
-    private static final Duration HOUR = Duration.ofHours(1);
 
     /** Top-level keys KI-CR-v1.1.0 marks MUST. */
     private static final Set<String> RECEIPT_MUST =
@@ -116,21 +112,25 @@ class ConsentReceiptServiceTest {
                     "termination",
                     "thirdPartyDisclosure");
 
-    private final List<ConsentEvent> recorded = new ArrayList<>();
+    private final Map<UUID, IssuedReceipt> stored = new HashMap<>();
 
-    private final ReceiptSigner signer = signer();
+    private final SigningKeyStore keys = keys();
+
+    private final ConsentSigningService signing =
+            new JwsConsentSigningService(keys, new CanonicalJsonSerializer(TestJson.mapper()));
 
     private final ConsentReceiptService receipts =
             new ConsentReceiptService(
                     users(new User(SUBJECT, null, null, null)),
-                    events(recorded),
+                    issued(stored),
                     new ConsentManagerConfiguration.Receipts(),
-                    signer);
+                    signing,
+                    TestJson.mapper());
 
-    private static ReceiptSigner signer() {
+    private static SigningKeyStore keys() {
         ConsentManagerConfiguration.Receipts settings = new ConsentManagerConfiguration.Receipts();
         settings.setEphemeralSigningKey(true);
-        return new ReceiptSigner(settings, TestJson.mapper());
+        return new SigningKeyStore(settings);
     }
 
     /** A snapshot naming one purpose and nothing else: the sparsest a receipt is drawn from. */
@@ -173,7 +173,7 @@ class ConsentReceiptServiceTest {
     @DisplayName("names the controller by name, else identifier, else the provider")
     void fallsBackForTheController(ControllerDetails controller, String name, String contact) {
         ConsentReceiptKantaraPiiControllersInner rendered =
-                receipts.toKantara(details(withController(controller), CONTRACT_URI))
+                receipts.toKantara(details(withController(controller), CONTRACT_URI), GRANTED_AT)
                         .getPiiControllers()
                         .getFirst();
 
@@ -200,7 +200,8 @@ class ConsentReceiptServiceTest {
                         title, List.of(PURPOSE), null, null, null, null, null, null, null, null);
         ConsentDetails details = details(snapshot, contractUri);
 
-        String service = receipts.toKantara(details).getServices().getFirst().getService();
+        String service =
+                receipts.toKantara(details, GRANTED_AT).getServices().getFirst().getService();
 
         assertThat(service)
                 .isEqualTo(
@@ -232,7 +233,7 @@ class ConsentReceiptServiceTest {
     void namesThirdPartiesExactlyWhenItDisclosesToThem(
             List<Recipient> recipients, String thirdPartyName) {
         ConsentReceiptKantaraServicesInnerPurposesInner purpose =
-                receipts.toKantara(details(withRecipients(recipients), CONTRACT_URI))
+                receipts.toKantara(details(withRecipients(recipients), CONTRACT_URI), GRANTED_AT)
                         .getServices()
                         .getFirst()
                         .getPurposes()
@@ -247,7 +248,7 @@ class ConsentReceiptServiceTest {
     void fallsBackForPolicyAndTermination() {
         ConsentDetails details = details(bare(), null);
 
-        ConsentReceiptKantara receipt = receipts.toKantara(details);
+        ConsentReceiptKantara receipt = receipts.toKantara(details, GRANTED_AT);
 
         assertThat(receipt.getPolicyUrl())
                 .isEqualTo(
@@ -265,7 +266,8 @@ class ConsentReceiptServiceTest {
     @SuppressWarnings("unchecked")
     void publishesEveryMustKey() throws IOException {
         String json =
-                TestJson.mapper().writeValueAsString(receipts.toKantara(details(bare(), null)));
+                TestJson.mapper()
+                        .writeValueAsString(receipts.toKantara(details(bare(), null), GRANTED_AT));
         Map<String, Object> receipt =
                 TestJson.mapper().readValue(json, Argument.mapOf(String.class, Object.class));
 
@@ -280,44 +282,33 @@ class ConsentReceiptServiceTest {
                 .containsKeys(PURPOSE_MUST.toArray(String[]::new));
     }
 
-    static Stream<Arguments> grantHistories() {
-        return Stream.of(
-                Arguments.of(List.of(ConsentEventState.CONSENT_GIVEN), GRANTED_AT),
-                Arguments.of(
-                        List.of(
-                                ConsentEventState.CONSENT_REQUESTED,
-                                ConsentEventState.CONSENT_RESUMED),
-                        GRANTED_AT.plus(HOUR)),
-                Arguments.of(
-                        List.of(
-                                ConsentEventState.CONSENT_GIVEN,
-                                ConsentEventState.CONSENT_RE_CONFIRMED),
-                        GRANTED_AT));
-    }
-
-    @ParameterizedTest
-    @MethodSource("grantHistories")
-    @DisplayName(
-            "dates a Kantara receipt by the event that granted it, not by the row's last write")
-    void datesTheReceiptByItsGrantingEvent(List<ConsentEventState> history, Instant expected) {
+    @Test
+    @DisplayName("dates a Kantara receipt by the granting instant it is given, not the last write")
+    void datesTheReceiptByItsGrantingInstant() {
         ConsentDetails details = details(bare(), CONTRACT_URI);
-        UUID consentId = details.consent().getId();
-        recorded.clear();
-        for (int hop = 0; hop < history.size(); hop++) {
-            recorded.add(
-                    event(consentId, history.get(hop), GRANTED_AT.plus(HOUR.multipliedBy(hop))));
-        }
 
-        assertThat(receipts.toKantara(details).getConsentTimestamp())
-                .isEqualTo(expected.getEpochSecond())
+        assertThat(receipts.toKantara(details, GRANTED_AT).getConsentTimestamp())
+                .isEqualTo(GRANTED_AT.getEpochSecond())
                 .isNotEqualTo(details.consent().getUpdatedAt().getEpochSecond());
     }
 
     @Test
-    @DisplayName("refuses to date a granted consent whose granting event is missing")
-    void refusesAGrantWithoutItsEvent() {
+    @DisplayName("serves the issued Kantara receipt verbatim, beside its stored signature")
+    void servesTheIssuedReceiptAsStored() {
         ConsentDetails details = details(bare(), CONTRACT_URI);
-        recorded.clear();
+        IssuedReceipt stored = issue(details);
+
+        SignedConsentReceiptKantara served = receipts.toKantara(details);
+
+        assertThat(served.getJws()).isEqualTo(stored.jws());
+        assertThat(signing.verifyCanonical(stored.canonicalReceipt(), served.getJws())).isTrue();
+        assertThat(signing.verify(served.getReceipt(), served.getJws())).isTrue();
+    }
+
+    @Test
+    @DisplayName("refuses to serve a granted consent that holds no issued receipt")
+    void refusesAGrantWithoutItsReceipt() {
+        ConsentDetails details = details(bare(), CONTRACT_URI);
 
         assertThatThrownBy(() -> receipts.toKantara(details))
                 .isInstanceOf(IllegalStateException.class);
@@ -343,7 +334,11 @@ class ConsentReceiptServiceTest {
                 Arguments.of(
                         Named.<Function<ConsentReceiptServiceTest, Object>>of(
                                 "Kantara",
-                                test -> test.receipts.toKantara(test.details(bare(), null)))));
+                                test -> {
+                                    ConsentDetails details = test.details(bare(), null);
+                                    test.issue(details);
+                                    return test.receipts.toKantara(details);
+                                })));
     }
 
     @ParameterizedTest
@@ -353,14 +348,14 @@ class ConsentReceiptServiceTest {
             throws Exception {
         String json = TestJson.mapper().writeValueAsString(render.apply(this));
 
-        assertThat(ReceiptSignatures.verifies(json, new JWKSet(signer.publicKey()))).isTrue();
+        assertThat(ReceiptSignatures.verifies(json, new JWKSet(keys.verificationKeys()))).isTrue();
     }
 
     private ConsentDetails details(ConsentSnapshot snapshot, String contractUri) {
         return details(ConsentStatus.GRANTED, snapshot, contractUri);
     }
 
-    /** A consent in {@code status}; a grant is recorded as given at {@link #GRANTED_AT}. */
+    /** A consent in {@code status}, last written now. */
     private ConsentDetails details(
             ConsentStatus status, ConsentSnapshot snapshot, String contractUri) {
         Consent consent =
@@ -376,34 +371,34 @@ class ConsentReceiptServiceTest {
         Instant now = Instant.now();
         consent.setCreatedAt(now);
         consent.setUpdatedAt(now);
-        if (status == ConsentStatus.GRANTED) {
-            recorded.add(event(consent.getId(), ConsentEventState.CONSENT_GIVEN, GRANTED_AT));
-        }
         return new ConsentDetails(consent, PROVIDER, CONSUMER, false);
     }
 
-    private static ConsentEvent event(UUID consentId, ConsentEventState state, Instant at) {
-        return new ConsentEvent(
-                consentId, state, ConsentEventTrigger.EXPLICIT.eventType(), ACTOR, at, null);
+    /** Signs and stores the Kantara receipt of {@code details}, as issuance at the grant does. */
+    private IssuedReceipt issue(ConsentDetails details) {
+        SignedReceipt<ConsentReceiptKantara> signed =
+                signing.sign(receipts.toKantara(details, GRANTED_AT));
+        IssuedReceipt receipt =
+                new IssuedReceipt(
+                        details.consent().getId(),
+                        UUID.randomUUID(),
+                        signed.canonicalJson(),
+                        signed.jws(),
+                        signed.keyId(),
+                        GRANTED_AT);
+        stored.put(receipt.consentId(), receipt);
+        return receipt;
     }
 
-    /** A {@link ConsentEventRepository} answering the latest-event lookup off {@code recorded}. */
-    @SuppressWarnings("unchecked")
-    private static ConsentEventRepository events(List<ConsentEvent> recorded) {
-        return (ConsentEventRepository)
+    /** An {@link IssuedReceiptRepository} whose {@code findById} reads {@code stored}. */
+    private static IssuedReceiptRepository issued(Map<UUID, IssuedReceipt> stored) {
+        return (IssuedReceiptRepository)
                 Proxy.newProxyInstance(
-                        ConsentEventRepository.class.getClassLoader(),
-                        new Class<?>[] {ConsentEventRepository.class},
+                        IssuedReceiptRepository.class.getClassLoader(),
+                        new Class<?>[] {IssuedReceiptRepository.class},
                         (proxy, method, args) -> {
-                            if (method.getName()
-                                    .equals(
-                                            "findFirstByConsentIdAndEventStateInOrderByOccurredAtDesc")) {
-                                Collection<ConsentEventState> states =
-                                        (Collection<ConsentEventState>) args[1];
-                                return recorded.stream()
-                                        .filter(event -> event.getConsentId().equals(args[0]))
-                                        .filter(event -> states.contains(event.getEventState()))
-                                        .max(Comparator.comparing(ConsentEvent::getOccurredAt));
+                            if (method.getName().equals("findById")) {
+                                return Optional.ofNullable(stored.get(args[0]));
                             }
                             throw new UnsupportedOperationException(method.getName());
                         });

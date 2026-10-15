@@ -9,19 +9,24 @@ import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiC
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInner;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInnerPurposesInner;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptRecipientsInner;
+import com.seamware.consentmanager.api.generated.model.SignedConsentReceipt;
+import com.seamware.consentmanager.api.generated.model.SignedConsentReceiptKantara;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
-import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
+import com.seamware.consentmanager.domain.IssuedReceipt;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.error.BadRequestException;
-import com.seamware.consentmanager.repository.ConsentEventRepository;
+import com.seamware.consentmanager.repository.IssuedReceiptRepository;
 import com.seamware.consentmanager.repository.UserRepository;
-import com.seamware.consentmanager.security.ReceiptSigner;
+import com.seamware.consentmanager.signing.ConsentSigningService;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
+import io.micronaut.json.JsonMapper;
 import jakarta.inject.Singleton;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -35,7 +40,10 @@ import java.util.stream.Stream;
  *
  * <p>Every term is read off {@link Consent#getSnapshot()} and {@link Consent#getContractUri()} -
  * never off the live notice - so archiving or regenerating the notice cannot rewrite a receipt.
- * Every receipt, in either format, leaves here signed by {@link ReceiptSigner}.
+ * Every receipt, in either format, leaves here beside its detached JWS from {@link
+ * ConsentSigningService}: the ISO record is signed on each read, because it carries the live
+ * status, while the Kantara receipt is the one {@link ConsentReceiptIssuer} signed and stored at
+ * the grant.
  */
 @Singleton
 public class ConsentReceiptService {
@@ -62,35 +70,38 @@ public class ConsentReceiptService {
     /** A notice classifies no PII as sensitive, so no receipt declares any. */
     static final boolean SENSITIVE = false;
 
-    /** {@code signature} while a receipt is rendered: it signs every member but that one. */
-    private static final String UNSIGNED = null;
-
     private static final String NOT_GRANTED =
             "Consent '%s' is %s; a Kantara receipt attests a consent that is GRANTED.";
 
     private static final String MISSING_SUBJECT = "Consent '%s' names no stored data subject.";
 
-    private static final String MISSING_GRANT = "Granted consent '%s' records no granting event.";
+    private static final String MISSING_RECEIPT = "Granted consent '%s' holds no issued receipt.";
+
+    private static final String UNREADABLE_RECEIPT =
+            "The issued receipt of consent '%s' does not deserialise.";
 
     private final UserRepository users;
-    private final ConsentEventRepository events;
+    private final IssuedReceiptRepository issued;
     private final ConsentManagerConfiguration.Receipts settings;
-    private final ReceiptSigner signer;
+    private final ConsentSigningService signing;
+    private final JsonMapper json;
 
     public ConsentReceiptService(
             UserRepository users,
-            ConsentEventRepository events,
+            IssuedReceiptRepository issued,
             ConsentManagerConfiguration.Receipts settings,
-            ReceiptSigner signer) {
+            ConsentSigningService signing,
+            JsonMapper json) {
         this.users = users;
-        this.events = events;
+        this.issued = issued;
         this.settings = settings;
-        this.signer = signer;
+        this.signing = signing;
+        this.json = json;
     }
 
-    /** The ISO/IEC 29184 record of {@code details}, rendered for a consent in any status. */
+    /** The signed ISO/IEC 29184 record of {@code details}, rendered for a consent in any status. */
     @NonNull
-    public ConsentReceipt toIso29184(@NonNull ConsentDetails details) {
+    public SignedConsentReceipt toIso29184(@NonNull ConsentDetails details) {
         Consent consent = details.consent();
         ConsentSnapshot snapshot = consent.getSnapshot();
         ConsentReceipt receipt =
@@ -105,8 +116,7 @@ public class ConsentReceiptService {
                                 details.providerIdentifier(),
                                 details.consumerIdentifier(),
                                 atUtc(consent.getCreatedAt()),
-                                atUtc(consent.getUpdatedAt()),
-                                UNSIGNED)
+                                atUtc(consent.getUpdatedAt()))
                         .contractUri(consent.getContractUri())
                         .title(snapshot.title())
                         .controllerDetails(controllerDetails(snapshot.controllerDetails()))
@@ -118,50 +128,62 @@ public class ConsentReceiptService {
                         .piiPrincipalRights(snapshot.piiPrincipalRights())
                         .internationalTransfers(snapshot.internationalTransfers())
                         .withdrawalOfConsent(snapshot.withdrawalOfConsent());
-        return receipt.signature(signer.sign(receipt));
+        return new SignedConsentReceipt(receipt, signing.sign(receipt).jws());
     }
 
     /**
-     * The KI-CR-v1.1.0 receipt of {@code details}. Throws {@link BadRequestException} unless the
-     * consent is {@code GRANTED}: the receipt attests that consent was given.
+     * The KI-CR-v1.1.0 receipt issued when {@code details} was granted, served as stored and never
+     * re-signed. Throws {@link BadRequestException} unless the consent is {@code GRANTED}: the
+     * receipt attests that consent was given. A grant with no stored receipt is an invariant
+     * breach.
      */
     @NonNull
-    public ConsentReceiptKantara toKantara(@NonNull ConsentDetails details) {
+    public SignedConsentReceiptKantara toKantara(@NonNull ConsentDetails details) {
         Consent consent = details.consent();
         if (consent.getStatus() != ConsentStatus.GRANTED) {
             throw new BadRequestException(
                     NOT_GRANTED.formatted(consent.getId(), consent.getStatus()));
         }
-        ConsentSnapshot snapshot = consent.getSnapshot();
-        ConsentReceiptKantara receipt =
-                new ConsentReceiptKantara(
-                        ConsentReceiptKantara.VersionEnum.KI_CR_V1_1_0,
-                        settings.getJurisdiction(),
-                        grantedAt(consent).getEpochSecond(),
-                        COLLECTION_METHOD,
-                        consent.getId().toString(),
-                        Objects.requireNonNullElse(
-                                consent.getContractUri(),
-                                NOTICE_URN.formatted(consent.getPrivacyNoticeId())),
-                        subjectIdentifier(consent),
-                        List.of(piiController(snapshot.controllerDetails(), details)),
-                        List.of(service(snapshot, consent)),
-                        SENSITIVE,
-                        List.of(),
-                        UNSIGNED);
-        return receipt.signature(signer.sign(receipt));
+        IssuedReceipt stored =
+                issued.findById(consent.getId())
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                MISSING_RECEIPT.formatted(consent.getId())));
+        return new SignedConsentReceiptKantara(read(stored), stored.jws());
     }
 
     /**
-     * When the grant in force was given, read off its event rather than {@code updatedAt}, so a
-     * later write to the row that is not a status move cannot re-date the receipt.
+     * The unsigned KI-CR-v1.1.0 receipt of {@code details}, dated by {@code grantedAt} - the
+     * granting event's instant, never {@code updatedAt}, which a later write could move.
      */
-    private Instant grantedAt(Consent consent) {
-        return events.findFirstByConsentIdAndEventStateInOrderByOccurredAtDesc(
-                        consent.getId(), ConsentFactory.GRANTING_EVENTS)
-                .map(ConsentEvent::getOccurredAt)
-                .orElseThrow(
-                        () -> new IllegalStateException(MISSING_GRANT.formatted(consent.getId())));
+    @NonNull
+    public ConsentReceiptKantara toKantara(
+            @NonNull ConsentDetails details, @NonNull Instant grantedAt) {
+        Consent consent = details.consent();
+        ConsentSnapshot snapshot = consent.getSnapshot();
+        return new ConsentReceiptKantara(
+                ConsentReceiptKantara.VersionEnum.KI_CR_V1_1_0,
+                settings.getJurisdiction(),
+                grantedAt.getEpochSecond(),
+                COLLECTION_METHOD,
+                consent.getId().toString(),
+                Objects.requireNonNullElse(
+                        consent.getContractUri(),
+                        NOTICE_URN.formatted(consent.getPrivacyNoticeId())),
+                subjectIdentifier(consent),
+                List.of(piiController(snapshot.controllerDetails(), details)),
+                List.of(service(snapshot, consent)),
+                SENSITIVE,
+                List.of());
+    }
+
+    private ConsentReceiptKantara read(IssuedReceipt stored) {
+        try {
+            return json.readValue(stored.canonicalReceipt(), ConsentReceiptKantara.class);
+        } catch (IOException e) {
+            throw new UncheckedIOException(UNREADABLE_RECEIPT.formatted(stored.consentId()), e);
+        }
     }
 
     /**
