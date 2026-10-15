@@ -65,14 +65,24 @@ and carries no token or state-changing link. An SMTP implementation is bound onl
     no database access.
   - The executor is `@Named("notifications")`, produced by a `@Factory` gated by
     `SmtpConfiguredCondition`: a `ThreadPoolExecutor` with `NOTIFICATION_SENDER_THREADS = 2`
-    threads and a bounded queue of `NOTIFICATION_QUEUE_CAPACITY = 1000`, named threads, and
-    `AbortPolicy`. It is shut down with the context (`@Bean(preDestroy = "shutdown")`).
-    A full queue is a dropped notification: the `RejectedExecutionException` is caught in
-    `SmtpUserNotificationService` and logged at ERROR with the kind and consent id.
+    threads and a bounded queue of `NOTIFICATION_QUEUE_CAPACITY = 1000`, named **daemon**
+    threads, and `AbortPolicy`. A full queue is a dropped notification: the
+    `RejectedExecutionException` is caught in `SmtpUserNotificationService` and logged at ERROR
+    with the kind and consent id.
+  - Shutdown drops what is queued; it does not drain it. A plain `shutdown()` would still run
+    every queued task on non-daemon threads (1000 × 5 s connect timeout ÷ 2 threads ≈ 40 min
+    against an unreachable server) using a `Session` from a closed context. The pool is a small
+    package-private `NotificationThreadPool extends ThreadPoolExecutor` with a `drain()` method,
+    and the factory method declares that type and `@Bean(preDestroy = "drain")`. `drain()` calls
+    `shutdown()`, waits at most `NOTIFICATION_SHUTDOWN_GRACE = 2 s` (`awaitTermination`), then
+    calls `shutdownNow()` and logs one WARN with the number of tasks it dropped. A send still
+    blocked in a socket after that does not hold the JVM, because the threads are daemon. A
+    task that runs inside the grace window after `EmailSender` has closed fails into the task's
+    own `catch` and is logged like any other send failure.
   - Not `@Async`: Micronaut's async interceptor would run the whole method, entity arguments
     included, on another thread, and its default executor has an unbounded queue.
-  - Messages still queued at shutdown or held by a crashed process are lost. This is within the
-    ticket's best-effort contract and ADR-0015 records it.
+  - Messages still queued after the shutdown grace, or held by a crashed process, are lost. This
+    is within the ticket's best-effort contract and ADR-0015 records it, with the grace bound.
   - The SMTP timeouts stay, now to bound how long a sender thread is held rather than response
     latency: `mail.smtp.connectiontimeout` 5 s, `mail.smtp.timeout` 10 s,
     `mail.smtp.writetimeout` 10 s, as named `Duration` constants (JavaMail's own default is
@@ -126,7 +136,12 @@ Files:
     exactly one session source and it is not configured under `javamail.*`.
 - `notification/NotificationExecutorFactory.java` (`@Factory`,
   `@Requires(condition = SmtpConfiguredCondition.class)`): the `@Named("notifications")`
-  `ExecutorService` described under "Asynchronous send", with its sizes as named constants.
+  `NotificationThreadPool` (`@Bean(preDestroy = "drain")`) described under "Asynchronous send",
+  with its sizes and shutdown grace as named constants, and a `ThreadFactory` producing named
+  daemon threads.
+- `notification/NotificationThreadPool.java`: package-private `ThreadPoolExecutor` subclass
+  whose only addition is `drain()`, i.e. bounded shutdown then `shutdownNow()` plus a WARN with
+  the dropped count.
 - `notification/LoggingUserNotificationService.java`: `@Singleton`,
   `@Requires(condition = SmtpNotConfiguredCondition.class)`. It logs at DEBUG which message would have gone to
   which user id and consent id. It logs no email address and sends nothing.
@@ -153,17 +168,29 @@ Tests (`src/test/java/com/seamware/consentmanager/notification/`):
   `UserNotificationService` and neither a `Session` nor a `notifications` executor bean exists,
   and `localhost` (with a
   `from-address`) → the SMTP implementation is the only one. Start each case with
-  `ApplicationContext.builder().environments("test").properties(...)` so `application.yml` and
-  `application-test.yml` are both loaded. This covers AC 7 and AC 8.
-- `SmtpSessionFactoryTest` (`ApplicationContext.run(Map)` with `smtp.host=localhost`):
+  `ApplicationContext.builder(Environment.TEST).environmentPropertySource(false).properties(...)`
+  so `application.yml` and `application-test.yml` are both loaded and an `SMTP_HOST` exported in
+  the developer's shell (e.g. from a sourced `.env`) cannot turn the "absent" case into a
+  configured one. The test checks the YAML, not the shell. This covers AC 7 and AC 8.
+- `SmtpSessionFactoryTest`. Start every case with
+  `ApplicationContext.builder(Environment.TEST).environmentPropertySource(false).properties(...).start()`,
+  as `ConsentManagerConfigurationTest` does, with `smtp.host=localhost`. Without the `test`
+  environment, the `@Context` `SigningKeyStore` fails startup with `MISSING_KEY`
+  (`ephemeral-signing-key` is set only in `application-test.yml`), so every case would fail
+  for a reason unrelated to SMTP.
   - By default, `checkserveridentity=true`, `ssl.trust` is absent and STARTTLS is required.
   - With the opt-out set, `trust=*` on the `Session`.
-  - With the opt-out set, a WARN naming the property is captured **right after
-    `ApplicationContext.run(...)` returns and before any `Session` bean is fetched**, which proves
-    it is logged at startup and not on first send. Use a Logback `ListAppender`, as
-    `KeyMaterialLeakIT` does. Without the opt-out, no such WARN is captured.
-  - Startup fails without `from-address`.
+  - With the opt-out set, a WARN naming the property is captured **right after `start()`
+    returns and before any `Session` bean is fetched**, which proves it is logged at startup and
+    not on first send. Use a Logback `ListAppender`, as `KeyMaterialLeakIT` does. Without the
+    opt-out, no such WARN is captured.
+  - Startup fails without `from-address`, and the failure's message (root cause included)
+    names `SMTP_FROM_ADDRESS`. Asserting only that startup failed would also pass for an
+    unrelated startup failure.
   Parameterize where the cases share a shape. This covers AC 6.
+- `NotificationThreadPoolTest`. One task blocks on a latch and the queue holds several more.
+  `drain()` returns within `NOTIFICATION_SHUTDOWN_GRACE` plus a named margin, the queued tasks
+  never run, a WARN carrying the dropped count is captured, and the pool's threads are daemon.
 - Extend `ConsentManagerConfigurationTest` for `notifications.client-url`.
 
 Acceptance: `./mvnw verify` is green, and the application starts with no `SMTP_*` set.
@@ -346,7 +373,8 @@ Files:
   - the call sites, and why the four other termination paths (resume collateral, `decide`'s
     redundant-request cleanup, erasure, deregistration) do not notify;
   - asynchronous hand-off on the bounded `notifications` executor, what is lost on a full queue
-    or at shutdown, and the SMTP timeout values (5 s / 10 s / 10 s) that bound a sender thread;
+    or at shutdown (queued mail is dropped after the 2 s grace on daemon threads, not drained),
+    and the SMTP timeout values (5 s / 10 s / 10 s) that bound a sender thread;
   - the neutral consent-terminated wording, because `terminate` also closes unanswered requests;
   - addressability (never derive an address from `identifier`);
   - TLS on by default and the named opt-out, whose warning is logged at startup by the eager
