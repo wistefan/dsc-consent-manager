@@ -16,6 +16,10 @@ public enum ConsentFormat {
     private static final String LISTING_FULL_ONLY =
             "A listing renders format 'full' alone; read a receipt one consent at a time.";
 
+    private static final String RECEIPT_WITHOUT_LINEAGE =
+            "A receipt is evidence of one decision and carries no lineage; drop includeLineage or"
+                    + " read format 'full'.";
+
     private final String value;
 
     ConsentFormat(String value) {
@@ -48,5 +52,17 @@ public enum ConsentFormat {
         if (of(value) != FULL) {
             throw new BadRequestException(LISTING_FULL_ONLY);
         }
+    }
+
+    /**
+     * The format {@code value} names, refusing a receipt asked for with its lineage as a {@code
+     * 400}.
+     */
+    public static ConsentFormat of(@Nullable String value, boolean includeLineage) {
+        ConsentFormat format = of(value);
+        if (includeLineage && format != FULL) {
+            throw new BadRequestException(RECEIPT_WITHOUT_LINEAGE);
+        }
+        return format;
     }
 }

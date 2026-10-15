@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.api;
 
 import com.seamware.consentmanager.api.generated.model.Consent.StatusEnum;
+import com.seamware.consentmanager.api.generated.model.ConsentLineageLink;
 import com.seamware.consentmanager.api.generated.model.ConsentResponse;
 import com.seamware.consentmanager.api.generated.model.ConsentValidity;
 import com.seamware.consentmanager.api.generated.model.GrantConsent;
@@ -76,6 +77,25 @@ public class ConsentMapper {
                 .purposes(snapshot.purposes())
                 .data(snapshot.dataCategories())
                 .contractUri(consent.getContractUri());
+    }
+
+    /** {@link #toResponse(ConsentDetails)} carrying the chain it supersedes, newest first. */
+    @NonNull
+    public ConsentResponse toResponse(
+            @NonNull ConsentDetails details,
+            @NonNull List<com.seamware.consentmanager.domain.Consent> lineage) {
+        return toResponse(details).lineage(lineage.stream().map(ConsentMapper::toLink).toList());
+    }
+
+    /** One superseded record as a lineage link; {@code StatusEnum} bridges by name. */
+    private static ConsentLineageLink toLink(com.seamware.consentmanager.domain.Consent consent) {
+        return new ConsentLineageLink(
+                        consent.getId(),
+                        ConsentLineageLink.StatusEnum.fromValue(consent.getStatus().name()),
+                        consent.isConsented(),
+                        ParticipantMapper.atUtc(consent.getCreatedAt()),
+                        ParticipantMapper.atUtc(consent.getUpdatedAt()))
+                .parentConsentId(consent.getParentConsentId());
     }
 
     /**

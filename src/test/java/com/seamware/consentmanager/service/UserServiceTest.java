@@ -1372,6 +1372,18 @@ class UserServiceTest {
         }
 
         @Override
+        public List<Consent> findLineageForUser(
+                UUID startId, UUID parentId, UUID userId, int maxDepth) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findLineageForParticipant(
+                UUID startId, UUID parentId, UUID participantId, int maxDepth) {
+            throw unsupported();
+        }
+
+        @Override
         public int countByParticipant(UUID participantId) {
             throw unsupported();
         }

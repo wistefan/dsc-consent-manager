@@ -1748,6 +1748,11 @@ paths:
 
         `format` selects the representation: the full consent, or a consent
         receipt rendered from the terms frozen when the decision was taken.
+        `includeLineage=true` adds the chain of records this one supersedes,
+        newest first; each link is read under the same party predicate, so the
+        chain stops at the first record the caller is no party to. A receipt
+        carries no lineage, so asking for one with a receipt `format` is refused
+        with `400`.
       tags:
         - ConsentQuery
       security:
@@ -1782,6 +1787,16 @@ paths:
               - receipt
               - receipt-kantara
             default: full
+        - name: includeLineage
+          in: query
+          required: false
+          description: >
+            Whether to include the chain of consents this record supersedes,
+            newest first and bounded by the depth this deployment configures.
+            Refused with `400` alongside a receipt `format`.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: >
@@ -2205,9 +2220,8 @@ paths:
 
 
         A listing renders the full representation alone; a consent receipt is
-        read one consent at a time from `/consents/me/{id}`. `includeLineage` is
-        accepted and shapes a later elaboration of the response - the chain a
-        decision supersedes; until that lands, no lineage is rendered.
+        read one consent at a time from `/consents/me/{id}`. `includeLineage=true`
+        adds to each record the chain of records it supersedes, newest first.
       tags:
         - ConsentQuery
       security:
@@ -2277,8 +2291,10 @@ paths:
           in: query
           required: false
           description: >
-            Whether to include the chain of consents each record supersedes. A
-            later step wires it; until then the lineage is always absent.
+            Whether to include, on each record, the chain of consents it
+            supersedes, newest first. The walk is bounded by a depth this
+            deployment configures, so a long history is cut short rather than
+            read whole; omitted or `false`, no `lineage` is rendered.
           schema:
             type: boolean
             default: false
@@ -2317,8 +2333,10 @@ paths:
 
         `format` selects the representation: the full consent, or a consent
         receipt rendered from the terms frozen when the decision was taken.
-        `includeLineage` is accepted as on the listing; until lineage lands, no
-        lineage is rendered.
+        `includeLineage=true` adds the chain of records this one supersedes,
+        newest first, as on the listing. A receipt is evidence of one decision and
+        carries no lineage, so asking for one with a receipt `format` is refused
+        with `400`.
       tags:
         - ConsentQuery
       security:
@@ -2357,8 +2375,9 @@ paths:
           in: query
           required: false
           description: >
-            Whether to include the chain of consents this record supersedes, as
-            on the listing.
+            Whether to include the chain of consents this record supersedes,
+            newest first and bounded by the configured depth, as on the listing.
+            Refused with `400` alongside a receipt `format`.
           schema:
             type: boolean
             default: false

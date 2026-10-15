@@ -293,4 +293,44 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
             "SELECT * FROM consents WHERE id = :id"
                     + " AND (provider_id = :participantId OR consumer_id = :participantId)")
     Optional<Consent> findByIdForParticipant(UUID id, UUID participantId);
+
+    /**
+     * The chain above {@code startId} the subject owns, nearest first, in one recursive read.
+     *
+     * <p>Stops at {@code maxDepth} links, at the first record the subject does not own, and at a
+     * record already on the path (seeded with {@code startId}), so a cycle across rows ends.
+     */
+    @Query(
+            "WITH RECURSIVE chain(id, parent_consent_id, depth, path) AS ("
+                    + " SELECT c.id, c.parent_consent_id, 1, ARRAY[CAST(:startId AS uuid), c.id]"
+                    + " FROM consents c WHERE c.id = :parentId AND c.user_id = :userId"
+                    + " AND c.id <> :startId AND :maxDepth > 0"
+                    + " UNION ALL"
+                    + " SELECT p.id, p.parent_consent_id, chain.depth + 1, chain.path || p.id"
+                    + " FROM chain JOIN consents p ON p.id = chain.parent_consent_id"
+                    + " WHERE p.user_id = :userId AND chain.depth < :maxDepth"
+                    + " AND p.id <> ALL(chain.path))"
+                    + " SELECT c.* FROM chain JOIN consents c ON c.id = chain.id"
+                    + " ORDER BY chain.depth")
+    List<Consent> findLineageForUser(UUID startId, UUID parentId, UUID userId, int maxDepth);
+
+    /**
+     * The chain above {@code startId} naming the participant as a party, nearest first, in one
+     * recursive read, under the same stops as {@link #findLineageForUser}.
+     */
+    @Query(
+            "WITH RECURSIVE chain(id, parent_consent_id, depth, path) AS ("
+                    + " SELECT c.id, c.parent_consent_id, 1, ARRAY[CAST(:startId AS uuid), c.id]"
+                    + " FROM consents c WHERE c.id = :parentId"
+                    + " AND (c.provider_id = :participantId OR c.consumer_id = :participantId)"
+                    + " AND c.id <> :startId AND :maxDepth > 0"
+                    + " UNION ALL"
+                    + " SELECT p.id, p.parent_consent_id, chain.depth + 1, chain.path || p.id"
+                    + " FROM chain JOIN consents p ON p.id = chain.parent_consent_id"
+                    + " WHERE (p.provider_id = :participantId OR p.consumer_id = :participantId)"
+                    + " AND chain.depth < :maxDepth AND p.id <> ALL(chain.path))"
+                    + " SELECT c.* FROM chain JOIN consents c ON c.id = chain.id"
+                    + " ORDER BY chain.depth")
+    List<Consent> findLineageForParticipant(
+            UUID startId, UUID parentId, UUID participantId, int maxDepth);
 }
