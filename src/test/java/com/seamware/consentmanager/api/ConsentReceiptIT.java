@@ -21,6 +21,8 @@ import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.IdentityProviderRegistry;
+import com.seamware.consentmanager.service.ConsentReceiptIssuer;
+import com.seamware.consentmanager.service.RecordedConsent;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
@@ -149,6 +151,8 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     @Inject ConsentRepository consents;
 
     @Inject ConsentEventRepository events;
+
+    @Inject ConsentReceiptIssuer issuer;
 
     private PrivacyNotice notice;
 
@@ -388,31 +392,35 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo(HttpStatus.BAD_REQUEST.getCode());
     }
 
-    /** Seeds a consent in {@code status}; a grant is recorded as given at {@link #GRANTED_AT}. */
+    /**
+     * Seeds a consent in {@code status}; a grant is recorded as given at {@link #GRANTED_AT} and
+     * carries the receipt issuance stores at the grant.
+     */
     private UUID seedConsent(ConsentStatus status) {
-        UUID id =
+        Consent consent =
                 consents.save(
-                                Consent.withStatus(
-                                        status,
-                                        subject.getId(),
-                                        notice.getId(),
-                                        notice.getProviderId(),
-                                        notice.getConsumerId(),
-                                        null,
-                                        notice.getContractUri(),
-                                        ConsentSnapshot.of(notice, null, null)))
-                        .getId();
+                        Consent.withStatus(
+                                status,
+                                subject.getId(),
+                                notice.getId(),
+                                notice.getProviderId(),
+                                notice.getConsumerId(),
+                                null,
+                                notice.getContractUri(),
+                                ConsentSnapshot.of(notice, null, null)));
         if (status == ConsentStatus.GRANTED) {
-            events.save(
-                    new ConsentEvent(
-                            id,
-                            ConsentEventState.CONSENT_GIVEN,
-                            ConsentEventTrigger.EXPLICIT.eventType(),
-                            subject.getIdentifier(),
-                            GRANTED_AT,
-                            null));
+            ConsentEvent given =
+                    events.save(
+                            new ConsentEvent(
+                                    consent.getId(),
+                                    ConsentEventState.CONSENT_GIVEN,
+                                    ConsentEventTrigger.EXPLICIT.eventType(),
+                                    subject.getIdentifier(),
+                                    GRANTED_AT,
+                                    null));
+            issuer.issue(new RecordedConsent(consent, given, true));
         }
-        return id;
+        return consent.getId();
     }
 
     private static PrivacyNoticePayload terms() {

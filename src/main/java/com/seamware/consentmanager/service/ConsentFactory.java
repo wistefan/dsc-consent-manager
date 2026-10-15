@@ -54,13 +54,6 @@ public class ConsentFactory {
      */
     static final Map<ConsentStatus, Set<ConsentEventState>> ADMISSIBLE_EVENTS = admissibleEvents();
 
-    /**
-     * The events that move a consent <em>into</em> {@link ConsentStatus#GRANTED}: everything {@code
-     * GRANTED} admits except the {@link #AFFIRMATION}, derived so a new granting event cannot
-     * drift.
-     */
-    static final Set<ConsentEventState> GRANTING_EVENTS = grantingEvents();
-
     private static final String UNMAPPED_STATUS = "no consent event is defined for state %s";
 
     private static final String INADMISSIBLE_EVENT =
@@ -233,12 +226,5 @@ public class ConsentFactory {
                         AFFIRMATION));
         table.put(ConsentStatus.DRAFT, EnumSet.noneOf(ConsentEventState.class));
         return Collections.unmodifiableMap(table);
-    }
-
-    private static Set<ConsentEventState> grantingEvents() {
-        Set<ConsentEventState> granting =
-                EnumSet.copyOf(ADMISSIBLE_EVENTS.get(ConsentStatus.GRANTED));
-        granting.remove(AFFIRMATION);
-        return Collections.unmodifiableSet(granting);
     }
 }

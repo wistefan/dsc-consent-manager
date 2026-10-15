@@ -16,6 +16,7 @@ import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.error.ProblemType;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
+import com.seamware.consentmanager.repository.IssuedReceiptRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
@@ -158,6 +159,8 @@ public class UserService {
 
     private final ConsentEventRepository consentEvents;
 
+    private final IssuedReceiptRepository issuedReceipts;
+
     private final ConsentFactory consentFactory;
 
     private final ErasureVerifier erasureVerifier;
@@ -170,6 +173,7 @@ public class UserService {
             ParticipantRepository participants,
             ConsentRepository consents,
             ConsentEventRepository consentEvents,
+            IssuedReceiptRepository issuedReceipts,
             ConsentFactory consentFactory,
             ErasureVerifier erasureVerifier,
             ConsentManagerConfiguration.Users configuration) {
@@ -178,6 +182,7 @@ public class UserService {
         this.participants = participants;
         this.consents = consents;
         this.consentEvents = consentEvents;
+        this.issuedReceipts = issuedReceipts;
         this.consentFactory = consentFactory;
         this.erasureVerifier = erasureVerifier;
         this.configuration = configuration;
@@ -509,13 +514,14 @@ public class UserService {
      *
      * <p>Every consent still open is closed - {@code GRANTED} ones are revoked, the unanswered
      * {@code PENDING} and {@code DRAFT} ones are terminated - each with the matching event appended
-     * to its trail, and every participant link is removed. The {@code users} row then goes one of
-     * two ways. A row no consent refers to is deleted outright: nothing is being retained that
-     * would need it, and leaving a renamed husk behind would accumulate rows no later call can ever
-     * remove. A row consents still name survives with its display attributes cleared and its global
-     * identifier replaced by a fresh opaque pseudonym, because those consents are the evidence of
-     * what was authorised while it was authorised and {@code consents.user_id} is {@code ON DELETE
-     * RESTRICT}. Either way what dies is the tie between the records and the person.
+     * to its trail, every participant link is removed, and every signed grant receipt is deleted
+     * (it names the subject). The {@code users} row then goes one of two ways. A row no consent
+     * refers to is deleted outright: nothing is being retained that would need it, and leaving a
+     * renamed husk behind would accumulate rows no later call can ever remove. A row consents still
+     * name survives with its display attributes cleared and its global identifier replaced by a
+     * fresh opaque pseudonym, because those consents are the evidence of what was authorised while
+     * it was authorised and {@code consents.user_id} is {@code ON DELETE RESTRICT}. Either way what
+     * dies is the tie between the records and the person.
      *
      * <p>{@code @Transactional} is right here and nowhere else in this class. Erasure must be
      * atomic - a half-erased subject is worse than an un-erased one - and unlike the registration
@@ -534,6 +540,8 @@ public class UserService {
         UUID userId = user.getId();
         int revoked = close(userId, Set.of(ConsentStatus.GRANTED), ConsentStatus.REVOKED);
         int terminated = close(userId, UNANSWERED_STATUSES, ConsentStatus.TERMINATED);
+        // A signed receipt names the subject and cannot be pseudonymised without breaking it.
+        issuedReceipts.deleteByUserId(userId);
         long linksRemoved = links.deleteByIdUserId(userId);
         String pseudonym = pseudonymiseOrDelete(user);
 
