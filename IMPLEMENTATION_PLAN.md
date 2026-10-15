@@ -273,6 +273,27 @@ Reconcile docs and the recorded conventions with what shipped.
 - Update `AGENTS.md`: correct the stale `SPECIFIED_OPERATION_COUNT` note (now **34**), add
   the query endpoints, the receipt/JWS/JWKS additions, and the lineage depth config to the
   conventions and important-files sections.
+  **Deferred to a plan-mode agent:** step agents may not edit `AGENTS.md`, so the step-8 PR
+  ships everything else and leaves these edits:
+  - `SPECIFIED_OPERATION_COUNT` (**21** → **34**).
+  - The `items` gotcha: an inline titled object under `items` in a component file is proven
+    by `ConsentResponse.yaml` (lineage), and is no longer "unverified".
+  - Project structure:
+    - `api/`: `ConsentQueryController`, `ContractDiscoveryController`,
+      `ReceiptSigningController` + `@OriginRoot`.
+    - `service/`: `ConsentQueryService`, `ConsentLineageService`, `ConsentReceiptService`,
+      `ContractDiscoveryService`.
+    - `security/`: `ReceiptSigner`.
+    - `docs/adr`: ADRs 0001-0013.
+  - A query-side convention:
+    - Scope goes in the `WHERE` clause, and every new finder belongs in
+      `ConsentQueryIndexUsageIT`.
+    - An unlinked `userIdentifier` returns an empty page.
+    - `/consents/check` uses `requireActive()` and `no-store`.
+    - Receipts render from `snapshot` and carry a detached JWS. The JWKS is at the origin root,
+      outside `API_PREFIX`.
+  - Config: `consent-manager.consents.*` (page sizes, `lineage-max-depth`),
+    `contract-discovery.*` and `receipts.*`.
 - Add an ADR under `docs/adr/` recording the query-side access model (predicate-level
   scoping, empty-page-not-403 for unlinked identifiers, `no-store` on validity, receipts from
   the frozen snapshot, and the detached-JWS/JWKS decision).

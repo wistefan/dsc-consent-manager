@@ -1713,6 +1713,14 @@ paths:
           description: >
             Whether the consent is in force. Carried on both the true and the
             false answer, since "no" is as much the answer as "yes" is.
+          headers:
+            Cache-Control:
+              description: >
+                Always `no-store`, so no client or intermediary replays an answer
+                that the next revocation has already made wrong.
+              schema:
+                type: string
+                enum: [no-store]
           content:
             application/json:
               schema:
