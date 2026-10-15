@@ -5,6 +5,7 @@ import com.seamware.consentmanager.api.generated.model.ConsentReceiptControllerD
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptDataReferencesInner;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantara;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiControllersInner;
+import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiControllersInnerAddress;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInner;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInnerPurposesInner;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptRecipientsInner;
@@ -43,6 +44,19 @@ public class ConsentReceiptService {
 
     /** Separator {@code thirdPartyName} joins the notice's recipients with. */
     static final String THIRD_PARTY_SEPARATOR = ", ";
+
+    /** A KI-CR MUST string this service holds no source for: stated empty, never invented. */
+    static final String NOT_STATED = "";
+
+    /** {@code policyUrl} of a consent carrying no contract: the notice, as a URN. */
+    static final String NOTICE_URN = "urn:uuid:%s";
+
+    /** {@code termination} when the notice stated none: this service's own revocation route. */
+    static final String DEFAULT_TERMINATION =
+            "Revocable by the data subject at any time via POST /consents/{id}/revoke.";
+
+    /** A notice classifies no PII as sensitive, so no receipt declares any. */
+    static final boolean SENSITIVE = false;
 
     private static final String NOT_GRANTED =
             "Consent '%s' is %s; a Kantara receipt attests a consent that is GRANTED.";
@@ -101,15 +115,19 @@ public class ConsentReceiptService {
         }
         ConsentSnapshot snapshot = consent.getSnapshot();
         return new ConsentReceiptKantara(
-                        ConsentReceiptKantara.VersionEnum.KI_CR_V1_1_0,
-                        settings.getJurisdiction(),
-                        consent.getUpdatedAt().getEpochSecond(),
-                        COLLECTION_METHOD,
-                        consent.getId().toString(),
-                        subjectIdentifier(consent),
-                        List.of(piiController(snapshot.controllerDetails(), details)),
-                        List.of(service(snapshot, consent)))
-                .policyUrl(consent.getContractUri());
+                ConsentReceiptKantara.VersionEnum.KI_CR_V1_1_0,
+                settings.getJurisdiction(),
+                consent.getUpdatedAt().getEpochSecond(),
+                COLLECTION_METHOD,
+                consent.getId().toString(),
+                Objects.requireNonNullElse(
+                        consent.getContractUri(),
+                        NOTICE_URN.formatted(consent.getPrivacyNoticeId())),
+                subjectIdentifier(consent),
+                List.of(piiController(snapshot.controllerDetails(), details)),
+                List.of(service(snapshot, consent)),
+                SENSITIVE,
+                List.of());
     }
 
     /**
@@ -126,15 +144,23 @@ public class ConsentReceiptService {
     private ConsentReceiptKantaraPiiControllersInner piiController(
             @Nullable PrivacyNoticePayload.ControllerDetails controller, ConsentDetails details) {
         if (controller == null) {
-            return new ConsentReceiptKantaraPiiControllersInner(details.providerIdentifier());
+            return controller(details.providerIdentifier(), details.providerIdentifier());
         }
-        return new ConsentReceiptKantaraPiiControllersInner(
-                        firstPresent(
-                                controller.name(),
-                                controller.identifier(),
-                                details.providerIdentifier()))
-                .contact(controller.contact())
+        String name =
+                firstPresent(
+                        controller.name(), controller.identifier(), details.providerIdentifier());
+        return controller(name, Objects.requireNonNullElse(controller.contact(), name))
                 .piiControllerUrl(controller.selfDescriptionUri());
+    }
+
+    private static ConsentReceiptKantaraPiiControllersInner controller(
+            String name, String contact) {
+        return new ConsentReceiptKantaraPiiControllersInner(
+                name,
+                contact,
+                new ConsentReceiptKantaraPiiControllersInnerAddress(),
+                NOT_STATED,
+                NOT_STATED);
     }
 
     /** The one service a consent covers, named by its notice title, else its contract or notice. */
@@ -155,10 +181,15 @@ public class ConsentReceiptService {
                                 purpose ->
                                         new ConsentReceiptKantaraServicesInnerPurposesInner(
                                                         purpose,
+                                                        List.of(),
                                                         EXPLICIT_CONSENT,
+                                                        Objects.requireNonNullElse(
+                                                                snapshot.dataCategories(),
+                                                                List.of()),
+                                                        Objects.requireNonNullElse(
+                                                                snapshot.withdrawalOfConsent(),
+                                                                DEFAULT_TERMINATION),
                                                         !thirdParties.isEmpty())
-                                                .piiCategory(snapshot.dataCategories())
-                                                .termination(snapshot.withdrawalOfConsent())
                                                 .thirdPartyName(
                                                         thirdParties.isEmpty()
                                                                 ? null

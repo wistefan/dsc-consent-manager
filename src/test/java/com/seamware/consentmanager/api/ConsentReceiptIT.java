@@ -44,15 +44,15 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Exercises {@code GET /consents/{id}?format=receipt|receipt-kantara} against real Keycloak and
- * PostgreSQL.
+ * Exercises {@code GET /consents/me/{id}} and {@code GET /consents/{id}} with {@code
+ * format=receipt|receipt-kantara} against real Keycloak and PostgreSQL.
  *
  * <p>The defining case is stability: a receipt rendered before its notice is archived and
  * regenerated with different terms must read the same afterwards, because it is rendered from the
@@ -62,7 +62,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 @DisplayName("Consent receipts")
 class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
 
-    private static final String PATH_CONSENT = "/consents/{id}";
+    private static final String PATH_MY_CONSENTS = "/consents/me";
 
     private static final String PARAM_FORMAT = "format";
 
@@ -80,8 +80,6 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
 
     private static final String CONTRACT_URI =
             "https://contract.example.org/v1/contracts/receipt-1";
-
-    private static final String SUBJECT = "urn:test:user:receipt-subject";
 
     private static final String TITLE = "Fitness data for research";
 
@@ -133,6 +131,20 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
 
     private User subject;
 
+    /** The two single-consent reads a receipt renders on, each with the token it admits. */
+    enum Route {
+        SUBJECT("/consents/me/{id}", RealmPrincipal.USER),
+        PARTY("/consents/{id}", RealmPrincipal.PARTICIPANT);
+
+        private final String path;
+        private final RealmPrincipal caller;
+
+        Route(String path, RealmPrincipal caller) {
+            this.path = path;
+            this.caller = caller;
+        }
+    }
+
     @BeforeEach
     void seedTheNoticeAndTheSubject() {
         Await.until(
@@ -148,7 +160,10 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                                 register(CALLER).getId(),
                                 register(COUNTERPARTY).getId(),
                                 terms()));
-        subject = users.save(new User(SUBJECT, null, null, null));
+        String identifier = subjectIdentifier();
+        subject =
+                users.findByIdentifier(identifier)
+                        .orElseGet(() -> users.save(new User(identifier, null, null, null)));
     }
 
     /** Consents restrict deletion of their user and participants, so they go first. */
@@ -156,7 +171,7 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     void removeCommittedRows() {
         consents.deleteAll();
         notices.deleteAll();
-        users.findByIdentifier(SUBJECT).ifPresent(users::delete);
+        users.findByIdentifier(subjectIdentifier()).ifPresent(users::delete);
         List.of(CALLER, COUNTERPARTY)
                 .forEach(
                         party ->
@@ -165,17 +180,18 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                                         .ifPresent(participants::delete));
     }
 
-    @Test
-    void rendersEveryFrozenTermAsAnIso29184Record() {
+    @ParameterizedTest
+    @EnumSource(Route.class)
+    void rendersEveryFrozenTermAsAnIso29184Record(Route route) {
         UUID id = seedConsent(ConsentStatus.GRANTED);
 
-        Map<String, Object> receipt = body(read(id, FORMAT_ISO));
+        Map<String, Object> receipt = body(read(route, id, FORMAT_ISO));
 
         assertThat(receipt)
                 .containsEntry("standard", "ISO/IEC 29184:2020")
                 .containsEntry("consentId", id.toString())
                 .containsEntry("privacyNoticeId", notice.getId().toString())
-                .containsEntry("piiPrincipalId", SUBJECT)
+                .containsEntry("piiPrincipalId", subject.getIdentifier())
                 .containsEntry("status", ConsentStatus.GRANTED.name())
                 .containsEntry("consented", true)
                 .containsEntry("provider", CALLER)
@@ -203,27 +219,39 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                 .containsEntry("name", RECIPIENT_NAME);
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(Route.class)
     @SuppressWarnings("unchecked")
-    void rendersAKantaraReceiptForAGrant() {
+    void rendersAKantaraReceiptForAGrant(Route route) {
         UUID id = seedConsent(ConsentStatus.GRANTED);
 
-        Map<String, Object> receipt = body(read(id, FORMAT_KANTARA));
+        Map<String, Object> receipt = body(read(route, id, FORMAT_KANTARA));
 
         assertThat(receipt)
                 .containsEntry("version", "KI-CR-v1.1.0")
                 .containsEntry("jurisdiction", JURISDICTION)
                 .containsEntry("consentReceiptID", id.toString())
-                .containsEntry("piiPrincipalId", SUBJECT)
+                .containsEntry("piiPrincipalId", subject.getIdentifier())
                 .containsEntry("policyUrl", CONTRACT_URI)
+                .containsEntry("sensitive", false)
+                .containsEntry("spiCat", List.of())
                 .containsKeys("consentTimestamp", "collectionMethod")
                 .containsEntry(
                         "piiControllers",
                         List.of(
                                 Map.of(
-                                        "piiController", CONTROLLER_NAME,
-                                        "contact", CONTROLLER_CONTACT,
-                                        "piiControllerUrl", CONTROLLER_SD)));
+                                        "piiController",
+                                        CONTROLLER_NAME,
+                                        "contact",
+                                        CONTROLLER_CONTACT,
+                                        "address",
+                                        Map.of(),
+                                        "email",
+                                        "",
+                                        "phone",
+                                        "",
+                                        "piiControllerUrl",
+                                        CONTROLLER_SD)));
         Map<String, Object> service =
                 ((List<Map<String, Object>>) receipt.get("services")).getFirst();
         assertThat(service).containsEntry("service", TITLE);
@@ -233,6 +261,8 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                         Map.of(
                                 "purpose",
                                 PURPOSE,
+                                "purposeCategory",
+                                List.of(),
                                 "consentType",
                                 "EXPLICIT",
                                 "piiCategory",
@@ -245,11 +275,20 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                                 RECIPIENT_NAME));
     }
 
+    /** Every route, in every receipt format. */
+    static Stream<Arguments> routesAndFormats() {
+        return Arrays.stream(Route.values())
+                .flatMap(
+                        route ->
+                                Stream.of(FORMAT_ISO, FORMAT_KANTARA)
+                                        .map(format -> Arguments.of(route, format)));
+    }
+
     @ParameterizedTest
-    @ValueSource(strings = {FORMAT_ISO, FORMAT_KANTARA})
-    void readsTheSameAfterItsNoticeIsArchivedAndRegenerated(String format) {
+    @MethodSource("routesAndFormats")
+    void readsTheSameAfterItsNoticeIsArchivedAndRegenerated(Route route, String format) {
         UUID id = seedConsent(ConsentStatus.GRANTED);
-        Map<String, Object> before = body(read(id, format));
+        Map<String, Object> before = body(read(route, id, format));
 
         notice.setArchivedAt(Instant.now());
         notice.setTitle(REGENERATED);
@@ -263,32 +302,48 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                         notice.getConsumerId(),
                         regeneratedTerms()));
 
-        assertThat(body(read(id, format))).isEqualTo(before);
+        assertThat(body(read(route, id, format))).isEqualTo(before);
     }
 
-    /** Every status but {@code GRANTED}: the ones a Kantara receipt cannot attest. */
+    /** Every route, with every status but {@code GRANTED}: the ones Kantara cannot attest. */
     static Stream<Arguments> ungranted() {
-        return Arrays.stream(ConsentStatus.values())
-                .filter(status -> status != ConsentStatus.GRANTED)
-                .map(Arguments::of);
+        return Arrays.stream(Route.values())
+                .flatMap(
+                        route ->
+                                Arrays.stream(ConsentStatus.values())
+                                        .filter(status -> status != ConsentStatus.GRANTED)
+                                        .map(status -> Arguments.of(route, status)));
     }
 
     @ParameterizedTest
     @MethodSource("ungranted")
-    void refusesAKantaraReceiptButRecordsAnUngrantedConsent(ConsentStatus status) {
+    void refusesAKantaraReceiptButRecordsAnUngrantedConsent(Route route, ConsentStatus status) {
         UUID id = seedConsent(status);
 
-        assertThat(read(id, FORMAT_KANTARA).code()).isEqualTo(HttpStatus.BAD_REQUEST.getCode());
-        assertThat(body(read(id, FORMAT_ISO)))
+        assertThat(read(route, id, FORMAT_KANTARA).code())
+                .isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+        assertThat(body(read(route, id, FORMAT_ISO)))
                 .containsEntry("status", status.name())
                 .containsEntry("consented", false);
     }
 
-    @Test
-    void refusesAnUnknownFormat() {
+    @ParameterizedTest
+    @EnumSource(Route.class)
+    void refusesAnUnknownFormat(Route route) {
         UUID id = seedConsent(ConsentStatus.GRANTED);
 
-        assertThat(read(id, "receipt-v2").code()).isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+        assertThat(read(route, id, "receipt-v2").code())
+                .isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+    }
+
+    /** A listing renders {@code full} alone, so asking it for a receipt is refused, not ignored. */
+    @ParameterizedTest
+    @ValueSource(strings = {FORMAT_ISO, FORMAT_KANTARA})
+    void refusesAReceiptListing(String format) {
+        seedConsent(ConsentStatus.GRANTED);
+
+        assertThat(exchange(PATH_MY_CONSENTS, format, RealmPrincipal.USER).code())
+                .isEqualTo(HttpStatus.BAD_REQUEST.getCode());
     }
 
     private UUID seedConsent(ConsentStatus status) {
@@ -347,15 +402,25 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                                                 null)));
     }
 
-    /** Reads the consent as the provider, returning a refusal rather than throwing it. */
+    /** The data subject the {@code USER} token carries, so both routes reach the same consent. */
+    private static String subjectIdentifier() {
+        return KeycloakTestResource.subject(KeycloakTestResource.accessToken(RealmPrincipal.USER));
+    }
+
+    /** Reads the consent through {@code route}, as the caller that route admits. */
+    private HttpResponse<String> read(Route route, UUID id, String format) {
+        return exchange(
+                UriBuilder.of(route.path).expand(Map.of("id", id.toString())).toString(),
+                format,
+                route.caller);
+    }
+
+    /** Sends a {@code GET}, returning a refusal rather than throwing it. */
     @SuppressWarnings("unchecked")
-    private HttpResponse<String> read(UUID id, String format) {
+    private HttpResponse<String> exchange(String path, String format, RealmPrincipal caller) {
         HttpRequest<?> request =
-                HttpRequest.GET(
-                                UriBuilder.of(PATH_CONSENT)
-                                        .queryParam(PARAM_FORMAT, format)
-                                        .expand(Map.of("id", id.toString())))
-                        .bearerAuth(KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
+                HttpRequest.GET(UriBuilder.of(path).queryParam(PARAM_FORMAT, format).build())
+                        .bearerAuth(KeycloakTestResource.accessToken(caller));
         try {
             return client.toBlocking().exchange(request, String.class);
         } catch (HttpClientResponseException e) {

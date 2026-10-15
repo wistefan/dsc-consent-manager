@@ -2690,9 +2690,6 @@ components:
         - totalElements
         - totalPages
 
-    # Declared inline, with `items` an internal ref, because that is the only
-    # form proven to generate a typed `List<ConsentResponse>` rather than a
-    # `List<Object>`; see the note ParticipantPage carries.
     # Written out here so its members are same-document refs. With
     # `useOneOfInterfaces` the generator turns it into an interface the three
     # representations implement, which is what lets one handler return any of
@@ -2707,6 +2704,9 @@ components:
         - $ref: "#/components/schemas/ConsentReceipt"
         - $ref: "#/components/schemas/ConsentReceiptKantara"
 
+    # Declared inline, with `items` an internal ref, because that is the only
+    # form proven to generate a typed `List<ConsentResponse>` rather than a
+    # `List<Object>`; see the note ParticipantPage carries.
     ConsentPage:
       type: object
       description: >

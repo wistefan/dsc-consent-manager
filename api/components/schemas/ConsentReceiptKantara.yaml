@@ -5,12 +5,13 @@
 # Receipt, KI-CR-v1.1.0. Property names are the specification's own. Every
 # term is read off the snapshot the consent froze, never off the live notice.
 #
-# Deliberate departures from KI-CR-v1.1.0, each because this service holds no
-# source for the field and a receipt must not state what nobody decided:
-# `piiControllers[].address`, `.email` and `.phone` (a registration carries one
-# `contact`), `purposes[].purposeCategory` (a notice states purposes without a
-# category), and `sensitive` / `spiCat` (a notice does not classify its data).
-# All are left out rather than filled with a placeholder.
+# Every key KI-CR-v1.1.0 marks MUST is required here and always rendered, so a
+# receipt validates against the published schema. Where this service holds no
+# source for a MUST field, the receipt states "not stated" in that field's own
+# type and does not invent a value: `""` for controller `email` and `phone`, an
+# empty `address`, and an empty `purposeCategory`. `sensitive` / `spiCat`
+# record that the notice declared no sensitive PII category.
+# `ConsentReceiptServiceTest` pins this key set.
 type: object
 description: >
   A KI-CR-v1.1.0 consent receipt for one granted consent, rendered from the
@@ -38,8 +39,8 @@ properties:
   policyUrl:
     type: string
     description: >
-      The contract the notice was generated from, as frozen on the consent.
-      Absent when the consent carries none.
+      The contract the notice was generated from, as frozen on the consent;
+      `urn:uuid:` and the notice's id when the consent carries none.
   piiPrincipalId:
     type: string
     description: Identifier of the data subject who gave consent.
@@ -54,11 +55,40 @@ properties:
           description: Name of the controller, or its identifier when unnamed.
         contact:
           type: string
+          description: >
+            The controller's contact as the notice stated it, else the
+            controller's name.
+        address:
+          type: object
+          description: >
+            The controller's postal address. Always empty: a registration
+            carries no postal address.
+          properties:
+            streetAddress:
+              type: string
+            addressLocality:
+              type: string
+            addressRegion:
+              type: string
+            postalCode:
+              type: string
+            addressCountry:
+              type: string
+        email:
+          type: string
+          description: Always `""`; a registration carries one `contact` and no email.
+        phone:
+          type: string
+          description: Always `""`; a registration carries one `contact` and no phone.
         piiControllerUrl:
           type: string
           description: The controller's self-description document.
       required:
         - piiController
+        - contact
+        - address
+        - email
+        - phone
   services:
     type: array
     description: The one service consented to, and its elected purposes.
@@ -75,16 +105,24 @@ properties:
             properties:
               purpose:
                 type: string
+              purposeCategory:
+                type: array
+                description: Always empty; a notice states purposes without a category.
+                items:
+                  type: string
               consentType:
                 type: string
                 description: Always `EXPLICIT`; only the data subject grants.
               piiCategory:
                 type: array
+                description: The data categories the notice named; empty when it named none.
                 items:
                   type: string
               termination:
                 type: string
-                description: How consent may be withdrawn, as the notice stated it.
+                description: >
+                  How consent may be withdrawn, as the notice stated it, else
+                  this service's own revocation route.
               thirdPartyDisclosure:
                 type: boolean
               thirdPartyName:
@@ -95,17 +133,33 @@ properties:
                   `thirdPartyDisclosure` is true exactly when present.
             required:
               - purpose
+              - purposeCategory
               - consentType
+              - piiCategory
+              - termination
               - thirdPartyDisclosure
       required:
         - service
         - purposes
+  sensitive:
+    type: boolean
+    description: >
+      Whether the notice declared sensitive PII. Always false: a notice
+      declares no sensitive category.
+  spiCat:
+    type: array
+    description: The sensitive PII categories the notice declared; always empty.
+    items:
+      type: string
 required:
   - version
   - jurisdiction
   - consentTimestamp
   - collectionMethod
   - consentReceiptID
+  - policyUrl
   - piiPrincipalId
   - piiControllers
   - services
+  - sensitive
+  - spiCat

@@ -1,0 +1,296 @@
+package com.seamware.consentmanager.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantara;
+import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiControllersInner;
+import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInnerPurposesInner;
+import com.seamware.consentmanager.config.ConsentManagerConfiguration;
+import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentSnapshot;
+import com.seamware.consentmanager.domain.ConsentStatus;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload.ControllerDetails;
+import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
+import com.seamware.consentmanager.domain.User;
+import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.repository.UserRepository;
+import com.seamware.consentmanager.support.TestJson;
+import io.micronaut.core.type.Argument;
+import java.io.IOException;
+import java.lang.reflect.Proxy;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
+
+/**
+ * Pins the receipt renderer's fallbacks for a sparsely populated snapshot, and that every key
+ * KI-CR-v1.1.0 marks MUST is on the wire however sparse the snapshot is.
+ */
+@DisplayName("Consent receipt rendering")
+class ConsentReceiptServiceTest {
+
+    private static final String SUBJECT = "urn:test:user:receipt-subject";
+
+    private static final String PROVIDER = "urn:test:participant:provider";
+
+    private static final String CONSUMER = "urn:test:participant:consumer";
+
+    private static final String CONTRACT_URI = "https://contract.example.org/v1/contracts/1";
+
+    private static final String TITLE = "Fitness data for research";
+
+    private static final String PURPOSE = "Clinical research";
+
+    private static final String CONTROLLER_NAME = "Fitness Provider Ltd";
+
+    private static final String CONTROLLER_ID = "did:web:provider.example.org";
+
+    private static final String CONTROLLER_CONTACT = "dpo@provider.example.org";
+
+    private static final String RECIPIENT_NAME = "Research Lab";
+
+    private static final String RECIPIENT_ID = "did:web:lab.example.org";
+
+    private static final String OTHER_RECIPIENT_ID = "did:web:archive.example.org";
+
+    /** Top-level keys KI-CR-v1.1.0 marks MUST. */
+    private static final Set<String> RECEIPT_MUST =
+            Set.of(
+                    "version",
+                    "jurisdiction",
+                    "consentTimestamp",
+                    "collectionMethod",
+                    "consentReceiptID",
+                    "piiPrincipalId",
+                    "piiControllers",
+                    "policyUrl",
+                    "services",
+                    "sensitive",
+                    "spiCat");
+
+    /** Keys KI-CR-v1.1.0 marks MUST on each {@code piiControllers} entry. */
+    private static final Set<String> CONTROLLER_MUST =
+            Set.of("piiController", "contact", "address", "email", "phone");
+
+    /** Keys KI-CR-v1.1.0 marks MUST on each {@code services} entry. */
+    private static final Set<String> SERVICE_MUST = Set.of("service", "purposes");
+
+    /** Keys KI-CR-v1.1.0 marks MUST on each {@code purposes} entry. */
+    private static final Set<String> PURPOSE_MUST =
+            Set.of(
+                    "purpose",
+                    "purposeCategory",
+                    "consentType",
+                    "piiCategory",
+                    "termination",
+                    "thirdPartyDisclosure");
+
+    private final ConsentReceiptService receipts =
+            new ConsentReceiptService(
+                    users(new User(SUBJECT, null, null, null)),
+                    new ConsentManagerConfiguration.Receipts());
+
+    /** A snapshot naming one purpose and nothing else: the sparsest a receipt is drawn from. */
+    private static ConsentSnapshot bare() {
+        return new ConsentSnapshot(
+                null, List.of(PURPOSE), null, null, null, null, null, null, null, null);
+    }
+
+    private static ConsentSnapshot withController(ControllerDetails controller) {
+        return new ConsentSnapshot(
+                null, List.of(PURPOSE), null, null, null, controller, null, null, null, null);
+    }
+
+    private static ConsentSnapshot withRecipients(List<Recipient> recipients) {
+        return new ConsentSnapshot(
+                null, List.of(PURPOSE), null, null, recipients, null, null, null, null, null);
+    }
+
+    static Stream<Arguments> controllers() {
+        return Stream.of(
+                Arguments.of(null, PROVIDER, PROVIDER),
+                Arguments.of(new ControllerDetails(null, null, null, null), PROVIDER, PROVIDER),
+                Arguments.of(
+                        new ControllerDetails(null, null, CONTROLLER_ID, null),
+                        CONTROLLER_ID,
+                        CONTROLLER_ID),
+                Arguments.of(
+                        new ControllerDetails(CONTROLLER_NAME, null, CONTROLLER_ID, null),
+                        CONTROLLER_NAME,
+                        CONTROLLER_NAME),
+                Arguments.of(
+                        new ControllerDetails(
+                                CONTROLLER_NAME, CONTROLLER_CONTACT, CONTROLLER_ID, null),
+                        CONTROLLER_NAME,
+                        CONTROLLER_CONTACT));
+    }
+
+    @ParameterizedTest
+    @MethodSource("controllers")
+    @DisplayName("names the controller by name, else identifier, else the provider")
+    void fallsBackForTheController(ControllerDetails controller, String name, String contact) {
+        ConsentReceiptKantaraPiiControllersInner rendered =
+                receipts.toKantara(details(withController(controller), CONTRACT_URI))
+                        .getPiiControllers()
+                        .getFirst();
+
+        assertThat(rendered.getPiiController()).isEqualTo(name);
+        assertThat(rendered.getContact()).isEqualTo(contact);
+        assertThat(rendered.getEmail()).isEqualTo(ConsentReceiptService.NOT_STATED);
+        assertThat(rendered.getPhone()).isEqualTo(ConsentReceiptService.NOT_STATED);
+    }
+
+    static Stream<Arguments> serviceNames() {
+        return Stream.of(
+                Arguments.of(TITLE, CONTRACT_URI, TITLE),
+                Arguments.of(TITLE, null, TITLE),
+                Arguments.of(null, CONTRACT_URI, CONTRACT_URI),
+                Arguments.of(null, null, null));
+    }
+
+    @ParameterizedTest
+    @MethodSource("serviceNames")
+    @DisplayName("names the service by title, else contract, else notice id")
+    void fallsBackForTheServiceName(String title, String contractUri, String expected) {
+        ConsentSnapshot snapshot =
+                new ConsentSnapshot(
+                        title, List.of(PURPOSE), null, null, null, null, null, null, null, null);
+        ConsentDetails details = details(snapshot, contractUri);
+
+        String service = receipts.toKantara(details).getServices().getFirst().getService();
+
+        assertThat(service)
+                .isEqualTo(
+                        expected == null
+                                ? details.consent().getPrivacyNoticeId().toString()
+                                : expected);
+    }
+
+    static Stream<Arguments> recipients() {
+        return Stream.of(
+                Arguments.of(null, null),
+                Arguments.of(List.of(), null),
+                Arguments.of(
+                        List.of(new Recipient(RECIPIENT_ID, RECIPIENT_NAME, null, null)),
+                        RECIPIENT_NAME),
+                Arguments.of(List.of(new Recipient(RECIPIENT_ID, null, null, null)), RECIPIENT_ID),
+                Arguments.of(
+                        List.of(
+                                new Recipient(RECIPIENT_ID, RECIPIENT_NAME, null, null),
+                                new Recipient(OTHER_RECIPIENT_ID, null, null, null)),
+                        RECIPIENT_NAME
+                                + ConsentReceiptService.THIRD_PARTY_SEPARATOR
+                                + OTHER_RECIPIENT_ID));
+    }
+
+    @ParameterizedTest
+    @MethodSource("recipients")
+    @DisplayName("discloses to third parties exactly when it names them")
+    void namesThirdPartiesExactlyWhenItDisclosesToThem(
+            List<Recipient> recipients, String thirdPartyName) {
+        ConsentReceiptKantaraServicesInnerPurposesInner purpose =
+                receipts.toKantara(details(withRecipients(recipients), CONTRACT_URI))
+                        .getServices()
+                        .getFirst()
+                        .getPurposes()
+                        .getFirst();
+
+        assertThat(purpose.getThirdPartyName()).isEqualTo(thirdPartyName);
+        assertThat(purpose.getThirdPartyDisclosure()).isEqualTo(thirdPartyName != null);
+    }
+
+    @Test
+    @DisplayName("states the notice and the service's own terms where the snapshot is silent")
+    void fallsBackForPolicyAndTermination() {
+        ConsentDetails details = details(bare(), null);
+
+        ConsentReceiptKantara receipt = receipts.toKantara(details);
+
+        assertThat(receipt.getPolicyUrl())
+                .isEqualTo(
+                        ConsentReceiptService.NOTICE_URN.formatted(
+                                details.consent().getPrivacyNoticeId()));
+        ConsentReceiptKantaraServicesInnerPurposesInner purpose =
+                receipt.getServices().getFirst().getPurposes().getFirst();
+        assertThat(purpose.getTermination()).isEqualTo(ConsentReceiptService.DEFAULT_TERMINATION);
+        assertThat(purpose.getPiiCategory()).isEmpty();
+        assertThat(purpose.getPurposeCategory()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("publishes every key KI-CR-v1.1.0 marks MUST, even from the sparsest snapshot")
+    @SuppressWarnings("unchecked")
+    void publishesEveryMustKey() throws IOException {
+        String json =
+                TestJson.mapper().writeValueAsString(receipts.toKantara(details(bare(), null)));
+        Map<String, Object> receipt =
+                TestJson.mapper().readValue(json, Argument.mapOf(String.class, Object.class));
+
+        assertThat(receipt).containsKeys(RECEIPT_MUST.toArray(String[]::new));
+        Map<String, Object> controller =
+                ((List<Map<String, Object>>) receipt.get("piiControllers")).getFirst();
+        assertThat(controller).containsKeys(CONTROLLER_MUST.toArray(String[]::new));
+        Map<String, Object> service =
+                ((List<Map<String, Object>>) receipt.get("services")).getFirst();
+        assertThat(service).containsKeys(SERVICE_MUST.toArray(String[]::new));
+        assertThat(((List<Map<String, Object>>) service.get("purposes")).getFirst())
+                .containsKeys(PURPOSE_MUST.toArray(String[]::new));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ConsentStatus.class, names = "GRANTED", mode = EnumSource.Mode.EXCLUDE)
+    @DisplayName("refuses a Kantara receipt for a consent that is not granted")
+    void refusesAnUngrantedKantaraReceipt(ConsentStatus status) {
+        ConsentDetails details = details(status, bare(), CONTRACT_URI);
+
+        assertThatThrownBy(() -> receipts.toKantara(details))
+                .isInstanceOf(BadRequestException.class);
+    }
+
+    private static ConsentDetails details(ConsentSnapshot snapshot, String contractUri) {
+        return details(ConsentStatus.GRANTED, snapshot, contractUri);
+    }
+
+    private static ConsentDetails details(
+            ConsentStatus status, ConsentSnapshot snapshot, String contractUri) {
+        Consent consent =
+                Consent.withStatus(
+                        status,
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
+                        null,
+                        contractUri,
+                        snapshot);
+        Instant now = Instant.now();
+        consent.setCreatedAt(now);
+        consent.setUpdatedAt(now);
+        return new ConsentDetails(consent, PROVIDER, CONSUMER, false);
+    }
+
+    /** A {@link UserRepository} whose {@code findById} answers {@code subject} for any id. */
+    private static UserRepository users(User subject) {
+        return (UserRepository)
+                Proxy.newProxyInstance(
+                        UserRepository.class.getClassLoader(),
+                        new Class<?>[] {UserRepository.class},
+                        (proxy, method, args) -> {
+                            if (method.getName().equals("findById")) {
+                                return Optional.of(subject);
+                            }
+                            throw new UnsupportedOperationException(method.getName());
+                        });
+    }
+}

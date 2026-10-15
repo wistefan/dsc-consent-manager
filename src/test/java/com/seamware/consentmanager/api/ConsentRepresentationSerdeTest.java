@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.seamware.consentmanager.api.generated.model.ConsentReceipt;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantara;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiControllersInner;
+import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiControllersInnerAddress;
 import com.seamware.consentmanager.api.generated.model.ConsentRepresentation;
 import com.seamware.consentmanager.api.generated.model.ConsentResponse;
 import com.seamware.consentmanager.support.TestJson;
@@ -36,6 +37,8 @@ class ConsentRepresentationSerdeTest {
     private static final long EPOCH_SECONDS = AT.toEpochSecond();
     private static final String COLLECTION_METHOD = "API decision";
     private static final String JURISDICTION = "EU";
+    private static final String POLICY_URL = "https://contract.example.org/v1/contracts/1";
+    private static final String NOT_STATED = "";
 
     static Stream<ConsentRepresentation> representations() {
         return Stream.of(
@@ -66,8 +69,17 @@ class ConsentRepresentationSerdeTest {
                         EPOCH_SECONDS,
                         COLLECTION_METHOD,
                         ID.toString(),
+                        POLICY_URL,
                         SUBJECT,
-                        List.of(new ConsentReceiptKantaraPiiControllersInner(PROVIDER)),
+                        List.of(
+                                new ConsentReceiptKantaraPiiControllersInner(
+                                        PROVIDER,
+                                        PROVIDER,
+                                        new ConsentReceiptKantaraPiiControllersInnerAddress(),
+                                        NOT_STATED,
+                                        NOT_STATED)),
+                        List.of(),
+                        false,
                         List.of()));
     }
 
