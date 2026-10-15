@@ -2558,6 +2558,15 @@ paths:
       responses:
         "200":
           description: The published signing keys.
+          headers:
+            Cache-Control:
+              description: >
+                Always `public, max-age=3600`, so verifiers and intermediaries may
+                hold the set for an hour. A rotation signs with the new key at once,
+                so a verifier meeting a `kid` its cached set lacks should refetch.
+              schema:
+                type: string
+                enum: ["public, max-age=3600"]
           content:
             application/json:
               schema:
