@@ -11,7 +11,8 @@
 # type and does not invent a value: `""` for controller `email` and `phone`, an
 # empty `address`, and an empty `purposeCategory`. `sensitive` / `spiCat`
 # record that the notice declared no sensitive PII category.
-# `ConsentReceiptServiceTest` pins this key set.
+# `ConsentReceiptServiceTest` pins this key set. `signature` is not a KI-CR
+# key: it is the detached JWS this service adds to both receipt formats alike.
 type: object
 description: >
   A KI-CR-v1.1.0 consent receipt for one granted consent, rendered from the
@@ -151,6 +152,15 @@ properties:
     description: The sensitive PII categories the notice declared; always empty.
     items:
       type: string
+  signature:
+    type: string
+    description: >
+      Detached compact JWS (RFC 7515 Appendix F, `header..signature`) over the
+      RFC 8785 (JCS) canonical form of this receipt with `signature` itself
+      removed. Verify it against the key `GET /.well-known/jwks.json` publishes
+      under the header's `kid`. An ECDSA signature is randomized, so two reads
+      of one receipt carry different signatures over the same content.
+    example: "eyJraWQiOiJyZWNlaXB0cyIsImFsZyI6IkVTMjU2In0..MEUCIQ"
 required:
   - version
   - jurisdiction
@@ -163,3 +173,4 @@ required:
   - services
   - sensitive
   - spiCat
+  - signature

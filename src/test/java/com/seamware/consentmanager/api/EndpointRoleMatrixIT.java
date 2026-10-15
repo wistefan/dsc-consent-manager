@@ -110,6 +110,8 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_CONTRACTS_AVAILABLE = "/contracts/available";
 
+    private static final String PATH_JWKS = "/.well-known/jwks.json";
+
     /** A side contract discovery accepts, so the role row is decided by role and not by input. */
     private static final String PROVIDER_ROLE = "provider";
 
@@ -396,7 +398,8 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 "get " + PATH_CONTRACTS_AVAILABLE, () -> HttpRequest.GET(PATH_CONTRACTS_AVAILABLE)),
         LIST_AVAILABLE_CONTRACTS(
                 "get " + PATH_CONTRACTS_AVAILABLE + "/{role}",
-                () -> HttpRequest.GET(PATH_CONTRACTS_AVAILABLE + "/" + PROVIDER_ROLE));
+                () -> HttpRequest.GET(PATH_CONTRACTS_AVAILABLE + "/" + PROVIDER_ROLE)),
+        RECEIPT_SIGNING_KEYS("get " + PATH_JWKS, () -> HttpRequest.GET(PATH_JWKS));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -481,8 +484,9 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
      *
      * <p>A caller holding no role of this service is {@code 403} rather than {@code 401}: its
      * signature was good and its issuer is trusted, so asking it to authenticate again would be a
-     * lie. {@code /api-status} stays {@code 200} throughout, including for a caller that names
-     * nobody, because a reachability check must not depend on a credential.
+     * lie. {@code /api-status} and the receipt JWKS stay {@code 200} throughout, including for a
+     * caller that names nobody: neither a reachability check nor verifying a receipt may depend on
+     * a credential.
      */
     static Stream<Arguments> roleMatrix() {
         HttpStatus ok = HttpStatus.OK;
@@ -703,7 +707,8 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 ok,
                                 denied,
                                 denied,
-                                challenged))
+                                challenged),
+                        row(Endpoint.RECEIPT_SIGNING_KEYS, ok, ok, ok, ok, ok))
                 .flatMap(row -> row);
     }
 

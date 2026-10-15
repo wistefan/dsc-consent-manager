@@ -39,6 +39,7 @@ class ConsentRepresentationSerdeTest {
     private static final String JURISDICTION = "EU";
     private static final String POLICY_URL = "https://contract.example.org/v1/contracts/1";
     private static final String NOT_STATED = "";
+    private static final String SIGNATURE = "eyJhbGciOiJFUzI1NiJ9..c2lnbmF0dXJl";
 
     static Stream<ConsentRepresentation> representations() {
         return Stream.of(
@@ -62,7 +63,8 @@ class ConsentRepresentationSerdeTest {
                         PROVIDER,
                         CONSUMER,
                         AT,
-                        AT),
+                        AT,
+                        SIGNATURE),
                 new ConsentReceiptKantara(
                         ConsentReceiptKantara.VersionEnum.KI_CR_V1_1_0,
                         JURISDICTION,
@@ -80,7 +82,8 @@ class ConsentRepresentationSerdeTest {
                                         NOT_STATED)),
                         List.of(),
                         false,
-                        List.of()));
+                        List.of(),
+                        SIGNATURE));
     }
 
     @ParameterizedTest

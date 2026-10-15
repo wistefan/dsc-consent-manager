@@ -468,6 +468,14 @@ consent-manager:
     # the processing. KI-CR-v1.1.0 requires one and neither a notice nor a contract
     # carries it, so it is stated per deployment.
     jurisdiction: ${RECEIPTS_JURISDICTION:EU}
+    # Private JSON Web Key (RFC 7517, one line of JSON, EC P-256/P-384/P-521 or RSA)
+    # every receipt is signed with; a secret. Its public half is published at
+    # GET /.well-known/jwks.json under the key's `kid` (or, absent one, its RFC 7638
+    # thumbprint). Rotating it leaves earlier receipts unverifiable against the JWKS.
+    signing-key: ${RECEIPTS_SIGNING_KEY:}
+    # With no signing key, generate a throwaway one at startup instead of failing.
+    # Receipts it signs stop verifying on restart, so only dev and test enable it.
+    ephemeral-signing-key: ${RECEIPTS_EPHEMERAL_SIGNING_KEY:false}
 
   erasure:
     # Key of the salted HMAC an erased record keeps instead of its identifier, so

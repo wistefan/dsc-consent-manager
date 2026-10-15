@@ -19,6 +19,7 @@ import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.UserRepository;
+import com.seamware.consentmanager.security.ReceiptSigner;
 import com.seamware.consentmanager.support.TestJson;
 import io.micronaut.core.type.Argument;
 import java.io.IOException;
@@ -117,7 +118,14 @@ class ConsentReceiptServiceTest {
             new ConsentReceiptService(
                     users(new User(SUBJECT, null, null, null)),
                     events(recorded),
-                    new ConsentManagerConfiguration.Receipts());
+                    new ConsentManagerConfiguration.Receipts(),
+                    signer());
+
+    private static ReceiptSigner signer() {
+        ConsentManagerConfiguration.Receipts settings = new ConsentManagerConfiguration.Receipts();
+        settings.setEphemeralSigningKey(true);
+        return new ReceiptSigner(settings, TestJson.mapper());
+    }
 
     /** A snapshot naming one purpose and nothing else: the sparsest a receipt is drawn from. */
     private static ConsentSnapshot bare() {

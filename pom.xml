@@ -38,6 +38,7 @@
         <testcontainers-keycloak.version>3.6.0</testcontainers-keycloak.version>
         <wiremock.version>3.10.0</wiremock.version>
         <lombok.version>1.18.48</lombok.version>
+        <json-canonicalization.version>1.1</json-canonicalization.version>
 
         <!-- OpenAPI Generator and generated-code dependencies -->
         <openapi.generator.version>7.12.0</openapi.generator.version>
@@ -231,6 +232,16 @@
             <groupId>com.nimbusds</groupId>
             <artifactId>nimbus-jose-jwt</artifactId>
             <scope>compile</scope>
+        </dependency>
+
+        <!--
+            RFC 8785 (JCS) canonicalization of the receipt bytes a detached JWS signs, so a
+            verifier holding only the JSON it was served can recompute the exact payload.
+        -->
+        <dependency>
+            <groupId>io.github.erdtman</groupId>
+            <artifactId>java-json-canonicalization</artifactId>
+            <version>${json-canonicalization.version}</version>
         </dependency>
 
         <!-- Micronaut Management Endpoints -->

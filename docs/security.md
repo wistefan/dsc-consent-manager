@@ -84,6 +84,7 @@ Implemented operations:
 | Operation | Roles | Controller |
 |---|---|---|
 | `GET /api-status` | anonymous | `ApiStatusController` |
+| `GET /.well-known/jwks.json` | anonymous | `ReceiptSigningController` |
 | `POST /users/register` | `USER` | `UserController` |
 | `GET /users/me` | `USER` | `UserController` |
 | `DELETE /users/me` | `USER` | `UserController` |
@@ -199,11 +200,13 @@ that is its only role, and authenticates but answers `403` on participant-scoped
 also grants another role whose identifier it does carry — the identifier is required of the *acting*
 role, see [ADR 0006](adr/0006-identifier-claim-is-required-of-the-acting-role.md).
 
-**No JWKS endpoint is served here yet.** The Consent Manager is a resource server: it verifies
-tokens against each issuer's published key set and holds no signing key of its own today. Receipt
-signing and the key set arrive with TICKET-011, which owns `GET /.well-known/jwks.json`
-(US-PM-008) end-to-end — the route and the key material both — so nothing should expect to fetch
-keys from this module in the meantime.
+**Receipt signing is the one key this service holds.** It issues no tokens, but every consent
+receipt it renders carries a detached JWS (`signature`) over the RFC 8785 canonical form of the
+receipt's other members, made by `ReceiptSigner` with the private JWK in `RECEIPTS_SIGNING_KEY`.
+Its public half is published anonymously at `GET /.well-known/jwks.json` under the key's `kid`, so
+anyone holding a receipt can verify it without a credential. Startup fails without a usable private
+key unless `RECEIPTS_EPHEMERAL_SIGNING_KEY=true` permits a throwaway one (dev and test only):
+receipts signed by such a key stop verifying on restart, as do receipts signed before a rotation.
 
 ## Erasure verification
 

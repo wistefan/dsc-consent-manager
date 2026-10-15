@@ -18,6 +18,7 @@ import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.UserRepository;
+import com.seamware.consentmanager.security.ReceiptSigner;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
@@ -34,6 +35,7 @@ import java.util.stream.Stream;
  *
  * <p>Every term is read off {@link Consent#getSnapshot()} and {@link Consent#getContractUri()} -
  * never off the live notice - so archiving or regenerating the notice cannot rewrite a receipt.
+ * Every receipt, in either format, leaves here signed by {@link ReceiptSigner}.
  */
 @Singleton
 public class ConsentReceiptService {
@@ -60,6 +62,9 @@ public class ConsentReceiptService {
     /** A notice classifies no PII as sensitive, so no receipt declares any. */
     static final boolean SENSITIVE = false;
 
+    /** {@code signature} while a receipt is rendered: it signs every member but that one. */
+    private static final String UNSIGNED = null;
+
     private static final String NOT_GRANTED =
             "Consent '%s' is %s; a Kantara receipt attests a consent that is GRANTED.";
 
@@ -70,14 +75,17 @@ public class ConsentReceiptService {
     private final UserRepository users;
     private final ConsentEventRepository events;
     private final ConsentManagerConfiguration.Receipts settings;
+    private final ReceiptSigner signer;
 
     public ConsentReceiptService(
             UserRepository users,
             ConsentEventRepository events,
-            ConsentManagerConfiguration.Receipts settings) {
+            ConsentManagerConfiguration.Receipts settings,
+            ReceiptSigner signer) {
         this.users = users;
         this.events = events;
         this.settings = settings;
+        this.signer = signer;
     }
 
     /** The ISO/IEC 29184 record of {@code details}, rendered for a consent in any status. */
@@ -85,29 +93,32 @@ public class ConsentReceiptService {
     public ConsentReceipt toIso29184(@NonNull ConsentDetails details) {
         Consent consent = details.consent();
         ConsentSnapshot snapshot = consent.getSnapshot();
-        return new ConsentReceipt(
-                        consent.getId(),
-                        ConsentReceipt.StandardEnum.ISO_IEC_29184_2020,
-                        consent.getId(),
-                        consent.getPrivacyNoticeId(),
-                        subjectIdentifier(consent),
-                        ConsentReceipt.StatusEnum.fromValue(consent.getStatus().name()),
-                        consent.isConsented(),
-                        details.providerIdentifier(),
-                        details.consumerIdentifier(),
-                        atUtc(consent.getCreatedAt()),
-                        atUtc(consent.getUpdatedAt()))
-                .contractUri(consent.getContractUri())
-                .title(snapshot.title())
-                .controllerDetails(controllerDetails(snapshot.controllerDetails()))
-                .purposes(snapshot.purposes())
-                .dataCategories(snapshot.dataCategories())
-                .dataReferences(map(snapshot.dataReferences(), this::dataReference))
-                .recipients(map(snapshot.recipients(), this::recipient))
-                .retentionPeriod(snapshot.retentionPeriod())
-                .piiPrincipalRights(snapshot.piiPrincipalRights())
-                .internationalTransfers(snapshot.internationalTransfers())
-                .withdrawalOfConsent(snapshot.withdrawalOfConsent());
+        ConsentReceipt receipt =
+                new ConsentReceipt(
+                                consent.getId(),
+                                ConsentReceipt.StandardEnum.ISO_IEC_29184_2020,
+                                consent.getId(),
+                                consent.getPrivacyNoticeId(),
+                                subjectIdentifier(consent),
+                                ConsentReceipt.StatusEnum.fromValue(consent.getStatus().name()),
+                                consent.isConsented(),
+                                details.providerIdentifier(),
+                                details.consumerIdentifier(),
+                                atUtc(consent.getCreatedAt()),
+                                atUtc(consent.getUpdatedAt()),
+                                UNSIGNED)
+                        .contractUri(consent.getContractUri())
+                        .title(snapshot.title())
+                        .controllerDetails(controllerDetails(snapshot.controllerDetails()))
+                        .purposes(snapshot.purposes())
+                        .dataCategories(snapshot.dataCategories())
+                        .dataReferences(map(snapshot.dataReferences(), this::dataReference))
+                        .recipients(map(snapshot.recipients(), this::recipient))
+                        .retentionPeriod(snapshot.retentionPeriod())
+                        .piiPrincipalRights(snapshot.piiPrincipalRights())
+                        .internationalTransfers(snapshot.internationalTransfers())
+                        .withdrawalOfConsent(snapshot.withdrawalOfConsent());
+        return receipt.signature(signer.sign(receipt));
     }
 
     /**
@@ -122,20 +133,23 @@ public class ConsentReceiptService {
                     NOT_GRANTED.formatted(consent.getId(), consent.getStatus()));
         }
         ConsentSnapshot snapshot = consent.getSnapshot();
-        return new ConsentReceiptKantara(
-                ConsentReceiptKantara.VersionEnum.KI_CR_V1_1_0,
-                settings.getJurisdiction(),
-                grantedAt(consent).getEpochSecond(),
-                COLLECTION_METHOD,
-                consent.getId().toString(),
-                Objects.requireNonNullElse(
-                        consent.getContractUri(),
-                        NOTICE_URN.formatted(consent.getPrivacyNoticeId())),
-                subjectIdentifier(consent),
-                List.of(piiController(snapshot.controllerDetails(), details)),
-                List.of(service(snapshot, consent)),
-                SENSITIVE,
-                List.of());
+        ConsentReceiptKantara receipt =
+                new ConsentReceiptKantara(
+                        ConsentReceiptKantara.VersionEnum.KI_CR_V1_1_0,
+                        settings.getJurisdiction(),
+                        grantedAt(consent).getEpochSecond(),
+                        COLLECTION_METHOD,
+                        consent.getId().toString(),
+                        Objects.requireNonNullElse(
+                                consent.getContractUri(),
+                                NOTICE_URN.formatted(consent.getPrivacyNoticeId())),
+                        subjectIdentifier(consent),
+                        List.of(piiController(snapshot.controllerDetails(), details)),
+                        List.of(service(snapshot, consent)),
+                        SENSITIVE,
+                        List.of(),
+                        UNSIGNED);
+        return receipt.signature(signer.sign(receipt));
     }
 
     /**

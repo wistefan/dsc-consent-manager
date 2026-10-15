@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.InstanceOfAssertFactories.LIST;
 import static org.assertj.core.api.InstanceOfAssertFactories.MAP;
 
+import com.nimbusds.jose.jwk.JWKSet;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentEventState;
@@ -20,11 +21,13 @@ import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.IdentityProviderRegistry;
+import com.seamware.consentmanager.security.ReceiptSigner;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
 import com.seamware.consentmanager.support.PrivacyNoticeFixtures;
+import com.seamware.consentmanager.support.ReceiptSignatures;
 import io.micronaut.core.type.Argument;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
@@ -41,6 +44,7 @@ import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -73,6 +77,11 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     private static final String FORMAT_ISO = "receipt";
 
     private static final String FORMAT_KANTARA = "receipt-kantara";
+
+    private static final String PATH_JWKS = "/.well-known/jwks.json";
+
+    /** A data subject a forger swaps in for the one the receipt was signed for. */
+    private static final String FORGED_SUBJECT = "urn:test:user:someone-else";
 
     /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
@@ -299,7 +308,7 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     @MethodSource("routesAndFormats")
     void readsTheSameAfterItsNoticeIsArchivedAndRegenerated(Route route, String format) {
         UUID id = seedConsent(ConsentStatus.GRANTED);
-        Map<String, Object> before = body(read(route, id, format));
+        Map<String, Object> before = signed(body(read(route, id, format)));
 
         notice.setArchivedAt(Instant.now());
         notice.setTitle(REGENERATED);
@@ -313,7 +322,24 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                         notice.getConsumerId(),
                         regeneratedTerms()));
 
-        assertThat(body(read(route, id, format))).isEqualTo(before);
+        assertThat(signed(body(read(route, id, format)))).isEqualTo(before);
+    }
+
+    @ParameterizedTest
+    @MethodSource("routesAndFormats")
+    @DisplayName(
+            "signs every receipt so the anonymously published JWKS verifies it, and not a forgery")
+    void carriesASignatureThePublishedKeysVerify(Route route, String format) throws Exception {
+        UUID id = seedConsent(ConsentStatus.GRANTED);
+        String receipt = read(route, id, format).body();
+        JWKSet published = JWKSet.parse(publishedKeys());
+
+        assertThat(ReceiptSignatures.verifies(receipt, published)).isTrue();
+        assertThat(receipt).contains(subjectIdentifier());
+        assertThat(
+                        ReceiptSignatures.verifies(
+                                receipt.replace(subjectIdentifier(), FORGED_SUBJECT), published))
+                .isFalse();
     }
 
     /** Every route, with every status but {@code GRANTED}: the ones Kantara cannot attest. */
@@ -450,6 +476,24 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
         } catch (HttpClientResponseException e) {
             return (HttpResponse<String>) e.getResponse();
         }
+    }
+
+    /**
+     * The members {@code receipt}'s signature covers. The signature itself is left out because an
+     * ECDSA signature is randomized, so two signings of the same content differ.
+     */
+    private static Map<String, Object> signed(Map<String, Object> receipt) {
+        Map<String, Object> members = new HashMap<>(receipt);
+        members.remove(ReceiptSigner.SIGNATURE_MEMBER);
+        return members;
+    }
+
+    /** The receipt JWKS, fetched with no credential at all. */
+    private String publishedKeys() {
+        HttpResponse<String> response =
+                client.toBlocking().exchange(HttpRequest.GET(PATH_JWKS), String.class);
+        assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        return response.body();
     }
 
     private Map<String, Object> body(HttpResponse<String> response) {
