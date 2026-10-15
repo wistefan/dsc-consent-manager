@@ -9,6 +9,7 @@ import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentEventState;
 import com.seamware.consentmanager.domain.ConsentStatus;
+import com.seamware.consentmanager.domain.IssuedReceipt;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
@@ -20,6 +21,7 @@ import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
+import com.seamware.consentmanager.repository.IssuedReceiptRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
@@ -30,6 +32,7 @@ import io.micronaut.data.exceptions.DataAccessException;
 import io.micronaut.data.model.Page;
 import io.micronaut.data.model.Pageable;
 import io.micronaut.data.model.Sort;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -113,6 +116,9 @@ class UserServiceTest {
 
     private final StubConsentEventRepository consentEvents = new StubConsentEventRepository();
 
+    private final StubIssuedReceiptRepository issuedReceipts =
+            new StubIssuedReceiptRepository(consents);
+
     private final ConsentManagerConfiguration.Users limits =
             new ConsentManagerConfiguration.Users();
 
@@ -127,6 +133,7 @@ class UserServiceTest {
                     participants,
                     consents,
                     consentEvents,
+                    issuedReceipts,
                     consentFactory,
                     erasureVerifier,
                     limits);
@@ -589,6 +596,8 @@ class UserServiceTest {
         Consent pending = consents.put(consent(user, ConsentStatus.PENDING, alpha, beta));
         Consent draft = consents.put(consent(user, ConsentStatus.DRAFT, beta, alpha));
         Consent revoked = consents.put(consent(user, ConsentStatus.REVOKED, beta, alpha));
+        issuedReceipts.put(receiptOf(granted));
+        issuedReceipts.put(receiptOf(revoked));
 
         ErasureResult result = service.erase(user);
 
@@ -620,6 +629,9 @@ class UserServiceTest {
         assertThat(eventStatesFor(draft)).containsExactly(ConsentEventState.CONSENT_TERMINATED);
         assertThat(consentEvents.appendedFor(revoked.getId()))
                 .as("a consent that was already closed is not closed again")
+                .isEmpty();
+        assertThat(issuedReceipts.rows())
+                .as("a signed receipt names the subject, so none survives erasure")
                 .isEmpty();
     }
 
@@ -672,13 +684,16 @@ class UserServiceTest {
         User bystander = users.put(new User(USER_ON_BETA, STORED_EMAIL, null, null));
         links.put(new UserParticipant(erased.getId(), alpha.getId(), null));
         links.put(new UserParticipant(bystander.getId(), alpha.getId(), null));
-        consents.put(consent(erased, ConsentStatus.GRANTED, alpha, alpha));
+        issuedReceipts.put(
+                receiptOf(consents.put(consent(erased, ConsentStatus.GRANTED, alpha, alpha))));
         Consent theirs = consents.put(consent(bystander, ConsentStatus.GRANTED, alpha, alpha));
+        issuedReceipts.put(receiptOf(theirs));
 
         service.erase(erased);
 
         assertThat(theirs.getStatus()).isEqualTo(ConsentStatus.GRANTED);
         assertThat(consentEvents.appendedFor(theirs.getId())).isEmpty();
+        assertThat(issuedReceipts.rows()).containsOnlyKeys(theirs.getId());
         assertThat(links.rows().values())
                 .extracting(link -> link.getId().getUserId())
                 .containsExactly(bystander.getId());
@@ -699,6 +714,7 @@ class UserServiceTest {
                         participants,
                         consents,
                         consentEvents,
+                        issuedReceipts,
                         consentFactory,
                         verifierWith(null),
                         limits);
@@ -1464,18 +1480,68 @@ class UserServiceTest {
         }
 
         @Override
-        public Optional<ConsentEvent> findFirstByConsentIdAndEventStateInOrderByOccurredAtDesc(
-                UUID consentId, Collection<ConsentEventState> eventStates) {
-            throw unsupported();
-        }
-
-        @Override
         public <S extends ConsentEvent> S update(S entity) {
             throw unsupported();
         }
 
         @Override
         public Optional<ConsentEvent> findById(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
+        public boolean existsById(UUID id) {
+            throw unsupported();
+        }
+
+        @Override
+        public void deleteById(UUID id) {
+            throw unsupported();
+        }
+    }
+
+    /** A stored grant receipt of {@code consent}; its contents are never read here. */
+    private static IssuedReceipt receiptOf(Consent consent) {
+        return new IssuedReceipt(
+                consent.getId(), UuidGenerator.uuidV7(), "{}", "..", "kid", Instant.EPOCH);
+    }
+
+    /** An in-memory {@link IssuedReceiptRepository}; erasure only ever deletes from it. */
+    private static final class StubIssuedReceiptRepository
+            extends StubRepository<UUID, IssuedReceipt> implements IssuedReceiptRepository {
+
+        private final StubConsentRepository consents;
+
+        StubIssuedReceiptRepository(StubConsentRepository consents) {
+            this.consents = consents;
+        }
+
+        @Override
+        UUID keyOf(IssuedReceipt row) {
+            return row.consentId();
+        }
+
+        @Override
+        public int deleteByUserId(UUID userId) {
+            int before = rows().size();
+            rows().keySet()
+                    .removeIf(
+                            consentId -> consents.rows().get(consentId).getUserId().equals(userId));
+            return before - rows().size();
+        }
+
+        @Override
+        public <S extends IssuedReceipt> S save(S entity) {
+            throw unsupported();
+        }
+
+        @Override
+        public <S extends IssuedReceipt> S update(S entity) {
+            throw unsupported();
+        }
+
+        @Override
+        public Optional<IssuedReceipt> findById(UUID id) {
             throw unsupported();
         }
 
