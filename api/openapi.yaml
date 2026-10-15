@@ -1701,8 +1701,11 @@ paths:
           required: false
           description: >
             A processing purpose the consent's frozen scope must cover for the
-            answer to be `valid: true`. Omitted, the existence of a grant for the
-            subject and notice is enough.
+            answer to be `valid: true`. Matched verbatim: the value must equal one
+            of the consent's frozen `purposes` exactly, character for character
+            and case-sensitively - it is not a keyword or fuzzy match, and a
+            difference in whitespace or punctuation answers `valid: false`.
+            Omitted, the existence of a grant for the subject and notice is enough.
           schema:
             type: string
       responses:

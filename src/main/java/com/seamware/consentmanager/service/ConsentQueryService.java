@@ -160,10 +160,11 @@ public class ConsentQueryService {
      * Whether a {@code GRANTED} consent the caller is a party to is in force for the subject and
      * notice right now, and - where a {@code purpose} is named - covers it.
      *
-     * <p>A single indexed lookup scoped to the caller (provider or consumer), restricted to {@code
-     * GRANTED}. Every no-grant case answers {@code valid: false} with the same reason, so an
-     * unknown subject and a known subject with no grant are indistinguishable; the lookup reveals
-     * nothing about another participant's grant or whether the subject exists.
+     * <p>One statement resolves the subject and the grant together, scoped to the caller (provider
+     * or consumer) and restricted to {@code GRANTED}; the purpose must equal a frozen one verbatim.
+     * Every no-grant case answers {@code valid: false} with the same reason, so an unknown subject
+     * and a known subject with no grant are indistinguishable; the lookup reveals nothing about
+     * another participant's grant or whether the subject exists.
      */
     @NonNull
     public ConsentValidityResult checkValidity(
@@ -172,16 +173,9 @@ public class ConsentQueryService {
             @NonNull UUID privacyNoticeId,
             @Nullable String purpose) {
         OffsetDateTime checkedAt = now();
-        Optional<User> subject = users.findByIdentifier(userIdentifier);
-        if (subject.isEmpty()) {
-            return new ConsentValidityResult(false, null, NO_GRANT_IN_FORCE, checkedAt);
-        }
         Optional<Consent> grant =
-                consents.findForParticipantByUserAndNoticeAndStatus(
-                        subject.get().getId(),
-                        privacyNoticeId,
-                        ConsentStatus.GRANTED,
-                        caller.getId());
+                consents.findForParticipantBySubjectAndNoticeAndStatus(
+                        userIdentifier, privacyNoticeId, ConsentStatus.GRANTED, caller.getId());
         if (grant.isEmpty()) {
             return new ConsentValidityResult(false, null, NO_GRANT_IN_FORCE, checkedAt);
         }

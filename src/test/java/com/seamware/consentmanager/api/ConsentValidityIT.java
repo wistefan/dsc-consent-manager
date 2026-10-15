@@ -36,6 +36,7 @@ import java.io.UncheckedIOException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -89,6 +90,10 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
     private static final String OUTSIDER_CONSUMER = "urn:test:participant:check-outsider-consumer";
 
     private static final String CONTRACT_URI = "https://contract.example.org/v1/contracts/check-1";
+
+    /** The contract of the notice the caller consumes under, for the consumer-side cases. */
+    private static final String CONSUMED_CONTRACT_URI =
+            "https://contract.example.org/v1/contracts/check-consumed";
 
     /** A second contract, because the active-notice index is unique per (contract, provider). */
     private static final String OUTSIDER_CONTRACT_URI =
@@ -184,20 +189,36 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
                                         .ifPresent(participants::delete));
     }
 
-    /** The purpose a valid answer is asked about: an omitted one, or one the grant covers. */
-    static Stream<Arguments> coveredPurposes() {
-        return Stream.of(
-                Arguments.of("an omitted purpose", null),
-                Arguments.of("a purpose the grant covers", COVERED_PURPOSE));
+    /** The side of a notice the caller is party to; both halves of the scoping predicate. */
+    enum CallerSide {
+        PROVIDER,
+        CONSUMER
     }
 
-    @ParameterizedTest(name = "{0}")
+    /**
+     * Each side the caller may hold, crossed with the purpose a valid answer is asked about: an
+     * omitted one, or one the grant covers.
+     */
+    static Stream<Arguments> coveredPurposes() {
+        return Arrays.stream(CallerSide.values())
+                .flatMap(
+                        side ->
+                                Stream.of(
+                                        Arguments.of(side, "an omitted purpose", null),
+                                        Arguments.of(
+                                                side,
+                                                "a purpose the grant covers",
+                                                COVERED_PURPOSE)));
+    }
+
+    @ParameterizedTest(name = "caller as {0}, {1}")
     @MethodSource("coveredPurposes")
     @DisplayName("answers a grant the caller is party to with valid:true and the grant's terms")
-    void answersAGrantAsValid(String label, String purpose) {
-        UUID consentId = seedConsent(notice, ConsentStatus.GRANTED, grantedScope());
+    void answersAGrantAsValid(CallerSide side, String label, String purpose) {
+        PrivacyNotice against = side == CallerSide.PROVIDER ? notice : consumedNotice();
+        UUID consentId = seedConsent(against, ConsentStatus.GRANTED, grantedScope());
 
-        HttpResponse<String> response = check(SUBJECT, notice.getId(), purpose);
+        HttpResponse<String> response = check(SUBJECT, against.getId(), purpose);
 
         assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
         assertThat(body(response))
@@ -314,6 +335,17 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
     void refusesAnUnauthenticatedRequest() {
         assertThat(exchange(HttpRequest.GET(uri(SUBJECT, notice.getId(), null)), null).code())
                 .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+    }
+
+    /** A notice naming the caller as its consumer, so the consumer half of the scope is read. */
+    private PrivacyNotice consumedNotice() {
+        return notices.save(
+                new PrivacyNotice(
+                        CONSUMED_CONTRACT_URI,
+                        NOTICE_TITLE,
+                        register(COUNTERPARTY).getId(),
+                        register(CALLER).getId(),
+                        PrivacyNoticeFixtures.emptyPayload()));
     }
 
     /** The frozen scope every valid-answer case seeds: one purpose a covered check names. */
