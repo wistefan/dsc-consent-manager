@@ -1452,6 +1452,12 @@ class UserServiceTest {
         }
 
         @Override
+        public Optional<ConsentEvent> findFirstByConsentIdAndEventStateInOrderByOccurredAtDesc(
+                UUID consentId, Collection<ConsentEventState> eventStates) {
+            throw unsupported();
+        }
+
+        @Override
         public <S extends ConsentEvent> S update(S entity) {
             throw unsupported();
         }

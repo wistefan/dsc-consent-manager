@@ -8,18 +8,26 @@ import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiC
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInnerPurposesInner;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentEvent;
+import com.seamware.consentmanager.domain.ConsentEventState;
+import com.seamware.consentmanager.domain.ConsentEventTrigger;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.ControllerDetails;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.support.TestJson;
 import io.micronaut.core.type.Argument;
 import java.io.IOException;
 import java.lang.reflect.Proxy;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -64,6 +72,13 @@ class ConsentReceiptServiceTest {
 
     private static final String OTHER_RECIPIENT_ID = "did:web:archive.example.org";
 
+    private static final String ACTOR = SUBJECT;
+
+    /** When the seeded grant was given, a day before the row was last written. */
+    private static final Instant GRANTED_AT = Instant.parse("2026-01-01T00:00:00Z");
+
+    private static final Duration HOUR = Duration.ofHours(1);
+
     /** Top-level keys KI-CR-v1.1.0 marks MUST. */
     private static final Set<String> RECEIPT_MUST =
             Set.of(
@@ -96,9 +111,12 @@ class ConsentReceiptServiceTest {
                     "termination",
                     "thirdPartyDisclosure");
 
+    private final List<ConsentEvent> recorded = new ArrayList<>();
+
     private final ConsentReceiptService receipts =
             new ConsentReceiptService(
                     users(new User(SUBJECT, null, null, null)),
+                    events(recorded),
                     new ConsentManagerConfiguration.Receipts());
 
     /** A snapshot naming one purpose and nothing else: the sparsest a receipt is drawn from. */
@@ -248,6 +266,49 @@ class ConsentReceiptServiceTest {
                 .containsKeys(PURPOSE_MUST.toArray(String[]::new));
     }
 
+    static Stream<Arguments> grantHistories() {
+        return Stream.of(
+                Arguments.of(List.of(ConsentEventState.CONSENT_GIVEN), GRANTED_AT),
+                Arguments.of(
+                        List.of(
+                                ConsentEventState.CONSENT_REQUESTED,
+                                ConsentEventState.CONSENT_RESUMED),
+                        GRANTED_AT.plus(HOUR)),
+                Arguments.of(
+                        List.of(
+                                ConsentEventState.CONSENT_GIVEN,
+                                ConsentEventState.CONSENT_RE_CONFIRMED),
+                        GRANTED_AT));
+    }
+
+    @ParameterizedTest
+    @MethodSource("grantHistories")
+    @DisplayName(
+            "dates a Kantara receipt by the event that granted it, not by the row's last write")
+    void datesTheReceiptByItsGrantingEvent(List<ConsentEventState> history, Instant expected) {
+        ConsentDetails details = details(bare(), CONTRACT_URI);
+        UUID consentId = details.consent().getId();
+        recorded.clear();
+        for (int hop = 0; hop < history.size(); hop++) {
+            recorded.add(
+                    event(consentId, history.get(hop), GRANTED_AT.plus(HOUR.multipliedBy(hop))));
+        }
+
+        assertThat(receipts.toKantara(details).getConsentTimestamp())
+                .isEqualTo(expected.getEpochSecond())
+                .isNotEqualTo(details.consent().getUpdatedAt().getEpochSecond());
+    }
+
+    @Test
+    @DisplayName("refuses to date a granted consent whose granting event is missing")
+    void refusesAGrantWithoutItsEvent() {
+        ConsentDetails details = details(bare(), CONTRACT_URI);
+        recorded.clear();
+
+        assertThatThrownBy(() -> receipts.toKantara(details))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
     @ParameterizedTest
     @EnumSource(value = ConsentStatus.class, names = "GRANTED", mode = EnumSource.Mode.EXCLUDE)
     @DisplayName("refuses a Kantara receipt for a consent that is not granted")
@@ -258,11 +319,12 @@ class ConsentReceiptServiceTest {
                 .isInstanceOf(BadRequestException.class);
     }
 
-    private static ConsentDetails details(ConsentSnapshot snapshot, String contractUri) {
+    private ConsentDetails details(ConsentSnapshot snapshot, String contractUri) {
         return details(ConsentStatus.GRANTED, snapshot, contractUri);
     }
 
-    private static ConsentDetails details(
+    /** A consent in {@code status}; a grant is recorded as given at {@link #GRANTED_AT}. */
+    private ConsentDetails details(
             ConsentStatus status, ConsentSnapshot snapshot, String contractUri) {
         Consent consent =
                 Consent.withStatus(
@@ -277,7 +339,37 @@ class ConsentReceiptServiceTest {
         Instant now = Instant.now();
         consent.setCreatedAt(now);
         consent.setUpdatedAt(now);
+        if (status == ConsentStatus.GRANTED) {
+            recorded.add(event(consent.getId(), ConsentEventState.CONSENT_GIVEN, GRANTED_AT));
+        }
         return new ConsentDetails(consent, PROVIDER, CONSUMER, false);
+    }
+
+    private static ConsentEvent event(UUID consentId, ConsentEventState state, Instant at) {
+        return new ConsentEvent(
+                consentId, state, ConsentEventTrigger.EXPLICIT.eventType(), ACTOR, at, null);
+    }
+
+    /** A {@link ConsentEventRepository} answering the latest-event lookup off {@code recorded}. */
+    @SuppressWarnings("unchecked")
+    private static ConsentEventRepository events(List<ConsentEvent> recorded) {
+        return (ConsentEventRepository)
+                Proxy.newProxyInstance(
+                        ConsentEventRepository.class.getClassLoader(),
+                        new Class<?>[] {ConsentEventRepository.class},
+                        (proxy, method, args) -> {
+                            if (method.getName()
+                                    .equals(
+                                            "findFirstByConsentIdAndEventStateInOrderByOccurredAtDesc")) {
+                                Collection<ConsentEventState> states =
+                                        (Collection<ConsentEventState>) args[1];
+                                return recorded.stream()
+                                        .filter(event -> event.getConsentId().equals(args[0]))
+                                        .filter(event -> states.contains(event.getEventState()))
+                                        .max(Comparator.comparing(ConsentEvent::getOccurredAt));
+                            }
+                            throw new UnsupportedOperationException(method.getName());
+                        });
     }
 
     /** A {@link UserRepository} whose {@code findById} answers {@code subject} for any id. */

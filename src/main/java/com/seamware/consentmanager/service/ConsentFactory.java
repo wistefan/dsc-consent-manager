@@ -49,6 +49,14 @@ public class ConsentFactory {
      */
     static final Map<ConsentStatus, Set<ConsentEventState>> ADMISSIBLE_EVENTS = admissibleEvents();
 
+    /**
+     * The events that move a consent <em>into</em> {@link ConsentStatus#GRANTED}; a re-confirmation
+     * affirms a grant already in force, so it does not date one.
+     */
+    static final Set<ConsentEventState> GRANTING_EVENTS =
+            Collections.unmodifiableSet(
+                    EnumSet.of(ConsentEventState.CONSENT_GIVEN, ConsentEventState.CONSENT_RESUMED));
+
     private static final String UNMAPPED_STATUS = "no consent event is defined for state %s";
 
     private static final String INADMISSIBLE_EVENT =

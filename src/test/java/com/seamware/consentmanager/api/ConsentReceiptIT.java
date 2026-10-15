@@ -5,12 +5,16 @@ import static org.assertj.core.api.InstanceOfAssertFactories.LIST;
 import static org.assertj.core.api.InstanceOfAssertFactories.MAP;
 
 import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentEvent;
+import com.seamware.consentmanager.domain.ConsentEventState;
+import com.seamware.consentmanager.domain.ConsentEventTrigger;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.User;
+import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
@@ -109,6 +113,9 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     private static final String JURISDICTION = "EU";
 
     /** Terms the regenerated notice carries, all different from the frozen ones. */
+    /** When the seeded grant was given: well before the row is written, so the two differ. */
+    private static final Instant GRANTED_AT = Instant.parse("2026-01-01T00:00:00Z");
+
     private static final String REGENERATED = "regenerated";
 
     @Inject
@@ -126,6 +133,8 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     @Inject PrivacyNoticeRepository notices;
 
     @Inject ConsentRepository consents;
+
+    @Inject ConsentEventRepository events;
 
     private PrivacyNotice notice;
 
@@ -252,6 +261,8 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                                         "",
                                         "piiControllerUrl",
                                         CONTROLLER_SD)));
+        assertThat(((Number) receipt.get("consentTimestamp")).longValue())
+                .isEqualTo(GRANTED_AT.getEpochSecond());
         Map<String, Object> service =
                 ((List<Map<String, Object>>) receipt.get("services")).getFirst();
         assertThat(service).containsEntry("service", TITLE);
@@ -346,18 +357,31 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo(HttpStatus.BAD_REQUEST.getCode());
     }
 
+    /** Seeds a consent in {@code status}; a grant is recorded as given at {@link #GRANTED_AT}. */
     private UUID seedConsent(ConsentStatus status) {
-        return consents.save(
-                        Consent.withStatus(
-                                status,
-                                subject.getId(),
-                                notice.getId(),
-                                notice.getProviderId(),
-                                notice.getConsumerId(),
-                                null,
-                                notice.getContractUri(),
-                                ConsentSnapshot.of(notice, null, null)))
-                .getId();
+        UUID id =
+                consents.save(
+                                Consent.withStatus(
+                                        status,
+                                        subject.getId(),
+                                        notice.getId(),
+                                        notice.getProviderId(),
+                                        notice.getConsumerId(),
+                                        null,
+                                        notice.getContractUri(),
+                                        ConsentSnapshot.of(notice, null, null)))
+                        .getId();
+        if (status == ConsentStatus.GRANTED) {
+            events.save(
+                    new ConsentEvent(
+                            id,
+                            ConsentEventState.CONSENT_GIVEN,
+                            ConsentEventTrigger.EXPLICIT.eventType(),
+                            subject.getIdentifier(),
+                            GRANTED_AT,
+                            null));
+        }
+        return id;
     }
 
     private static PrivacyNoticePayload terms() {

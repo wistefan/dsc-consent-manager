@@ -11,10 +11,12 @@ import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServ
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptRecipientsInner;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
+import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
@@ -63,12 +65,18 @@ public class ConsentReceiptService {
 
     private static final String MISSING_SUBJECT = "Consent '%s' names no stored data subject.";
 
+    private static final String MISSING_GRANT = "Granted consent '%s' records no granting event.";
+
     private final UserRepository users;
+    private final ConsentEventRepository events;
     private final ConsentManagerConfiguration.Receipts settings;
 
     public ConsentReceiptService(
-            UserRepository users, ConsentManagerConfiguration.Receipts settings) {
+            UserRepository users,
+            ConsentEventRepository events,
+            ConsentManagerConfiguration.Receipts settings) {
         this.users = users;
+        this.events = events;
         this.settings = settings;
     }
 
@@ -117,7 +125,7 @@ public class ConsentReceiptService {
         return new ConsentReceiptKantara(
                 ConsentReceiptKantara.VersionEnum.KI_CR_V1_1_0,
                 settings.getJurisdiction(),
-                consent.getUpdatedAt().getEpochSecond(),
+                grantedAt(consent).getEpochSecond(),
                 COLLECTION_METHOD,
                 consent.getId().toString(),
                 Objects.requireNonNullElse(
@@ -128,6 +136,18 @@ public class ConsentReceiptService {
                 List.of(service(snapshot, consent)),
                 SENSITIVE,
                 List.of());
+    }
+
+    /**
+     * When the grant in force was given, read off its event rather than {@code updatedAt}, so a
+     * later write to the row that is not a status move cannot re-date the receipt.
+     */
+    private Instant grantedAt(Consent consent) {
+        return events.findFirstByConsentIdAndEventStateInOrderByOccurredAtDesc(
+                        consent.getId(), ConsentFactory.GRANTING_EVENTS)
+                .map(ConsentEvent::getOccurredAt)
+                .orElseThrow(
+                        () -> new IllegalStateException(MISSING_GRANT.formatted(consent.getId())));
     }
 
     /**
