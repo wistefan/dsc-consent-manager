@@ -20,7 +20,9 @@ import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.UserRepository;
-import com.seamware.consentmanager.security.ReceiptSigner;
+import com.seamware.consentmanager.signing.CanonicalJsonSerializer;
+import com.seamware.consentmanager.signing.JwsConsentSigningService;
+import com.seamware.consentmanager.signing.SigningKeyStore;
 import com.seamware.consentmanager.support.ReceiptSignatures;
 import com.seamware.consentmanager.support.TestJson;
 import io.micronaut.core.type.Argument;
@@ -118,19 +120,20 @@ class ConsentReceiptServiceTest {
 
     private final List<ConsentEvent> recorded = new ArrayList<>();
 
-    private final ReceiptSigner signer = signer();
+    private final SigningKeyStore keys = keys();
 
     private final ConsentReceiptService receipts =
             new ConsentReceiptService(
                     users(new User(SUBJECT, null, null, null)),
                     events(recorded),
                     new ConsentManagerConfiguration.Receipts(),
-                    signer);
+                    new JwsConsentSigningService(
+                            keys, new CanonicalJsonSerializer(TestJson.mapper())));
 
-    private static ReceiptSigner signer() {
+    private static SigningKeyStore keys() {
         ConsentManagerConfiguration.Receipts settings = new ConsentManagerConfiguration.Receipts();
         settings.setEphemeralSigningKey(true);
-        return new ReceiptSigner(settings, TestJson.mapper());
+        return new SigningKeyStore(settings);
     }
 
     /** A snapshot naming one purpose and nothing else: the sparsest a receipt is drawn from. */
@@ -357,7 +360,7 @@ class ConsentReceiptServiceTest {
             throws Exception {
         String json = TestJson.mapper().writeValueAsString(render.apply(this));
 
-        assertThat(ReceiptSignatures.verifies(json, new JWKSet(signer.publicKey()))).isTrue();
+        assertThat(ReceiptSignatures.verifies(json, new JWKSet(keys.verificationKeys()))).isTrue();
     }
 
     private ConsentDetails details(ConsentSnapshot snapshot, String contractUri) {

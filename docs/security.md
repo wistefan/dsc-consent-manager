@@ -224,7 +224,7 @@ role, see [ADR 0006](adr/0006-identifier-claim-is-required-of-the-acting-role.md
 
 **Receipt signing is the one key this service holds.** It issues no tokens, but every consent
 receipt it renders is answered as `{receipt, jws}`: a detached JWS beside the receipt, over the
-RFC 8785 canonical form of the whole receipt, made by `ReceiptSigner` with the private JWK in `RECEIPTS_SIGNING_KEY`.
+RFC 8785 canonical form of the whole receipt, made by `ConsentSigningService` (package `signing`) with the private JWK in `RECEIPTS_SIGNING_KEY`.
 Its public half is published anonymously under the key's `kid`, so anyone holding a receipt can
 verify it without a credential, at `https://<host>/.well-known/jwks.json`: the origin root RFC 8615
 defines, **not** under `API_PREFIX`. `@OriginRoot` exempts `ReceiptSigningController` from the
