@@ -52,6 +52,16 @@ resolved; discovery retries with bounded backoff rather than aborting the proces
 | `PrincipalResolutionFilter`, `PrincipalArgumentBinder(s)` | Resolve the typed principal and inject it into controller methods. |
 | `BearerChallengeProvider` | RFC 6750 `WWW-Authenticate: Bearer` on 401. |
 
+## `com.seamware.consentmanager.signing`
+
+| Class | Role |
+| --- | --- |
+| `SigningKeyStore` | Loads `RECEIPTS_SIGNING_KEY` and `RECEIPTS_RETIRED_VERIFICATION_KEYS` eagerly at startup; holds the one private key and the published key list (active first). |
+| `CanonicalJsonSerializer` | RFC 8785 canonical form of a receipt: the bytes a JWS covers. |
+| `ConsentSigningService` / `JwsConsentSigningService` | Signs a receipt as a detached JWS (`alg`, `kid`, `typ: JOSE`, no `jku`); `verify` / `verifyCanonical` answer `false`, never throw, on any mismatch. |
+| `SignedReceipt` | A receipt, its JWS, the signing `kid` and the canonical text that was signed. |
+| `ReceiptSigningException` | Any signing failure; unchecked and not a `DataAccessException`, so it fails the grant with `500`. |
+
 Failures are rendered as RFC 7807 Problem Details by `GlobalExceptionHandler`, with `type` URIs
 under `https://consent-manager.example/problems/<slug>` and a `correlationId` field.
 
@@ -84,7 +94,7 @@ Implemented operations:
 | Operation | Roles | Controller |
 |---|---|---|
 | `GET /api-status` | anonymous | `ApiStatusController` |
-| `GET /.well-known/jwks.json` (origin root, outside `API_PREFIX`) | anonymous | `ReceiptSigningController` |
+| `GET /.well-known/jwks.json` (origin root, outside `API_PREFIX`; `Cache-Control: public, max-age=3600`) | anonymous | `ReceiptSigningController` |
 | `POST /users/register` | `USER` | `UserController` |
 | `GET /users/me` | `USER` | `UserController` |
 | `DELETE /users/me` | `USER` | `UserController` |
@@ -223,20 +233,70 @@ also grants another role whose identifier it does carry — the identifier is re
 role, see [ADR 0006](adr/0006-identifier-claim-is-required-of-the-acting-role.md).
 
 **Receipt signing is the one key this service holds.** It issues no tokens, but every consent
-receipt it renders is answered as `{receipt, jws}`: a detached JWS beside the receipt, over the
-RFC 8785 canonical form of the whole receipt, made by `ConsentSigningService` (package `signing`) with the private JWK in `RECEIPTS_SIGNING_KEY`.
-Its public half is published anonymously under the key's `kid`, so anyone holding a receipt can
-verify it without a credential, at `https://<host>/.well-known/jwks.json`: the origin root RFC 8615
-defines, **not** under `API_PREFIX`. `@OriginRoot` exempts `ReceiptSigningController` from the
-context path; the security filter and `PrincipalResolutionFilter` are context-path-relative and do
-not see that route, which is why only a public route may carry the marker. The JWS header names only
-`alg` and `kid` — no `jku` — so a verifier fetches the JWKS from the deployment it obtained the
-receipt from, or one it otherwise trusts, rather than from a URL the signed object chose. Startup
-fails without a usable private key unless `RECEIPTS_EPHEMERAL_SIGNING_KEY=true` permits a throwaway
-one (dev and test only), and receipts signed by such a key stop verifying on restart. Rotation keeps earlier receipts verifiable: the old
-key's public entry moves to `RECEIPTS_RETIRED_VERIFICATION_KEYS`, which the JWKS publishes after the
-active key; a private member, an unsupported key type or a repeated `kid` there fails startup. Why the
-JWS is detached and the header carries no `jku` is recorded in
+receipt it renders is answered as `{receipt, jws}`: a detached JWS (RFC 7515 Appendix F) *beside*
+the receipt, over the RFC 8785 canonical form of the whole receipt. The receipt carries no
+`signature` member. `JwsConsentSigningService` (package `signing`, behind `ConsentSigningService`)
+signs with the private JWK in `RECEIPTS_SIGNING_KEY`, which `SigningKeyStore` loads at startup. The
+JWS header names only `alg`, `kid` and `typ: JOSE` — no `jku` — so a verifier fetches the JWKS from
+the deployment it obtained the receipt from, or one it otherwise trusts, rather than from a URL the
+signed object chose.
+
+The Kantara receipt (`format=receipt-kantara`) is signed **once**, in the transaction that records
+the grant. `ConsentWriter` hands every write whose recorded status is `GRANTED` to
+`ConsentReceiptIssuer`, which stores the canonical text and JWS in `consent_receipts`; reads serve
+those stored bytes and never sign again. A signing failure rolls the grant back and answers `500`, so
+no grant is recorded without its receipt. The ISO/IEC 29184 record (`format=receipt`) carries the
+live status, so it is signed on every read instead.
+
+The public keys are published anonymously under their `kid`s at
+`https://<host>/.well-known/jwks.json`: the origin root RFC 8615 defines, **not** under
+`API_PREFIX`. `@OriginRoot` exempts `ReceiptSigningController` from the context path; the security
+filter and `PrincipalResolutionFilter` are context-path-relative and do not see that route, which is
+why only a public route may carry the marker. The response is sent `Cache-Control: public,
+max-age=3600`, so a verifier may hold a key set up to one hour old. Two things follow: a key that
+stopped signing must stay published for as long as receipts it signed are in circulation, and a new
+key must be published one cache lifetime *before* it signs.
+
+Startup fails without a usable private key unless `RECEIPTS_EPHEMERAL_SIGNING_KEY=true` permits a
+throwaway one (dev and test only), and receipts signed by such a key stop verifying on restart. A
+private member, an unsupported key type or a repeated `kid` in `RECEIPTS_RETIRED_VERIFICATION_KEYS`
+also fails startup; no startup message quotes key material.
+
+Generate a key with OpenSSL — ES256 (EC P-256) is preferred, RS256 (RSA, at least 2048 bits, 3072
+recommended) is for verifiers that cannot handle EC — and convert it to the private JWK the variable
+takes with the [`step` CLI](https://smallstep.com/docs/step-cli/):
+
+```bash
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out receipts-signing.pem
+# or: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out receipts-signing.pem
+step crypto jwk create receipts-signing.pub.json receipts-signing.json \
+  --from-pem receipts-signing.pem --alg ES256 --use sig --kid receipts-2026-10 \
+  --no-password --insecure          # --alg RS256 for the RSA key
+RECEIPTS_SIGNING_KEY=$(jq -c . receipts-signing.json)
+jq -c '{keys: [.]}' receipts-signing.pub.json   # this key's entry for the published-keys list
+```
+
+`step crypto jwk create … --kty EC --crv P-256 --alg ES256 --use sig --kid <kid> --no-password
+--insecure` (no `--from-pem`) generates the key directly.
+
+**Rotation takes two deploys,** because of the JWKS cache:
+
+1. **Pre-publish.** Add the new key's *public* JWK to `RECEIPTS_RETIRED_VERIFICATION_KEYS`, leave
+   `RECEIPTS_SIGNING_KEY` unchanged, and deploy. The new key is published but signs nothing.
+2. **Wait** at least one `max-age` (one hour), so every cached JWKS includes the new key.
+3. **Switch.** Set `RECEIPTS_SIGNING_KEY` to the new private JWK. In the same change, remove the new
+   key's entry from `RECEIPTS_RETIRED_VERIFICATION_KEYS` — a `kid` present in both fails startup
+   with the duplicate-key-id message — and add the old key's public JWK there. Deploy.
+4. **Retire** the old public JWK only when no stored or distributed receipt still needs it. Receipts
+   are long-lived, so normally it stays.
+
+Switching in a single deploy makes receipts signed by the new key fail verification for up to an
+hour at any verifier holding a cached JWKS. `RECEIPTS_RETIRED_VERIFICATION_KEYS` is therefore every
+published key that does not sign — upcoming as well as retired — despite its name. Why the JWS
+travels beside the receipt, why the Kantara receipt is stored and the ISO record is not, and why the
+configuration stays an inline JWK are recorded in
+[ADR 0014](adr/0014-a-grant-receipt-is-signed-once-and-travels-beside-its-signature.md); why the
+header carries no `jku` in
 [ADR 0013](adr/0013-the-query-side-scopes-by-predicate-and-signs-what-it-attests.md).
 
 ## Erasure verification
@@ -259,6 +319,12 @@ printf '%s' "${VERIFIER%%.*}$IDENTIFIER" \
   | openssl dgst -sha256 -hmac "$ERASURE_VERIFICATION_SECRET" -binary \
   | basenc --base64url | tr -d '='   # equals ${VERIFIER#*.} iff that identifier consented
 ```
+
+Erasure also deletes the subject's stored grant receipts (`consent_receipts`) in the same
+transaction. A signed receipt names the subject as `piiPrincipalId`, and pseudonymising it would
+break its signature; erasure already revokes every grant, so no Kantara receipt can be read for the
+subject afterwards. Copies the subject or a party saved earlier still verify against the published
+keys — erasure withdraws this service's copy, not the signature.
 
 ## Outbound fetches
 
@@ -333,6 +399,12 @@ The consent flow follows the rule: `/consents` and `/consents/requests` are inli
   negatives a conforming IDP cannot issue.
 - `KeycloakKeyRotationIT` — rotates the realm signing key mid-test and asserts tokens signed by the
   new key are accepted without an application restart.
+- `JwksIT` — the receipt JWKS is anonymous, cacheable, public-only and lists the active key first;
+  receipts signed by the active and by a retired key verify against it with plain Nimbus.
+- `KeyMaterialLeakIT` — no log event, MDC value, throwable chain or response body carries any
+  private member of the signing key, across signing, the ephemeral-key warning and signing failures.
+- `ConsentReceiptIssuanceIT`, `SigningFailureIT` — every grant path stores exactly one receipt that
+  reads never re-sign; a signing failure rolls the grant back and answers `500`.
 
 Integration tests are named `*IT` and run under `maven-failsafe-plugin`, so `./mvnw verify` runs
 them together with the unit suite; `./mvnw test` runs the unit tests alone. There is no

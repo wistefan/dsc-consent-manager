@@ -478,16 +478,22 @@ consent-manager:
     # Private JSON Web Key (RFC 7517, one line of JSON, EC P-256/P-384/P-521 or RSA)
     # every receipt is signed with; a secret. Its public half is published at the
     # origin root, GET /.well-known/jwks.json (RFC 8615, outside API_PREFIX), under
-    # the key's `kid` (or, absent one, its RFC 7638 thumbprint).
+    # the key's `kid` (or, absent one, its RFC 7638 thumbprint). ES256 is preferred,
+    # RS256 is for compatibility; .env.sample gives the openssl + `step crypto jwk
+    # create --from-pem` commands that produce one.
     signing-key: ${RECEIPTS_SIGNING_KEY:}
     # With no signing key, generate a throwaway one at startup instead of failing.
     # Receipts it signs stop verifying on restart, so only dev and test enable it.
     ephemeral-signing-key: ${RECEIPTS_EPHEMERAL_SIGNING_KEY:false}
-    # Public-only JWKS (RFC 7517 `{"keys":[...]}`, one line) of the keys earlier
-    # receipts were signed with, published after the active key so receipts saved
-    # before a rotation keep verifying. On rotation, move the old key's public JWKS
-    # entry here. Private members, unsupported key types and repeated `kid`s fail
-    # startup.
+    # Public-only JWKS (RFC 7517 `{"keys":[...]}`, one line) of every published key
+    # that does not sign: retired keys, so receipts saved before a rotation keep
+    # verifying, and an upcoming key, pre-published before it signs. Private
+    # members, unsupported key types and repeated `kid`s fail startup.
+    # The JWKS is cached up to its max-age (one hour), so rotation takes two
+    # deploys: (1) add the new public key here and deploy; (2) wait an hour;
+    # (3) put the new private key in signing-key, moving the new key's entry out
+    # of this list and the old key's public entry into it, and deploy. Keep the
+    # old entry while its receipts are in use. See docs/security.md, ADR-0014.
     retired-verification-keys: ${RECEIPTS_RETIRED_VERIFICATION_KEYS:}
 
   erasure:
