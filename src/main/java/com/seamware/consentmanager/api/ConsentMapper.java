@@ -2,11 +2,13 @@ package com.seamware.consentmanager.api;
 
 import com.seamware.consentmanager.api.generated.model.Consent.StatusEnum;
 import com.seamware.consentmanager.api.generated.model.ConsentResponse;
+import com.seamware.consentmanager.api.generated.model.ConsentValidity;
 import com.seamware.consentmanager.api.generated.model.GrantConsent;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.service.ConsentDetails;
+import com.seamware.consentmanager.service.ConsentValidityResult;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
@@ -74,6 +76,30 @@ public class ConsentMapper {
                 .purposes(snapshot.purposes())
                 .data(snapshot.dataCategories())
                 .contractUri(consent.getContractUri());
+    }
+
+    /**
+     * A validity check's outcome as the API publishes it.
+     *
+     * <p>The grant fields are filled only when a grant was found, so the no-grant answer carries
+     * nothing beyond {@code valid}, {@code checkedAt} and its reason - the same shape whether the
+     * subject is unknown or merely holds no consent. {@code grantedAt} is the grant's last update,
+     * which for a {@code GRANTED} row is when it became the decision it now records.
+     */
+    @NonNull
+    public ConsentValidity toValidity(@NonNull ConsentValidityResult result) {
+        ConsentValidity body = new ConsentValidity(result.valid(), result.checkedAt());
+        if (result.reason() != null) {
+            body.reason(result.reason());
+        }
+        com.seamware.consentmanager.domain.Consent grant = result.grant();
+        if (grant != null) {
+            body.consentId(grant.getId())
+                    .status(ConsentValidity.StatusEnum.fromValue(grant.getStatus().name()))
+                    .grantedAt(ParticipantMapper.atUtc(grant.getUpdatedAt()))
+                    .purposes(grant.getSnapshot().purposes());
+        }
+        return body;
     }
 
     /**

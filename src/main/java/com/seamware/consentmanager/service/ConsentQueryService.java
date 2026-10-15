@@ -14,6 +14,9 @@ import io.micronaut.data.model.Page;
 import io.micronaut.data.model.Pageable;
 import io.micronaut.data.model.Sort;
 import jakarta.inject.Singleton;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -35,6 +38,19 @@ public class ConsentQueryService {
 
     private static final String UNKNOWN_CONSENT_FOR_PARTICIPANT =
             "No consent '%s' names the calling participant as a party.";
+
+    /**
+     * Why a validity check answered no when no grant was found. One message for both the unknown
+     * subject and the known subject with no grant, so the answer never discloses which.
+     */
+    private static final String NO_GRANT_IN_FORCE =
+            "No consent is in force for this subject and notice.";
+
+    /**
+     * Why a validity check answered no when a grant was found but did not cover the named purpose.
+     */
+    private static final String PURPOSE_NOT_COVERED =
+            "The consent in force does not cover the requested purpose.";
 
     /** First page, applied when the caller names none. */
     private static final int FIRST_PAGE = 0;
@@ -138,6 +154,53 @@ public class ConsentQueryService {
                                         new NotFoundException(
                                                 UNKNOWN_CONSENT_FOR_PARTICIPANT.formatted(id)));
         return read(consent);
+    }
+
+    /**
+     * Whether a {@code GRANTED} consent the caller is a party to is in force for the subject and
+     * notice right now, and - where a {@code purpose} is named - covers it.
+     *
+     * <p>A single indexed lookup scoped to the caller (provider or consumer), restricted to {@code
+     * GRANTED}. Every no-grant case answers {@code valid: false} with the same reason, so an
+     * unknown subject and a known subject with no grant are indistinguishable; the lookup reveals
+     * nothing about another participant's grant or whether the subject exists.
+     */
+    @NonNull
+    public ConsentValidityResult checkValidity(
+            @NonNull Participant caller,
+            @NonNull String userIdentifier,
+            @NonNull UUID privacyNoticeId,
+            @Nullable String purpose) {
+        OffsetDateTime checkedAt = now();
+        Optional<User> subject = users.findByIdentifier(userIdentifier);
+        if (subject.isEmpty()) {
+            return new ConsentValidityResult(false, null, NO_GRANT_IN_FORCE, checkedAt);
+        }
+        Optional<Consent> grant =
+                consents.findForParticipantByUserAndNoticeAndStatus(
+                        subject.get().getId(),
+                        privacyNoticeId,
+                        ConsentStatus.GRANTED,
+                        caller.getId());
+        if (grant.isEmpty()) {
+            return new ConsentValidityResult(false, null, NO_GRANT_IN_FORCE, checkedAt);
+        }
+        Consent consent = grant.get();
+        if (purpose != null && !covers(consent, purpose)) {
+            return new ConsentValidityResult(false, consent, PURPOSE_NOT_COVERED, checkedAt);
+        }
+        return new ConsentValidityResult(true, consent, null, checkedAt);
+    }
+
+    /** Whether the grant's frozen scope names the purpose; a consent naming none covers none. */
+    private boolean covers(Consent grant, String purpose) {
+        List<String> purposes = grant.getSnapshot().purposes();
+        return purposes != null && purposes.contains(purpose);
+    }
+
+    /** The moment the check was made, at the microsecond resolution the stored timestamps keep. */
+    private OffsetDateTime now() {
+        return OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
     }
 
     /**

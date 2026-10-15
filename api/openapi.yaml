@@ -1642,6 +1642,86 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /consents/check:
+    get:
+      operationId: checkConsentValidity
+      summary: Ask whether a subject's consent is in force right now
+      description: >
+        Answers a single yes/no a participant asks before it processes a
+        subject's data: is there a consent in force, under this notice, that the
+        calling participant is a party to, covering the named purpose? It is the
+        service's sole runtime control point, so the answer carries only what the
+        decision turns on and is never cached - a stale "yes" is the worst
+        possible answer.
+
+
+        **The lookup is scoped to the caller in the query, not after it.** A
+        consent naming neither the caller as provider nor as consumer is never
+        read here, so one participant can never learn whether another's grant
+        exists.
+
+
+        `valid` is true only when a `GRANTED` consent exists for this subject and
+        notice that the caller is a party to and, where a `purpose` is named, the
+        consent's frozen scope covers it. Every other case is `valid: false` with
+        a `reason`.
+
+
+        **A case where no grant is found discloses nothing about whether the
+        subject exists.** An identifier no user holds and a known user with no
+        consent in force return the same shape and the same `200`, so the check
+        cannot be used to probe which subjects exist.
+      tags:
+        - ConsentQuery
+      security:
+        - bearerAuth: [PARTICIPANT]
+      x-roles: [PARTICIPANT]
+      x-principal: ParticipantPrincipal
+      parameters:
+        - name: userIdentifier
+          in: query
+          required: true
+          description: The data subject whose consent is being checked.
+          schema:
+            type: string
+        - name: privacyNoticeId
+          in: query
+          required: true
+          description: The privacy notice the consent must have been decided against.
+          schema:
+            type: string
+            format: uuid
+        - name: purpose
+          in: query
+          required: false
+          description: >
+            A processing purpose the consent's frozen scope must cover for the
+            answer to be `valid: true`. Omitted, the existence of a grant for the
+            subject and notice is enough.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >
+            Whether the consent is in force. Carried on both the true and the
+            false answer, since "no" is as much the answer as "yes" is.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentValidity"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
   /consents/{id}:
     get:
       operationId: getConsent
@@ -2343,6 +2423,9 @@ components:
 
     ConsentResponse:
       $ref: "./components/schemas/ConsentResponse.yaml"
+
+    ConsentValidity:
+      $ref: "./components/schemas/ConsentValidity.yaml"
 
     GrantConsent:
       $ref: "./components/schemas/GrantConsent.yaml"

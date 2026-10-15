@@ -3,12 +3,14 @@ package com.seamware.consentmanager.api;
 import com.seamware.consentmanager.api.generated.AbstractConsentQueryController;
 import com.seamware.consentmanager.api.generated.model.ConsentPage;
 import com.seamware.consentmanager.api.generated.model.ConsentResponse;
+import com.seamware.consentmanager.api.generated.model.ConsentValidity;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
 import com.seamware.consentmanager.security.UserPrincipal;
 import com.seamware.consentmanager.service.ConsentDetails;
 import com.seamware.consentmanager.service.ConsentQueryCriteria;
 import com.seamware.consentmanager.service.ConsentQueryService;
 import io.micronaut.data.model.Page;
+import io.micronaut.http.HttpHeaders;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
 import java.util.List;
@@ -29,6 +31,9 @@ import java.util.UUID;
  */
 @Controller
 public class ConsentQueryController extends AbstractConsentQueryController {
+
+    /** Keeps a yes/no answer out of every cache; a stale "yes" is the worst possible answer. */
+    private static final String NO_STORE = "no-store";
 
     private final ConsentQueryService queries;
 
@@ -79,6 +84,22 @@ public class ConsentQueryController extends AbstractConsentQueryController {
     public HttpResponse<ConsentResponse> getConsent(ParticipantPrincipal principal, UUID id) {
         return HttpResponse.ok(
                 mapper.toResponse(queries.getForParticipant(principal.requireRegistered(), id)));
+    }
+
+    @Override
+    public HttpResponse<ConsentValidity> checkConsentValidity(
+            ParticipantPrincipal principal,
+            String userIdentifier,
+            UUID privacyNoticeId,
+            String purpose) {
+        ConsentValidity body =
+                mapper.toValidity(
+                        queries.checkValidity(
+                                principal.requireRegistered(),
+                                userIdentifier,
+                                privacyNoticeId,
+                                purpose));
+        return HttpResponse.ok(body).header(HttpHeaders.CACHE_CONTROL, NO_STORE);
     }
 
     private ConsentPage toPage(Page<ConsentDetails> page) {

@@ -1358,6 +1358,12 @@ class UserServiceTest {
         }
 
         @Override
+        public Optional<Consent> findForParticipantByUserAndNoticeAndStatus(
+                UUID userId, UUID privacyNoticeId, ConsentStatus status, UUID participantId) {
+            throw unsupported();
+        }
+
+        @Override
         public Optional<Consent> findByIdForParticipant(UUID id, UUID participantId) {
             throw unsupported();
         }
