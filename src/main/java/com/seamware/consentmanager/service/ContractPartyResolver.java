@@ -65,6 +65,29 @@ public class ContractPartyResolver {
     }
 
     /**
+     * Whether the contract still puts the participant on the given side, read off exactly the
+     * evidence {@link #requireBound} judges a declared pair by, so the two cannot disagree.
+     */
+    public boolean binds(
+            @NonNull ContractResponse contract,
+            @NonNull String participant,
+            @NonNull ContractSide side) {
+        return switch (contract.shape()) {
+            case BILATERAL ->
+                    participant.equals(
+                            switch (side) {
+                                case PROVIDER -> contract.dataProviderIdentifier();
+                                case CONSUMER -> contract.dataConsumerIdentifier();
+                            });
+            case ECOSYSTEM ->
+                    activeMembers(contract).contains(participant)
+                            && !recordedOnOtherSide(contract, participant, side)
+                            && !(side == ContractSide.CONSUMER
+                                    && offersWithoutRole(contract, participant));
+        };
+    }
+
+    /**
      * Refuses a declared pair the fetched contract does not support.
      *
      * <p>Two conditions, reported apart because they fail for different reasons. The contract must
@@ -151,23 +174,37 @@ public class ContractPartyResolver {
         requireNamedParty(members.contains(provider), provider);
         requireNamedParty(members.contains(consumer), consumer);
 
-        Set<String> recordedProviders = membersInRole(contract, DATA_PROVIDER_ROLE);
-        Set<String> recordedConsumers = membersInRole(contract, DATA_CONSUMER_ROLE);
-        if (recordedConsumers.contains(provider) && !recordedProviders.contains(provider)) {
+        if (recordedOnOtherSide(contract, provider, ContractSide.PROVIDER)) {
             throw contradicted(provider, "data consumer", "data provider");
         }
-        if (recordedProviders.contains(consumer) && !recordedConsumers.contains(consumer)) {
+        if (recordedOnOtherSide(contract, consumer, ContractSide.CONSUMER)) {
             throw contradicted(consumer, "data provider", "data consumer");
         }
-        if (!recordedConsumers.contains(consumer)
-                && !recordedProviders.contains(consumer)
-                && offeringParticipants(contract).contains(consumer)) {
+        if (offersWithoutRole(contract, consumer)) {
             throw new BadRequestException(
                     "The contract names '"
                             + consumer
                             + "' as offering a service under it and records no role saying"
                             + " otherwise, so it cannot be this notice's data consumer.");
         }
+    }
+
+    /** Whether the contract records the participant in the role opposite {@code side} only. */
+    private static boolean recordedOnOtherSide(
+            ContractResponse contract, String participant, ContractSide side) {
+        Set<String> providers = membersInRole(contract, DATA_PROVIDER_ROLE);
+        Set<String> consumers = membersInRole(contract, DATA_CONSUMER_ROLE);
+        return switch (side) {
+            case PROVIDER -> consumers.contains(participant) && !providers.contains(participant);
+            case CONSUMER -> providers.contains(participant) && !consumers.contains(participant);
+        };
+    }
+
+    /** Whether the participant offers a service and records no role, which reads it as provider. */
+    private static boolean offersWithoutRole(ContractResponse contract, String participant) {
+        return !membersInRole(contract, DATA_PROVIDER_ROLE).contains(participant)
+                && !membersInRole(contract, DATA_CONSUMER_ROLE).contains(participant)
+                && offeringParticipants(contract).contains(participant);
     }
 
     /** Refuses a bilateral contract that leaves one of its two parties unstated. */

@@ -451,6 +451,18 @@ consent-manager:
     # working request into a 400.
     page-max-size: ${CONSENTS_PAGE_MAX_SIZE:100}
 
+  contract-discovery:
+    # Contracts one GET /contracts/available listing reads from the Contract Service at
+    # once. The candidates are every contract this service holds a notice for, so a
+    # serial read would hold the request for one full fetch bound per contract; this
+    # caps the fan-out an upstream sees from a single listing.
+    max-concurrency: ${CONTRACT_DISCOVERY_MAX_CONCURRENCY:8}
+
+    # Longest one listing waits on the Contract Service before it answers 502 with no
+    # partial list. Shorter than one worst-case fetch (see contract-service above) on
+    # purpose: an upstream that slow is answered as unavailable rather than waited out.
+    max-duration: ${CONTRACT_DISCOVERY_MAX_DURATION:30s}
+
   erasure:
     # Key of the salted HMAC an erased record keeps instead of its identifier, so
     # that the operator - and nobody else, since the key is not in the database -

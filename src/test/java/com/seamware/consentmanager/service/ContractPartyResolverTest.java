@@ -29,6 +29,12 @@ class ContractPartyResolverTest {
     /** Consumer every fixture that resolves names. */
     private static final String CONSUMER = "did:web:consumer.example.org";
 
+    /** A participant no fixture names. */
+    private static final String STRANGER = "did:web:stranger.example.org";
+
+    /** The member {@link ContractFixtures#ECOSYSTEM_NO_PURPOSE} records as revoked. */
+    private static final String DEPARTED = "did:web:departed.example.org";
+
     private final ContractPartyResolver resolver = new ContractPartyResolver();
 
     /** Contracts that narrow each side to exactly one party, and what narrowed it. */
@@ -115,5 +121,106 @@ class ContractPartyResolverTest {
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining(reported)
                 .hasMessageContaining("POST /privacy-notices");
+    }
+
+    /** Whether a fixture still binds a participant on a side, and the evidence that decides it. */
+    static List<Arguments> bindings() {
+        return List.of(
+                Arguments.of(
+                        "bilateral provider",
+                        ContractFixtures.BILATERAL,
+                        PROVIDER,
+                        ContractSide.PROVIDER,
+                        true),
+                Arguments.of(
+                        "bilateral consumer",
+                        ContractFixtures.BILATERAL,
+                        CONSUMER,
+                        ContractSide.CONSUMER,
+                        true),
+                Arguments.of(
+                        "bilateral provider on the consuming side",
+                        ContractFixtures.BILATERAL,
+                        PROVIDER,
+                        ContractSide.CONSUMER,
+                        false),
+                Arguments.of(
+                        "a party the bilateral no longer names",
+                        ContractFixtures.BILATERAL,
+                        STRANGER,
+                        ContractSide.CONSUMER,
+                        false),
+                Arguments.of(
+                        "ecosystem member in its recorded role",
+                        ContractFixtures.ECOSYSTEM,
+                        CONSUMER,
+                        ContractSide.CONSUMER,
+                        true),
+                Arguments.of(
+                        "ecosystem member against its recorded role",
+                        ContractFixtures.ECOSYSTEM,
+                        CONSUMER,
+                        ContractSide.PROVIDER,
+                        false),
+                Arguments.of(
+                        "a participant the ecosystem does not name",
+                        ContractFixtures.ECOSYSTEM,
+                        STRANGER,
+                        ContractSide.PROVIDER,
+                        false),
+                Arguments.of(
+                        "a revoked ecosystem member",
+                        ContractFixtures.ECOSYSTEM_NO_PURPOSE,
+                        DEPARTED,
+                        ContractSide.CONSUMER,
+                        false),
+                Arguments.of(
+                        "a roleless member offering a service, as consumer",
+                        ContractFixtures.ECOSYSTEM_OFFERING_EVIDENCE,
+                        PROVIDER,
+                        ContractSide.CONSUMER,
+                        false),
+                Arguments.of(
+                        "a roleless member offering a service, as provider",
+                        ContractFixtures.ECOSYSTEM_OFFERING_EVIDENCE,
+                        PROVIDER,
+                        ContractSide.PROVIDER,
+                        true),
+                Arguments.of(
+                        "no evidence of direction leaves either side standing",
+                        ContractFixtures.ECOSYSTEM_ROLELESS,
+                        CONSUMER,
+                        ContractSide.PROVIDER,
+                        true));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("bindings")
+    @DisplayName("a contract binds a participant on a side only while its document says so")
+    void bindsOnlyWhatTheDocumentConfirms(
+            String description,
+            String fixture,
+            String participant,
+            ContractSide side,
+            boolean bound) {
+        assertThat(resolver.binds(ContractFixtures.contract(fixture), participant, side))
+                .as(description)
+                .isEqualTo(bound);
+    }
+
+    /** The per-side check and the pair check read one body of evidence, so they never disagree. */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("resolvingContracts")
+    @DisplayName("a derived pair is bound on each side by the per-side check too")
+    void derivedPartiesBindTheirSides(String description, String fixture) {
+        ContractResponse contract = ContractFixtures.contract(fixture);
+        ContractParties parties = resolver.resolve(contract);
+
+        assertThat(resolver.binds(contract, parties.dataProvider(), ContractSide.PROVIDER))
+                .as(description)
+                .isTrue();
+        assertThat(resolver.binds(contract, parties.dataConsumer(), ContractSide.CONSUMER))
+                .as(description)
+                .isTrue();
     }
 }
