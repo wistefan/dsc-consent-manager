@@ -90,6 +90,10 @@ consent-manager:
   erasure:
     verification-secret: test-erasure-verification-secret
 
+  # Every test signs with a key generated per context; the JWKS publishes it.
+  receipts:
+    ephemeral-signing-key: true
+
   identity-providers:
     primary:
       issuer: http://localhost:1/realms/test

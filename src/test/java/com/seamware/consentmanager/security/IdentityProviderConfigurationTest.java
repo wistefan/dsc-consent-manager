@@ -47,6 +47,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 @DisplayName("Identity provider trust list configuration")
 class IdentityProviderConfigurationTest {
 
+    /** No property file is read, so the receipt signer, which fails startup keyless, needs this. */
+    private static final Map<String, Object> EPHEMERAL_RECEIPT_KEY =
+            Map.of("consent-manager.receipts.ephemeral-signing-key", true);
+
     /**
      * Host and port that refuse connections instantly, keeping any discovery attempt cheap.
      *
@@ -157,6 +161,7 @@ class IdentityProviderConfigurationTest {
     private static ApplicationContext startContext(Map<String, Object> properties) {
         return ApplicationContext.builder()
                 .enableDefaultPropertySources(false)
+                .properties(EPHEMERAL_RECEIPT_KEY)
                 .properties(properties)
                 .build()
                 .start();
@@ -174,6 +179,7 @@ class IdentityProviderConfigurationTest {
             Map<String, Object> properties, Map<String, Object> environmentVariables) {
         return ApplicationContext.builder()
                 .enableDefaultPropertySources(false)
+                .properties(EPHEMERAL_RECEIPT_KEY)
                 .properties(properties)
                 .propertySources(
                         PropertySource.of(
@@ -199,6 +205,7 @@ class IdentityProviderConfigurationTest {
             Map<String, Object> properties, String... environments) {
         return ApplicationContext.builder()
                 .enableDefaultPropertySources(false)
+                .properties(EPHEMERAL_RECEIPT_KEY)
                 .deduceEnvironment(false)
                 .environments(environments)
                 .properties(properties)

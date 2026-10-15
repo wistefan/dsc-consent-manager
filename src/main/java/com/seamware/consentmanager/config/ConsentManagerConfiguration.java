@@ -34,6 +34,11 @@ import lombok.Setter;
  *   <li>{@code CONTRACT_DISCOVERY_MAX_DURATION} &rarr; {@code
  *       consent-manager.contract-discovery.max-duration}
  *   <li>{@code RECEIPTS_JURISDICTION} &rarr; {@code consent-manager.receipts.jurisdiction}
+ *   <li>{@code RECEIPTS_SIGNING_KEY} &rarr; {@code consent-manager.receipts.signing-key}
+ *   <li>{@code RECEIPTS_EPHEMERAL_SIGNING_KEY} &rarr; {@code
+ *       consent-manager.receipts.ephemeral-signing-key}
+ *   <li>{@code RECEIPTS_RETIRED_VERIFICATION_KEYS} &rarr; {@code
+ *       consent-manager.receipts.retired-verification-keys}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut
@@ -393,5 +398,24 @@ public class ConsentManagerConfiguration {
          * RECEIPTS_JURISDICTION}; neither a notice nor a contract carries one.
          */
         private String jurisdiction = DEFAULT_JURISDICTION;
+
+        /**
+         * Private JWK (RFC 7517 JSON, EC or RSA) every receipt is signed with, bound to {@code
+         * RECEIPTS_SIGNING_KEY}; a secret. Unset fails startup unless an ephemeral key is allowed.
+         */
+        @Nullable private String signingKey;
+
+        /**
+         * Whether startup may generate a throwaway key when {@link #signingKey} is unset, bound to
+         * {@code RECEIPTS_EPHEMERAL_SIGNING_KEY}; receipts it signed stop verifying on restart.
+         */
+        private boolean ephemeralSigningKey;
+
+        /**
+         * Public-only JWKS (RFC 7517 JSON) of keys earlier receipts were signed with, bound to
+         * {@code RECEIPTS_RETIRED_VERIFICATION_KEYS}; published beside the active key so they still
+         * verify.
+         */
+        @Nullable private String retiredVerificationKeys;
     }
 }

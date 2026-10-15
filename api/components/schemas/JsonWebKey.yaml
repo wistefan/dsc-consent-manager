@@ -1,0 +1,48 @@
+# Schema: JsonWebKey — referenced from api/openapi.yaml as
+# components.schemas.JsonWebKey.
+#
+# The public half of a receipt signing key, as RFC 7517 / RFC 7518 spell it.
+# An EC key carries `crv`, `x` and `y`; an RSA key carries `n` and `e`. No
+# private member is ever published.
+type: object
+description: A public JSON Web Key that consent receipts are verified against.
+properties:
+  kty:
+    type: string
+    description: Key type.
+    enum:
+      - EC
+      - RSA
+  use:
+    type: string
+    description: Intended use; always signing.
+    enum:
+      - sig
+  kid:
+    type: string
+    description: Key identifier, repeated in the JWS header of every receipt it signs.
+  alg:
+    type: string
+    description: The JWS algorithm receipts are signed with under this key.
+    example: ES256
+  crv:
+    type: string
+    description: Curve of an EC key.
+    example: P-256
+  x:
+    type: string
+    description: X coordinate of an EC key, base64url.
+  "y":
+    type: string
+    description: Y coordinate of an EC key, base64url.
+  "n":
+    type: string
+    description: Modulus of an RSA key, base64url.
+  e:
+    type: string
+    description: Exponent of an RSA key, base64url.
+required:
+  - kty
+  - use
+  - kid
+  - alg

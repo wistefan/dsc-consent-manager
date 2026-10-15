@@ -2502,6 +2502,42 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 
+  /.well-known/jwks.json:
+    # RFC 8615 places well-known URIs at the origin root, so this one path is
+    # served outside the API context path the top-level server names.
+    servers:
+      - url: /
+        description: Origin root (RFC 8615), outside the API context path
+    get:
+      operationId: getReceiptSigningKeys
+      summary: Publish the keys consent receipts are signed with
+      description: >
+        Returns the JSON Web Key Set (RFC 7517) holding the public half of the
+        key every consent receipt's `signature` is made with, so anyone holding
+        a receipt - the data subject, a participant, an auditor - can verify it
+        without a credential. Each key names its `kid`, which a receipt's JWS
+        header repeats. The active key comes first, followed by any retired keys
+        earlier receipts were signed with, so a receipt saved before a key
+        rotation still verifies. Served at the origin root
+        (`https://<host>/.well-known/jwks.json`, RFC 8615), not under the API
+        context path. Public: it exposes no consent data and no secret.
+      tags:
+        - ReceiptSigning
+      security: []
+      responses:
+        "200":
+          description: The published signing keys.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonWebKeySet"
+        default:
+          description: Unexpected error
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2703,6 +2739,25 @@ components:
         - $ref: "#/components/schemas/ConsentResponse"
         - $ref: "#/components/schemas/ConsentReceipt"
         - $ref: "#/components/schemas/ConsentReceiptKantara"
+
+    JsonWebKey:
+      $ref: "./components/schemas/JsonWebKey.yaml"
+
+    # Declared inline, with `items` an internal ref, for the reason
+    # ConsentPage below states.
+    JsonWebKeySet:
+      type: object
+      description: >
+        A JSON Web Key Set (RFC 7517 section 5) of the public keys consent
+        receipts are signed with.
+      properties:
+        keys:
+          type: array
+          description: The published keys, one per `kid`.
+          items:
+            $ref: "#/components/schemas/JsonWebKey"
+      required:
+        - keys
 
     # Declared inline, with `items` an internal ref, because that is the only
     # form proven to generate a typed `List<ConsentResponse>` rather than a

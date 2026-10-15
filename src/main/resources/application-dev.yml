@@ -54,6 +54,10 @@ tracing:
 # step 3 on, discovery is retried with backoff and readiness reports DOWN until it
 # succeeds, so `./mvnw mn:run` without the compose stack still starts.
 consent-manager:
+  # Local runs need no key material; production configures RECEIPTS_SIGNING_KEY.
+  receipts:
+    ephemeral-signing-key: ${RECEIPTS_EPHEMERAL_SIGNING_KEY:true}
+
   identity-providers:
     primary:
       issuer: ${IDP_ISSUER:`http://localhost:8180/realms/consent-manager`}
