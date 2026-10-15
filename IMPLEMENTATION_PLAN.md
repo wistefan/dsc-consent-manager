@@ -18,7 +18,8 @@ is bound only when `smtp.host` is set; otherwise a logging implementation sends 
   - the bulk terminations of unanswered consents in `ParticipantService.deregister` (ADR-0008),
     because they run inside that method's transaction and the participant is leaving the
     dataspace.
-  ADR-0015 (Step 4) records both exclusions.
+  The reviewer (wistefan) confirmed the deregistration exclusion on PR #18, so it is a decision
+  rather than a by-product of the transaction boundary. ADR-0015 (Step 4) records both exclusions.
 - **Call site.** The notifier is called directly from the two service methods, after `ConsentWriter`
   has returned and so after commit. It is not called from `ConsentLifecycleService.report` or
   `ConsentStateChangeLog`, because those also see the collateral moves. ADR-0011 asks for an outbox
@@ -35,6 +36,19 @@ is bound only when `smtp.host` is set; otherwise a logging implementation sends 
 - **Engine.** `micronaut-views-thymeleaf` + `micronaut-email-template` (`TemplateBody`, `MultipartBody`).
   HTML templates use `th:text` and never `th:utext`, so values are escaped. `.txt` templates must
   render in Thymeleaf `TEXT` mode, so a legal name is not HTML-entity-encoded in the text part.
+- **What "SMTP configured" means.** The SMTP beans bind only when `smtp.host` is present **and
+  non-blank**. `smtp.host` is deliberately **not** written in `application.yml`. A bare
+  `${SMTP_HOST}` fails startup when the variable is unset, and the repo's usual `${SMTP_HOST:}`
+  makes the key present with an empty value, which a plain `@Requires(property = "smtp.host")`
+  treats as set. The value arrives through Micronaut's environment mapping (`SMTP_HOST` →
+  `smtp.host`), and a YAML comment in the `smtp:` block documents the variable. Both sides are
+  gated by one `Condition` pair (see Step 1), not by `property`/`missingProperty`, so an exported
+  `SMTP_HOST=` (empty) also selects the logging implementation.
+- **Call-site failure guard.** Both call sites wrap the notifier call in
+  `try`/`catch (RuntimeException)` and log ERROR under the calling class
+  (`ConsentService`/`ConsentLifecycleService`) with the consent id. The interface contract says
+  implementations never throw, but a committed write must never become a `500` because a future
+  implementation breaks that contract.
 - **Synchronous send with bounded timeouts.** Send on the request thread after commit. Named
   defaults go on `mail.smtp.connectiontimeout` / `timeout` / `writetimeout`, so an unreachable
   server delays a response by a bounded amount and never fails it. No `@Async` and no executor.
@@ -55,7 +69,14 @@ Files:
   `fromAddress`, `fromName`, and the explicit opt-out `insecureTrustAllCertificates` (default
   `false`, env `SMTP_INSECURE_TRUST_ALL_CERTIFICATES`). `password` is never logged and never
   rendered by `toString`.
-- `notification/SmtpSessionFactory.java` (`@Factory`, `@Requires(property = "smtp.host")`). It
+- `notification/SmtpConfiguredCondition.java` and `notification/SmtpNotConfiguredCondition.java`:
+  two `io.micronaut.context.condition.Condition`s sharing one package-private predicate, true when
+  `smtp.host` resolves to a non-blank string. Every SMTP bean (`SmtpSessionFactory`, the
+  `fromAddress` validator, Step 2's `SmtpUserNotificationService`) carries
+  `@Requires(condition = SmtpConfiguredCondition.class)`, and the logging implementation carries
+  `@Requires(condition = SmtpNotConfiguredCondition.class)`. The two are exact complements, so
+  exactly one `UserNotificationService` binds whatever the environment holds.
+- `notification/SmtpSessionFactory.java` (`@Factory`, `@Requires(condition = SmtpConfiguredCondition.class)`). It
   provides the `jakarta.mail.Session` / Micronaut Email `SessionProvider` that the javamail sender
   uses, built only from `NotificationConfiguration`:
   - Set `mail.smtp.host`/`port`, plus `auth` and an `Authenticator` when `user` is set.
@@ -64,20 +85,23 @@ Files:
   - Set the three timeouts from named constants.
   - When `insecureTrustAllCertificates` is true, set `ssl.trust=*` and
     `checkserveridentity=false`, and log a WARN once at startup naming the property.
-  - Fail startup when `fromAddress` is blank while `smtp.host` is set. The message names the
+  - Fail startup when `fromAddress` is blank while SMTP is configured. The message names the
     `SMTP_FROM_ADDRESS` variable. Use a `@Context`/`@PostConstruct` validator in the style of
     `IdentityProviderRegistryValidator`.
   - Verify how the `micronaut-email-javamail` module (version from `micronaut-parent` 5.2.0)
     obtains its session. If it ships its own `SessionProvider`, use `@Replaces`, so there is
     exactly one session source and it is not configured under `javamail.*`.
 - `notification/LoggingUserNotificationService.java`: `@Singleton`,
-  `@Requires(missingProperty = "smtp.host")`. It logs at DEBUG which message would have gone to
+  `@Requires(condition = SmtpNotConfiguredCondition.class)`. It logs at DEBUG which message would have gone to
   which user id and consent id. It logs no email address and sends nothing.
 - `config/ConsentManagerConfiguration.java`: add a nested `Notifications` class with `clientUrl`
   (nullable `URI`).
-- `src/main/resources/application.yml`: add an `smtp:` block bound to `SMTP_HOST` (no default, so
-  it stays absent), `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_STARTTLS`,
-  `SMTP_FROM_ADDRESS`, `SMTP_FROM_NAME` and `SMTP_INSECURE_TRUST_ALL_CERTIFICATES`. Add
+- `src/main/resources/application.yml`: add an `smtp:` block bound to `SMTP_PORT`, `SMTP_USER`,
+  `SMTP_PASSWORD`, `SMTP_STARTTLS`, `SMTP_FROM_ADDRESS`, `SMTP_FROM_NAME` and
+  `SMTP_INSECURE_TRUST_ALL_CERTIFICATES`. Do **not** add a `host:` key. Instead, a comment at the
+  top of the block names `SMTP_HOST`, says it reaches `smtp.host` through Micronaut's environment
+  mapping, and says notifications are disabled when it is unset or blank. That comment is what
+  satisfies the "document every env var in `application.yml`" convention. Add
   `consent-manager.notifications.client-url: ${NOTIFICATION_CLIENT_URL:}`, or an equivalent
   that leaves it null when unset.
 - `.env.sample`: rewrite the "Email / SMTP" block to match the ticket's table. Rename `SMTP_FROM`
@@ -87,9 +111,13 @@ Files:
   `SMTP_USER`/`SMTP_PASSWORD` as optional.
 
 Tests (`src/test/java/com/seamware/consentmanager/notification/`):
-- `NotificationBindingTest` (`@MicronautTest`, no `smtp.host`): the bound
-  `UserNotificationService` is `LoggingUserNotificationService`, and no `Session` bean exists.
-  This covers AC 7 and AC 8.
+- `NotificationBindingTest`. It runs against the **real** `application.yml`, not a hand-built
+  property map, so a future `host: ${SMTP_HOST:}` line in the YAML fails it. Parameterize over the
+  `smtp.host` values {absent, `""`, `"   "`} → `LoggingUserNotificationService` is the only
+  `UserNotificationService` and no `Session` bean exists, and `localhost` (with a
+  `from-address`) → the SMTP implementation is the only one. Start each case with
+  `ApplicationContext.builder().environments("test").properties(...)` so `application.yml` and
+  `application-test.yml` are both loaded. This covers AC 7 and AC 8.
 - `SmtpSessionFactoryTest` (`ApplicationContext.run(Map)` with `smtp.host=localhost`):
   - By default, `checkserveridentity=true`, `ssl.trust` is absent and STARTTLS is required.
   - With the opt-out set, `trust=*` and a WARN naming the property is captured. Use a Logback
@@ -111,6 +139,12 @@ Files:
   example through a `BeanCreatedEventListener` on the views module's template resolver that sets
   the TEXT/HTML mode patterns, with the view suffix handled accordingly. Keep this in
   `notification/` and verify it with a test. Don't hand-roll escaping.
+  **Spike this first, before writing any template.** `micronaut-views-thymeleaf` resolves views
+  through one configured suffix (`.html` by default), so `TemplateBody` probably cannot find a
+  `.txt` view as-is. Settle the naming with a throwaway render test. Either set an empty suffix
+  and pass full names (`email/consent-requested.txt`), or keep `.html` and name the text views
+  differently while still matching them to `TEXT` mode by pattern. The template-mode test below
+  then pins whichever was chosen.
 - `src/main/resources/views/email/consent-requested.html` / `.txt`. Variables: `displayName`,
   `participantLegalName`, `noticeTitle`, `clientUrl`. The link block is omitted when `clientUrl`
   is null.
@@ -119,7 +153,8 @@ Files:
   to seconds, from a named `DateTimeFormatter` constant. Its source is defined in Step 3.
 - No template carries purposes, data categories, the consent id or anything beyond the notice
   title.
-- `notification/SmtpUserNotificationService.java`: `@Singleton`, `@Requires(property = "smtp.host")`,
+- `notification/SmtpUserNotificationService.java`: `@Singleton`,
+  `@Requires(condition = SmtpConfiguredCondition.class)`,
   built on Micronaut Email's `EmailSender`.
   - Skip silently, with at most a DEBUG line, when `user.getEmail()` is blank (AC 3).
   - Build the model and send an `Email` whose body is a `MultipartBody` of two `TemplateBody`
@@ -179,7 +214,16 @@ Files:
     carry the move time, put the event's `occurredAt` on the model instead, and update the
     interface Javadoc to match.
   - Do **not** call it from `report`, `resume` or the collateral path.
-- No change to `ParticipantService.deregister` or `ConsentStateChangeLog`.
+  - Guard both call sites (this method and `ConsentService.request`) with
+    `try`/`catch (RuntimeException)`, and log ERROR under the calling class with the consent id.
+    Never rethrow.
+  - Correct `report`'s Javadoc ("whatever notification grows from it"). Subject notification does
+    not grow from `report`; it is called from `request`/`terminate` directly, per ADR-0015.
+- `service/ConsentStateChangeLog.java`: no behaviour change. Rewrite the one class-Javadoc
+  sentence that names it as the seam TICKET-013's subject notification grows from. TICKET-013 is
+  called from `request`/`terminate` directly (ADR-0015), and the seam remains TICKET-020's.
+  Without this, the next reader would wire a second sender into the seam.
+- No change to `ParticipantService.deregister`.
 
 Tests (`src/test/java/com/seamware/consentmanager/service/`):
 - `ConsentNotificationIT`. Use `@MicronautTest(transactional = false)`, `PostgresTestResource`,
@@ -194,13 +238,10 @@ Tests (`src/test/java/com/seamware/consentmanager/service/`):
   - **Failure isolation (AC 5).** Configure the double to throw a `RuntimeException` (the
     contract says implementations never throw, and this proves the caller does not depend on
     it). Assert that the request and the termination are still committed: read back the
-    `consents` row and its `consent_events` entry. Decide one behaviour:
-    - either the call sites also guard with `try`/`catch` and log under
-      `ConsentService`/`ConsentLifecycleService`, and the test asserts the operation returns
-      normally;
-    - or the test asserts only that the row is committed.
-    Prefer the guard, because then a bug in a future implementation cannot turn a committed
-    write into a `500`.
+    `consents` row and its `consent_events` entry. Also assert that the HTTP call returns the same
+    success status that `ConsentRequestIT` / `ConsentLifecycleIT` assert for the unguarded path,
+    and that an ERROR is captured under `ConsentService` / `ConsentLifecycleService` (Logback
+    `ListAppender`).
 - Make sure the existing `ConsentRequestIT`, `ConsentLifecycleIT`, `ConsentLifecycleSeamIT`
   and the surface ITs stay green with the logging implementation bound.
 
@@ -231,6 +272,9 @@ Files:
   - mention ADR-0015 and correct the ADR range;
   - add GreenMail to the test stack;
   - note the Thymeleaf HTML/TEXT template-mode wiring as a gotcha.
+  - note as a gotcha that `smtp.host` is absent from `application.yml` on purpose, and that the
+    SMTP/logging split is a `Condition` pair on a non-blank host, never `property`/`missingProperty`;
+  - record in the best-effort-notification convention that the call sites guard and log too.
 - `.env.sample` / `application.yml`: confirm Step 1's entries are complete and match ADR-0015.
 
 Acceptance: the docs match the code, `./mvnw spotless:apply` makes no changes, and
