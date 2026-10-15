@@ -9,16 +9,23 @@ import com.seamware.consentmanager.api.generated.model.JsonWebKeySet;
 import com.seamware.consentmanager.security.ReceiptSigner;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
-import java.util.List;
 
-/** Publishes the JWKS a consent receipt's {@code signature} verifies against; public by spec. */
+/**
+ * Publishes the JWKS a consent receipt's {@code signature} verifies against; public by spec, and
+ * served at the origin root where RFC 8615 places {@code /.well-known/}.
+ */
 @Controller
+@OriginRoot
 public class ReceiptSigningController extends AbstractReceiptSigningController {
 
     private final JsonWebKeySet published;
 
     public ReceiptSigningController(ReceiptSigner signer) {
-        this.published = new JsonWebKeySet(List.of(toJsonWebKey(signer.publicKey())));
+        this.published =
+                new JsonWebKeySet(
+                        signer.verificationKeys().stream()
+                                .map(ReceiptSigningController::toJsonWebKey)
+                                .toList());
     }
 
     @Override

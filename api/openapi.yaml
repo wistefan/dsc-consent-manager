@@ -2503,6 +2503,11 @@ paths:
                 $ref: "#/components/schemas/ProblemDetail"
 
   /.well-known/jwks.json:
+    # RFC 8615 places well-known URIs at the origin root, so this one path is
+    # served outside the API context path the top-level server names.
+    servers:
+      - url: /
+        description: Origin root (RFC 8615), outside the API context path
     get:
       operationId: getReceiptSigningKeys
       summary: Publish the keys consent receipts are signed with
@@ -2511,7 +2516,11 @@ paths:
         key every consent receipt's `signature` is made with, so anyone holding
         a receipt - the data subject, a participant, an auditor - can verify it
         without a credential. Each key names its `kid`, which a receipt's JWS
-        header repeats. Public: it exposes no consent data and no secret.
+        header repeats. The active key comes first, followed by any retired keys
+        earlier receipts were signed with, so a receipt saved before a key
+        rotation still verifies. Served at the origin root
+        (`https://<host>/.well-known/jwks.json`, RFC 8615), not under the API
+        context path. Public: it exposes no consent data and no secret.
       tags:
         - ReceiptSigning
       security: []

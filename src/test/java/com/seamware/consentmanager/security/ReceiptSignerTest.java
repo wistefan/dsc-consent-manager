@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -36,6 +37,23 @@ class ReceiptSignerTest {
     private static final int HMAC_KEY_SIZE = 256;
 
     private static final String STATUS = "status";
+
+    private static final String SIGNING_KEY_VARIABLE = "RECEIPTS_SIGNING_KEY";
+
+    private static final String RETIRED_KEYS_VARIABLE = "RECEIPTS_RETIRED_VERIFICATION_KEYS";
+
+    private static final String RETIRED_KEY_ID = "receipts-2025";
+
+    /** RFC 8037 Appendix A.1 Ed25519 private key: an OKP key this service never signs with. */
+    private static final String ED25519_PRIVATE_KEY =
+            "{\"kty\":\"OKP\",\"crv\":\"Ed25519\","
+                    + "\"d\":\"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A\","
+                    + "\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\"}";
+
+    /** The public half of {@link #ED25519_PRIVATE_KEY}. */
+    private static final String ED25519_PUBLIC_KEY =
+            "{\"kty\":\"OKP\",\"crv\":\"Ed25519\","
+                    + "\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\"}";
 
     /** A receipt whose members a verifier recomputes; it arrives carrying a stale signature. */
     private static Map<String, Object> receipt() {
@@ -106,6 +124,13 @@ class ReceiptSignerTest {
                         new OctetSequenceKeyGenerator(HMAC_KEY_SIZE)
                                 .algorithm(JWSAlgorithm.HS256)
                                 .generate()
+                                .toJSONString()),
+                Arguments.of("OKP Ed25519", ED25519_PRIVATE_KEY),
+                Arguments.of(
+                        "EC P-256 naming another curve's alg",
+                        new ECKeyGenerator(Curve.P_256)
+                                .algorithm(JWSAlgorithm.ES384)
+                                .generate()
                                 .toJSONString()));
     }
 
@@ -118,11 +143,82 @@ class ReceiptSignerTest {
 
         assertThatThrownBy(() -> new ReceiptSigner(settings, TestJson.mapper()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("RECEIPTS_SIGNING_KEY");
+                .hasMessageContaining(SIGNING_KEY_VARIABLE);
+    }
+
+    @Test
+    @DisplayName("publishes retired keys after the active one, so a pre-rotation receipt verifies")
+    void keepsReceiptsSignedBeforeARotationVerifiable() throws Exception {
+        ReceiptSigner retired =
+                signer(new ECKeyGenerator(Curve.P_256).keyID(RETIRED_KEY_ID).generate());
+        Map<String, Object> receipt = receipt();
+        receipt.put(ReceiptSigner.SIGNATURE_MEMBER, retired.sign(receipt));
+
+        ReceiptSigner rotated =
+                signer(
+                        new ECKeyGenerator(Curve.P_384).keyID(KEY_ID).generate(),
+                        new JWKSet(retired.publicKey()).toString());
+
+        assertThat(rotated.verificationKeys())
+                .extracting(JWK::getKeyID)
+                .containsExactly(KEY_ID, RETIRED_KEY_ID);
+        assertThat(rotated.verificationKeys()).noneMatch(JWK::isPrivate);
+        assertThat(
+                        ReceiptSignatures.verifies(
+                                json(receipt), new JWKSet(rotated.verificationKeys())))
+                .isTrue();
+    }
+
+    static Stream<Arguments> unusableRetiredKeys() throws JOSEException {
+        return Stream.of(
+                Arguments.of("not a JWKS", "{\"keys\":", RETIRED_KEYS_VARIABLE),
+                Arguments.of(
+                        "a private key",
+                        new JWKSet(new ECKeyGenerator(Curve.P_256).generate()).toString(false),
+                        RETIRED_KEYS_VARIABLE),
+                Arguments.of(
+                        "an OKP key",
+                        "{\"keys\":[" + ED25519_PUBLIC_KEY + "]}",
+                        RETIRED_KEYS_VARIABLE),
+                Arguments.of(
+                        "an EC key naming another curve's alg",
+                        new JWKSet(
+                                        new ECKeyGenerator(Curve.P_256)
+                                                .algorithm(JWSAlgorithm.ES512)
+                                                .generate()
+                                                .toPublicJWK())
+                                .toString(),
+                        RETIRED_KEYS_VARIABLE),
+                Arguments.of(
+                        "the active key's kid",
+                        new JWKSet(
+                                        new ECKeyGenerator(Curve.P_256)
+                                                .keyID(KEY_ID)
+                                                .generate()
+                                                .toPublicJWK())
+                                .toString(),
+                        KEY_ID));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unusableRetiredKeys")
+    @DisplayName("fails startup on a retired key set it cannot publish safely")
+    void refusesAnUnusableRetiredKey(String name, String retired, String named)
+            throws JOSEException {
+        JWK active = new ECKeyGenerator(Curve.P_256).keyID(KEY_ID).generate();
+
+        assertThatThrownBy(() -> signer(active, retired))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(named);
     }
 
     private static ReceiptSigner signer(JWK configured) {
+        return signer(configured, null);
+    }
+
+    private static ReceiptSigner signer(JWK configured, String retired) {
         ConsentManagerConfiguration.Receipts settings = new ConsentManagerConfiguration.Receipts();
+        settings.setRetiredVerificationKeys(retired);
         if (configured == null) {
             settings.setEphemeralSigningKey(true);
         } else {

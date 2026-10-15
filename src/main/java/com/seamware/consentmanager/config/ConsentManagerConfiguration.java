@@ -408,5 +408,12 @@ public class ConsentManagerConfiguration {
          * {@code RECEIPTS_EPHEMERAL_SIGNING_KEY}; receipts it signed stop verifying on restart.
          */
         private boolean ephemeralSigningKey;
+
+        /**
+         * Public-only JWKS (RFC 7517 JSON) of keys earlier receipts were signed with, bound to
+         * {@code RECEIPTS_RETIRED_VERIFICATION_KEYS}; published beside the active key so they still
+         * verify.
+         */
+        @Nullable private String retiredVerificationKeys;
     }
 }
