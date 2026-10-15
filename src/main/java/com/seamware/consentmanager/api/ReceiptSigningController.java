@@ -11,8 +11,8 @@ import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
 
 /**
- * Publishes the JWKS a consent receipt's {@code signature} verifies against; public by spec, and
- * served at the origin root where RFC 8615 places {@code /.well-known/}.
+ * Publishes the JWKS a consent receipt's {@code jws} verifies against; public by spec, and served
+ * at the origin root where RFC 8615 places {@code /.well-known/}.
  */
 @Controller
 @OriginRoot

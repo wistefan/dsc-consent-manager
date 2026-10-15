@@ -19,7 +19,6 @@ import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import io.micronaut.context.annotation.Context;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.json.JsonMapper;
-import io.micronaut.json.tree.JsonNode;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.text.ParseException;
@@ -37,14 +36,11 @@ import org.slf4j.LoggerFactory;
  * Signs consent receipts with this deployment's receipt key and holds the public keys it publishes.
  *
  * <p>A signature is a detached compact JWS (RFC 7515 Appendix F) over the RFC 8785 canonical form
- * of the receipt without its {@value #SIGNATURE_MEMBER} member. A {@link Context} bean, so a
- * missing or unusable key fails startup rather than the first receipt read.
+ * of the whole receipt, carried beside it. A {@link Context} bean, so a missing or unusable key
+ * fails startup rather than the first receipt read.
  */
 @Context
 public class ReceiptSigner {
-
-    /** Receipt member carrying the signature, which is never part of what it signs. */
-    public static final String SIGNATURE_MEMBER = "signature";
 
     /** Curve of the key generated when none is configured and an ephemeral one is allowed. */
     static final Curve EPHEMERAL_CURVE = Curve.P_256;
@@ -115,10 +111,7 @@ public class ReceiptSigner {
         this.verificationKeys = verificationKeys(publicKey, settings.getRetiredVerificationKeys());
     }
 
-    /**
-     * The detached JWS of {@code receipt}; a {@value #SIGNATURE_MEMBER} it already carries is
-     * ignored.
-     */
+    /** The detached JWS over the RFC 8785 form of the whole {@code receipt}. */
     @NonNull
     public String sign(@NonNull Object receipt) {
         JWSObject jws = new JWSObject(header, new Payload(canonicalForm(receipt)));
@@ -146,14 +139,7 @@ public class ReceiptSigner {
 
     private byte[] canonicalForm(Object receipt) {
         try {
-            Map<String, JsonNode> members = new LinkedHashMap<>();
-            for (Map.Entry<String, JsonNode> member : json.writeValueToTree(receipt).entries()) {
-                if (!SIGNATURE_MEMBER.equals(member.getKey())) {
-                    members.put(member.getKey(), member.getValue());
-                }
-            }
-            return new JsonCanonicalizer(json.writeValueAsBytes(JsonNode.createObjectNode(members)))
-                    .getEncodedUTF8();
+            return new JsonCanonicalizer(json.writeValueAsBytes(receipt)).getEncodedUTF8();
         } catch (IOException e) {
             throw new UncheckedIOException("Could not canonicalize a consent receipt", e);
         }

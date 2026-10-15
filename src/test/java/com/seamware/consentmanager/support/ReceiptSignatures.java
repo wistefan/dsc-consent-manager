@@ -10,7 +10,6 @@ import com.nimbusds.jose.jwk.JWKSet;
 import io.micronaut.core.type.Argument;
 import java.io.IOException;
 import java.text.ParseException;
-import java.util.HashMap;
 import java.util.Map;
 import org.erdtman.jcs.JsonCanonicalizer;
 
@@ -20,22 +19,29 @@ import org.erdtman.jcs.JsonCanonicalizer;
  */
 public final class ReceiptSignatures {
 
-    private static final String SIGNATURE = "signature";
+    private static final String RECEIPT = "receipt";
+
+    private static final String JWS = "jws";
 
     private ReceiptSignatures() {}
 
     /**
-     * Whether {@code receiptJson}'s {@code signature} verifies against the key its {@code kid}
+     * Whether the {@code jws} of a served {@code {receipt, jws}} body verifies over its receipt.
+     */
+    public static boolean verifies(String signedReceiptJson, JWKSet published)
+            throws IOException, ParseException, JOSEException {
+        Map<String, Object> body =
+                TestJson.mapper()
+                        .readValue(signedReceiptJson, Argument.mapOf(String.class, Object.class));
+        return verifies(body.get(RECEIPT), (String) body.get(JWS), published);
+    }
+
+    /**
+     * Whether {@code signature} verifies over {@code receipt} against the key its {@code kid}
      * names.
      */
-    public static boolean verifies(String receiptJson, JWKSet published)
+    public static boolean verifies(Object receipt, String signature, JWKSet published)
             throws IOException, ParseException, JOSEException {
-        Map<String, Object> receipt =
-                new HashMap<>(
-                        TestJson.mapper()
-                                .readValue(
-                                        receiptJson, Argument.mapOf(String.class, Object.class)));
-        String signature = (String) receipt.remove(SIGNATURE);
         byte[] payload =
                 new JsonCanonicalizer(TestJson.mapper().writeValueAsBytes(receipt))
                         .getEncodedUTF8();

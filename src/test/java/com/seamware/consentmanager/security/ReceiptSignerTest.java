@@ -15,7 +15,6 @@ import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.support.ReceiptSignatures;
 import com.seamware.consentmanager.support.TestJson;
-import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** Pins that a signed receipt verifies against the published key and nothing else does. */
 @DisplayName("Receipt signing")
@@ -37,6 +37,9 @@ class ReceiptSignerTest {
     private static final int HMAC_KEY_SIZE = 256;
 
     private static final String STATUS = "status";
+
+    /** A value no member of {@link #receipt()} holds. */
+    private static final String TAMPERED = "tampered";
 
     private static final String SIGNING_KEY_VARIABLE = "RECEIPTS_SIGNING_KEY";
 
@@ -55,7 +58,7 @@ class ReceiptSignerTest {
             "{\"kty\":\"OKP\",\"crv\":\"Ed25519\","
                     + "\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\"}";
 
-    /** A receipt whose members a verifier recomputes; it arrives carrying a stale signature. */
+    /** A receipt whose members a verifier recomputes. */
     private static Map<String, Object> receipt() {
         Map<String, Object> receipt = new LinkedHashMap<>();
         receipt.put("consentId", "0199e1f0-0000-7000-8000-000000000001");
@@ -63,7 +66,6 @@ class ReceiptSignerTest {
         receipt.put("consented", true);
         receipt.put("consentTimestamp", 1_767_225_600L);
         receipt.put("purposes", List.of("Clinical research", "Ünïcode ✓"));
-        receipt.put(ReceiptSigner.SIGNATURE_MEMBER, "stale");
         return receipt;
     }
 
@@ -96,7 +98,7 @@ class ReceiptSignerTest {
         JWKSet published = new JWKSet(signer.publicKey());
         Map<String, Object> receipt = receipt();
 
-        receipt.put(ReceiptSigner.SIGNATURE_MEMBER, signer.sign(receipt));
+        String jws = signer.sign(receipt);
 
         assertThat(signer.publicKey().isPrivate()).isFalse();
         assertThat(signer.publicKey().getKeyUse()).isEqualTo(KeyUse.SIGNATURE);
@@ -104,11 +106,25 @@ class ReceiptSignerTest {
         if (configured != null && configured.getKeyID() != null) {
             assertThat(signer.publicKey().getKeyID()).isEqualTo(configured.getKeyID());
         }
-        assertThat((String) receipt.get(ReceiptSigner.SIGNATURE_MEMBER)).contains("..");
-        assertThat(ReceiptSignatures.verifies(json(receipt), published)).isTrue();
+        assertThat(jws).contains("..");
+        assertThat(ReceiptSignatures.verifies(receipt, jws, published)).isTrue();
 
         receipt.put(STATUS, "REVOKED");
-        assertThat(ReceiptSignatures.verifies(json(receipt), published)).isFalse();
+        assertThat(ReceiptSignatures.verifies(receipt, jws, published)).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"consentId", STATUS, "consented", "consentTimestamp", "purposes"})
+    @DisplayName("signs the whole receipt, so altering any one member breaks verification")
+    void coversEveryMember(String member) throws Exception {
+        ReceiptSigner signer = signer(null);
+        Map<String, Object> receipt = receipt();
+        String jws = signer.sign(receipt);
+
+        receipt.put(member, TAMPERED);
+
+        assertThat(ReceiptSignatures.verifies(receipt, jws, new JWKSet(signer.publicKey())))
+                .isFalse();
     }
 
     static Stream<Arguments> unusableKeys() throws JOSEException {
@@ -152,7 +168,7 @@ class ReceiptSignerTest {
         ReceiptSigner retired =
                 signer(new ECKeyGenerator(Curve.P_256).keyID(RETIRED_KEY_ID).generate());
         Map<String, Object> receipt = receipt();
-        receipt.put(ReceiptSigner.SIGNATURE_MEMBER, retired.sign(receipt));
+        String jws = retired.sign(receipt);
 
         ReceiptSigner rotated =
                 signer(
@@ -163,9 +179,7 @@ class ReceiptSignerTest {
                 .extracting(JWK::getKeyID)
                 .containsExactly(KEY_ID, RETIRED_KEY_ID);
         assertThat(rotated.verificationKeys()).noneMatch(JWK::isPrivate);
-        assertThat(
-                        ReceiptSignatures.verifies(
-                                json(receipt), new JWKSet(rotated.verificationKeys())))
+        assertThat(ReceiptSignatures.verifies(receipt, jws, new JWKSet(rotated.verificationKeys())))
                 .isTrue();
     }
 
@@ -225,9 +239,5 @@ class ReceiptSignerTest {
             settings.setSigningKey(configured.toJSONString());
         }
         return new ReceiptSigner(settings, TestJson.mapper());
-    }
-
-    private static String json(Map<String, Object> receipt) throws IOException {
-        return TestJson.mapper().writeValueAsString(receipt);
     }
 }

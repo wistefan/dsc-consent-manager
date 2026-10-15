@@ -21,7 +21,6 @@ import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.IdentityProviderRegistry;
-import com.seamware.consentmanager.security.ReceiptSigner;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
@@ -44,7 +43,6 @@ import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -79,6 +77,13 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     private static final String FORMAT_KANTARA = "receipt-kantara";
 
     private static final String PATH_JWKS = "/.well-known/jwks.json";
+
+    private static final String MEMBER_RECEIPT = "receipt";
+
+    private static final String MEMBER_JWS = "jws";
+
+    /** The member a receipt carried its signature in before the signature was detached. */
+    private static final String LEGACY_SIGNATURE_MEMBER = "signature";
 
     /** A data subject a forger swaps in for the one the receipt was signed for. */
     private static final String FORGED_SUBJECT = "urn:test:user:someone-else";
@@ -203,7 +208,7 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     void rendersEveryFrozenTermAsAnIso29184Record(Route route) {
         UUID id = seedConsent(ConsentStatus.GRANTED);
 
-        Map<String, Object> receipt = body(read(route, id, FORMAT_ISO));
+        Map<String, Object> receipt = receipt(read(route, id, FORMAT_ISO));
 
         assertThat(receipt)
                 .containsEntry("standard", "ISO/IEC 29184:2020")
@@ -243,7 +248,7 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     void rendersAKantaraReceiptForAGrant(Route route) {
         UUID id = seedConsent(ConsentStatus.GRANTED);
 
-        Map<String, Object> receipt = body(read(route, id, FORMAT_KANTARA));
+        Map<String, Object> receipt = receipt(read(route, id, FORMAT_KANTARA));
 
         assertThat(receipt)
                 .containsEntry("version", "KI-CR-v1.1.0")
@@ -308,7 +313,7 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     @MethodSource("routesAndFormats")
     void readsTheSameAfterItsNoticeIsArchivedAndRegenerated(Route route, String format) {
         UUID id = seedConsent(ConsentStatus.GRANTED);
-        Map<String, Object> before = signed(body(read(route, id, format)));
+        Map<String, Object> before = receipt(read(route, id, format));
 
         notice.setArchivedAt(Instant.now());
         notice.setTitle(REGENERATED);
@@ -322,7 +327,7 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                         notice.getConsumerId(),
                         regeneratedTerms()));
 
-        assertThat(signed(body(read(route, id, format)))).isEqualTo(before);
+        assertThat(receipt(read(route, id, format))).isEqualTo(before);
     }
 
     @ParameterizedTest
@@ -359,7 +364,7 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
 
         assertThat(read(route, id, FORMAT_KANTARA).code())
                 .isEqualTo(HttpStatus.BAD_REQUEST.getCode());
-        assertThat(body(read(route, id, FORMAT_ISO)))
+        assertThat(receipt(read(route, id, FORMAT_ISO)))
                 .containsEntry("status", status.name())
                 .containsEntry("consented", false);
     }
@@ -478,16 +483,6 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    /**
-     * The members {@code receipt}'s signature covers. The signature itself is left out because an
-     * ECDSA signature is randomized, so two signings of the same content differ.
-     */
-    private static Map<String, Object> signed(Map<String, Object> receipt) {
-        Map<String, Object> members = new HashMap<>(receipt);
-        members.remove(ReceiptSigner.SIGNATURE_MEMBER);
-        return members;
-    }
-
     /** The receipt JWKS, fetched with no credential at all. */
     private String publishedKeys() {
         HttpResponse<String> response =
@@ -496,12 +491,22 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
         return response.body();
     }
 
-    private Map<String, Object> body(HttpResponse<String> response) {
+    /**
+     * The receipt of a served {@code {receipt, jws}} body. The JWS travels beside the receipt, so
+     * the receipt itself carries no signature.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> receipt(HttpResponse<String> response) {
         assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());
+        Map<String, Object> body;
         try {
-            return json.readValue(response.body(), Argument.mapOf(String.class, Object.class));
+            body = json.readValue(response.body(), Argument.mapOf(String.class, Object.class));
         } catch (IOException e) {
             throw new UncheckedIOException("Could not read the response body", e);
         }
+        assertThat(body).containsOnlyKeys(MEMBER_RECEIPT, MEMBER_JWS);
+        Map<String, Object> receipt = (Map<String, Object>) body.get(MEMBER_RECEIPT);
+        assertThat(receipt).doesNotContainKey(LEGACY_SIGNATURE_MEMBER);
+        return receipt;
     }
 }

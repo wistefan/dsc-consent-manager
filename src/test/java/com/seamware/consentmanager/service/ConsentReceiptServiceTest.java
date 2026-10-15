@@ -174,6 +174,7 @@ class ConsentReceiptServiceTest {
     void fallsBackForTheController(ControllerDetails controller, String name, String contact) {
         ConsentReceiptKantaraPiiControllersInner rendered =
                 receipts.toKantara(details(withController(controller), CONTRACT_URI))
+                        .getReceipt()
                         .getPiiControllers()
                         .getFirst();
 
@@ -200,7 +201,8 @@ class ConsentReceiptServiceTest {
                         title, List.of(PURPOSE), null, null, null, null, null, null, null, null);
         ConsentDetails details = details(snapshot, contractUri);
 
-        String service = receipts.toKantara(details).getServices().getFirst().getService();
+        String service =
+                receipts.toKantara(details).getReceipt().getServices().getFirst().getService();
 
         assertThat(service)
                 .isEqualTo(
@@ -233,6 +235,7 @@ class ConsentReceiptServiceTest {
             List<Recipient> recipients, String thirdPartyName) {
         ConsentReceiptKantaraServicesInnerPurposesInner purpose =
                 receipts.toKantara(details(withRecipients(recipients), CONTRACT_URI))
+                        .getReceipt()
                         .getServices()
                         .getFirst()
                         .getPurposes()
@@ -247,7 +250,7 @@ class ConsentReceiptServiceTest {
     void fallsBackForPolicyAndTermination() {
         ConsentDetails details = details(bare(), null);
 
-        ConsentReceiptKantara receipt = receipts.toKantara(details);
+        ConsentReceiptKantara receipt = receipts.toKantara(details).getReceipt();
 
         assertThat(receipt.getPolicyUrl())
                 .isEqualTo(
@@ -265,7 +268,8 @@ class ConsentReceiptServiceTest {
     @SuppressWarnings("unchecked")
     void publishesEveryMustKey() throws IOException {
         String json =
-                TestJson.mapper().writeValueAsString(receipts.toKantara(details(bare(), null)));
+                TestJson.mapper()
+                        .writeValueAsString(receipts.toKantara(details(bare(), null)).getReceipt());
         Map<String, Object> receipt =
                 TestJson.mapper().readValue(json, Argument.mapOf(String.class, Object.class));
 
@@ -308,7 +312,7 @@ class ConsentReceiptServiceTest {
                     event(consentId, history.get(hop), GRANTED_AT.plus(HOUR.multipliedBy(hop))));
         }
 
-        assertThat(receipts.toKantara(details).getConsentTimestamp())
+        assertThat(receipts.toKantara(details).getReceipt().getConsentTimestamp())
                 .isEqualTo(expected.getEpochSecond())
                 .isNotEqualTo(details.consent().getUpdatedAt().getEpochSecond());
     }
