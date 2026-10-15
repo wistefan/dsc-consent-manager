@@ -137,15 +137,6 @@ properties:
   withdrawalOfConsent:
     type: string
     description: How consent may be withdrawn, as the notice stated it.
-  signature:
-    type: string
-    description: >
-      Detached compact JWS (RFC 7515 Appendix F, `header..signature`) over the
-      RFC 8785 (JCS) canonical form of this receipt with `signature` itself
-      removed. Verify it against the key `GET /.well-known/jwks.json` publishes
-      under the header's `kid`. An ECDSA signature is randomized, so two reads
-      of one receipt carry different signatures over the same content.
-    example: "eyJraWQiOiJyZWNlaXB0cyIsImFsZyI6IkVTMjU2In0..MEUCIQ"
 required:
   - receiptId
   - standard
@@ -158,4 +149,3 @@ required:
   - consumer
   - createdAt
   - updatedAt
-  - signature

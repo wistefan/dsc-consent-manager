@@ -9,6 +9,8 @@ import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiC
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInner;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInnerPurposesInner;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptRecipientsInner;
+import com.seamware.consentmanager.api.generated.model.SignedConsentReceipt;
+import com.seamware.consentmanager.api.generated.model.SignedConsentReceiptKantara;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
@@ -35,7 +37,7 @@ import java.util.stream.Stream;
  *
  * <p>Every term is read off {@link Consent#getSnapshot()} and {@link Consent#getContractUri()} -
  * never off the live notice - so archiving or regenerating the notice cannot rewrite a receipt.
- * Every receipt, in either format, leaves here signed by {@link ReceiptSigner}.
+ * Every receipt, in either format, leaves here beside its detached JWS from {@link ReceiptSigner}.
  */
 @Singleton
 public class ConsentReceiptService {
@@ -62,9 +64,6 @@ public class ConsentReceiptService {
     /** A notice classifies no PII as sensitive, so no receipt declares any. */
     static final boolean SENSITIVE = false;
 
-    /** {@code signature} while a receipt is rendered: it signs every member but that one. */
-    private static final String UNSIGNED = null;
-
     private static final String NOT_GRANTED =
             "Consent '%s' is %s; a Kantara receipt attests a consent that is GRANTED.";
 
@@ -88,9 +87,9 @@ public class ConsentReceiptService {
         this.signer = signer;
     }
 
-    /** The ISO/IEC 29184 record of {@code details}, rendered for a consent in any status. */
+    /** The signed ISO/IEC 29184 record of {@code details}, rendered for a consent in any status. */
     @NonNull
-    public ConsentReceipt toIso29184(@NonNull ConsentDetails details) {
+    public SignedConsentReceipt toIso29184(@NonNull ConsentDetails details) {
         Consent consent = details.consent();
         ConsentSnapshot snapshot = consent.getSnapshot();
         ConsentReceipt receipt =
@@ -105,8 +104,7 @@ public class ConsentReceiptService {
                                 details.providerIdentifier(),
                                 details.consumerIdentifier(),
                                 atUtc(consent.getCreatedAt()),
-                                atUtc(consent.getUpdatedAt()),
-                                UNSIGNED)
+                                atUtc(consent.getUpdatedAt()))
                         .contractUri(consent.getContractUri())
                         .title(snapshot.title())
                         .controllerDetails(controllerDetails(snapshot.controllerDetails()))
@@ -118,15 +116,15 @@ public class ConsentReceiptService {
                         .piiPrincipalRights(snapshot.piiPrincipalRights())
                         .internationalTransfers(snapshot.internationalTransfers())
                         .withdrawalOfConsent(snapshot.withdrawalOfConsent());
-        return receipt.signature(signer.sign(receipt));
+        return new SignedConsentReceipt(receipt, signer.sign(receipt));
     }
 
     /**
-     * The KI-CR-v1.1.0 receipt of {@code details}. Throws {@link BadRequestException} unless the
-     * consent is {@code GRANTED}: the receipt attests that consent was given.
+     * The signed KI-CR-v1.1.0 receipt of {@code details}. Throws {@link BadRequestException} unless
+     * the consent is {@code GRANTED}: the receipt attests that consent was given.
      */
     @NonNull
-    public ConsentReceiptKantara toKantara(@NonNull ConsentDetails details) {
+    public SignedConsentReceiptKantara toKantara(@NonNull ConsentDetails details) {
         Consent consent = details.consent();
         if (consent.getStatus() != ConsentStatus.GRANTED) {
             throw new BadRequestException(
@@ -147,9 +145,8 @@ public class ConsentReceiptService {
                         List.of(piiController(snapshot.controllerDetails(), details)),
                         List.of(service(snapshot, consent)),
                         SENSITIVE,
-                        List.of(),
-                        UNSIGNED);
-        return receipt.signature(signer.sign(receipt));
+                        List.of());
+        return new SignedConsentReceiptKantara(receipt, signer.sign(receipt));
     }
 
     /**
