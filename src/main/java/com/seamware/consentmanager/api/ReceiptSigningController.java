@@ -7,6 +7,7 @@ import com.seamware.consentmanager.api.generated.AbstractReceiptSigningControlle
 import com.seamware.consentmanager.api.generated.model.JsonWebKey;
 import com.seamware.consentmanager.api.generated.model.JsonWebKeySet;
 import com.seamware.consentmanager.signing.SigningKeyStore;
+import io.micronaut.http.HttpHeaders;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
 
@@ -17,6 +18,9 @@ import io.micronaut.http.annotation.Controller;
 @Controller
 @OriginRoot
 public class ReceiptSigningController extends AbstractReceiptSigningController {
+
+    /** The set changes only on a restart, so verifiers may hold it for an hour. */
+    static final String JWKS_CACHE_CONTROL = "public, max-age=3600";
 
     private final JsonWebKeySet published;
 
@@ -30,7 +34,7 @@ public class ReceiptSigningController extends AbstractReceiptSigningController {
 
     @Override
     public HttpResponse<JsonWebKeySet> getReceiptSigningKeys() {
-        return HttpResponse.ok(published);
+        return HttpResponse.ok(published).header(HttpHeaders.CACHE_CONTROL, JWKS_CACHE_CONTROL);
     }
 
     private static JsonWebKey toJsonWebKey(JWK key) {
