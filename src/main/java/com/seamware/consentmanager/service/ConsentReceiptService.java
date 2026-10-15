@@ -20,7 +20,7 @@ import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.UserRepository;
-import com.seamware.consentmanager.security.ReceiptSigner;
+import com.seamware.consentmanager.signing.ConsentSigningService;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
@@ -37,7 +37,8 @@ import java.util.stream.Stream;
  *
  * <p>Every term is read off {@link Consent#getSnapshot()} and {@link Consent#getContractUri()} -
  * never off the live notice - so archiving or regenerating the notice cannot rewrite a receipt.
- * Every receipt, in either format, leaves here beside its detached JWS from {@link ReceiptSigner}.
+ * Every receipt, in either format, leaves here beside its detached JWS from {@link
+ * ConsentSigningService}.
  */
 @Singleton
 public class ConsentReceiptService {
@@ -74,17 +75,17 @@ public class ConsentReceiptService {
     private final UserRepository users;
     private final ConsentEventRepository events;
     private final ConsentManagerConfiguration.Receipts settings;
-    private final ReceiptSigner signer;
+    private final ConsentSigningService signing;
 
     public ConsentReceiptService(
             UserRepository users,
             ConsentEventRepository events,
             ConsentManagerConfiguration.Receipts settings,
-            ReceiptSigner signer) {
+            ConsentSigningService signing) {
         this.users = users;
         this.events = events;
         this.settings = settings;
-        this.signer = signer;
+        this.signing = signing;
     }
 
     /** The signed ISO/IEC 29184 record of {@code details}, rendered for a consent in any status. */
@@ -116,7 +117,7 @@ public class ConsentReceiptService {
                         .piiPrincipalRights(snapshot.piiPrincipalRights())
                         .internationalTransfers(snapshot.internationalTransfers())
                         .withdrawalOfConsent(snapshot.withdrawalOfConsent());
-        return new SignedConsentReceipt(receipt, signer.sign(receipt));
+        return new SignedConsentReceipt(receipt, signing.sign(receipt).jws());
     }
 
     /**
@@ -146,7 +147,7 @@ public class ConsentReceiptService {
                         List.of(service(snapshot, consent)),
                         SENSITIVE,
                         List.of());
-        return new SignedConsentReceiptKantara(receipt, signer.sign(receipt));
+        return new SignedConsentReceiptKantara(receipt, signing.sign(receipt).jws());
     }
 
     /**

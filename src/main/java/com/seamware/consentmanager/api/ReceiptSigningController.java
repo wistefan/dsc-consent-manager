@@ -6,7 +6,7 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.seamware.consentmanager.api.generated.AbstractReceiptSigningController;
 import com.seamware.consentmanager.api.generated.model.JsonWebKey;
 import com.seamware.consentmanager.api.generated.model.JsonWebKeySet;
-import com.seamware.consentmanager.security.ReceiptSigner;
+import com.seamware.consentmanager.signing.SigningKeyStore;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
 
@@ -20,10 +20,10 @@ public class ReceiptSigningController extends AbstractReceiptSigningController {
 
     private final JsonWebKeySet published;
 
-    public ReceiptSigningController(ReceiptSigner signer) {
+    public ReceiptSigningController(SigningKeyStore keys) {
         this.published =
                 new JsonWebKeySet(
-                        signer.verificationKeys().stream()
+                        keys.verificationKeys().stream()
                                 .map(ReceiptSigningController::toJsonWebKey)
                                 .toList());
     }
