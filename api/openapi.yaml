@@ -1671,6 +1671,11 @@ paths:
         subject exists.** An identifier no user holds and a known user with no
         consent in force return the same shape and the same `200`, so the check
         cannot be used to probe which subjects exist.
+
+
+        **A deregistered caller is `403`.** A `yes` licenses processing, which is
+        acting in the dataspace, so a participant that has left is refused even
+        though the consents naming it are retained.
       tags:
         - ConsentQuery
       security:

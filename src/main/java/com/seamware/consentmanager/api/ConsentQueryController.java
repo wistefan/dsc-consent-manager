@@ -26,6 +26,11 @@ import java.util.UUID;
  * only consents in its own scope and one addressed by id resolves only within it. An unregistered
  * participant is refused by {@code requireRegistered()} with a {@code 403} before any read.
  *
+ * <p>The validity check alone resolves the caller through {@link
+ * ParticipantPrincipal#requireActive()}: its answer licenses processing, which is acting in the
+ * dataspace, so a deregistered participant whose grants were retained is refused rather than told
+ * {@code valid: true}.
+ *
  * <p>{@code format} and {@code includeLineage} are accepted and ignored here: receipt rendering and
  * lineage traversal land in later steps, and every value renders the full representation meanwhile.
  */
@@ -95,7 +100,7 @@ public class ConsentQueryController extends AbstractConsentQueryController {
         ConsentValidity body =
                 mapper.toValidity(
                         queries.checkValidity(
-                                principal.requireRegistered(),
+                                principal.requireActive(),
                                 userIdentifier,
                                 privacyNoticeId,
                                 purpose));

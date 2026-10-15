@@ -35,6 +35,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,8 +58,8 @@ import org.junit.jupiter.params.provider.MethodSource;
  * to the caller, and silent about everything it does not turn on. So the cases prove the true
  * answer for a grant the caller is party to, the false answer for every other status and for a
  * purpose the grant does not cover, that a grant naming another participant is invisible, that an
- * unknown subject and a known subject with no grant are indistinguishable, and that the answer is
- * never cached.
+ * unknown subject and a known subject with no grant are indistinguishable, that a deregistered
+ * caller is refused, and that the answer is never cached.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent validity check endpoint")
@@ -279,6 +280,23 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
                 .as("the shape and reason must not reveal whether the subject exists")
                 .isEqualTo(knownButBare);
         assertThat(knownButBare).containsEntry(PROPERTY_VALID, false).containsKey(PROPERTY_REASON);
+    }
+
+    /**
+     * The window the role matrix cannot sweep: it only deletes the caller's row, while a retained
+     * record is registered and departed, and still names every grant it was a party to.
+     */
+    @Test
+    @DisplayName("refuses a deregistered participant with 403 rather than answering valid:true")
+    void refusesADeregisteredParticipant() {
+        seedConsent(notice, ConsentStatus.GRANTED, grantedScope());
+        Participant caller = participants.findByIdentifier(CALLER).orElseThrow();
+        caller.setDeregisteredAt(Instant.now());
+        participants.update(caller);
+
+        assertThat(check(SUBJECT, notice.getId(), null).code())
+                .as("a departed participant is not licensed to process on a retained grant")
+                .isEqualTo(HttpStatus.FORBIDDEN.getCode());
     }
 
     @Test
