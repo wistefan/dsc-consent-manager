@@ -264,6 +264,25 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
             Pageable pageable);
 
     /**
+     * The consent in the given status for the subject (by identifier) and notice that the
+     * participant is a party to, or empty.
+     *
+     * <p>Backs {@code GET /consents/check}. Called with {@code GRANTED}, where the partial unique
+     * index {@code uq_consents_granted_per_user_notice} admits at most one row per pair. The
+     * subject is resolved in the same statement, so an unknown identifier and a known subject with
+     * no grant cost the same single query and yield the same empty answer. The caller is scoped
+     * <em>in</em> the predicate - a grant naming it as neither provider nor consumer is never read.
+     */
+    @Query(
+            "SELECT c.* FROM consents c JOIN users u ON u.id = c.user_id"
+                    + " WHERE u.identifier = :userIdentifier"
+                    + " AND c.privacy_notice_id = :privacyNoticeId"
+                    + " AND c.status = :status"
+                    + " AND (c.provider_id = :participantId OR c.consumer_id = :participantId)")
+    Optional<Consent> findForParticipantBySubjectAndNoticeAndStatus(
+            String userIdentifier, UUID privacyNoticeId, ConsentStatus status, UUID participantId);
+
+    /**
      * One consent the participant is a party to, or empty when none with that id names it.
      *
      * <p>Party-ship is a predicate rather than a check after the read, so {@code GET /consents/id}

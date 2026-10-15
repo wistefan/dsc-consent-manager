@@ -377,7 +377,16 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         LIST_CONSENTS("get " + PATH_CONSENTS, () -> HttpRequest.GET(PATH_CONSENTS)),
         GET_CONSENT(
                 "get " + PATH_CONSENTS + "/{id}",
-                () -> HttpRequest.GET(PATH_CONSENTS + "/" + ABSENT_CONSENT));
+                () -> HttpRequest.GET(PATH_CONSENTS + "/" + ABSENT_CONSENT)),
+        CHECK_CONSENT(
+                "get " + PATH_CONSENTS + "/check",
+                () ->
+                        HttpRequest.GET(
+                                PATH_CONSENTS
+                                        + "/check?userIdentifier="
+                                        + LINKED_USER
+                                        + "&privacyNoticeId="
+                                        + ABSENT_NOTICE));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -660,7 +669,13 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 unknownConsent,
                                 denied,
                                 denied,
-                                challenged))
+                                challenged),
+                        // The validity check is the participant's alone. The seeded subject exists
+                        // but holds no grant the caller is party to, so the one caller this route
+                        // admits is answered 200 with valid:false - the same shape an unknown
+                        // subject earns - while every other role is refused. ConsentValidityIT owns
+                        // the true answer and the no-disclosure proof.
+                        row(Endpoint.CHECK_CONSENT, denied, ok, denied, denied, challenged))
                 .flatMap(row -> row);
     }
 

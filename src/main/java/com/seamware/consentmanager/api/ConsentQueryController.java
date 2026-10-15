@@ -3,12 +3,14 @@ package com.seamware.consentmanager.api;
 import com.seamware.consentmanager.api.generated.AbstractConsentQueryController;
 import com.seamware.consentmanager.api.generated.model.ConsentPage;
 import com.seamware.consentmanager.api.generated.model.ConsentResponse;
+import com.seamware.consentmanager.api.generated.model.ConsentValidity;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
 import com.seamware.consentmanager.security.UserPrincipal;
 import com.seamware.consentmanager.service.ConsentDetails;
 import com.seamware.consentmanager.service.ConsentQueryCriteria;
 import com.seamware.consentmanager.service.ConsentQueryService;
 import io.micronaut.data.model.Page;
+import io.micronaut.http.HttpHeaders;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
 import java.util.List;
@@ -24,11 +26,19 @@ import java.util.UUID;
  * only consents in its own scope and one addressed by id resolves only within it. An unregistered
  * participant is refused by {@code requireRegistered()} with a {@code 403} before any read.
  *
+ * <p>The validity check alone resolves the caller through {@link
+ * ParticipantPrincipal#requireActive()}: its answer licenses processing, which is acting in the
+ * dataspace, so a deregistered participant whose grants were retained is refused rather than told
+ * {@code valid: true}.
+ *
  * <p>{@code format} and {@code includeLineage} are accepted and ignored here: receipt rendering and
  * lineage traversal land in later steps, and every value renders the full representation meanwhile.
  */
 @Controller
 public class ConsentQueryController extends AbstractConsentQueryController {
+
+    /** Keeps a yes/no answer out of every cache; a stale "yes" is the worst possible answer. */
+    private static final String NO_STORE = "no-store";
 
     private final ConsentQueryService queries;
 
@@ -79,6 +89,22 @@ public class ConsentQueryController extends AbstractConsentQueryController {
     public HttpResponse<ConsentResponse> getConsent(ParticipantPrincipal principal, UUID id) {
         return HttpResponse.ok(
                 mapper.toResponse(queries.getForParticipant(principal.requireRegistered(), id)));
+    }
+
+    @Override
+    public HttpResponse<ConsentValidity> checkConsentValidity(
+            ParticipantPrincipal principal,
+            String userIdentifier,
+            UUID privacyNoticeId,
+            String purpose) {
+        ConsentValidity body =
+                mapper.toValidity(
+                        queries.checkValidity(
+                                principal.requireActive(),
+                                userIdentifier,
+                                privacyNoticeId,
+                                purpose));
+        return HttpResponse.ok(body).header(HttpHeaders.CACHE_CONTROL, NO_STORE);
     }
 
     private ConsentPage toPage(Page<ConsentDetails> page) {
