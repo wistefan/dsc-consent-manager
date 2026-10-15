@@ -69,7 +69,7 @@ properties:
   updatedAt:
     type: string
     format: date-time
-    description: When the consent last changed state.
+    description: When the consent record was last written; not necessarily a change of state.
   title:
     type: string
     description: Title of the notice as presented.

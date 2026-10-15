@@ -112,10 +112,10 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
     /** The configured default jurisdiction a Kantara receipt names. */
     private static final String JURISDICTION = "EU";
 
-    /** Terms the regenerated notice carries, all different from the frozen ones. */
     /** When the seeded grant was given: well before the row is written, so the two differ. */
     private static final Instant GRANTED_AT = Instant.parse("2026-01-01T00:00:00Z");
 
+    /** Terms the regenerated notice carries, all different from the frozen ones. */
     private static final String REGENERATED = "regenerated";
 
     @Inject
