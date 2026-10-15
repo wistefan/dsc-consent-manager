@@ -3,23 +3,29 @@
 ## Overview
 Send two purely informational emails to data subjects: one when a participant requests their
 consent (`ConsentService.request`) and one when a participant terminates it
-(`ConsentLifecycleService.terminate`). Delivery is best-effort. It runs after the consent write
-has committed, never throws, and carries no token or state-changing link. An SMTP implementation
-is bound only when `smtp.host` is set; otherwise a logging implementation sends nothing.
+(`ConsentLifecycleService.terminate`). Delivery is best-effort and asynchronous. It is handed off
+after the consent write has committed, never throws, never delays the response on the mail server,
+and carries no token or state-changing link. An SMTP implementation is bound only when
+`smtp.host` is set and non-blank; otherwise a logging implementation sends nothing.
 
 ### Decisions fixed by this plan (resolved from the ticket and the analysis comment)
 - **Package.** The ticket's paths say `eu.prometheusx.consentmanager`. This repo is
   `com.seamware.consentmanager`, so the new code lives in `com.seamware.consentmanager.notification`.
 - **Who is notified for termination.** Only the participant-initiated move,
-  `ConsentLifecycleService.terminate`. Two other paths also terminate consents, and neither
-  notifies:
-  - the collateral terminations a subject's own `resume` performs (ADR-0011), because the
-    subject caused them;
+  `ConsentLifecycleService.terminate`. Four other paths also move consents to `TERMINATED`, and
+  none of them notifies:
+  - the collateral terminations a subject's own `resume` performs (`ConsentWriter.resume` →
+    `closeRedundant`, ADR-0011), because the subject caused them;
+  - the redundant open requests `ConsentWriter.decide` closes through `closeRedundant` with
+    `CLEANUP_TRIGGER` when the subject answers one of several, because the subject caused them;
+  - the unanswered consents `UserService.erase` closes (`close(userId, UNANSWERED_STATUSES,
+    TERMINATED)`, ADR-0007), because the subject asked to be erased and must not be emailed
+    about it;
   - the bulk terminations of unanswered consents in `ParticipantService.deregister` (ADR-0008),
-    because they run inside that method's transaction and the participant is leaving the
-    dataspace.
+    because the participant is leaving the dataspace.
   The reviewer (wistefan) confirmed the deregistration exclusion on PR #18, so it is a decision
-  rather than a by-product of the transaction boundary. ADR-0015 (Step 4) records both exclusions.
+  rather than a by-product of the transaction boundary. ADR-0015 (Step 4) lists all four
+  exclusions, so none of them reads later as an oversight to be wired up.
 - **Call site.** The notifier is called directly from the two service methods, after `ConsentWriter`
   has returned and so after commit. It is not called from `ConsentLifecycleService.report` or
   `ConsentStateChangeLog`, because those also see the collateral moves. ADR-0011 asks for an outbox
@@ -44,14 +50,34 @@ is bound only when `smtp.host` is set; otherwise a logging implementation sends 
   `smtp.host`), and a YAML comment in the `smtp:` block documents the variable. Both sides are
   gated by one `Condition` pair (see Step 1), not by `property`/`missingProperty`, so an exported
   `SMTP_HOST=` (empty) also selects the logging implementation.
-- **Call-site failure guard.** Both call sites wrap the notifier call in
-  `try`/`catch (RuntimeException)` and log ERROR under the calling class
-  (`ConsentService`/`ConsentLifecycleService`) with the consent id. The interface contract says
-  implementations never throw, but a committed write must never become a `500` because a future
-  implementation breaks that contract.
-- **Synchronous send with bounded timeouts.** Send on the request thread after commit. Named
-  defaults go on `mail.smtp.connectiontimeout` / `timeout` / `writetimeout`, so an unreachable
-  server delays a response by a bounded amount and never fails it. No `@Async` and no executor.
+- **Call-site failure guard.** Everything a call site does after the write commits sits inside
+  one `try`/`catch (RuntimeException)`: in `terminate` that includes the subject lookup, not only
+  the notifier call. The guard logs ERROR under the calling class
+  (`ConsentService`/`ConsentLifecycleService`) with the consent id and never rethrows. The
+  interface contract says implementations never throw, but a committed write must never become a
+  `404`/`500` because of anything that runs after commit.
+- **Asynchronous send (decided by wistefan on PR #18).** The request thread only builds the
+  message model and hands it to a dedicated executor; rendering and the SMTP exchange run there.
+  A slow or unreachable mail server therefore never delays a request/terminate response.
+  - Everything that needs the request's state stays on the request thread: the subject lookup,
+    the blank-email skip and building the immutable `NotificationModel` from the entities. The
+    task carries only that model and the recipient address, never a JPA/JDBC entity, and does
+    no database access.
+  - The executor is `@Named("notifications")`, produced by a `@Factory` gated by
+    `SmtpConfiguredCondition`: a `ThreadPoolExecutor` with `NOTIFICATION_SENDER_THREADS = 2`
+    threads and a bounded queue of `NOTIFICATION_QUEUE_CAPACITY = 1000`, named threads, and
+    `AbortPolicy`. It is shut down with the context (`@Bean(preDestroy = "shutdown")`).
+    A full queue is a dropped notification: the `RejectedExecutionException` is caught in
+    `SmtpUserNotificationService` and logged at ERROR with the kind and consent id.
+  - Not `@Async`: Micronaut's async interceptor would run the whole method, entity arguments
+    included, on another thread, and its default executor has an unbounded queue.
+  - Messages still queued at shutdown or held by a crashed process are lost. This is within the
+    ticket's best-effort contract and ADR-0015 records it.
+  - The SMTP timeouts stay, now to bound how long a sender thread is held rather than response
+    latency: `mail.smtp.connectiontimeout` 5 s, `mail.smtp.timeout` 10 s,
+    `mail.smtp.writetimeout` 10 s, as named `Duration` constants (JavaMail's own default is
+    infinite). ADR-0015 records the values.
+  - The logging implementation stays synchronous; it only writes a DEBUG line.
 
 ## Steps
 
@@ -82,7 +108,7 @@ Files:
   - Set `mail.smtp.host`/`port`, plus `auth` and an `Authenticator` when `user` is set.
   - Set `mail.smtp.starttls.enable` and `starttls.required` from `starttls`.
   - **Always** set `mail.smtp.ssl.checkserveridentity=true`. Leave `mail.smtp.ssl.trust` unset.
-  - Set the three timeouts from named constants.
+  - Set the three timeouts from named constants (connect 5 s, read 10 s, write 10 s).
   - When `insecureTrustAllCertificates` is true, set `ssl.trust=*` and
     `checkserveridentity=false`, and log a WARN once at startup naming the property.
   - Fail startup when `fromAddress` is blank while SMTP is configured. The message names the
@@ -91,6 +117,9 @@ Files:
   - Verify how the `micronaut-email-javamail` module (version from `micronaut-parent` 5.2.0)
     obtains its session. If it ships its own `SessionProvider`, use `@Replaces`, so there is
     exactly one session source and it is not configured under `javamail.*`.
+- `notification/NotificationExecutorFactory.java` (`@Factory`,
+  `@Requires(condition = SmtpConfiguredCondition.class)`): the `@Named("notifications")`
+  `ExecutorService` described under "Asynchronous send", with its sizes as named constants.
 - `notification/LoggingUserNotificationService.java`: `@Singleton`,
   `@Requires(condition = SmtpNotConfiguredCondition.class)`. It logs at DEBUG which message would have gone to
   which user id and consent id. It logs no email address and sends nothing.
@@ -114,7 +143,8 @@ Tests (`src/test/java/com/seamware/consentmanager/notification/`):
 - `NotificationBindingTest`. It runs against the **real** `application.yml`, not a hand-built
   property map, so a future `host: ${SMTP_HOST:}` line in the YAML fails it. Parameterize over the
   `smtp.host` values {absent, `""`, `"   "`} → `LoggingUserNotificationService` is the only
-  `UserNotificationService` and no `Session` bean exists, and `localhost` (with a
+  `UserNotificationService` and neither a `Session` nor a `notifications` executor bean exists,
+  and `localhost` (with a
   `from-address`) → the SMTP implementation is the only one. Start each case with
   `ApplicationContext.builder().environments("test").properties(...)` so `application.yml` and
   `application-test.yml` are both loaded. This covers AC 7 and AC 8.
@@ -151,18 +181,26 @@ Files:
 - `src/main/resources/views/email/consent-terminated.html` / `.txt`. Variables: `displayName`,
   `participantLegalName`, `noticeTitle`, `terminatedAt`. The timestamp is UTC ISO-8601 truncated
   to seconds, from a named `DateTimeFormatter` constant. Its source is defined in Step 3.
+  `terminate` is permitted from a granted consent **and** from an unanswered request, and the
+  ticket's interface carries no held status, so the copy is neutral and true for both. For
+  example: "<participant> has ended its consent arrangement with you for <notice>. If you had
+  given consent, it no longer applies. If a request was still open, you no longer need to answer
+  it." It never says "you granted" or "your consent has been revoked".
 - No template carries purposes, data categories, the consent id or anything beyond the notice
   title.
 - `notification/SmtpUserNotificationService.java`: `@Singleton`,
   `@Requires(condition = SmtpConfiguredCondition.class)`,
-  built on Micronaut Email's `EmailSender`.
-  - Skip silently, with at most a DEBUG line, when `user.getEmail()` is blank (AC 3).
-  - Build the model and send an `Email` whose body is a `MultipartBody` of two `TemplateBody`
+  built on Micronaut Email's `EmailSender` and the `@Named("notifications")` executor.
+  - On the calling thread: skip silently, with at most a DEBUG line, when `user.getEmail()` is
+    blank (AC 3); otherwise build the `NotificationModel` and submit one task. Catch
+    `RejectedExecutionException` around the submit and log it at ERROR as a dropped
+    notification. The method then returns without waiting.
+  - In the task: send an `Email` whose body is a `MultipartBody` of two `TemplateBody`
     parts (HTML + text) (AC 9).
   - Use subjects that are named constants containing no interpolated values, so no
     attacker-influenced data reaches a header.
   - Set the sender from `fromAddress`/`fromName`.
-  - Wrap render + send in one `try`/`catch (RuntimeException)`. On failure, log ERROR through
+  - Wrap the task's render + send in one `try`/`catch (RuntimeException)`. On failure, log ERROR through
     this class's own `LoggerFactory.getLogger(SmtpUserNotificationService.class)` with the
     message kind, the consent id and the exception (AC 5, AC 11). Never rethrow. Log the user
     id, not the address.
@@ -178,16 +216,27 @@ Tests:
     present in the HTML part (AC 10).
   - Null title and null name fall back.
   - The requested template has no link when `clientUrl` is null.
+  - The terminated template carries the neutral wording above and none of "you granted",
+    "revoked", or any other phrase that assumes the subject had consented. Pin the wording with
+    a named expected-phrase constant so a later copy edit has to update the test deliberately.
 - `SmtpUserNotificationServiceIT`, against an in-process GreenMail SMTP server on a random
   localhost port, with `smtp.starttls=false` for the test only. Parameterized over
   {requested, terminated} × {addressable, no email} (AC 12):
+  - Delivery is asynchronous, so wait with GreenMail's `waitForIncomingEmail(timeout, count)`
+    under a named timeout constant, never a fixed sleep.
   - An addressable user receives exactly one `multipart/alternative` message with a `text/html`
     and a `text/plain` part.
-  - A user with no email receives nothing and nothing throws.
+  - A user with no email receives nothing and nothing throws. To prove "nothing" without a
+    sleep, follow it with an addressable sentinel call and assert that only the sentinel arrives.
   - Every received body is scanned for absence of `token`, `verify`, `access_token`, `/consents/`,
     the consent id and any URL other than the configured client URL (AC 4).
 - Send failure: point `smtp.port` at a closed localhost port. Both methods return normally, and
-  an ERROR whose logger name is `SmtpUserNotificationService` is captured (AC 5, AC 11).
+  an ERROR whose logger name is `SmtpUserNotificationService` is captured, polled with
+  `support/Await` because it is logged on the sender thread (AC 5, AC 11).
+- Does not block: point `smtp.port` at a localhost `ServerSocket` that accepts and never
+  answers. Both methods return within a named bound well below the 5 s connect timeout.
+- Queue full: a unit test with a saturated single-slot executor shows that a rejected submit
+  returns normally and logs a dropped-notification ERROR.
 
 Acceptance: `./mvnw verify` is green, and no test configuration points `smtp.host` anywhere
 other than `localhost`/GreenMail (AC 8).
@@ -208,15 +257,19 @@ Files:
   - Inject `UserNotificationService` (the constructor grows by one) and use the existing
     `UserRepository users`.
   - In `terminate`, after `report(...)`, load the subject by `consent.getUserId()` and call
-    `notifications.consentTerminated(subject, details.consent(), caller)`.
+    `notifications.consentTerminated(subject, details.consent(), caller)`. The
+    `users.findById(...)` call sits **inside** the guard's `try`. An empty result is logged at
+    ERROR with the consent id and skipped, never thrown: no `orElseThrow(NotFoundException::new)`
+    after commit. The FK restrict makes it unlikely, but the guard depends on nothing after
+    commit.
   - Pass the consent read back from the move, so its `updatedAt` is the committed termination
     time. Step 2's template formats `consent.getUpdatedAt()`. If `updatedAt` turns out not to
     carry the move time, put the event's `occurredAt` on the model instead, and update the
     interface Javadoc to match.
   - Do **not** call it from `report`, `resume` or the collateral path.
   - Guard both call sites (this method and `ConsentService.request`) with
-    `try`/`catch (RuntimeException)`, and log ERROR under the calling class with the consent id.
-    Never rethrow.
+    `try`/`catch (RuntimeException)` around everything after the write, and log ERROR under the
+    calling class with the consent id. Never rethrow.
   - Correct `report`'s Javadoc ("whatever notification grows from it"). Subject notification does
     not grow from `report`; it is called from `request`/`terminate` directly, per ADR-0015.
 - `service/ConsentStateChangeLog.java`: no behaviour change. Rewrite the one class-Javadoc
@@ -233,8 +286,10 @@ Tests (`src/test/java/com/seamware/consentmanager/service/`):
   - Parameterized over {request, terminate} × {user with email, user without email}. The
     double is invoked once with the subject, the consent and the acting participant. The
     implementation-level skip for no email is already covered in Step 2.
-  - A `resume` that collaterally terminates a sibling consent triggers no `consentTerminated`.
-    A rejected request or termination (403/404/409) triggers nothing.
+  - None of the four excluded termination paths triggers `consentTerminated`: a `resume` that
+    collaterally terminates a sibling, a `decide` that closes a redundant open request, an
+    erasure that closes an unanswered request, and a deregistration that closes one.
+    Parameterize over them. A rejected request or termination (403/404/409) triggers nothing.
   - **Failure isolation (AC 5).** Configure the double to throw a `RuntimeException` (the
     contract says implementations never throw, and this proves the caller does not depend on
     it). Assert that the request and the termination are still committed: read back the
@@ -257,7 +312,11 @@ Files:
   - email is a notification, not part of authentication;
   - best-effort after commit, with no outbox, and why this does not conflict with ADR-0011's
     outbox note (which concerns guaranteed delivery);
-  - the call sites, and why resume-collateral and deregistration terminations do not notify;
+  - the call sites, and why the four other termination paths (resume collateral, `decide`'s
+    redundant-request cleanup, erasure, deregistration) do not notify;
+  - asynchronous hand-off on the bounded `notifications` executor, what is lost on a full queue
+    or at shutdown, and the SMTP timeout values (5 s / 10 s / 10 s) that bound a sender thread;
+  - the neutral consent-terminated wording, because `terminate` also closes unanswered requests;
   - addressability (never derive an address from `identifier`);
   - TLS on by default and the named opt-out;
   - escaping and the minimal template content;
@@ -274,7 +333,11 @@ Files:
   - note the Thymeleaf HTML/TEXT template-mode wiring as a gotcha.
   - note as a gotcha that `smtp.host` is absent from `application.yml` on purpose, and that the
     SMTP/logging split is a `Condition` pair on a non-blank host, never `property`/`missingProperty`;
-  - record in the best-effort-notification convention that the call sites guard and log too.
+  - in the best-effort-notification convention, correct "With `smtp.host` unset" to "With
+    `smtp.host` unset **or blank**", so it matches the `Condition` pair and does not point the
+    next agent at `missingProperty` (review comment 6043);
+  - record in that convention that sending is asynchronous on the `notifications` executor and
+    that the call sites guard and log too, the subject lookup included.
 - `.env.sample` / `application.yml`: confirm Step 1's entries are complete and match ADR-0015.
 
 Acceptance: the docs match the code, `./mvnw spotless:apply` makes no changes, and
