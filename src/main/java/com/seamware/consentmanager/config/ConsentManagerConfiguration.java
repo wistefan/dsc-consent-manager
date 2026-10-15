@@ -26,6 +26,21 @@ import lombok.Setter;
  *       consent-manager.participants.page-default-size}
  *   <li>{@code PARTICIPANTS_PAGE_MAX_SIZE} &rarr; {@code
  *       consent-manager.participants.page-max-size}
+ *   <li>{@code CONSENTS_PAGE_DEFAULT_SIZE} &rarr; {@code
+ *       consent-manager.consents.page-default-size}
+ *   <li>{@code CONSENTS_PAGE_MAX_SIZE} &rarr; {@code consent-manager.consents.page-max-size}
+ *   <li>{@code CONSENTS_LINEAGE_MAX_DEPTH} &rarr; {@code
+ *       consent-manager.consents.lineage-max-depth}
+ *   <li>{@code CONTRACT_DISCOVERY_MAX_CONCURRENCY} &rarr; {@code
+ *       consent-manager.contract-discovery.max-concurrency}
+ *   <li>{@code CONTRACT_DISCOVERY_MAX_DURATION} &rarr; {@code
+ *       consent-manager.contract-discovery.max-duration}
+ *   <li>{@code RECEIPTS_JURISDICTION} &rarr; {@code consent-manager.receipts.jurisdiction}
+ *   <li>{@code RECEIPTS_SIGNING_KEY} &rarr; {@code consent-manager.receipts.signing-key}
+ *   <li>{@code RECEIPTS_EPHEMERAL_SIGNING_KEY} &rarr; {@code
+ *       consent-manager.receipts.ephemeral-signing-key}
+ *   <li>{@code RECEIPTS_RETIRED_VERIFICATION_KEYS} &rarr; {@code
+ *       consent-manager.receipts.retired-verification-keys}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut
@@ -305,5 +320,116 @@ public class ConsentManagerConfiguration {
          * the ceiling never turns a caller's working request into a {@code 400}.
          */
         private int pageMaxSize = DEFAULT_PAGE_MAX_SIZE;
+    }
+
+    /**
+     * Paging and lineage depth of consent queries, bound under {@code consent-manager.consents}.
+     */
+    @Getter
+    @Setter
+    @ConfigurationProperties("consents")
+    public static class Consents {
+
+        /** Records a consent page carries when the caller asks for no size. */
+        public static final int DEFAULT_PAGE_DEFAULT_SIZE = 20;
+
+        /** Most records a consent page may carry when no ceiling is configured. */
+        public static final int DEFAULT_PAGE_MAX_SIZE = 100;
+
+        /** Most superseded records one lineage carries when no depth is configured. */
+        public static final int DEFAULT_LINEAGE_MAX_DEPTH = 20;
+
+        /**
+         * Page size applied when {@code GET /consents/me} names none, bound to {@code
+         * CONSENTS_PAGE_DEFAULT_SIZE}; a value below one would make every page answer empty.
+         *
+         * <p>Deliberately absent from the specification, which could not track a value configured
+         * per deployment; the response reports the size it applied instead.
+         */
+        private int pageDefaultSize = DEFAULT_PAGE_DEFAULT_SIZE;
+
+        /**
+         * Most records one consent page may carry, bound to {@code CONSENTS_PAGE_MAX_SIZE}; it caps
+         * the default too, since the clamp applies to that as well.
+         *
+         * <p>A larger requested size is clamped to this rather than refused, so raising or lowering
+         * the ceiling never turns a caller's working request into a {@code 400}.
+         */
+        private int pageMaxSize = DEFAULT_PAGE_MAX_SIZE;
+
+        /**
+         * Most superseded records one {@code includeLineage} walk reads, bound to {@code
+         * CONSENTS_LINEAGE_MAX_DEPTH}; it bounds the rows read per rendered consent, not just the
+         * output.
+         */
+        private int lineageMaxDepth = DEFAULT_LINEAGE_MAX_DEPTH;
+    }
+
+    /**
+     * Bounds on one contract-discovery listing, bound under {@code
+     * consent-manager.contract-discovery}.
+     */
+    @Getter
+    @Setter
+    @ConfigurationProperties("contract-discovery")
+    public static class ContractDiscovery {
+
+        /**
+         * Contracts one listing reads from the Contract Service at once when none is configured.
+         */
+        public static final int DEFAULT_MAX_CONCURRENCY = 8;
+
+        /** Longest one listing waits on the Contract Service when none is configured. */
+        public static final Duration DEFAULT_MAX_DURATION = Duration.ofSeconds(30);
+
+        /**
+         * Contracts one listing reads from the Contract Service at once, bound to {@code
+         * CONTRACT_DISCOVERY_MAX_CONCURRENCY}; at least one.
+         */
+        private int maxConcurrency = DEFAULT_MAX_CONCURRENCY;
+
+        /**
+         * Longest one listing waits on the Contract Service before answering {@code 502}, bound to
+         * {@code CONTRACT_DISCOVERY_MAX_DURATION}; a single uncached fetch alone may take ~47s.
+         */
+        private Duration maxDuration = DEFAULT_MAX_DURATION;
+    }
+
+    /**
+     * What a consent receipt states about this deployment, bound under {@code
+     * consent-manager.receipts}.
+     */
+    @Getter
+    @Setter
+    @ConfigurationProperties("receipts")
+    public static class Receipts {
+
+        /** Jurisdiction a receipt names when none is configured. */
+        public static final String DEFAULT_JURISDICTION = "EU";
+
+        /**
+         * Jurisdiction a Kantara receipt names as governing the processing, bound to {@code
+         * RECEIPTS_JURISDICTION}; neither a notice nor a contract carries one.
+         */
+        private String jurisdiction = DEFAULT_JURISDICTION;
+
+        /**
+         * Private JWK (RFC 7517 JSON, EC or RSA) every receipt is signed with, bound to {@code
+         * RECEIPTS_SIGNING_KEY}; a secret. Unset fails startup unless an ephemeral key is allowed.
+         */
+        @Nullable private String signingKey;
+
+        /**
+         * Whether startup may generate a throwaway key when {@link #signingKey} is unset, bound to
+         * {@code RECEIPTS_EPHEMERAL_SIGNING_KEY}; receipts it signed stop verifying on restart.
+         */
+        private boolean ephemeralSigningKey;
+
+        /**
+         * Public-only JWKS (RFC 7517 JSON) of keys earlier receipts were signed with, bound to
+         * {@code RECEIPTS_RETIRED_VERIFICATION_KEYS}; published beside the active key so they still
+         * verify.
+         */
+        @Nullable private String retiredVerificationKeys;
     }
 }

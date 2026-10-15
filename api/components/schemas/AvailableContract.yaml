@@ -1,0 +1,75 @@
+# Schema: AvailableContract — referenced from api/openapi.yaml as
+# components.schemas.AvailableContract.
+#
+# One contract the caller takes part in, as `GET /contracts/available` and
+# `GET /contracts/available/{role}` list it: what the Contract Service says the
+# contract is, plus the side this service's records put the caller on.
+#
+# No property is `nullable`, for the reason the consent schemas state: a nullable
+# response property forces `JsonNullable` onto the generated model. A party the
+# contract's shape does not name is absent rather than null.
+type: object
+description: >
+  A contract the caller takes part in. The contract itself is read from the
+  Contract Service; `roles` is read from the privacy notices this service holds
+  for it, because those name the side each participant was published on.
+properties:
+  contractUri:
+    type: string
+    description: >
+      The contract URI as this service stores it, verbatim. The key by which a
+      privacy notice is generated or resolved for this contract.
+    example: "https://contract.example.org/contracts/c-1"
+  contractId:
+    type: string
+    description: The Contract Service's own identifier for the contract.
+    example: "c-1"
+  shape:
+    type: string
+    description: >
+      Which document the Contract Service holds: a `BILATERAL` contract between
+      one data provider and one data consumer, or an `ECOSYSTEM` contract among
+      the members of an ecosystem.
+    enum:
+      - BILATERAL
+      - ECOSYSTEM
+    example: "BILATERAL"
+  status:
+    type: string
+    description: >
+      The contract's status as the Contract Service reports it, verbatim. Absent
+      when the document states none.
+    example: "signed"
+  dataProvider:
+    type: string
+    description: >
+      The data provider a bilateral contract names. Absent on an ecosystem
+      contract, which names its parties as members instead.
+    example: "did:web:provider.example.org"
+  dataConsumer:
+    type: string
+    description: >
+      The data consumer a bilateral contract names. Absent on an ecosystem
+      contract.
+    example: "did:web:consumer.example.org"
+  ecosystem:
+    type: string
+    description: >
+      The ecosystem an ecosystem contract belongs to. Absent on a bilateral
+      contract.
+  roles:
+    type: array
+    description: >
+      The sides the caller takes in the contract: for a participant, the sides it
+      is published on; for a data subject, the sides any participant they are
+      linked to is published on. Never empty, and each side appears at most once.
+    items:
+      type: string
+      enum:
+        - PROVIDER
+        - CONSUMER
+    example: ["PROVIDER"]
+required:
+  - contractUri
+  - shape
+  - roles

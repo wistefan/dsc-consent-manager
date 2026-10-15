@@ -1278,6 +1278,32 @@ class UserServiceTest {
         }
 
         @Override
+        public Page<Consent> findByUserIdAndStatusIn(
+                UUID userId, Collection<ConsentStatus> statuses, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findByUserIdAndPrivacyNoticeId(
+                UUID userId, UUID privacyNoticeId, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findByUserIdAndStatusInAndPrivacyNoticeId(
+                UUID userId,
+                Collection<ConsentStatus> statuses,
+                UUID privacyNoticeId,
+                Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Optional<Consent> findByIdAndUserId(UUID id, UUID userId) {
+            throw unsupported();
+        }
+
+        @Override
         public List<Consent> findByPrivacyNoticeId(UUID privacyNoticeId) {
             throw unsupported();
         }
@@ -1318,6 +1344,42 @@ class UserServiceTest {
         @Override
         public List<UUID> findIdsByParticipantAndStatus(
                 UUID participantId, ConsentStatus status, int limit) {
+            throw unsupported();
+        }
+
+        @Override
+        public Page<Consent> findForParticipant(
+                UUID participantId,
+                Collection<ConsentStatus> statuses,
+                UUID userId,
+                UUID privacyNoticeId,
+                Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Optional<Consent> findForParticipantBySubjectAndNoticeAndStatus(
+                String userIdentifier,
+                UUID privacyNoticeId,
+                ConsentStatus status,
+                UUID participantId) {
+            throw unsupported();
+        }
+
+        @Override
+        public Optional<Consent> findByIdForParticipant(UUID id, UUID participantId) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findLineageForUser(
+                UUID startId, UUID parentId, UUID userId, int maxDepth) {
+            throw unsupported();
+        }
+
+        @Override
+        public List<Consent> findLineageForParticipant(
+                UUID startId, UUID parentId, UUID participantId, int maxDepth) {
             throw unsupported();
         }
 
@@ -1398,6 +1460,12 @@ class UserServiceTest {
 
         @Override
         public Page<ConsentEvent> findByConsentId(UUID consentId, Pageable pageable) {
+            throw unsupported();
+        }
+
+        @Override
+        public Optional<ConsentEvent> findFirstByConsentIdAndEventStateInOrderByOccurredAtDesc(
+                UUID consentId, Collection<ConsentEventState> eventStates) {
             throw unsupported();
         }
 

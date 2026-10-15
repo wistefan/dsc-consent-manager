@@ -258,6 +258,15 @@ class ConsentFactoryTest {
         assertThat(ConsentFactory.ADMISSIBLE_EVENTS.get(status)).contains(defaulted);
     }
 
+    @Test
+    @DisplayName("a grant is dated by giving or resuming it, never by affirming it")
+    void aGrantIsDatedByGivingOrResumingIt() {
+        assertThat(ConsentFactory.GRANTING_EVENTS)
+                .containsExactlyInAnyOrder(
+                        ConsentEventState.CONSENT_GIVEN, ConsentEventState.CONSENT_RESUMED)
+                .doesNotContain(ConsentFactory.AFFIRMATION);
+    }
+
     private RecordedConsent create(ConsentStatus target) {
         return factory.create(
                 target,

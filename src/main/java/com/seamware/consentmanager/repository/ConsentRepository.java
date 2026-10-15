@@ -2,6 +2,7 @@ package com.seamware.consentmanager.repository;
 
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentStatus;
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.annotation.Query;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
 import io.micronaut.data.model.Page;
@@ -34,6 +35,48 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
      * @return a page of consents belonging to the user
      */
     Page<Consent> findByUserId(UUID userId, Pageable pageable);
+
+    /**
+     * One page of the user's consents in any of the given statuses, filtered total included.
+     *
+     * <p>Backs the status-only filter of {@code GET /consents/me}. The page's total is counted
+     * under the same predicate as its content, so it is the number of the user's consents in these
+     * statuses rather than their whole history (bug 18.3 prevention). Called only for a non-empty
+     * status set, so no empty {@code IN ()} ever reaches Postgres.
+     */
+    Page<Consent> findByUserIdAndStatusIn(
+            UUID userId, Collection<ConsentStatus> statuses, Pageable pageable);
+
+    /**
+     * One page of the user's consents decided against the given notice, filtered total included.
+     *
+     * <p>Backs the notice-only filter of {@code GET /consents/me}, with the same filtered-total
+     * guarantee as the status variants.
+     */
+    Page<Consent> findByUserIdAndPrivacyNoticeId(
+            UUID userId, UUID privacyNoticeId, Pageable pageable);
+
+    /**
+     * One page of the user's consents matching both the status set and the notice, filtered total
+     * included.
+     *
+     * <p>Backs the combined filter of {@code GET /consents/me}; called only for a non-empty status
+     * set.
+     */
+    Page<Consent> findByUserIdAndStatusInAndPrivacyNoticeId(
+            UUID userId,
+            Collection<ConsentStatus> statuses,
+            UUID privacyNoticeId,
+            Pageable pageable);
+
+    /**
+     * One consent the given user owns, or empty when no such consent exists.
+     *
+     * <p>Ownership is a predicate rather than a check after the read, so {@code GET
+     * /consents/me/id} cannot tell an unknown id from one owned by another subject: both resolve to
+     * empty and the same {@code 404}, disclosing nothing about consents the caller does not own.
+     */
+    Optional<Consent> findByIdAndUserId(UUID id, UUID userId);
 
     /**
      * Finds all consents for the given user with the specified status.
@@ -181,4 +224,113 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
                     + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
                     + " AND status = :status ORDER BY id LIMIT :limit")
     List<UUID> findIdsByParticipantAndStatus(UUID participantId, ConsentStatus status, int limit);
+
+    /**
+     * One page of the consents the participant is a party to, filtered total included.
+     *
+     * <p>Backs {@code GET /consents}. The caller is scoped <em>in</em> the predicate - a consent
+     * naming it as neither provider nor consumer is never read - so a participant can see only
+     * consents it is party to and no window exists in which another's row is materialised. Backed
+     * by {@code idx_consents_provider_id} and {@code idx_consents_consumer_id}.
+     *
+     * <p>{@code statuses} is always non-empty: an absent {@code status} filter defaults to {@code
+     * GRANTED} in the service, so no empty {@code IN ()} reaches Postgres. {@code userId} and
+     * {@code privacyNoticeId} are each optional; a null narrows nothing, guarded with a {@code
+     * CAST(... AS uuid) IS NULL} rather than branching into a separate method per filter
+     * combination. The page's total is counted under the same predicate as its content (bug 18.3
+     * prevention). The table carries the {@code consent_} alias Micronaut appends its dynamic
+     * {@code ORDER BY} against, so the {@link Pageable}'s sort resolves on a native query.
+     */
+    @Query(
+            value =
+                    "SELECT * FROM consents consent_"
+                            + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
+                            + " AND status IN (:statuses)"
+                            + " AND (CAST(:userId AS uuid) IS NULL OR user_id = :userId)"
+                            + " AND (CAST(:privacyNoticeId AS uuid) IS NULL"
+                            + " OR privacy_notice_id = :privacyNoticeId)",
+            countQuery =
+                    "SELECT COUNT(*) FROM consents"
+                            + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
+                            + " AND status IN (:statuses)"
+                            + " AND (CAST(:userId AS uuid) IS NULL OR user_id = :userId)"
+                            + " AND (CAST(:privacyNoticeId AS uuid) IS NULL"
+                            + " OR privacy_notice_id = :privacyNoticeId)")
+    Page<Consent> findForParticipant(
+            UUID participantId,
+            Collection<ConsentStatus> statuses,
+            @Nullable UUID userId,
+            @Nullable UUID privacyNoticeId,
+            Pageable pageable);
+
+    /**
+     * The consent in the given status for the subject (by identifier) and notice that the
+     * participant is a party to, or empty.
+     *
+     * <p>Backs {@code GET /consents/check}. Called with {@code GRANTED}, where the partial unique
+     * index {@code uq_consents_granted_per_user_notice} admits at most one row per pair. The
+     * subject is resolved in the same statement, so an unknown identifier and a known subject with
+     * no grant cost the same single query and yield the same empty answer. The caller is scoped
+     * <em>in</em> the predicate - a grant naming it as neither provider nor consumer is never read.
+     */
+    @Query(
+            "SELECT c.* FROM consents c JOIN users u ON u.id = c.user_id"
+                    + " WHERE u.identifier = :userIdentifier"
+                    + " AND c.privacy_notice_id = :privacyNoticeId"
+                    + " AND c.status = :status"
+                    + " AND (c.provider_id = :participantId OR c.consumer_id = :participantId)")
+    Optional<Consent> findForParticipantBySubjectAndNoticeAndStatus(
+            String userIdentifier, UUID privacyNoticeId, ConsentStatus status, UUID participantId);
+
+    /**
+     * One consent the participant is a party to, or empty when none with that id names it.
+     *
+     * <p>Party-ship is a predicate rather than a check after the read, so {@code GET /consents/id}
+     * cannot tell an unknown id from one the caller is no party to: both resolve to empty and the
+     * same {@code 404}, disclosing nothing about consents the caller may not see.
+     */
+    @Query(
+            "SELECT * FROM consents WHERE id = :id"
+                    + " AND (provider_id = :participantId OR consumer_id = :participantId)")
+    Optional<Consent> findByIdForParticipant(UUID id, UUID participantId);
+
+    /**
+     * The chain above {@code startId} the subject owns, nearest first, in one recursive read.
+     *
+     * <p>Stops at {@code maxDepth} links, at the first record the subject does not own, and at a
+     * record already on the path (seeded with {@code startId}), so a cycle across rows ends.
+     */
+    @Query(
+            "WITH RECURSIVE chain(id, parent_consent_id, depth, path) AS ("
+                    + " SELECT c.id, c.parent_consent_id, 1, ARRAY[CAST(:startId AS uuid), c.id]"
+                    + " FROM consents c WHERE c.id = :parentId AND c.user_id = :userId"
+                    + " AND c.id <> :startId AND :maxDepth > 0"
+                    + " UNION ALL"
+                    + " SELECT p.id, p.parent_consent_id, chain.depth + 1, chain.path || p.id"
+                    + " FROM chain JOIN consents p ON p.id = chain.parent_consent_id"
+                    + " WHERE p.user_id = :userId AND chain.depth < :maxDepth"
+                    + " AND p.id <> ALL(chain.path))"
+                    + " SELECT c.* FROM chain JOIN consents c ON c.id = chain.id"
+                    + " ORDER BY chain.depth")
+    List<Consent> findLineageForUser(UUID startId, UUID parentId, UUID userId, int maxDepth);
+
+    /**
+     * The chain above {@code startId} naming the participant as a party, nearest first, in one
+     * recursive read, under the same stops as {@link #findLineageForUser}.
+     */
+    @Query(
+            "WITH RECURSIVE chain(id, parent_consent_id, depth, path) AS ("
+                    + " SELECT c.id, c.parent_consent_id, 1, ARRAY[CAST(:startId AS uuid), c.id]"
+                    + " FROM consents c WHERE c.id = :parentId"
+                    + " AND (c.provider_id = :participantId OR c.consumer_id = :participantId)"
+                    + " AND c.id <> :startId AND :maxDepth > 0"
+                    + " UNION ALL"
+                    + " SELECT p.id, p.parent_consent_id, chain.depth + 1, chain.path || p.id"
+                    + " FROM chain JOIN consents p ON p.id = chain.parent_consent_id"
+                    + " WHERE (p.provider_id = :participantId OR p.consumer_id = :participantId)"
+                    + " AND chain.depth < :maxDepth AND p.id <> ALL(chain.path))"
+                    + " SELECT c.* FROM chain JOIN consents c ON c.id = chain.id"
+                    + " ORDER BY chain.depth")
+    List<Consent> findLineageForParticipant(
+            UUID startId, UUID parentId, UUID participantId, int maxDepth);
 }

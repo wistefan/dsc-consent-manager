@@ -1,0 +1,176 @@
+# Schema: ConsentReceiptKantara — referenced from api/openapi.yaml as
+# components.schemas.ConsentReceiptKantara.
+#
+# The `format=receipt-kantara` representation: a Kantara Initiative Consent
+# Receipt, KI-CR-v1.1.0. Property names are the specification's own. Every
+# term is read off the snapshot the consent froze, never off the live notice.
+#
+# Every key KI-CR-v1.1.0 marks MUST is required here and always rendered, so a
+# receipt validates against the published schema. Where this service holds no
+# source for a MUST field, the receipt states "not stated" in that field's own
+# type and does not invent a value: `""` for controller `email` and `phone`, an
+# empty `address`, and an empty `purposeCategory`. `sensitive` / `spiCat`
+# record that the notice declared no sensitive PII category.
+# `ConsentReceiptServiceTest` pins this key set. `signature` is not a KI-CR
+# key: it is the detached JWS this service adds to both receipt formats alike.
+type: object
+description: >
+  A KI-CR-v1.1.0 consent receipt for one granted consent, rendered from the
+  terms frozen when consent was given.
+properties:
+  version:
+    type: string
+    description: The receipt specification version.
+    enum:
+      - KI-CR-v1.1.0
+  jurisdiction:
+    type: string
+    description: Jurisdiction governing the processing, configured per deployment.
+    example: "EU"
+  consentTimestamp:
+    type: integer
+    format: int64
+    description: When consent was given, in seconds since the Unix epoch.
+  collectionMethod:
+    type: string
+    description: How consent was collected.
+  consentReceiptID:
+    type: string
+    description: Identifier of this receipt; the consent's own id.
+  policyUrl:
+    type: string
+    description: >
+      The contract the notice was generated from, as frozen on the consent;
+      `urn:uuid:` and the notice's id when the consent carries none.
+  piiPrincipalId:
+    type: string
+    description: Identifier of the data subject who gave consent.
+  piiControllers:
+    type: array
+    description: The controller the notice named.
+    items:
+      type: object
+      properties:
+        piiController:
+          type: string
+          description: Name of the controller, or its identifier when unnamed.
+        contact:
+          type: string
+          description: >
+            The controller's contact as the notice stated it, else the
+            controller's name.
+        address:
+          type: object
+          description: >
+            The controller's postal address. Always empty: a registration
+            carries no postal address.
+          properties:
+            streetAddress:
+              type: string
+            addressLocality:
+              type: string
+            addressRegion:
+              type: string
+            postalCode:
+              type: string
+            addressCountry:
+              type: string
+        email:
+          type: string
+          description: Always `""`; a registration carries one `contact` and no email.
+        phone:
+          type: string
+          description: Always `""`; a registration carries one `contact` and no phone.
+        piiControllerUrl:
+          type: string
+          description: The controller's self-description document.
+      required:
+        - piiController
+        - contact
+        - address
+        - email
+        - phone
+  services:
+    type: array
+    description: The one service consented to, and its elected purposes.
+    items:
+      type: object
+      properties:
+        service:
+          type: string
+          description: Title of the notice, or the contract when untitled.
+        purposes:
+          type: array
+          items:
+            type: object
+            properties:
+              purpose:
+                type: string
+              purposeCategory:
+                type: array
+                description: Always empty; a notice states purposes without a category.
+                items:
+                  type: string
+              consentType:
+                type: string
+                description: Always `EXPLICIT`; only the data subject grants.
+              piiCategory:
+                type: array
+                description: The data categories the notice named; empty when it named none.
+                items:
+                  type: string
+              termination:
+                type: string
+                description: >
+                  How consent may be withdrawn, as the notice stated it, else
+                  this service's own revocation route.
+              thirdPartyDisclosure:
+                type: boolean
+              thirdPartyName:
+                type: string
+                description: >
+                  The recipients the notice declared, each by name else
+                  identifier, comma-separated. Absent when it declared none.
+                  `thirdPartyDisclosure` is true exactly when present.
+            required:
+              - purpose
+              - purposeCategory
+              - consentType
+              - piiCategory
+              - termination
+              - thirdPartyDisclosure
+      required:
+        - service
+        - purposes
+  sensitive:
+    type: boolean
+    description: >
+      Whether the notice declared sensitive PII. Always false: a notice
+      declares no sensitive category.
+  spiCat:
+    type: array
+    description: The sensitive PII categories the notice declared; always empty.
+    items:
+      type: string
+  signature:
+    type: string
+    description: >
+      Detached compact JWS (RFC 7515 Appendix F, `header..signature`) over the
+      RFC 8785 (JCS) canonical form of this receipt with `signature` itself
+      removed. Verify it against the key `GET /.well-known/jwks.json` publishes
+      under the header's `kid`. An ECDSA signature is randomized, so two reads
+      of one receipt carry different signatures over the same content.
+    example: "eyJraWQiOiJyZWNlaXB0cyIsImFsZyI6IkVTMjU2In0..MEUCIQ"
+required:
+  - version
+  - jurisdiction
+  - consentTimestamp
+  - collectionMethod
+  - consentReceiptID
+  - policyUrl
+  - piiPrincipalId
+  - piiControllers
+  - services
+  - sensitive
+  - spiCat
+  - signature

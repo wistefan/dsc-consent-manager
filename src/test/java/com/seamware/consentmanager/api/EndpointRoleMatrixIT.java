@@ -108,6 +108,13 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_CONSENT_REQUESTS = PATH_CONSENTS + "/requests";
 
+    private static final String PATH_CONTRACTS_AVAILABLE = "/contracts/available";
+
+    private static final String PATH_JWKS = "/.well-known/jwks.json";
+
+    /** A side contract discovery accepts, so the role row is decided by role and not by input. */
+    private static final String PROVIDER_ROLE = "provider";
+
     /** A decision the grant row states, so the body passes validation and the route is reached. */
     private static final String GRANTED_DECISION = "GRANTED";
 
@@ -368,7 +375,31 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 () ->
                         HttpRequest.POST(
                                 PATH_CONSENTS + "/" + ABSENT_CONSENT + "/resume",
-                                Map.of("userIdentifier", LINKED_USER)));
+                                Map.of("userIdentifier", LINKED_USER))),
+        LIST_MY_CONSENTS(
+                "get " + PATH_CONSENTS + "/me", () -> HttpRequest.GET(PATH_CONSENTS + "/me")),
+        GET_MY_CONSENT(
+                "get " + PATH_CONSENTS + "/me/{id}",
+                () -> HttpRequest.GET(PATH_CONSENTS + "/me/" + ABSENT_CONSENT)),
+        LIST_CONSENTS("get " + PATH_CONSENTS, () -> HttpRequest.GET(PATH_CONSENTS)),
+        GET_CONSENT(
+                "get " + PATH_CONSENTS + "/{id}",
+                () -> HttpRequest.GET(PATH_CONSENTS + "/" + ABSENT_CONSENT)),
+        CHECK_CONSENT(
+                "get " + PATH_CONSENTS + "/check",
+                () ->
+                        HttpRequest.GET(
+                                PATH_CONSENTS
+                                        + "/check?userIdentifier="
+                                        + LINKED_USER
+                                        + "&privacyNoticeId="
+                                        + ABSENT_NOTICE)),
+        LIST_MY_AVAILABLE_CONTRACTS(
+                "get " + PATH_CONTRACTS_AVAILABLE, () -> HttpRequest.GET(PATH_CONTRACTS_AVAILABLE)),
+        LIST_AVAILABLE_CONTRACTS(
+                "get " + PATH_CONTRACTS_AVAILABLE + "/{role}",
+                () -> HttpRequest.GET(PATH_CONTRACTS_AVAILABLE + "/" + PROVIDER_ROLE)),
+        RECEIPT_SIGNING_KEYS("get " + PATH_JWKS, () -> HttpRequest.GET(PATH_JWKS));
 
         private final String specification;
         private final Supplier<MutableHttpRequest<?>> factory;
@@ -453,8 +484,9 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
      *
      * <p>A caller holding no role of this service is {@code 403} rather than {@code 401}: its
      * signature was good and its issuer is trusted, so asking it to authenticate again would be a
-     * lie. {@code /api-status} stays {@code 200} throughout, including for a caller that names
-     * nobody, because a reachability check must not depend on a credential.
+     * lie. {@code /api-status} and the receipt JWKS stay {@code 200} throughout, including for a
+     * caller that names nobody: neither a reachability check nor verifying a receipt may depend on
+     * a credential.
      */
     static Stream<Arguments> roleMatrix() {
         HttpStatus ok = HttpStatus.OK;
@@ -626,7 +658,57 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                 denied,
                                 unknownConsent,
                                 denied,
-                                challenged))
+                                challenged),
+                        // The query side is the subject's alone: the seeded USER has no consent
+                        // yet, so the listing answers an empty page and the id lookup an absent
+                        // consent - the same 404 a consent owned by somebody else earns. Every
+                        // other role is refused outright. ConsentQueryIT owns the populated page.
+                        row(Endpoint.LIST_MY_CONSENTS, ok, denied, denied, denied, challenged),
+                        row(
+                                Endpoint.GET_MY_CONSENT,
+                                unknownConsent,
+                                denied,
+                                denied,
+                                denied,
+                                challenged),
+                        // The participant query side is the participant's alone: the seeded caller
+                        // is party to no consent yet, so the listing answers an empty page and the
+                        // id lookup an absent consent - the same 404 a consent it is no party to
+                        // earns. Every other role is refused outright. ConsentParticipantQueryIT
+                        // owns the populated page and the scoping.
+                        row(Endpoint.LIST_CONSENTS, denied, ok, denied, denied, challenged),
+                        row(
+                                Endpoint.GET_CONSENT,
+                                denied,
+                                unknownConsent,
+                                denied,
+                                denied,
+                                challenged),
+                        // The validity check is the participant's alone. The seeded subject exists
+                        // but holds no grant the caller is party to, so the one caller this route
+                        // admits is answered 200 with valid:false - the same shape an unknown
+                        // subject earns - while every other role is refused. ConsentValidityIT owns
+                        // the true answer and the no-disclosure proof.
+                        row(Endpoint.CHECK_CONSENT, denied, ok, denied, denied, challenged),
+                        // Contract discovery reads its candidates from the notices held here, and
+                        // the fixture seeds none for either caller, so the one role each route
+                        // admits is answered an empty list without the Contract Service being
+                        // asked. ContractDiscoveryIT owns the populated list and the 502.
+                        row(
+                                Endpoint.LIST_MY_AVAILABLE_CONTRACTS,
+                                ok,
+                                denied,
+                                denied,
+                                denied,
+                                challenged),
+                        row(
+                                Endpoint.LIST_AVAILABLE_CONTRACTS,
+                                denied,
+                                ok,
+                                denied,
+                                denied,
+                                challenged),
+                        row(Endpoint.RECEIPT_SIGNING_KEYS, ok, ok, ok, ok, ok))
                 .flatMap(row -> row);
     }
 

@@ -74,6 +74,9 @@ class ManagementEndpointSecurityIT {
     /** The one real API operation, declared {@code security: []} in the specification. */
     private static final String API_STATUS_PATH = "/api-status";
 
+    /** Well-known JWKS consent receipts verify against, declared {@code security: []}. */
+    private static final String RECEIPT_JWKS_PATH = "/.well-known/jwks.json";
+
     /** Metrics endpoint, protected only by its {@code intercept-url-map} entry in dev. */
     private static final String METRICS_PATH = "/metrics";
 
@@ -298,6 +301,19 @@ class ManagementEndpointSecurityIT {
                         "the generated controller carries @Secured(IS_ANONYMOUS) for the"
                                 + " specification's `security: []`, so the reachability probe stays"
                                 + " open once the filter is enabled"),
+                Arguments.of(
+                        API,
+                        RECEIPT_JWKS_PATH,
+                        HttpStatus.OK,
+                        "the receipt JWKS sits at the origin root RFC 8615 defines, outside the"
+                                + " API prefix, and stays anonymously readable"),
+                Arguments.of(
+                        API,
+                        API_CONTEXT_PATH + RECEIPT_JWKS_PATH,
+                        HttpStatus.UNAUTHORIZED,
+                        "@OriginRoot takes the receipt JWKS out of the API prefix rather than"
+                                + " serving it in both places, so under the prefix it is an"
+                                + " unrouted path the security filter refuses anonymously"),
                 Arguments.of(
                         MANAGEMENT,
                         API_CONTEXT_PATH + METRICS_PATH,

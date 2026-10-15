@@ -1,0 +1,15 @@
+{{!
+  Overrides the stock template only to emit the type-info annotations when a discriminator is
+  declared. Without one the stock template writes @JsonTypeInfo(property = ""), which
+  micronaut-serde cannot serialize; a discriminator-less oneOf (ConsentRepresentation) is
+  serialized by its runtime type instead.
+}}
+{{#additionalOneOfTypeAnnotations}}
+{{{.}}}
+{{/additionalOneOfTypeAnnotations}}
+{{>common/generatedAnnotation}}{{#discriminator}}{{>common/model/typeInfoAnnotation}}{{/discriminator}}{{>common/model/xmlAnnotation}}
+public interface {{classname}} {{#vendorExtensions.x-implements}}{{#-first}}extends {{{.}}}{{/-first}}{{^-first}}, {{{.}}}{{/-first}}{{/vendorExtensions.x-implements}} {
+    {{#discriminator}}
+    public {{propertyType}} {{propertyGetter}}();
+    {{/discriminator}}
+}

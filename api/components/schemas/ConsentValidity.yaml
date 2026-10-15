@@ -1,0 +1,78 @@
+# Schema: ConsentValidity — referenced from api/openapi.yaml as
+# components.schemas.ConsentValidity.
+#
+# The answer `GET /consents/check` returns: a single yes/no about whether a
+# subject's consent is in force for a notice right now, purpose-built so a
+# participant can decide whether it may process before it acts. It is not a
+# consent representation — it carries only what the decision turns on — so it is
+# a read model of its own rather than a slice of `ConsentResponse`.
+#
+# No property is `nullable`, for the reason the consent schemas state: a nullable
+# response property forces `JsonNullable` onto the generated model, and absence
+# already says everything an explicit null would. Only `valid` and `checkedAt`
+# are always present. The rest describe a grant that was found and are absent
+# when none was — which is deliberately the same shape whether the subject is
+# unknown or merely holds no consent, so the answer never discloses which.
+type: object
+description: >
+  Whether a subject's consent is in force for one privacy notice at the moment
+  it was checked. `valid` is true only when a `GRANTED` consent exists that the
+  calling participant is a party to and, where a `purpose` was named, that the
+  consent's frozen scope covers it. Every other case is `valid: false` with a
+  `reason`, and a case where no grant was found carries nothing further —
+  disclosing nothing about whether the subject exists.
+properties:
+  valid:
+    type: boolean
+    description: >
+      Whether data may be processed for this subject under this notice right now.
+    example: true
+  consentId:
+    type: string
+    format: uuid
+    description: >
+      The granted consent the answer rests on. Absent when no grant was found.
+    example: "018f3a2b-7c4d-7e8f-9a0b-1c2d3e4f5a6b"
+  status:
+    type: string
+    description: >
+      The found consent's lifecycle state. Always `GRANTED` when present, since
+      only a grant is consulted; absent when no grant was found. The full set is
+      published so the field stays stable if the check ever reports a non-grant.
+    enum:
+      - PENDING
+      - DRAFT
+      - GRANTED
+      - REVOKED
+      - EXPIRED
+      - TERMINATED
+      - REFUSED
+    example: "GRANTED"
+  grantedAt:
+    type: string
+    format: date-time
+    description: >
+      When the found consent last became the decision it now records. Absent when
+      no grant was found.
+  purposes:
+    type: array
+    description: >
+      The purposes the found consent was decided against, as the notice stated
+      them when it was created. Absent when no grant was found or the consent
+      named none.
+    items:
+      type: string
+    example: ["Produce aggregated mobility insights for the city of Example."]
+  checkedAt:
+    type: string
+    format: date-time
+    description: When the check was made, so a cached answer carries its own age.
+  reason:
+    type: string
+    description: >
+      Why the answer is `valid: false`, in human-readable form. Absent when
+      `valid` is true.
+    example: "No consent is in force for this subject and notice."
+required:
+  - valid
+  - checkedAt

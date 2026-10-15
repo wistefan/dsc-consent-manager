@@ -38,6 +38,7 @@
         <testcontainers-keycloak.version>3.6.0</testcontainers-keycloak.version>
         <wiremock.version>3.10.0</wiremock.version>
         <lombok.version>1.18.48</lombok.version>
+        <json-canonicalization.version>1.1</json-canonicalization.version>
 
         <!-- OpenAPI Generator and generated-code dependencies -->
         <openapi.generator.version>7.12.0</openapi.generator.version>
@@ -233,6 +234,16 @@
             <scope>compile</scope>
         </dependency>
 
+        <!--
+            RFC 8785 (JCS) canonicalization of the receipt bytes a detached JWS signs, so a
+            verifier holding only the JSON it was served can recompute the exact payload.
+        -->
+        <dependency>
+            <groupId>io.github.erdtman</groupId>
+            <artifactId>java-json-canonicalization</artifactId>
+            <version>${json-canonicalization.version}</version>
+        </dependency>
+
         <!-- Micronaut Management Endpoints -->
         <dependency>
             <groupId>io.micronaut</groupId>
@@ -417,16 +428,28 @@
                             <apiPackage>com.seamware.consentmanager.api.generated</apiPackage>
                             <modelPackage>com.seamware.consentmanager.api.generated.model</modelPackage>
                             <!--
-                                Overrides only server/controller.mustache; every other template,
-                                and every partial it references, still resolves against the
-                                generator's embedded java-micronaut templates. The override exists
-                                so a routed method can declare the typed principal parameter that
-                                PrincipalResolutionFilter and PrincipalArgumentBinder both require
-                                — see the comment at the head of the template.
+                                Overrides only server/controller.mustache,
+                                common/model/oneof_interface.mustache and
+                                common/model/modelInnerEnum.mustache; every other template, and
+                                every partial they reference, still resolves against the
+                                generator's embedded java-micronaut templates. The controller
+                                override exists so a routed method can declare the typed principal
+                                parameter that PrincipalResolutionFilter and PrincipalArgumentBinder
+                                both require; the oneOf override drops the empty-property
+                                @JsonTypeInfo serde cannot write; the enum override makes serde
+                                write an enum's value rather than its constant name - see the head
+                                of each template.
                             -->
                             <templateDirectory>${project.basedir}/api/templates</templateDirectory>
                             <configOptions>
                                 <useBeanValidation>true</useBeanValidation>
+                                <!--
+                                    A oneOf becomes an interface its members implement, so one
+                                    handler can return any representation `format` selects
+                                    (ConsentRepresentation). Without it the members are merged into
+                                    one model with the union of their properties.
+                                -->
+                                <useOneOfInterfaces>true</useOneOfInterfaces>
                                 <useJakartaEe>true</useJakartaEe>
                                 <serializationLibrary>micronaut_serde_jackson</serializationLibrary>
                                 <generateControllerFromExamples>false</generateControllerFromExamples>

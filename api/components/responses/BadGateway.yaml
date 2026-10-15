@@ -1,0 +1,19 @@
+# Response: 502 Bad Gateway — referenced from api/openapi.yaml as
+# components.responses.BadGateway.
+#
+# Referenced by the operations whose answer depends on a service this one calls,
+# currently the contract discovery operations.
+description: >
+  A service this operation depends on failed or could not be reached, so no
+  answer could be assembled. Nothing partial is returned alongside it: an
+  incomplete list would read as a complete one.
+content:
+  application/problem+json:
+    schema:
+      $ref: "../schemas/ProblemDetail.yaml"
+    example:
+      type: "https://consent-manager.example/problems/upstream-service"
+      title: "Bad Gateway"
+      status: 502
+      detail: "Contract Service at https://contract.example.org failed for contract c-1"
+      instance: "/v1/contracts/available"

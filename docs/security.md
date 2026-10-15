@@ -84,6 +84,7 @@ Implemented operations:
 | Operation | Roles | Controller |
 |---|---|---|
 | `GET /api-status` | anonymous | `ApiStatusController` |
+| `GET /.well-known/jwks.json` (origin root, outside `API_PREFIX`) | anonymous | `ReceiptSigningController` |
 | `POST /users/register` | `USER` | `UserController` |
 | `GET /users/me` | `USER` | `UserController` |
 | `DELETE /users/me` | `USER` | `UserController` |
@@ -104,6 +105,18 @@ Implemented operations:
 | `GET /privacy-notices/{id}` | `USER`, `PARTICIPANT`, `CATALOG` | `PrivacyNoticeController` |
 | `POST /consents` | `USER` | `ConsentController` |
 | `POST /consents/requests` | `PARTICIPANT` | `ConsentRequestController` |
+| `POST /consents/{id}/revoke` | `USER` | `ConsentLifecycleController` |
+| `POST /consents/{id}/refuse` | `USER` | `ConsentLifecycleController` |
+| `POST /consents/{id}/terminate` | `PARTICIPANT` | `ConsentLifecycleController` |
+| `POST /consents/{id}/re-confirm` | `USER` | `ConsentLifecycleController` |
+| `POST /consents/{id}/resume` | `USER`, `CATALOG` | `ConsentLifecycleController` |
+| `GET /consents/me` | `USER` | `ConsentQueryController` |
+| `GET /consents/me/{id}` | `USER` | `ConsentQueryController` |
+| `GET /consents` | `PARTICIPANT` | `ConsentQueryController` |
+| `GET /consents/{id}` | `PARTICIPANT` | `ConsentQueryController` |
+| `GET /consents/check` | `PARTICIPANT` | `ConsentQueryController` |
+| `GET /contracts/available` | `USER` | `ContractDiscoveryController` |
+| `GET /contracts/available/{role}` | `PARTICIPANT` | `ContractDiscoveryController` |
 
 `EndpointRoleMatrixIT` answers each of these with every role, with a token holding no role of this
 service and with no token at all, against a real Keycloak; it fails when an operation of the
@@ -171,6 +184,16 @@ catalog cannot learn whose consent an identifier addresses — see
 owner or the wrong party is refused is pinned by the lifecycle integration tests, because no role
 matrix can express it.
 
+### A consent read is scoped in the query, never after it
+
+Every read on the consent query routes puts the caller into the `WHERE` clause. A subject reads
+`user_id = :subject`, and a participant reads `provider_id = :caller OR consumer_id = :caller`, on
+every lineage hop too. A record outside that scope is never loaded. A `userIdentifier` the caller
+has no consent for yields an empty page rather than a `403`. An id outside the scope is a `404`
+identical to an unknown one. `GET /consents/check` resolves through `requireActive()`, answers an
+unknown subject and a subject with no grant identically, and is sent `Cache-Control: no-store`. See
+[ADR 0013](adr/0013-the-query-side-scopes-by-predicate-and-signs-what-it-attests.md).
+
 ## Participant onboarding
 
 A participant is onboarded by its identity provider, not by this service. The provider's operator
@@ -199,11 +222,22 @@ that is its only role, and authenticates but answers `403` on participant-scoped
 also grants another role whose identifier it does carry — the identifier is required of the *acting*
 role, see [ADR 0006](adr/0006-identifier-claim-is-required-of-the-acting-role.md).
 
-**No JWKS endpoint is served here yet.** The Consent Manager is a resource server: it verifies
-tokens against each issuer's published key set and holds no signing key of its own today. Receipt
-signing and the key set arrive with TICKET-011, which owns `GET /.well-known/jwks.json`
-(US-PM-008) end-to-end — the route and the key material both — so nothing should expect to fetch
-keys from this module in the meantime.
+**Receipt signing is the one key this service holds.** It issues no tokens, but every consent
+receipt it renders carries a detached JWS (`signature`) over the RFC 8785 canonical form of the
+receipt's other members, made by `ReceiptSigner` with the private JWK in `RECEIPTS_SIGNING_KEY`.
+Its public half is published anonymously under the key's `kid`, so anyone holding a receipt can
+verify it without a credential, at `https://<host>/.well-known/jwks.json`: the origin root RFC 8615
+defines, **not** under `API_PREFIX`. `@OriginRoot` exempts `ReceiptSigningController` from the
+context path; the security filter and `PrincipalResolutionFilter` are context-path-relative and do
+not see that route, which is why only a public route may carry the marker. The JWS header names only
+`alg` and `kid` — no `jku` — so a verifier fetches the JWKS from the deployment it obtained the
+receipt from, or one it otherwise trusts, rather than from a URL the signed object chose. Startup
+fails without a usable private key unless `RECEIPTS_EPHEMERAL_SIGNING_KEY=true` permits a throwaway
+one (dev and test only), and receipts signed by such a key stop verifying on restart. Rotation keeps earlier receipts verifiable: the old
+key's public entry moves to `RECEIPTS_RETIRED_VERIFICATION_KEYS`, which the JWKS publishes after the
+active key; a private member, an unsupported key type or a repeated `kid` there fails startup. Why the
+JWS is detached and the header carries no `jku` is recorded in
+[ADR 0013](adr/0013-the-query-side-scopes-by-predicate-and-signs-what-it-attests.md).
 
 ## Erasure verification
 

@@ -440,6 +440,56 @@ consent-manager:
     # caller's working request into a 400.
     page-max-size: ${PARTICIPANTS_PAGE_MAX_SIZE:100}
 
+  consents:
+    # Records GET /consents/me returns when the caller names no size. Not written in the
+    # specification, which could not track a value configured per deployment; the
+    # response reports the size it actually applied.
+    page-default-size: ${CONSENTS_PAGE_DEFAULT_SIZE:20}
+
+    # Most records one consent page may carry. A larger requested size is clamped to this
+    # and answered 200, never refused, so changing the ceiling cannot turn a caller's
+    # working request into a 400.
+    page-max-size: ${CONSENTS_PAGE_MAX_SIZE:100}
+
+    # Most superseded records one includeLineage walk reads and renders per consent. The
+    # walk also stops on a record it has already visited, so a cycle across rows ends
+    # rather than hanging; this caps the cost of a long but acyclic history. Each chain is
+    # one recursive query, so a GET /consents/me?includeLineage=true page costs one query
+    # per entry and reads at most page-max-size x lineage-max-depth superseded rows.
+    lineage-max-depth: ${CONSENTS_LINEAGE_MAX_DEPTH:20}
+
+  contract-discovery:
+    # Contracts one GET /contracts/available listing reads from the Contract Service at
+    # once. The candidates are every contract this service holds a notice for, so a
+    # serial read would hold the request for one full fetch bound per contract; this
+    # caps the fan-out an upstream sees from a single listing.
+    max-concurrency: ${CONTRACT_DISCOVERY_MAX_CONCURRENCY:8}
+
+    # Longest one listing waits on the Contract Service before it answers 502 with no
+    # partial list. Shorter than one worst-case fetch (see contract-service above) on
+    # purpose: an upstream that slow is answered as unavailable rather than waited out.
+    max-duration: ${CONTRACT_DISCOVERY_MAX_DURATION:30s}
+
+  receipts:
+    # Jurisdiction a Kantara consent receipt (format=receipt-kantara) names as governing
+    # the processing. KI-CR-v1.1.0 requires one and neither a notice nor a contract
+    # carries it, so it is stated per deployment.
+    jurisdiction: ${RECEIPTS_JURISDICTION:EU}
+    # Private JSON Web Key (RFC 7517, one line of JSON, EC P-256/P-384/P-521 or RSA)
+    # every receipt is signed with; a secret. Its public half is published at the
+    # origin root, GET /.well-known/jwks.json (RFC 8615, outside API_PREFIX), under
+    # the key's `kid` (or, absent one, its RFC 7638 thumbprint).
+    signing-key: ${RECEIPTS_SIGNING_KEY:}
+    # With no signing key, generate a throwaway one at startup instead of failing.
+    # Receipts it signs stop verifying on restart, so only dev and test enable it.
+    ephemeral-signing-key: ${RECEIPTS_EPHEMERAL_SIGNING_KEY:false}
+    # Public-only JWKS (RFC 7517 `{"keys":[...]}`, one line) of the keys earlier
+    # receipts were signed with, published after the active key so receipts saved
+    # before a rotation keep verifying. On rotation, move the old key's public JWKS
+    # entry here. Private members, unsupported key types and repeated `kid`s fail
+    # startup.
+    retired-verification-keys: ${RECEIPTS_RETIRED_VERIFICATION_KEYS:}
+
   erasure:
     # Key of the salted HMAC an erased record keeps instead of its identifier, so
     # that the operator - and nobody else, since the key is not in the database -
