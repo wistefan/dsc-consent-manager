@@ -97,8 +97,8 @@ Files:
   rendered by `toString`.
 - `notification/SmtpConfiguredCondition.java` and `notification/SmtpNotConfiguredCondition.java`:
   two `io.micronaut.context.condition.Condition`s sharing one package-private predicate, true when
-  `smtp.host` resolves to a non-blank string. Every SMTP bean (`SmtpSessionFactory`, the
-  `fromAddress` validator, Step 2's `SmtpUserNotificationService`) carries
+  `smtp.host` resolves to a non-blank string. Every SMTP bean (`SmtpSessionFactory`,
+  `SmtpConfigurationValidator`, Step 2's `SmtpUserNotificationService`) carries
   `@Requires(condition = SmtpConfiguredCondition.class)`, and the logging implementation carries
   `@Requires(condition = SmtpNotConfiguredCondition.class)`. The two are exact complements, so
   exactly one `UserNotificationService` binds whatever the environment holds.
@@ -110,10 +110,17 @@ Files:
   - **Always** set `mail.smtp.ssl.checkserveridentity=true`. Leave `mail.smtp.ssl.trust` unset.
   - Set the three timeouts from named constants (connect 5 s, read 10 s, write 10 s).
   - When `insecureTrustAllCertificates` is true, set `ssl.trust=*` and
-    `checkserveridentity=false`, and log a WARN once at startup naming the property.
+    `checkserveridentity=false`. The factory does **not** log the warning: the `Session` is a
+    lazy singleton that is first built on the first send, possibly hours after boot or never.
+- `notification/SmtpConfigurationValidator.java` (`@Context`,
+  `@Requires(condition = SmtpConfiguredCondition.class)`, `@PostConstruct`, in the style of
+  `IdentityProviderRegistryValidator`). Because it is `@Context`, it runs eagerly while the
+  application context starts, so both of these happen at startup whether or not mail is sent:
   - Fail startup when `fromAddress` is blank while SMTP is configured. The message names the
-    `SMTP_FROM_ADDRESS` variable. Use a `@Context`/`@PostConstruct` validator in the style of
-    `IdentityProviderRegistryValidator`.
+    `SMTP_FROM_ADDRESS` variable.
+  - When `insecureTrustAllCertificates` is true, log one WARN naming
+    `SMTP_INSECURE_TRUST_ALL_CERTIFICATES` and saying that server certificates and host names
+    are not verified (AC 6).
   - Verify how the `micronaut-email-javamail` module (version from `micronaut-parent` 5.2.0)
     obtains its session. If it ships its own `SessionProvider`, use `@Replaces`, so there is
     exactly one session source and it is not configured under `javamail.*`.
@@ -150,8 +157,11 @@ Tests (`src/test/java/com/seamware/consentmanager/notification/`):
   `application-test.yml` are both loaded. This covers AC 7 and AC 8.
 - `SmtpSessionFactoryTest` (`ApplicationContext.run(Map)` with `smtp.host=localhost`):
   - By default, `checkserveridentity=true`, `ssl.trust` is absent and STARTTLS is required.
-  - With the opt-out set, `trust=*` and a WARN naming the property is captured. Use a Logback
-    `ListAppender`, as `KeyMaterialLeakIT` does.
+  - With the opt-out set, `trust=*` on the `Session`.
+  - With the opt-out set, a WARN naming the property is captured **right after
+    `ApplicationContext.run(...)` returns and before any `Session` bean is fetched**, which proves
+    it is logged at startup and not on first send. Use a Logback `ListAppender`, as
+    `KeyMaterialLeakIT` does. Without the opt-out, no such WARN is captured.
   - Startup fails without `from-address`.
   Parameterize where the cases share a shape. This covers AC 6.
 - Extend `ConsentManagerConfigurationTest` for `notifications.client-url`.
@@ -207,6 +217,20 @@ Files:
 - Put the model building (display name fallback, title fallback, client URL, timestamp
   formatting) in one small package-private helper, e.g. `NotificationModel`, so the logging
   implementation can log the same kind/ids without duplicating it.
+- **Neutralise links in interpolated values.** Escaping stops markup, but mail clients autolink
+  any URL-shaped text in both the plain-text and the HTML part. The participant's legal name
+  (self-registration, PATCH), the snapshot title and the user's name are all set by parties
+  other than this service, so they could carry a clickable phishing link in a mail sent from the
+  service's own sender. `NotificationModel` passes each of these values through one
+  package-private `LinkNeutralizer` before they reach either template:
+  - a URI scheme separator (`<scheme>://`, matched case-insensitively for any scheme) becomes
+    `<scheme>[:]//`;
+  - `mailto:` becomes `mailto[:]`;
+  - a leading `www.` on a word becomes `www[.]`.
+  The configured client URL is the only value that is not neutralised, because it comes from
+  deployment config. A bare domain without a scheme or `www.` (e.g. `acme.io GmbH`) is left as
+  is, because breaking it would mangle legitimate legal names. That residual risk is accepted
+  and recorded in ADR-0015. The patterns are named constants.
 
 Tests:
 - `EmailTemplateRenderingTest`, parameterized over {requested, terminated} × {html, txt}:
@@ -215,6 +239,10 @@ Tests:
     (`&lt;script&gt;`) in HTML and verbatim in text, and no raw `<script` or `<a href="x"` is
     present in the HTML part (AC 10).
   - Null title and null name fall back.
+  - A legal name, a title and a first name containing `https://evil.example/verify`,
+    `HTTP://evil.example`, `mailto:x@evil.example` and `www.evil.example` render in both parts
+    with no `://`, `mailto:` or `www.` sequence left that a client would autolink. The configured
+    client URL still renders intact.
   - The requested template has no link when `clientUrl` is null.
   - The terminated template carries the neutral wording above and none of "you granted",
     "revoked", or any other phrase that assumes the subject had consented. Pin the wording with
@@ -229,7 +257,10 @@ Tests:
   - A user with no email receives nothing and nothing throws. To prove "nothing" without a
     sleep, follow it with an addressable sentinel call and assert that only the sentinel arrives.
   - Every received body is scanned for absence of `token`, `verify`, `access_token`, `/consents/`,
-    the consent id and any URL other than the configured client URL (AC 4).
+    the consent id and any URL other than the configured client URL (AC 4). The scan runs over
+    the benign fixture **and** over a hostile one whose participant legal name is
+    `ACME - confirm at https://evil.example/verify` and whose notice title carries a URL, so it
+    proves the delivered mail contains no URL the service did not configure itself.
 - Send failure: point `smtp.port` at a closed localhost port. Both methods return normally, and
   an ERROR whose logger name is `SmtpUserNotificationService` is captured, polled with
   `support/Await` because it is logged on the sender thread (AC 5, AC 11).
@@ -318,14 +349,17 @@ Files:
     or at shutdown, and the SMTP timeout values (5 s / 10 s / 10 s) that bound a sender thread;
   - the neutral consent-terminated wording, because `terminate` also closes unanswered requests;
   - addressability (never derive an address from `identifier`);
-  - TLS on by default and the named opt-out;
+  - TLS on by default and the named opt-out, whose warning is logged at startup by the eager
+    validator rather than on first send;
   - escaping and the minimal template content;
+  - neutralising URL-shaped text in participant- and user-supplied values, and the accepted
+    residual risk of bare domains;
   - the original bugs 13.3, 13.7, 13.8, 13.9 and 18.6, and why they cannot recur.
 - `docs/adr/0011-...md`: add a short note under Consequences saying that TICKET-013's subject
   notification is delivered by ADR-0015 on a best-effort footing and that TICKET-020 still owns
   guaranteed participant notification. Do not rewrite the accepted decision.
 - `docs/security.md`: a short "Outbound email" paragraph covering no tokens or links that act,
-  TLS verification, and escaping.
+  TLS verification, escaping, and link neutralisation in interpolated values.
 - `AGENTS.md`:
   - list the final `notification/` contents and `views/email/` under Project Structure;
   - mention ADR-0015 and correct the ADR range;
