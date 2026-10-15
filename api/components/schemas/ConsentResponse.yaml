@@ -4,8 +4,13 @@
 # The shape the query side returns for `format=full`: the same facts the grant
 # response (`Consent`) carries, published as a read model of its own so the two
 # can diverge without one dragging the other along — the query representation
-# gains a lineage chain in a later step that the write response has no business
-# carrying.
+# carries a lineage chain that the write response has no business carrying.
+#
+# `lineage.items` is written inline, with a `title` naming the generated model,
+# because a `$ref` under `items` from this file — to a sibling file or back into
+# openapi.yaml — degrades to `List<Object>`; the inline, titled form generates
+# `List<ConsentLineageLink>`. A link is deliberately narrower than this record:
+# every link of one chain shares its subject and notice.
 #
 # No property is `nullable`, for the reason `Consent` states: a nullable
 # response property forces `JsonNullable` onto the generated model, and absence
@@ -107,6 +112,66 @@ properties:
     type: string
     format: date-time
     description: When this record last changed state.
+  lineage:
+    type: array
+    description: >
+      The records this one supersedes, newest first: its parent, then that
+      record's parent, and so on. Present only when `includeLineage=true` was
+      asked for, and then empty for a chain's first record. The walk stops at
+      the deployment's configured depth, at a record the caller may not read,
+      and at a record it has already visited, so a chain is never longer than
+      the configured depth and never repeats a link.
+    items:
+      title: ConsentLineageLink
+      type: object
+      description: >
+        One earlier record in the chain a consent supersedes: the decision it replaced,
+        that decision's own predecessor, and so on.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Identifier of the superseded consent.
+          example: "018f3a2b-0e6f-7b2c-9d3e-4f5a6b7c8d9e"
+        parentConsentId:
+          type: string
+          format: uuid
+          description: >
+            The consent this link in turn supersedes. Absent on the chain's first
+            record.
+          example: "018f3a2b-0d5e-7a1b-8c2d-3e4f5a6b7c8d"
+        status:
+          type: string
+          description: State the superseded record holds now.
+          enum:
+            - PENDING
+            - DRAFT
+            - GRANTED
+            - REVOKED
+            - EXPIRED
+            - TERMINATED
+            - REFUSED
+          example: "REVOKED"
+        consented:
+          type: boolean
+          description: >
+            Whether data may be processed under this record, derived from `status` as
+            on the consent itself.
+          example: false
+        createdAt:
+          type: string
+          format: date-time
+          description: When the superseded record was created.
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the superseded record last changed state.
+      required:
+        - id
+        - status
+        - consented
+        - createdAt
+        - updatedAt
 required:
   - id
   - privacyNoticeId

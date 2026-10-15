@@ -79,7 +79,14 @@ class ConsentManagerConfigurationTest {
                         23,
                         context ->
                                 bean(context, ConsentManagerConfiguration.Participants.class)
-                                        .getPageMaxSize()));
+                                        .getPageMaxSize()),
+                setting(
+                        "consent-manager.consents.lineage-max-depth",
+                        "7",
+                        7,
+                        context ->
+                                bean(context, ConsentManagerConfiguration.Consents.class)
+                                        .getLineageMaxDepth()));
     }
 
     /** The three settings application.yml forwards into the keys Micronaut's client reads. */

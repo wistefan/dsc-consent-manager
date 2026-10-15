@@ -48,4 +48,24 @@ class ConsentFormatTest {
         assertThatThrownBy(() -> ConsentFormat.requireListable(value))
                 .isInstanceOf(BadRequestException.class);
     }
+
+    @ParameterizedTest
+    @MethodSource("values")
+    void selectsAnyFormatWithoutLineage(String value, ConsentFormat expected) {
+        assertThat(ConsentFormat.of(value, false)).isEqualTo(expected);
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = "full")
+    void admitsLineageOnFull(String value) {
+        assertThat(ConsentFormat.of(value, true)).isEqualTo(ConsentFormat.FULL);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"receipt", "receipt-kantara"})
+    void refusesLineageOnAReceipt(String value) {
+        assertThatThrownBy(() -> ConsentFormat.of(value, true))
+                .isInstanceOf(BadRequestException.class);
+    }
 }

@@ -451,6 +451,11 @@ consent-manager:
     # working request into a 400.
     page-max-size: ${CONSENTS_PAGE_MAX_SIZE:100}
 
+    # Most superseded records one includeLineage walk reads and renders per consent. The
+    # walk also stops on a record it has already visited, so a cycle across rows ends
+    # rather than hanging; this caps the cost of a long but acyclic history.
+    lineage-max-depth: ${CONSENTS_LINEAGE_MAX_DEPTH:20}
+
   contract-discovery:
     # Contracts one GET /contracts/available listing reads from the Contract Service at
     # once. The candidates are every contract this service holds a notice for, so a

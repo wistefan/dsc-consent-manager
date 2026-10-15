@@ -29,6 +29,8 @@ import lombok.Setter;
  *   <li>{@code CONSENTS_PAGE_DEFAULT_SIZE} &rarr; {@code
  *       consent-manager.consents.page-default-size}
  *   <li>{@code CONSENTS_PAGE_MAX_SIZE} &rarr; {@code consent-manager.consents.page-max-size}
+ *   <li>{@code CONSENTS_LINEAGE_MAX_DEPTH} &rarr; {@code
+ *       consent-manager.consents.lineage-max-depth}
  *   <li>{@code CONTRACT_DISCOVERY_MAX_CONCURRENCY} &rarr; {@code
  *       consent-manager.contract-discovery.max-concurrency}
  *   <li>{@code CONTRACT_DISCOVERY_MAX_DURATION} &rarr; {@code
@@ -320,7 +322,9 @@ public class ConsentManagerConfiguration {
         private int pageMaxSize = DEFAULT_PAGE_MAX_SIZE;
     }
 
-    /** Paging of a subject's consent listing, bound under {@code consent-manager.consents}. */
+    /**
+     * Paging and lineage depth of consent queries, bound under {@code consent-manager.consents}.
+     */
     @Getter
     @Setter
     @ConfigurationProperties("consents")
@@ -331,6 +335,9 @@ public class ConsentManagerConfiguration {
 
         /** Most records a consent page may carry when no ceiling is configured. */
         public static final int DEFAULT_PAGE_MAX_SIZE = 100;
+
+        /** Most superseded records one lineage carries when no depth is configured. */
+        public static final int DEFAULT_LINEAGE_MAX_DEPTH = 20;
 
         /**
          * Page size applied when {@code GET /consents/me} names none, bound to {@code
@@ -349,6 +356,13 @@ public class ConsentManagerConfiguration {
          * the ceiling never turns a caller's working request into a {@code 400}.
          */
         private int pageMaxSize = DEFAULT_PAGE_MAX_SIZE;
+
+        /**
+         * Most superseded records one {@code includeLineage} walk reads, bound to {@code
+         * CONSENTS_LINEAGE_MAX_DEPTH}; it bounds the reads per rendered consent, not just the
+         * output.
+         */
+        private int lineageMaxDepth = DEFAULT_LINEAGE_MAX_DEPTH;
     }
 
     /**

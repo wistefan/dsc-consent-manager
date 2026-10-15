@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.seamware.consentmanager.api.generated.model.Consent;
+import com.seamware.consentmanager.api.generated.model.ConsentLineageLink;
 import com.seamware.consentmanager.api.generated.model.ConsentReceipt;
 import com.seamware.consentmanager.api.generated.model.ConsentResponse;
 import com.seamware.consentmanager.api.generated.model.ConsentValidity;
@@ -42,6 +43,10 @@ class ConsentEnumParityTest {
                         "ConsentResponse",
                         ConsentResponse.StatusEnum.values(),
                         ConsentResponse.StatusEnum::fromValue),
+                served(
+                        "ConsentLineageLink",
+                        ConsentLineageLink.StatusEnum.values(),
+                        ConsentLineageLink.StatusEnum::fromValue),
                 served(
                         "ConsentValidity",
                         ConsentValidity.StatusEnum.values(),
