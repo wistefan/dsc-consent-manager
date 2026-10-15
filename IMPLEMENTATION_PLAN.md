@@ -280,7 +280,9 @@ configuration stay as they are.
 - `SigningKeyStore` (Step 2) must accept an upcoming key in the retired list exactly as it accepts a
   retired one. The Step 4 `JwksIT` row "every retired key is published" covers this, so the
   procedure needs no extra code.
-- `AGENTS.md`: update the project structure for the `signing/` package, `IssuedReceipt`,
+- `AGENTS.md` (**deferred to a plan-mode agent**: step agents must not edit `AGENTS.md`, so the
+  step 5 PR leaves it untouched and raises a `[plan-update]`): update the project structure for the
+  `signing/` package, `IssuedReceipt`,
   `ConsentReceiptIssuer`, V5 and ADR-0014, and add a Key Conventions bullet on receipt issuance:
   - the Kantara receipt is issued once, in the grant transaction, from `ConsentWriter.saveNew` /
     `saveUpdated` keyed on the recorded status; never wire issuance at a call site;
