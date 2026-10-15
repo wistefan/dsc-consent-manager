@@ -3,6 +3,7 @@ package com.seamware.consentmanager.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.nimbusds.jose.jwk.JWKSet;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantara;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiControllersInner;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInnerPurposesInner;
@@ -20,6 +21,7 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.ReceiptSigner;
+import com.seamware.consentmanager.support.ReceiptSignatures;
 import com.seamware.consentmanager.support.TestJson;
 import io.micronaut.core.type.Argument;
 import java.io.IOException;
@@ -34,8 +36,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -114,12 +118,14 @@ class ConsentReceiptServiceTest {
 
     private final List<ConsentEvent> recorded = new ArrayList<>();
 
+    private final ReceiptSigner signer = signer();
+
     private final ConsentReceiptService receipts =
             new ConsentReceiptService(
                     users(new User(SUBJECT, null, null, null)),
                     events(recorded),
                     new ConsentManagerConfiguration.Receipts(),
-                    signer());
+                    signer);
 
     private static ReceiptSigner signer() {
         ConsentManagerConfiguration.Receipts settings = new ConsentManagerConfiguration.Receipts();
@@ -325,6 +331,29 @@ class ConsentReceiptServiceTest {
 
         assertThatThrownBy(() -> receipts.toKantara(details))
                 .isInstanceOf(BadRequestException.class);
+    }
+
+    /** Both receipt formats, rendered from the sparsest snapshot. */
+    static Stream<Arguments> sparseReceipts() {
+        return Stream.of(
+                Arguments.of(
+                        Named.<Function<ConsentReceiptServiceTest, Object>>of(
+                                "ISO/IEC 29184",
+                                test -> test.receipts.toIso29184(test.details(bare(), null)))),
+                Arguments.of(
+                        Named.<Function<ConsentReceiptServiceTest, Object>>of(
+                                "Kantara",
+                                test -> test.receipts.toKantara(test.details(bare(), null)))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("sparseReceipts")
+    @DisplayName("signs exactly the members a sparse receipt serves, so its signature verifies")
+    void signsWhatSparseReceiptServes(Function<ConsentReceiptServiceTest, Object> render)
+            throws Exception {
+        String json = TestJson.mapper().writeValueAsString(render.apply(this));
+
+        assertThat(ReceiptSignatures.verifies(json, new JWKSet(signer.publicKey()))).isTrue();
     }
 
     private ConsentDetails details(ConsentSnapshot snapshot, String contractUri) {

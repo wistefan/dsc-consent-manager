@@ -37,6 +37,8 @@ import lombok.Setter;
  *   <li>{@code RECEIPTS_SIGNING_KEY} &rarr; {@code consent-manager.receipts.signing-key}
  *   <li>{@code RECEIPTS_EPHEMERAL_SIGNING_KEY} &rarr; {@code
  *       consent-manager.receipts.ephemeral-signing-key}
+ *   <li>{@code RECEIPTS_RETIRED_VERIFICATION_KEYS} &rarr; {@code
+ *       consent-manager.receipts.retired-verification-keys}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut

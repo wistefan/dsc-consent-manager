@@ -47,7 +47,9 @@ public class ReceiptSigningController extends AbstractReceiptSigningController {
                             .y(ec.getY().toString());
             case RSAKey rsa ->
                     jwk.n(rsa.getModulus().toString()).e(rsa.getPublicExponent().toString());
-            default -> jwk;
+            default ->
+                    throw new IllegalStateException(
+                            "No JWKS projection for key type " + key.getKeyType());
         };
     }
 }
