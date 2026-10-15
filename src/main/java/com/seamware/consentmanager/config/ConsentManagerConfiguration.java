@@ -33,6 +33,7 @@ import lombok.Setter;
  *       consent-manager.contract-discovery.max-concurrency}
  *   <li>{@code CONTRACT_DISCOVERY_MAX_DURATION} &rarr; {@code
  *       consent-manager.contract-discovery.max-duration}
+ *   <li>{@code RECEIPTS_JURISDICTION} &rarr; {@code consent-manager.receipts.jurisdiction}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut
@@ -373,5 +374,24 @@ public class ConsentManagerConfiguration {
          * {@code CONTRACT_DISCOVERY_MAX_DURATION}; a single uncached fetch alone may take ~47s.
          */
         private Duration maxDuration = DEFAULT_MAX_DURATION;
+    }
+
+    /**
+     * What a consent receipt states about this deployment, bound under {@code
+     * consent-manager.receipts}.
+     */
+    @Getter
+    @Setter
+    @ConfigurationProperties("receipts")
+    public static class Receipts {
+
+        /** Jurisdiction a receipt names when none is configured. */
+        public static final String DEFAULT_JURISDICTION = "EU";
+
+        /**
+         * Jurisdiction a Kantara receipt names as governing the processing, bound to {@code
+         * RECEIPTS_JURISDICTION}; neither a notice nor a contract carries one.
+         */
+        private String jurisdiction = DEFAULT_JURISDICTION;
     }
 }

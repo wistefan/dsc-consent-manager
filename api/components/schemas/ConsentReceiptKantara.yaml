@@ -1,0 +1,111 @@
+# Schema: ConsentReceiptKantara — referenced from api/openapi.yaml as
+# components.schemas.ConsentReceiptKantara.
+#
+# The `format=receipt-kantara` representation: a Kantara Initiative Consent
+# Receipt, KI-CR-v1.1.0. Property names are the specification's own. Every
+# term is read off the snapshot the consent froze, never off the live notice.
+#
+# Deliberate departures from KI-CR-v1.1.0, each because this service holds no
+# source for the field and a receipt must not state what nobody decided:
+# `piiControllers[].address`, `.email` and `.phone` (a registration carries one
+# `contact`), `purposes[].purposeCategory` (a notice states purposes without a
+# category), and `sensitive` / `spiCat` (a notice does not classify its data).
+# All are left out rather than filled with a placeholder.
+type: object
+description: >
+  A KI-CR-v1.1.0 consent receipt for one granted consent, rendered from the
+  terms frozen when consent was given.
+properties:
+  version:
+    type: string
+    description: The receipt specification version.
+    enum:
+      - KI-CR-v1.1.0
+  jurisdiction:
+    type: string
+    description: Jurisdiction governing the processing, configured per deployment.
+    example: "EU"
+  consentTimestamp:
+    type: integer
+    format: int64
+    description: When consent was given, in seconds since the Unix epoch.
+  collectionMethod:
+    type: string
+    description: How consent was collected.
+  consentReceiptID:
+    type: string
+    description: Identifier of this receipt; the consent's own id.
+  policyUrl:
+    type: string
+    description: >
+      The contract the notice was generated from, as frozen on the consent.
+      Absent when the consent carries none.
+  piiPrincipalId:
+    type: string
+    description: Identifier of the data subject who gave consent.
+  piiControllers:
+    type: array
+    description: The controller the notice named.
+    items:
+      type: object
+      properties:
+        piiController:
+          type: string
+          description: Name of the controller, or its identifier when unnamed.
+        contact:
+          type: string
+        piiControllerUrl:
+          type: string
+          description: The controller's self-description document.
+      required:
+        - piiController
+  services:
+    type: array
+    description: The one service consented to, and its elected purposes.
+    items:
+      type: object
+      properties:
+        service:
+          type: string
+          description: Title of the notice, or the contract when untitled.
+        purposes:
+          type: array
+          items:
+            type: object
+            properties:
+              purpose:
+                type: string
+              consentType:
+                type: string
+                description: Always `EXPLICIT`; only the data subject grants.
+              piiCategory:
+                type: array
+                items:
+                  type: string
+              termination:
+                type: string
+                description: How consent may be withdrawn, as the notice stated it.
+              thirdPartyDisclosure:
+                type: boolean
+              thirdPartyName:
+                type: string
+                description: >
+                  The recipients the notice declared, each by name else
+                  identifier, comma-separated. Absent when it declared none.
+                  `thirdPartyDisclosure` is true exactly when present.
+            required:
+              - purpose
+              - consentType
+              - thirdPartyDisclosure
+      required:
+        - service
+        - purposes
+required:
+  - version
+  - jurisdiction
+  - consentTimestamp
+  - collectionMethod
+  - consentReceiptID
+  - piiPrincipalId
+  - piiControllers
+  - services

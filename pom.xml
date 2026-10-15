@@ -417,16 +417,28 @@
                             <apiPackage>com.seamware.consentmanager.api.generated</apiPackage>
                             <modelPackage>com.seamware.consentmanager.api.generated.model</modelPackage>
                             <!--
-                                Overrides only server/controller.mustache; every other template,
-                                and every partial it references, still resolves against the
-                                generator's embedded java-micronaut templates. The override exists
-                                so a routed method can declare the typed principal parameter that
-                                PrincipalResolutionFilter and PrincipalArgumentBinder both require
-                                — see the comment at the head of the template.
+                                Overrides only server/controller.mustache,
+                                common/model/oneof_interface.mustache and
+                                common/model/modelInnerEnum.mustache; every other template, and
+                                every partial they reference, still resolves against the
+                                generator's embedded java-micronaut templates. The controller
+                                override exists so a routed method can declare the typed principal
+                                parameter that PrincipalResolutionFilter and PrincipalArgumentBinder
+                                both require; the oneOf override drops the empty-property
+                                @JsonTypeInfo serde cannot write; the enum override makes serde
+                                write an enum's value rather than its constant name - see the head
+                                of each template.
                             -->
                             <templateDirectory>${project.basedir}/api/templates</templateDirectory>
                             <configOptions>
                                 <useBeanValidation>true</useBeanValidation>
+                                <!--
+                                    A oneOf becomes an interface its members implement, so one
+                                    handler can return any representation `format` selects
+                                    (ConsentRepresentation). Without it the members are merged into
+                                    one model with the union of their properties.
+                                -->
+                                <useOneOfInterfaces>true</useOneOfInterfaces>
                                 <useJakartaEe>true</useJakartaEe>
                                 <serializationLibrary>micronaut_serde_jackson</serializationLibrary>
                                 <generateControllerFromExamples>false</generateControllerFromExamples>
