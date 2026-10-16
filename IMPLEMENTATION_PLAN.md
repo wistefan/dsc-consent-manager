@@ -56,19 +56,27 @@ of the security filter so 401/403 responses carry the ID too.
   the joined `detail`.
 - **Exposing 500 messages outside production.** Add `consent-manager.errors.expose-exception-detail`
   (env `ERRORS_EXPOSE_EXCEPTION_DETAIL`). It defaults to `false` in `application.yml` and is `true`
-  in `application-dev.yml`. When it is false, `GlobalExceptionHandler` keeps
-  `ProblemType.SERVER_ERROR_DETAIL`. When it is true, `detail` carries the exception message. The
-  stack trace never reaches the response. Document the setting in `.env.sample` and
-  `application.yml`.
+  in `application-dev.yml`. Document the setting in `.env.sample` and `application.yml`.
+  - **One helper, three sites.** Three places substitute `ProblemType.SERVER_ERROR_DETAIL` today:
+    `GlobalExceptionHandler.handle`, the 5xx branch of `ApiExceptionHandler.handle` (which includes
+    the 502 `UpstreamServiceException`), and `ProblemErrorResponseProcessor.processResponse`.
+    Replace all three with one `error/ServerErrorDetail` singleton,
+    `String detailFor(@Nullable Throwable)`.
+  - **Behaviour.** When the flag is false, the helper returns `SERVER_ERROR_DETAIL`. When it is
+    true, it returns the exception message, falling back to `SERVER_ERROR_DETAIL` when there is no
+    message. The stack trace never reaches the response.
 - **Tests.**
   - Unit `CorrelationIdFilterTest`, parameterized: absent, valid, too long, and illegal-charset
     header.
   - Extend `ProblemMappingTest`/`ProblemResponseIT`, parameterized over every exception type,
     asserting status, `correlationId` equal to the response header, and the inbound ID echoed.
   - A two-violation payload lists both fields in `errors`.
-  - Both values of the expose flag produce the right 500 body.
+  - Both values of the expose flag produce the right body, parameterized over the three sites: an
+    unhandled exception (500), a 502 `UpstreamServiceException`, and a framework-raised 500
+    reaching `ProblemErrorResponseProcessor`.
   - A captured log line carries the same `correlationId` as the response.
-- **Files.** `observability/CorrelationIdFilter.java`, `error/*` handlers, `ProblemDetail.yaml`
+- **Files.** `observability/CorrelationIdFilter.java`, `error/ServerErrorDetail.java` and the
+  `error/*` handlers, `ProblemDetail.yaml`
   (+ `ProblemFieldError`), `ConsentManagerConfiguration` (nested `Errors`), the yml files,
   `.env.sample`, and the tests.
 - **Acceptance.** ACs 18, 20, 22, 24, 25 hold. `./mvnw verify` is green.
@@ -87,6 +95,21 @@ of the security filter so 401/403 responses carry the ID too.
   - `GlobalExceptionHandler`, `ApiExceptionHandler`, `ProblemErrorResponseProcessor`: these log
     `request.getUri()`, which contains path identifiers and query strings. Log the matched route
     template (`UriRouteMatch` / `HttpAttributes.URI_TEMPLATE`) and the method instead.
+  - The same three handlers also log the exception message and the throwable at ERROR.
+    `ApiExceptionHandler` passes `exception.getMessage()` plus the exception, and the other two
+    pass the root cause, whose message chain the encoder prints. Messages in this codebase are
+    built from identifiers (`UNKNOWN_SUBJECT.formatted(userIdentifier, ...)` in `ConsentService`).
+    An unhandled Postgres unique violation reads `Key (identifier)=(alice@example.com) already
+    exists`. So the route-template change alone does not satisfy AC 19.
+    - **At ERROR**, log only the method, the route template, the problem type or status, the
+      exception class chain (class names only), and the top stack frame of the root cause as
+      `class.method:line`. The `correlationId` arrives through the MDC. Build this summary in one
+      `observability/FailureSummary` helper that all three handlers call.
+    - **At DEBUG**, log the message and the full throwable under the same `correlationId`, so an
+      operator who raises `com.seamware.consentmanager.error` to DEBUG gets the complete chain.
+    - **Why not keep the throwable at ERROR.** Its message chain is free text from drivers and
+      libraries, so no allow-list can vouch for it. The class chain and top frame are enough to
+      find the failing code, and the correlation ID links the request.
   - `UserService` bulk-entry failure (logs the external `identifier`): pseudonymise it, or move
     it to DEBUG.
   - `SmtpUserNotificationService` failure line: it uses the opaque `userId`; keep it, but never
@@ -100,11 +123,16 @@ of the security filter so 401/403 responses carry the ID too.
   chain).
   - **Scenario:** an authenticated end-to-end run. Register a user with a sentinel identifier,
     email and name. Grant, revoke and erase a consent. Send a request with a malformed bearer
-    token, a token in a query string, and a forced 500.
+    token, and a token in a query string.
+  - **Forced failures** come from a test-only `@Replaces` bean behind one route. It throws an
+    unhandled `DataAccessException` whose message *and* cause both carry the sentinel identifier
+    and email, which drives the throwable-chain scan against a personal identifier. A second case
+    throws an `UpstreamServiceException` whose message carries the sentinel (5xx `ApiException`
+    branch).
   - **Assertion:** no event at INFO or above contains the bearer token (whole, or any segment of
     length ≥ a named constant), any private JWK member, the pseudonym key, or the sentinel
-    identifier, email or name.
-    Parameterize over the forbidden sentinels.
+    identifier, email or name. Parameterize over the forbidden sentinels. The test also asserts that
+    each forced failure did produce its ERROR summary line, so a silenced handler cannot pass.
 - **Tests.** Add `LogPseudonymizerTest`, parameterized:
   - the same key and input give the same pseudonym;
   - a different key gives a different pseudonym;
@@ -119,10 +147,37 @@ of the security filter so 401/403 responses carry the ID too.
 - **Where to count.** Count in `ConsentStateChangeLog.recorded(held, moved, event)`, the one
   post-commit seam that every `ConsentLifecycleService` move passes through, collateral moves
   included. It already carries both statuses.
-  - `ConsentService.request` and `ConsentService.decide` do not pass through that seam today.
-    Route their committed writes through it (with `held` absent for a creation) rather than adding
-    a second list of call sites.
-  - Never count inside the transaction, and never on the lost-race 409 path.
+  - `ConsentService.request` and `ConsentService.decide` do not pass through that seam today, and
+    re-wiring them is not enough. `ConsentWriter.decide` makes up to three kinds of move in one
+    transaction:
+    - `revokeOpenGrant` moves the open grant GRANTED → REVOKED, and only its id is kept;
+    - `closeRedundant` moves extra PENDING rows to TERMINATED, and its result is discarded;
+    - then it either answers the adopted PENDING row in place or creates a row.
+
+    It returns a single `RecordedConsent`, which carries neither the collateral moves nor the
+    status the answered row held. The following changes are required.
+  - **Writer result.** Add a `service/ConsentWrite(RecordedConsent primary,
+    Optional<ConsentStatus> held, List<ConsentMove> collateral)` record. Its compact constructor
+    enforces `held.isEmpty() == primary.created()`. `ConsentWriter.decide` and `request` return it:
+    - `decide` collects the revoked grant and every `closeRedundant` move into `collateral`, as
+      `resume` already does, in the order they were written;
+    - `decide` answers through `moved(...)`, so `held` is the status read under the row lock;
+    - `request` returns an empty `collateral` and an empty `held`.
+
+    `ConsentService` unpacks `primary` exactly where it uses the `RecordedConsent` today, so the
+    rendered responses and the notification call are unchanged.
+  - **Seam for creations.** `recorded(@NonNull ConsentStatus held, ...)` keeps its signature for
+    moves. A new `created(ConsentDetails, ConsentEvent)` covers creations, so no bare null is
+    passed. Both delegate to one private method:
+    - for a creation, the JSON line *omits* `heldStatus` rather than emitting `null`, and the
+      message reads `none -> PENDING`;
+    - the counter is incremented in that same private method, with `from=none`.
+  - **One reporting path.** Lift `ConsentLifecycleService.report(ConsentMove)` into a shared
+    `ConsentReporter` bean that both services call. It also gets
+    `report(ConsentWrite)`, which reports the collateral moves first and then the primary. That
+    keeps a single list of call sites.
+  - Never count inside the transaction. The lost-race 409 path counts nothing, because the
+    rollback means no `ConsentWrite` is ever returned.
 - **Hikari metrics.** Confirm `hikaricp.*` meters are bound. If they are not, enable the
   Micronaut Micrometer JDBC/Hikari binder in `application.yml`.
 - **Tests.**
@@ -130,6 +185,15 @@ of the security filter so 401/403 responses carry the ID too.
     the HTTP routes that make each move. That covers creation (`request`), the decision path
     (`decide`) and the lifecycle routes, including a collateral move. Each committed move
     increments exactly its `(from,to)` counter. A refused move and a lost race increment nothing.
+    Explicit rows:
+    - a superseding grant (a decision against an open grant): GRANTED→REVOKED once, plus the
+      primary move;
+    - a redundant-pending close: PENDING→TERMINATED once per extra row. Two open requests arise
+      only from the race `ConsentWriter.request` documents, so the extra PENDING is seeded through
+      the repository and the decision is then made over HTTP;
+    - a creation through `request`: `none`→PENDING.
+  - `ConsentStateChangeLogTest`: a creation's JSON line has no `heldStatus` field, and a move's line
+    still has it.
   - `MetricsExposureIT`: `/metrics` lists `jvm.memory.used`, `http.server.requests`, a
     `hikaricp.connections*` meter, `consentmanager.consent.transitions` and the existing
     token-rejection meter. `/prometheus` returns the scrape format.
@@ -334,7 +398,11 @@ blocks, including code added by Steps 1-9. About 18,000 Javadoc lines in `src/ma
   Parameterize it over the matched files.
 - **AGENTS.md.** Replace the "Actual density" note under "Doc comments are terse" with the new
   rule, and drop the statement that service classes carry multi-paragraph Javadoc.
+- **Commits.** The step lands as two commits, so the comment-only claim can be checked:
+  1. the comment pass over existing files;
+  2. `SourceHygieneTest` and the AGENTS.md edit.
 - **Acceptance.**
-  - `git diff --stat` touches comments only. Check it with `git diff -U0 | grep '^[+-]'` filtered
-    to non-comment lines, which must be empty apart from Spotless reflow.
+  - Commit 1 touches comments only. Check it with `git diff -U0 <commit1>^ <commit1> -- src/main/java
+    src/test/java 'src/**/application*.yml' | grep '^[+-]'`, filtered to non-comment lines. The
+    result must be empty apart from Spotless reflow. Commit 2 is reviewed as ordinary code.
   - `./mvnw verify` is green.
