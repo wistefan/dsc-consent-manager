@@ -9,6 +9,7 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
+import com.seamware.consentmanager.notification.UserNotificationService;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import io.micronaut.core.annotation.NonNull;
@@ -16,6 +17,8 @@ import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The two ways a consent comes into being: the data subject's own decision, and a participant's
@@ -28,6 +31,11 @@ import java.util.List;
  */
 @Singleton
 public class ConsentService {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ConsentService.class);
+
+    private static final String NOTIFICATION_FAILED =
+            "Consent {} was requested, but notifying its subject failed";
 
     private static final String NOTHING_TO_NARROW =
             "Privacy notice '%s' declares no %s, so none can be elected.";
@@ -55,6 +63,7 @@ public class ConsentService {
     private final ConsentWriter writer;
     private final ConsentStateMachine lifecycle;
     private final ConsentParties parties;
+    private final UserNotificationService notifications;
 
     public ConsentService(
             ConsentNoticeGuard noticeGuard,
@@ -62,13 +71,15 @@ public class ConsentService {
             UserParticipantRepository links,
             ConsentWriter writer,
             ConsentStateMachine lifecycle,
-            ConsentParties parties) {
+            ConsentParties parties,
+            UserNotificationService notifications) {
         this.noticeGuard = noticeGuard;
         this.users = users;
         this.links = links;
         this.writer = writer;
         this.lifecycle = lifecycle;
         this.parties = parties;
+        this.notifications = notifications;
     }
 
     /**
@@ -110,6 +121,10 @@ public class ConsentService {
      *
      * <p>The caller is the registered participant behind the token, not a party named in the body,
      * so a participant cannot ask on another's behalf.
+     *
+     * <p>The subject is notified once {@link ConsentWriter} has committed; this bean is
+     * deliberately not transactional, so the notification never runs inside the write, and a
+     * failure in it is logged rather than allowed to turn a committed request into an error.
      */
     @NonNull
     public ConsentDetails request(
@@ -119,7 +134,14 @@ public class ConsentService {
         User subject = affiliated(caller, command.userIdentifier());
 
         ConsentSnapshot snapshot = ConsentSnapshot.of(notice, null, null);
-        return parties.details(writer.request(subject, notice, snapshot, caller.getIdentifier()));
+        RecordedConsent recorded =
+                writer.request(subject, notice, snapshot, caller.getIdentifier());
+        try {
+            notifications.consentRequested(subject, recorded.consent(), caller);
+        } catch (RuntimeException e) {
+            LOG.error(NOTIFICATION_FAILED, recorded.consent().getId(), e);
+        }
+        return parties.details(recorded);
     }
 
     /**

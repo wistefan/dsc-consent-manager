@@ -9,6 +9,7 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
+import com.seamware.consentmanager.notification.UserNotificationService;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.CatalogPrincipal;
@@ -19,7 +20,10 @@ import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import jakarta.inject.Singleton;
+import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The moves a consent makes after it exists: who is allowed to make each one, and what it reads
@@ -32,6 +36,14 @@ import java.util.UUID;
  */
 @Singleton
 public class ConsentLifecycleService {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ConsentLifecycleService.class);
+
+    private static final String NOTIFICATION_FAILED =
+            "Consent {} was terminated, but notifying its subject failed";
+
+    private static final String SUBJECT_MISSING =
+            "Consent {} was terminated, but its subject {} no longer exists to be notified";
 
     /** Every move served here is asked for by an identified caller, never by an automated sweep. */
     private static final ConsentEventTrigger EXPLICIT_TRIGGER = ConsentEventTrigger.EXPLICIT;
@@ -69,6 +81,7 @@ public class ConsentLifecycleService {
     private final ConsentWriter writer;
     private final ConsentParties parties;
     private final ConsentStateChangeLog changeLog;
+    private final UserNotificationService notifications;
 
     public ConsentLifecycleService(
             ConsentRepository consents,
@@ -77,7 +90,8 @@ public class ConsentLifecycleService {
             ConsentNoticeGuard noticeGuard,
             ConsentWriter writer,
             ConsentParties parties,
-            ConsentStateChangeLog changeLog) {
+            ConsentStateChangeLog changeLog,
+            UserNotificationService notifications) {
         this.consents = consents;
         this.users = users;
         this.states = states;
@@ -85,6 +99,7 @@ public class ConsentLifecycleService {
         this.writer = writer;
         this.parties = parties;
         this.changeLog = changeLog;
+        this.notifications = notifications;
     }
 
     /**
@@ -131,6 +146,11 @@ public class ConsentLifecycleService {
      * there is nothing to conceal, only standing to refuse. Permitted from {@code GRANTED} and
      * equally from the unanswered statuses, because a party may end an arrangement before the
      * subject has answered; a terminal status is {@code 400} naming both it and the move attempted.
+     *
+     * <p>The subject is notified once the move has committed. This is the only termination that
+     * notifies: the collateral ones a resume or decision performs, and those erasure and
+     * deregistration perform, do not — see ADR-0015. Nothing after the commit, the subject lookup
+     * included, can turn the committed termination into an error; a failure is logged instead.
      */
     @NonNull
     public ConsentDetails terminate(@NonNull Participant caller, @NonNull UUID consentId) {
@@ -139,12 +159,29 @@ public class ConsentLifecycleService {
                         .orElseThrow(
                                 () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
         requireParty(caller, consent);
-        return report(
-                writer.move(
-                        consent.getId(),
-                        ConsentStatus.TERMINATED,
-                        caller.getIdentifier(),
-                        EXPLICIT_TRIGGER));
+        ConsentDetails details =
+                report(
+                        writer.move(
+                                consent.getId(),
+                                ConsentStatus.TERMINATED,
+                                caller.getIdentifier(),
+                                EXPLICIT_TRIGGER));
+        notifyTerminated(caller, details.consent());
+        return details;
+    }
+
+    /** Tells the subject of a committed termination about it; never throws. */
+    private void notifyTerminated(Participant caller, Consent terminated) {
+        try {
+            Optional<User> subject = users.findById(terminated.getUserId());
+            if (subject.isEmpty()) {
+                LOG.error(SUBJECT_MISSING, terminated.getId(), terminated.getUserId());
+                return;
+            }
+            notifications.consentTerminated(subject.get(), terminated, caller);
+        } catch (RuntimeException e) {
+            LOG.error(NOTIFICATION_FAILED, terminated.getId(), e);
+        }
     }
 
     /**
@@ -271,10 +308,12 @@ public class ConsentLifecycleService {
      *
      * <p>The one path every lifecycle write passes through — including the revocation and the
      * terminations a resume performs collaterally, which {@link #resume} hands here one at a time —
-     * so {@link ConsentStateChangeLog}, and whatever notification grows from it, cannot be left off
-     * a route or a collateral write added later. The held status is the one {@link ConsentWriter}
-     * read under the row lock, not an earlier unlocked read, so a concurrent move cannot leave the
-     * reported {@code held} naming a status the write did not actually move from.
+     * so {@link ConsentStateChangeLog} cannot be left off a route or a collateral write added
+     * later. Subject notification deliberately does not live here, because it must skip the
+     * collateral moves; {@link #terminate} calls it directly (ADR-0015). The held status is the one
+     * {@link ConsentWriter} read under the row lock, not an earlier unlocked read, so a concurrent
+     * move cannot leave the reported {@code held} naming a status the write did not actually move
+     * from.
      */
     private ConsentDetails report(ConsentMove move) {
         ConsentDetails details = parties.details(move.recorded());
