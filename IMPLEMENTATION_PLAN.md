@@ -388,7 +388,8 @@ Files:
   guaranteed participant notification. Do not rewrite the accepted decision.
 - `docs/security.md`: a short "Outbound email" paragraph covering no tokens or links that act,
   TLS verification, escaping, and link neutralisation in interpolated values.
-- `AGENTS.md`:
+- `AGENTS.md` (**deferred to plan mode**: step agents may not edit `AGENTS.md`, so Step 4
+  ships without these and emits a `[plan-update]` for a plan-mode agent to apply them):
   - list the final `notification/` contents and `views/email/` under Project Structure;
   - mention ADR-0015 and correct the ADR range;
   - add GreenMail to the test stack;
