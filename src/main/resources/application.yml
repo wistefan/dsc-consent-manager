@@ -593,13 +593,13 @@ consent-manager:
 # environment mapping. Unset or blank disables notifications - nothing is sent and a
 # logging implementation is bound instead. A `host: ${SMTP_HOST:}` line would make the
 # key present with an empty value, which is why the host is read only from the variable.
+# SMTP_PORT (default 587) and SMTP_STARTTLS (default true; false sends unencrypted, warns at
+# startup and refuses to start while SMTP_USER is set) are likewise read only from the
+# environment, so the defaults live once, in NotificationConfiguration, and cannot drift.
 smtp:
-  port: ${SMTP_PORT:587}
   # Credentials are optional; without a user the session does not authenticate.
   user: ${SMTP_USER:}
   password: ${SMTP_PASSWORD:}
-  # STARTTLS is enabled and required by default; switch off only for a local test server.
-  starttls: ${SMTP_STARTTLS:true}
   # Sender of every notification. Startup fails when SMTP_HOST is set and this is blank.
   from-address: ${SMTP_FROM_ADDRESS:}
   from-name: ${SMTP_FROM_NAME:}

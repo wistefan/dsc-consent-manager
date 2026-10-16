@@ -19,6 +19,7 @@ public class SmtpConfigurationValidator {
 
     static final String FROM_ADDRESS_VARIABLE = "SMTP_FROM_ADDRESS";
     static final String TRUST_ALL_VARIABLE = "SMTP_INSECURE_TRUST_ALL_CERTIFICATES";
+    static final String STARTTLS_VARIABLE = "SMTP_STARTTLS";
 
     private final NotificationConfiguration configuration;
 
@@ -26,7 +27,10 @@ public class SmtpConfigurationValidator {
         this.configuration = configuration;
     }
 
-    /** Fails startup on a blank sender and warns once about the certificate opt-out. */
+    /**
+     * Fails startup on a blank sender or on credentials over a plaintext session, and warns once
+     * about each transport relaxation.
+     */
     @PostConstruct
     void validate() {
         String fromAddress = configuration.getFromAddress();
@@ -34,6 +38,16 @@ public class SmtpConfigurationValidator {
             throw new ConfigurationException(
                     "SMTP_HOST is set but %s (smtp.from-address) is blank; notifications need a sender address"
                             .formatted(FROM_ADDRESS_VARIABLE));
+        }
+        if (!configuration.isStarttls()) {
+            if (configuration.hasCredentials()) {
+                throw new ConfigurationException(
+                        "%s is false while SMTP_USER is set; the password would cross the network in plaintext"
+                                .formatted(STARTTLS_VARIABLE));
+            }
+            LOG.warn(
+                    "{} is false: notifications are sent unencrypted. Use this only against a local test server.",
+                    STARTTLS_VARIABLE);
         }
         if (configuration.isInsecureTrustAllCertificates()) {
             LOG.warn(

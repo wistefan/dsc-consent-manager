@@ -20,13 +20,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 /** The SMTP session verifies the server unless explicitly told not to, and says so at startup. */
 class SmtpSessionFactoryTest {
 
     private static final String TRUST_ALL_PROPERTY = "smtp.insecure-trust-all-certificates";
+    private static final String STARTTLS_PROPERTY = "smtp.starttls";
 
     private final Logger validatorLogger =
             (Logger) LoggerFactory.getLogger(SmtpConfigurationValidator.class);
@@ -80,28 +80,59 @@ class SmtpSessionFactoryTest {
         }
     }
 
-    @ParameterizedTest(name = "trust-all={0}")
-    @ValueSource(booleans = {true, false})
-    @DisplayName("the certificate opt-out is warned about at startup, before any session exists")
-    void warnsAboutTheOptOutAtStartup(boolean trustAll) {
-        try (ApplicationContext ignored = start(trustAll)) {
+    static Stream<Arguments> relaxations() {
+        return Stream.of(
+                Arguments.of(
+                        TRUST_ALL_PROPERTY, true, SmtpConfigurationValidator.TRUST_ALL_VARIABLE, 1),
+                Arguments.of(
+                        TRUST_ALL_PROPERTY,
+                        false,
+                        SmtpConfigurationValidator.TRUST_ALL_VARIABLE,
+                        0),
+                Arguments.of(
+                        STARTTLS_PROPERTY, false, SmtpConfigurationValidator.STARTTLS_VARIABLE, 1),
+                Arguments.of(
+                        STARTTLS_PROPERTY, true, SmtpConfigurationValidator.STARTTLS_VARIABLE, 0));
+    }
+
+    @ParameterizedTest(name = "{0}={1} -> {3} warning(s) naming {2}")
+    @MethodSource("relaxations")
+    @DisplayName("a transport relaxation is warned about at startup, before any session exists")
+    void warnsAboutRelaxationsAtStartup(
+            String property, boolean value, String variable, int expectedWarnings) {
+        try (ApplicationContext ignored =
+                NotificationContexts.start(NotificationContexts.smtp(Map.of(property, value)))) {
             // Asserted before any Session is fetched: the warning must not wait for the first send.
-            assertThat(warnings())
-                    .as("startup warnings naming %s", SmtpConfigurationValidator.TRUST_ALL_VARIABLE)
-                    .hasSize(trustAll ? 1 : 0);
+            assertThat(warnings(variable))
+                    .as("startup warnings naming %s", variable)
+                    .hasSize(expectedWarnings);
         }
     }
 
-    @Test
-    @DisplayName("startup fails without a sender address and names SMTP_FROM_ADDRESS")
-    void refusesToStartWithoutASender() {
-        Map<String, Object> properties = NotificationContexts.smtp(Map.of("smtp.from-address", ""));
+    static Stream<Arguments> refusals() {
+        return Stream.of(
+                Arguments.of(
+                        Map.of("smtp.from-address", ""),
+                        SmtpConfigurationValidator.FROM_ADDRESS_VARIABLE),
+                Arguments.of(
+                        Map.of(
+                                STARTTLS_PROPERTY,
+                                false,
+                                "smtp.user",
+                                "mailer",
+                                "smtp.password",
+                                "secret"),
+                        SmtpConfigurationValidator.STARTTLS_VARIABLE));
+    }
+
+    @ParameterizedTest(name = "{0} -> names {1}")
+    @MethodSource("refusals")
+    @DisplayName("startup fails on an unusable or unsafe transport and names the variable")
+    void refusesToStart(Map<String, Object> overrides, String variable) {
+        Map<String, Object> properties = NotificationContexts.smtp(overrides);
         assertThatThrownBy(() -> NotificationContexts.start(properties).close())
                 .satisfies(
-                        failure ->
-                                assertThat(rootCause(failure).getMessage())
-                                        .contains(
-                                                SmtpConfigurationValidator.FROM_ADDRESS_VARIABLE));
+                        failure -> assertThat(rootCause(failure).getMessage()).contains(variable));
     }
 
     private static ApplicationContext start(boolean trustAll) {
@@ -109,11 +140,11 @@ class SmtpSessionFactoryTest {
                 NotificationContexts.smtp(Map.of(TRUST_ALL_PROPERTY, trustAll)));
     }
 
-    private List<String> warnings() {
+    private List<String> warnings(String variable) {
         return appender.list.stream()
                 .filter(event -> event.getLevel() == Level.WARN)
                 .map(ILoggingEvent::getFormattedMessage)
-                .filter(message -> message.contains(SmtpConfigurationValidator.TRUST_ALL_VARIABLE))
+                .filter(message -> message.contains(variable))
                 .toList();
     }
 
