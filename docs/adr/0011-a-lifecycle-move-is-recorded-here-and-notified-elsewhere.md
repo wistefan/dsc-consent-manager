@@ -67,6 +67,10 @@ moves nothing, and would silently re-date a record whose authorisation is unchan
   criteria belong to TICKET-013 and TICKET-020 and should be moved there rather than ticked here;
   the deviation is recorded in `IMPLEMENTATION_PLAN.md` under "Criteria deliberately not met as
   written" as well as here.
+- **Note (2026-10-16):** TICKET-013's subject notification is now delivered by
+  [ADR-0015](0015-subject-notifications-are-best-effort-and-informational.md). It is best-effort,
+  called from `request`/`terminate` directly and not from this seam. TICKET-020 still owns
+  guaranteed participant notification and the outbox described below.
 - **Whoever implements delivery must not simply hang a sender off this call.** `recorded` runs
   *after* the write has committed and outside its transaction, so a crash between the commit and
   the call loses the line. That is acceptable for a log and not acceptable for a notification: a

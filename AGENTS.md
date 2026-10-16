@@ -74,9 +74,11 @@ src/main/java/com/seamware/consentmanager/
   security/                        # IdentityProviderRegistry, ClaimMapper, token validator,
                                    # Role, sealed ConsentManagerPrincipal + UserPrincipal /
                                    # ParticipantPrincipal / CatalogPrincipal,
-                                   # PrincipalResolutionFilter + argument binders,
-                                   # ReceiptSigner (receipt JWS + published keys; ticket #77
-                                   # moves it to a new signing/ package)
+                                   # PrincipalResolutionFilter + argument binders
+  signing/                         # ConsentSigningService / JwsConsentSigningService,
+                                   # SigningKeyStore, CanonicalJsonSerializer (ADR-0014)
+  notification/                    # (ticket #78) UserNotificationService + Smtp/Logging
+                                   # implementations, NotificationConfiguration (smtp.*)
   error/                           # ApiException + BadRequest/NotFound/Forbidden/Conflict/
                                    # UpstreamService, ProblemType, ApiExceptionHandler,
                                    # GlobalExceptionHandler, AuthorizationProblemHandler,
@@ -103,7 +105,7 @@ src/test/java/com/seamware/consentmanager/
                                    # ParticipantSchemaParityTest, PrivacyNoticeSpecParityTest,
                                    # ConsentEnumParityTest,
                                    # ParticipantCredentialAbsenceTest — all build-failing
-docs/security.md, docs/user-identifiers.md, docs/adr/   # ADRs 0001-0013
+docs/security.md, docs/user-identifiers.md, docs/adr/   # ADRs 0001-0014
 compose.yaml, docker/Dockerfile, .env.sample
 ```
 
@@ -205,8 +207,14 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
 - **Doc comments are terse.** One line on what a type or public method is and why, a second
   only for a contract the signature cannot show. No `@param`/`@return` blocks that echo the
   signature. Match the density of the file you are editing. Named constants, never magic values.
+  Actual density: the `service/` classes (e.g. `ConsentLifecycleService`) carry multi-paragraph
+  Javadoc on contracts and refusals; new small types (records, config, the `notification/` beans)
+  should stay at one to three lines — do not copy the service-layer length into them.
 - **Stateless.** No sessions, no token issuance, no stored credentials. Java only, no Kotlin.
   Annotation processors go in `maven-compiler-plugin`'s `annotationProcessorPaths`.
+- **Notifications are best-effort.** `UserNotificationService` is called *after* the consent
+  write commits and must never throw; a send failure is logged, never propagated. With
+  `smtp.host` unset the logging implementation is bound, so tests never reach a mail server.
 - **Config** is externalized to env vars; document every new one in `.env.sample` **and**
   `application.yml`.
 - **Testing.** Testcontainers for real PostgreSQL and Keycloak; WireMock for external stubs;

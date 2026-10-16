@@ -14,10 +14,12 @@ import org.slf4j.LoggerFactory;
  * Emits one event per lifecycle move, and is the seam a notification subsystem attaches to.
  *
  * <p>Every move {@link ConsentLifecycleService} records passes through here once the write has
- * committed, so TICKET-013's subject notification and TICKET-020's participant notification have a
- * single call site to grow from. It is a log and not a queue: nothing here is buffered, retried or
- * delivered to anyone, and a deployment that needs a revocation to reach the parties needs the
- * subsystem those tickets own — see ADR-0011.
+ * committed, so TICKET-020's participant notification has a single call site to grow from. Subject
+ * notification (TICKET-013) does not: it skips collateral moves, so it is called from {@code
+ * ConsentService.request} and {@code ConsentLifecycleService.terminate} directly — see ADR-0015. It
+ * is a log and not a queue: nothing here is buffered, retried or delivered to anyone, and a
+ * deployment that needs a revocation to reach the parties needs the subsystem those tickets own —
+ * see ADR-0011.
  */
 @Singleton
 public class ConsentStateChangeLog {

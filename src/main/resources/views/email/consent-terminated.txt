@@ -1,0 +1,7 @@
+Hello [(${displayName})],
+
+[(${participantLegalName})] has ended its consent arrangement with you for [(${noticeTitle})][# th:if="${terminatedAt}"] at [(${terminatedAt})] (UTC)[/].
+
+If you had given consent, it no longer applies. If a request was still open, you no longer need to answer it.
+
+This message is for your information only; you do not need to reply to it.

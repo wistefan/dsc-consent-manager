@@ -369,6 +369,20 @@ than an error, so an unreachable catalog can never become this service's `5xx`.
 `SelfDescriptionGuardTest` pins the fence and `SelfDescriptionCacheIT` pins that nothing a refusal
 or a failure produced is cached.
 
+## Outbound email
+
+Subject notifications (`…consentmanager.notification`, ADR-0015) are informational and confer
+nothing. No message carries a token, a consent id or a link that acts. The only link is the bare
+`NOTIFICATION_CLIENT_URL`, which startup requires to be an absolute `http(s)` URL. Subjects are
+constants, so no caller-supplied value reaches a header. The transport requires STARTTLS and
+always checks the server's identity. `SMTP_INSECURE_TRUST_ALL_CERTIFICATES` is the only way to
+relax that, and it is logged at WARN on every startup. `SMTP_STARTTLS=false` combined with
+`SMTP_USER` refuses to start. HTML views use `th:text` only. Because mail clients autolink even
+escaped text, `LinkNeutralizer` defuses `scheme://`, `mailto:` and `www.` in the legal name, the
+notice title and the user's name. A bare domain is left intact, and that risk is accepted. Logs
+name the user id and the consent id, never the address. `SmtpUserNotificationServiceIT` scans
+delivered mail for any URL the service did not configure.
+
 ## Spec layout
 
 `api/openapi.yaml` is the root document and `$ref`s into `api/components/`:
