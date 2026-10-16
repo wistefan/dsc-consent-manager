@@ -161,7 +161,11 @@ of the security filter so 401/403 responses carry the ID too.
     enforces `held.isEmpty() == primary.created()`. `ConsentWriter.decide` and `request` return it:
     - `decide` collects the revoked grant and every `closeRedundant` move into `collateral`, as
       `resume` already does, in the order they were written;
-    - `decide` answers through `moved(...)`, so `held` is the status read under the row lock;
+    - `decide` keeps answering through `answer(...)`, which sets `parentConsentId` to the
+      superseded grant and freezes the new snapshot *before* `factory.transition`. Routing it
+      through `moved(...)` would drop both. `decide` captures `held = unanswered.getStatus()`
+      from the row read under the lock (always `PENDING`, since `unanswered` is filtered on it)
+      and wraps the result as `new ConsentMove(held, answer(...))`;
     - `request` returns an empty `collateral` and an empty `held`.
 
     `ConsentService` unpacks `primary` exactly where it uses the `RecordedConsent` today, so the
@@ -176,24 +180,62 @@ of the security filter so 401/403 responses carry the ID too.
     `ConsentReporter` bean that both services call. It also gets
     `report(ConsentWrite)`, which reports the collateral moves first and then the primary. That
     keeps a single list of call sites.
+  - **Bulk moves: erasure and deregistration.** `UserService.erase` moves GRANTED → REVOKED and
+    PENDING/DRAFT → TERMINATED, and `ParticipantService.deregister` moves PENDING/DRAFT →
+    TERMINATED. Both go through `ConsentFactory` and `consents.updateAll`, not through
+    `ConsentWriter`, so neither reaches the seam today. Their private `close`/`terminateUnanswered`
+    run inside the `@Transactional` method (self-invoked), so counting there would count moves
+    that are then rolled back.
+    - `close` and `terminateUnanswered` return `List<ConsentMove>`, each with the status the row
+      held when it was read, instead of an `int`. `ErasureResult` and `DeregistrationResult` gain
+      a `List<ConsentMove> moves` component. Their existing counts become derived from it (or are
+      checked against it in the compact constructor), so the published summary is unchanged.
+    - `UserController.eraseCurrentUser` and `ParticipantController.deregisterCurrentParticipant`
+      hand `result.moves()` to `ConsentReporter.report(List<ConsentMove>)` after the
+      transactional call has returned, so only committed moves are counted and logged.
+    - That reporter method resolves the provider and consumer identifiers once per distinct
+      participant rather than per row, so a long-standing subject's erasure does not cost two
+      lookups per consent. The log line still names the subject by opaque `userId` only, which
+      ADR-0007 requires once the record is pseudonymised.
   - Never count inside the transaction. The lost-race 409 path counts nothing, because the
-    rollback means no `ConsentWrite` is ever returned.
+    rollback means no `ConsentWrite` is ever returned. A refused erasure or deregistration (for
+    example, deregistration while a grant is open) returns no result and counts nothing.
 - **Hikari metrics.** Confirm `hikaricp.*` meters are bound. If they are not, enable the
   Micronaut Micrometer JDBC/Hikari binder in `application.yml`.
 - **Tests.**
-  - `ConsentMetricsIT`: parameterized over every edge in `ConsentStateMachine`, driven through
-    the HTTP routes that make each move. That covers creation (`request`), the decision path
-    (`decide`) and the lifecycle routes, including a collateral move. Each committed move
-    increments exactly its `(from,to)` counter. A refused move and a lost race increment nothing.
+  - `ConsentMetricsIT`: parameterized over every edge that some HTTP route can make, driven
+    through that route. That covers creation (`request`, and `decide` with no open request), the
+    decision path (`decide`), the lifecycle routes, erasure and deregistration, including the
+    collateral moves. Each committed move increments exactly its `(from,to)` counter. A refused
+    move and a lost race increment nothing.
+    - **No row creates a DRAFT or an EXPIRED today.** Nothing in `src/main` creates a DRAFT row
+      or moves a consent to EXPIRED, so edges out of DRAFT are driven on a row seeded through the
+      repository, and only where a route accepts DRAFT (the lifecycle routes, erasure and
+      deregistration).
+    - **Edges no route makes** are listed in a named `NOT_YET_REACHABLE` constant in the IT. It is
+      expected to hold GRANTED → EXPIRED, GRANTED → TERMINATED and DRAFT → REFUSED; confirm the
+      list against the routes when writing the test. A test in the same class asserts that the
+      driven edges and `NOT_YET_REACHABLE` are disjoint and together equal every edge in the
+      `ConsentStateMachine` table, plus the `none` creations from `CREATABLE`. So an expiry job or
+      a draft route that makes a listed edge reachable fails the build until it moves from the
+      list to a driven row.
+
     Explicit rows:
     - a superseding grant (a decision against an open grant): GRANTED→REVOKED once, plus the
       primary move;
     - a redundant-pending close: PENDING→TERMINATED once per extra row. Two open requests arise
       only from the race `ConsentWriter.request` documents, so the extra PENDING is seeded through
       the repository and the decision is then made over HTTP;
-    - a creation through `request`: `none`→PENDING.
+    - a creation through `request`: `none`→PENDING;
+    - an erasure over HTTP for a subject holding a grant, a PENDING request and a seeded DRAFT:
+      GRANTED→REVOKED, PENDING→TERMINATED and DRAFT→TERMINATED, once each;
+    - a deregistration over HTTP for a participant named by a PENDING request and a seeded DRAFT:
+      PENDING→TERMINATED and DRAFT→TERMINATED, once each. A deregistration refused while a grant
+      is open counts nothing.
   - `ConsentStateChangeLogTest`: a creation's JSON line has no `heldStatus` field, and a move's line
     still has it.
+  - `UserServiceTest`/`ParticipantServiceTest` (or the existing erasure and deregistration ITs):
+    the returned `moves` match the published counts, and each carries the status it was read in.
   - `MetricsExposureIT`: `/metrics` lists `jvm.memory.used`, `http.server.requests`, a
     `hikaricp.connections*` meter, `consentmanager.consent.transitions` and the existing
     token-rejection meter. `/prometheus` returns the scrape format.
