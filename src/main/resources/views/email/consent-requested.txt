@@ -1,0 +1,7 @@
+Hello [(${displayName})],
+
+[(${participantLegalName})] has requested your consent for [(${noticeTitle})].
+
+[# th:if="${clientUrl}"]You can review the request and decide whether to answer it in your consent client: [(${clientUrl})][/][# th:unless="${clientUrl}"]You can review the request and decide whether to answer it in your consent client.[/]
+
+Nothing changes unless you answer the request yourself. This message is for your information only; you do not need to reply to it.

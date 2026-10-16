@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Consent arrangement ended</title>
+</head>
+<body>
+<p>Hello <span th:text="${displayName}">there</span>,</p>
+<p><span th:text="${participantLegalName}">A participant</span> has ended its consent arrangement
+    with you for <span th:text="${noticeTitle}">a privacy notice</span><th:block
+            th:if="${terminatedAt}"> at <span th:text="${terminatedAt}">time</span> (UTC)</th:block>.</p>
+<p>If you had given consent, it no longer applies. If a request was still open, you no longer need
+    to answer it.</p>
+<p>This message is for your information only; you do not need to reply to it.</p>
+</body>
+</html>
