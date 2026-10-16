@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.env.Environment;
+import java.net.URI;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -29,6 +30,7 @@ class ConsentManagerConfigurationTest {
 
     private static final String CONFIGURED_URL = "https://contract.example.org";
     private static final String CONTRACT_SERVICE_URL_VARIABLE = "CONTRACT_SERVICE_URL";
+    private static final String CONFIGURED_CLIENT_URL = "https://wallet.example.org/consents";
 
     /** One configured value per properties class, with the accessor that has to report it back. */
     static Stream<Arguments> boundSettings() {
@@ -86,7 +88,26 @@ class ConsentManagerConfigurationTest {
                         7,
                         context ->
                                 bean(context, ConsentManagerConfiguration.Consents.class)
-                                        .getLineageMaxDepth()));
+                                        .getLineageMaxDepth()),
+                setting(
+                        "consent-manager.notifications.client-url",
+                        CONFIGURED_CLIENT_URL,
+                        URI.create(CONFIGURED_CLIENT_URL),
+                        context ->
+                                bean(context, ConsentManagerConfiguration.Notifications.class)
+                                        .getClientUrl()));
+    }
+
+    @Test
+    @DisplayName("an unset NOTIFICATION_CLIENT_URL leaves the client url null, not an empty URI")
+    void leavesAnUnsetClientUrlNull() {
+        try (ApplicationContext context = startContext(Map.of())) {
+            assertThat(
+                            bean(context, ConsentManagerConfiguration.Notifications.class)
+                                    .getClientUrl())
+                    .as("an empty URI would render as a link to nowhere")
+                    .isNull();
+        }
     }
 
     /** The three settings application.yml forwards into the keys Micronaut's client reads. */

@@ -2,6 +2,7 @@ package com.seamware.consentmanager.config;
 
 import io.micronaut.context.annotation.ConfigurationProperties;
 import io.micronaut.core.annotation.Nullable;
+import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import lombok.Getter;
@@ -41,6 +42,7 @@ import lombok.Setter;
  *       consent-manager.receipts.ephemeral-signing-key}
  *   <li>{@code RECEIPTS_RETIRED_VERIFICATION_KEYS} &rarr; {@code
  *       consent-manager.receipts.retired-verification-keys}
+ *   <li>{@code NOTIFICATION_CLIENT_URL} &rarr; {@code consent-manager.notifications.client-url}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut
@@ -393,6 +395,24 @@ public class ConsentManagerConfiguration {
          * {@code CONTRACT_DISCOVERY_MAX_DURATION}; a single uncached fetch alone may take ~47s.
          */
         private Duration maxDuration = DEFAULT_MAX_DURATION;
+    }
+
+    /** Settings of the subject notifications, bound under {@code consent-manager.notifications}. */
+    @Getter
+    @Setter
+    @ConfigurationProperties("notifications")
+    public static class Notifications {
+
+        /**
+         * Client a consent-requested email links to, bound to {@code NOTIFICATION_CLIENT_URL}; the
+         * bare URL, never extended with an id or token. Unset means the email carries no link.
+         */
+        @Nullable private URI clientUrl;
+
+        /** Binds the client URL, treating the empty value of an unset variable as no URL. */
+        public void setClientUrl(@Nullable URI clientUrl) {
+            this.clientUrl = clientUrl == null || clientUrl.toString().isBlank() ? null : clientUrl;
+        }
     }
 
     /**

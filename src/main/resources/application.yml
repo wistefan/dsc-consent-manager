@@ -505,6 +505,13 @@ consent-manager:
     # ever. Rotating the key abandons every verifier written under the previous one.
     verification-secret: ${ERASURE_VERIFICATION_SECRET:}
 
+  notifications:
+    # Client the consent-requested email links the data subject to. Only this bare URL
+    # is rendered - never a consent id, token or query parameter - and unset (the
+    # default) means the email carries no link at all. With SMTP_HOST set, startup fails
+    # unless it is an absolute http(s) URL with a host.
+    client-url: ${NOTIFICATION_CLIENT_URL:}
+
   # ---------------------------------------------------------------------------
   # Identity provider trust list
   # ---------------------------------------------------------------------------
@@ -579,3 +586,24 @@ consent-manager:
         user: ${IDP_ROLE_USER:consent-user}
         participant: ${IDP_ROLE_PARTICIPANT:consent-participant}
         catalog: ${IDP_ROLE_CATALOG:consent-catalog}
+
+# -----------------------------------------------------------------------------
+# Outgoing mail (subject notifications)
+# -----------------------------------------------------------------------------
+# SMTP_HOST is deliberately not written here: it reaches `smtp.host` through Micronaut's
+# environment mapping. Unset or blank disables notifications - nothing is sent and a
+# logging implementation is bound instead. A `host: ${SMTP_HOST:}` line would make the
+# key present with an empty value, which is why the host is read only from the variable.
+# SMTP_PORT (default 587; STARTTLS only, so 465/implicit TLS warns at startup) and SMTP_STARTTLS (default true; false sends unencrypted, warns at
+# startup and refuses to start while SMTP_USER is set) are likewise read only from the
+# environment, so the defaults live once, in NotificationConfiguration, and cannot drift.
+smtp:
+  # Credentials are optional; without a user the session does not authenticate.
+  user: ${SMTP_USER:}
+  password: ${SMTP_PASSWORD:}
+  # Sender of every notification. Startup fails when SMTP_HOST is set and this is blank.
+  from-address: ${SMTP_FROM_ADDRESS:}
+  from-name: ${SMTP_FROM_NAME:}
+  # Dev-only: trust every server certificate and skip the host-name check. Logged at
+  # WARN on every startup while on.
+  insecure-trust-all-certificates: ${SMTP_INSECURE_TRUST_ALL_CERTIFICATES:false}
