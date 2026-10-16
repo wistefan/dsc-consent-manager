@@ -61,6 +61,12 @@ class EmailTemplateRenderingTest {
     static final String HOSTILE_TITLE = "HTTP://evil.example and mailto:x@evil.example";
     static final String HOSTILE_FIRST_NAME = "www.evil.example";
 
+    /** Schemes glued to a preceding word character, which a {@code \\b}-anchored match misses. */
+    static final String GLUED_URL_NAME = "ACME_https://evil.example/verify";
+
+    static final String GLUED_TITLE = "1https://evil.example and x_mailto:a@evil.example";
+    static final String GLUED_FIRST_NAME = "x_www.evil.example";
+
     private static final Contact FROM = new Contact(NotificationContexts.FROM_ADDRESS);
     private static final String RECIPIENT = "subject@example.org";
     private static final String WHITESPACE = "\\s+";
@@ -90,6 +96,26 @@ class EmailTemplateRenderingTest {
     @AfterAll
     static void stopContext() {
         context.close();
+    }
+
+    /** Hostile values for the legal name, the notice title and the first name. */
+    record HostileValues(String legalName, String title, String firstName) {}
+
+    static Stream<Arguments> kindsPartsAndHostileValues() {
+        List<HostileValues> fixtures =
+                List.of(
+                        new HostileValues(HOSTILE_URL_NAME, HOSTILE_TITLE, HOSTILE_FIRST_NAME),
+                        new HostileValues(GLUED_URL_NAME, GLUED_TITLE, GLUED_FIRST_NAME));
+        return kindsAndParts()
+                .flatMap(
+                        args ->
+                                fixtures.stream()
+                                        .map(
+                                                values ->
+                                                        Arguments.of(
+                                                                args.get()[0],
+                                                                args.get()[1],
+                                                                values)));
     }
 
     static Stream<Arguments> kindsAndParts() {
@@ -157,13 +183,14 @@ class EmailTemplateRenderingTest {
                 .doesNotContain(user.getIdentifier(), "null");
     }
 
-    @ParameterizedTest(name = "{0} {1}")
-    @MethodSource("kindsAndParts")
+    @ParameterizedTest(name = "{0} {1} {2}")
+    @MethodSource("kindsPartsAndHostileValues")
     @DisplayName("leaves no autolinkable URL in a value another party set")
-    void neutralisesLinksInInterpolatedValues(NotificationKind kind, Part part) {
-        User user = NotificationTestFixtures.user(RECIPIENT, HOSTILE_FIRST_NAME, null);
-        Participant participant = NotificationTestFixtures.participant(HOSTILE_URL_NAME);
-        Consent consent = NotificationTestFixtures.consent(user, participant, HOSTILE_TITLE);
+    void neutralisesLinksInInterpolatedValues(
+            NotificationKind kind, Part part, HostileValues values) {
+        User user = NotificationTestFixtures.user(RECIPIENT, values.firstName(), null);
+        Participant participant = NotificationTestFixtures.participant(values.legalName());
+        Consent consent = NotificationTestFixtures.consent(user, participant, values.title());
 
         String body = render(model(kind, user, consent, participant, CLIENT_URL), part);
 

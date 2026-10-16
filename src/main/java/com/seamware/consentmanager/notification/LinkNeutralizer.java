@@ -8,17 +8,20 @@ import java.util.regex.Pattern;
  */
 final class LinkNeutralizer {
 
-    /** {@code <scheme>://} for any scheme, matched case-insensitively. */
+    /**
+     * {@code <scheme>://} for any scheme, case-insensitively. Unanchored on purpose: a {@code \b}
+     * would let a scheme glued to a digit or underscore ({@code ACME_https://}) through.
+     */
     static final Pattern SCHEME_SEPARATOR =
-            Pattern.compile("\\b([a-z][a-z0-9+.-]*)://", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("([a-z][a-z0-9+.-]*)://", Pattern.CASE_INSENSITIVE);
 
     static final String SCHEME_SEPARATOR_REPLACEMENT = "$1[:]//";
 
-    static final Pattern MAILTO = Pattern.compile("\\b(mailto):", Pattern.CASE_INSENSITIVE);
+    static final Pattern MAILTO = Pattern.compile("(mailto):", Pattern.CASE_INSENSITIVE);
     static final String MAILTO_REPLACEMENT = "$1[:]";
 
-    /** {@code www.} at the start of a word. */
-    static final Pattern WWW_PREFIX = Pattern.compile("\\b(www)\\.", Pattern.CASE_INSENSITIVE);
+    /** {@code www.} anywhere, so a glued prefix ({@code x_www.}) is broken too. */
+    static final Pattern WWW_PREFIX = Pattern.compile("(www)\\.", Pattern.CASE_INSENSITIVE);
 
     static final String WWW_PREFIX_REPLACEMENT = "$1[.]";
 
