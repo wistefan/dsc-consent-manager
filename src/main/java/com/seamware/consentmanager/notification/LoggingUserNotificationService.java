@@ -17,15 +17,15 @@ public class LoggingUserNotificationService implements UserNotificationService {
 
     @Override
     public void consentRequested(User user, Consent consent, Participant participant) {
-        log("consent-requested", user, consent);
+        log(NotificationKind.CONSENT_REQUESTED, user, consent);
     }
 
     @Override
     public void consentTerminated(User user, Consent consent, Participant participant) {
-        log("consent-terminated", user, consent);
+        log(NotificationKind.CONSENT_TERMINATED, user, consent);
     }
 
-    private static void log(String kind, User user, Consent consent) {
+    private static void log(NotificationKind kind, User user, Consent consent) {
         LOG.debug(
                 "SMTP not configured; {} notification to user {} for consent {} not sent",
                 kind,

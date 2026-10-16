@@ -37,6 +37,7 @@
         <testcontainers.version>1.21.4</testcontainers.version>
         <testcontainers-keycloak.version>3.6.0</testcontainers-keycloak.version>
         <wiremock.version>3.10.0</wiremock.version>
+        <greenmail.version>2.1.3</greenmail.version>
         <lombok.version>1.18.48</lombok.version>
         <json-canonicalization.version>1.1</json-canonicalization.version>
 
@@ -264,6 +265,24 @@
             <artifactId>micronaut-email-javamail</artifactId>
             <scope>compile</scope>
         </dependency>
+        <dependency>
+            <groupId>io.micronaut.email</groupId>
+            <artifactId>micronaut-email-template</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <!-- The SMTP transport behind the jakarta.mail API; without it every send fails -->
+        <dependency>
+            <groupId>org.eclipse.angus</groupId>
+            <artifactId>angus-mail</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Thymeleaf views: renders the notification email templates -->
+        <dependency>
+            <groupId>io.micronaut.views</groupId>
+            <artifactId>micronaut-views-thymeleaf</artifactId>
+            <scope>compile</scope>
+        </dependency>
 
         <!-- Micronaut Serde (Jackson) -->
         <dependency>
@@ -398,6 +417,21 @@
             <artifactId>wiremock-standalone</artifactId>
             <version>${wiremock.version}</version>
             <scope>test</scope>
+        </dependency>
+
+        <!-- In-process SMTP server for the notification ITs -->
+        <dependency>
+            <groupId>com.icegreen</groupId>
+            <artifactId>greenmail-junit5</artifactId>
+            <version>${greenmail.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <!-- Bundles a second, older copy of the jakarta.mail API next to angus-mail -->
+                <exclusion>
+                    <groupId>org.eclipse.angus</groupId>
+                    <artifactId>jakarta.mail</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
     </dependencies>
 

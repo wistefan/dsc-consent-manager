@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Consent requested</title>
+</head>
+<body>
+<p>Hello <span th:text="${displayName}">there</span>,</p>
+<p><span th:text="${participantLegalName}">A participant</span> has requested your consent for
+    <span th:text="${noticeTitle}">a privacy notice</span>.</p>
+<p th:if="${clientUrl}">You can review the request and decide whether to answer it in your consent
+    client: <a th:href="${clientUrl}" th:text="${clientUrl}">client</a></p>
+<p th:unless="${clientUrl}">You can review the request and decide whether to answer it in your
+    consent client.</p>
+<p>Nothing changes unless you answer the request yourself. This message is for your information
+    only; you do not need to reply to it.</p>
+</body>
+</html>
