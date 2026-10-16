@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import ch.qos.logback.classic.Level;
@@ -27,6 +28,8 @@ class SmtpSessionFactoryTest {
 
     private static final String TRUST_ALL_PROPERTY = "smtp.insecure-trust-all-certificates";
     private static final String STARTTLS_PROPERTY = "smtp.starttls";
+    private static final String PORT_PROPERTY = "smtp.port";
+    private static final String CLIENT_URL_PROPERTY = "consent-manager.notifications.client-url";
 
     private final Logger validatorLogger =
             (Logger) LoggerFactory.getLogger(SmtpConfigurationValidator.class);
@@ -92,14 +95,24 @@ class SmtpSessionFactoryTest {
                 Arguments.of(
                         STARTTLS_PROPERTY, false, SmtpConfigurationValidator.STARTTLS_VARIABLE, 1),
                 Arguments.of(
-                        STARTTLS_PROPERTY, true, SmtpConfigurationValidator.STARTTLS_VARIABLE, 0));
+                        STARTTLS_PROPERTY, true, SmtpConfigurationValidator.STARTTLS_VARIABLE, 0),
+                Arguments.of(
+                        PORT_PROPERTY,
+                        SmtpConfigurationValidator.IMPLICIT_TLS_PORT,
+                        SmtpConfigurationValidator.PORT_VARIABLE,
+                        1),
+                Arguments.of(
+                        PORT_PROPERTY,
+                        NotificationConfiguration.DEFAULT_PORT,
+                        SmtpConfigurationValidator.PORT_VARIABLE,
+                        0));
     }
 
     @ParameterizedTest(name = "{0}={1} -> {3} warning(s) naming {2}")
     @MethodSource("relaxations")
     @DisplayName("a transport relaxation is warned about at startup, before any session exists")
     void warnsAboutRelaxationsAtStartup(
-            String property, boolean value, String variable, int expectedWarnings) {
+            String property, Object value, String variable, int expectedWarnings) {
         try (ApplicationContext ignored =
                 NotificationContexts.start(NotificationContexts.smtp(Map.of(property, value)))) {
             // Asserted before any Session is fetched: the warning must not wait for the first send.
@@ -122,7 +135,26 @@ class SmtpSessionFactoryTest {
                                 "mailer",
                                 "smtp.password",
                                 "secret"),
-                        SmtpConfigurationValidator.STARTTLS_VARIABLE));
+                        SmtpConfigurationValidator.STARTTLS_VARIABLE),
+                Arguments.of(
+                        Map.of(CLIENT_URL_PROPERTY, "wallet.example.org"),
+                        SmtpConfigurationValidator.CLIENT_URL_VARIABLE),
+                Arguments.of(
+                        Map.of(CLIENT_URL_PROPERTY, "ftp://wallet.example.org"),
+                        SmtpConfigurationValidator.CLIENT_URL_VARIABLE),
+                Arguments.of(
+                        Map.of(CLIENT_URL_PROPERTY, "https:wallet.example.org"),
+                        SmtpConfigurationValidator.CLIENT_URL_VARIABLE));
+    }
+
+    @Test
+    @DisplayName("an absolute https client url is accepted at startup")
+    void acceptsAnAbsoluteClientUrl() {
+        Map<String, Object> properties =
+                NotificationContexts.smtp(
+                        Map.of(CLIENT_URL_PROPERTY, "https://wallet.example.org/consents"));
+        assertThatCode(() -> NotificationContexts.start(properties).close())
+                .doesNotThrowAnyException();
     }
 
     @ParameterizedTest(name = "{0} -> names {1}")

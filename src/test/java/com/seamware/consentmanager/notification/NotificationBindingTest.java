@@ -8,7 +8,7 @@ import io.micronaut.inject.qualifiers.Qualifiers;
 import jakarta.mail.Session;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executor;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -46,6 +46,7 @@ class NotificationBindingTest {
     @Test
     @DisplayName("a configured smtp.host binds the SMTP session, its provider and the executor")
     void bindsTheSmtpBeansWithAHost() {
+        NotificationThreadPool executor;
         try (ApplicationContext context =
                 NotificationContexts.start(NotificationContexts.smtp(Map.of()))) {
             assertThat(context.getBeansOfType(LoggingUserNotificationService.class)).isEmpty();
@@ -56,12 +57,19 @@ class NotificationBindingTest {
                     .extracting(SessionProvider::session)
                     .isSameAs(session);
             assertThat(notificationExecutorExists(context)).isTrue();
+            executor =
+                    context.getBean(
+                            NotificationThreadPool.class,
+                            Qualifiers.byName(NotificationExecutorFactory.EXECUTOR_NAME));
+            assertThat(executor.isShutdown()).isFalse();
         }
+        assertThat(executor.isShutdown())
+                .as("closing the context must run the pool's preDestroy drain")
+                .isTrue();
     }
 
     private static boolean notificationExecutorExists(ApplicationContext context) {
         return context.containsBean(
-                ExecutorService.class,
-                Qualifiers.byName(NotificationExecutorFactory.EXECUTOR_NAME));
+                Executor.class, Qualifiers.byName(NotificationExecutorFactory.EXECUTOR_NAME));
     }
 }

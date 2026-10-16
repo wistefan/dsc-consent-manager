@@ -1,9 +1,13 @@
 package com.seamware.consentmanager.notification;
 
+import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import io.micronaut.context.annotation.Context;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.context.exceptions.ConfigurationException;
 import jakarta.annotation.PostConstruct;
+import java.net.URI;
+import java.util.Locale;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,16 +24,27 @@ public class SmtpConfigurationValidator {
     static final String FROM_ADDRESS_VARIABLE = "SMTP_FROM_ADDRESS";
     static final String TRUST_ALL_VARIABLE = "SMTP_INSECURE_TRUST_ALL_CERTIFICATES";
     static final String STARTTLS_VARIABLE = "SMTP_STARTTLS";
+    static final String PORT_VARIABLE = "SMTP_PORT";
+    static final String CLIENT_URL_VARIABLE = "NOTIFICATION_CLIENT_URL";
+
+    /** SMTPS port, which speaks TLS before the greeting; this session only negotiates STARTTLS. */
+    static final int IMPLICIT_TLS_PORT = 465;
+
+    private static final Set<String> CLIENT_URL_SCHEMES = Set.of("http", "https");
 
     private final NotificationConfiguration configuration;
+    private final ConsentManagerConfiguration.Notifications notifications;
 
-    SmtpConfigurationValidator(NotificationConfiguration configuration) {
+    SmtpConfigurationValidator(
+            NotificationConfiguration configuration,
+            ConsentManagerConfiguration.Notifications notifications) {
         this.configuration = configuration;
+        this.notifications = notifications;
     }
 
     /**
-     * Fails startup on a blank sender or on credentials over a plaintext session, and warns once
-     * about each transport relaxation.
+     * Fails startup on a blank sender, on credentials over a plaintext session or on a client URL
+     * no mail client can open, and warns once about each transport relaxation.
      */
     @PostConstruct
     void validate() {
@@ -53,6 +68,29 @@ public class SmtpConfigurationValidator {
             LOG.warn(
                     "{} is on: SMTP server certificates and host names are not verified. Never use this outside development.",
                     TRUST_ALL_VARIABLE);
+        }
+        if (configuration.getPort() == IMPLICIT_TLS_PORT) {
+            LOG.warn(
+                    "{} is {}, the implicit-TLS port, which is not supported: every send will time out. Use the STARTTLS submission port.",
+                    PORT_VARIABLE,
+                    IMPLICIT_TLS_PORT);
+        }
+        validateClientUrl(notifications.getClientUrl());
+    }
+
+    private static void validateClientUrl(URI clientUrl) {
+        if (clientUrl == null) {
+            return;
+        }
+        String scheme = clientUrl.getScheme();
+        boolean openable =
+                clientUrl.isAbsolute()
+                        && CLIENT_URL_SCHEMES.contains(scheme.toLowerCase(Locale.ROOT))
+                        && clientUrl.getHost() != null;
+        if (!openable) {
+            throw new ConfigurationException(
+                    "%s must be an absolute http(s) URL with a host; a mail client cannot open the configured value"
+                            .formatted(CLIENT_URL_VARIABLE));
         }
     }
 }
