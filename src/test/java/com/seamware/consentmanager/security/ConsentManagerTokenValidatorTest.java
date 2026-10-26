@@ -44,29 +44,9 @@ import org.junit.jupiter.params.provider.MethodSource;
 import reactor.core.publisher.Mono;
 
 /**
- * Pins the token validation pipeline: which tokens become an {@link Authentication} and which
- * become nothing at all.
- *
- * <p>Emitting nothing is the whole failure vocabulary of a {@link
- * io.micronaut.security.token.validator.TokenValidator}; the security filter turns it into {@code
- * 401}. So every rejection case below asserts the same thing - an empty result - and the value of
- * the suite is in the <em>breadth</em> of the matrix rather than in any single assertion. A check
- * that silently stopped running would show up here as a token that authenticates, not as a
- * different error.
- *
- * <p>The providers are WireMock stubs rather than containers: the pipeline needs an issuer whose
- * discovery resolves and whose key set is published, and nothing about those two documents needs a
- * real Keycloak. The end-to-end run against a real one is Step 8's.
- *
- * <p><strong>Two stubs, deliberately.</strong> Cross-issuer key confusion - a {@code kid} that is
- * genuinely valid at provider A, presented in a token claiming provider B's issuer - cannot be
- * expressed with a single trusted provider, and is the one rejection an implementation that
- * verified against "any trusted key" would still get wrong.
- *
- * <p>What is <em>not</em> asserted here is the shape of the HTTP response, including the rule that
- * a rejection must not echo the submitted issuer (US-ID-008): a validator produces no response and
- * no message, so that assertion belongs to {@link TokenSignatureEnforcementTest}, which makes it
- * against a real 401 body and its headers.
+ * Tests which tokens the validation pipeline turns into an {@link Authentication} and which into
+ * nothing, against two WireMock providers so cross-issuer key confusion can be expressed. The 401
+ * body itself is asserted in {@link TokenSignatureEnforcementTest}.
  */
 @DisplayName("Bearer token validation")
 class ConsentManagerTokenValidatorTest {
@@ -111,14 +91,7 @@ class ConsentManagerTokenValidatorTest {
     /** Nested path the entries carry their roles under, as Keycloak publishes them. */
     private static final List<String> ROLES_CLAIM = List.of(REALM_ACCESS_CLAIM, ROLES_SEGMENT);
 
-    /**
-     * Claim the entries carry the user identifier under.
-     *
-     * <p>Deliberately <em>not</em> {@link
-     * IdentityProviderConfiguration#DEFAULT_USER_IDENTIFIER_CLAIM}: a token always carries {@code
-     * sub}, so with the default in place the "a {@code USER} token with no user identifier" case
-     * could not be written at all.
-     */
+    /** User identifier claim; not the {@code sub} default, so a token can lack an identifier. */
     private static final String USER_IDENTIFIER_CLAIM = "user_id";
 
     /** Claim the entries carry the participant identifier under. */
@@ -152,10 +125,8 @@ class ConsentManagerTokenValidatorTest {
     private static final Duration OUTSIDE_WINDOW = Duration.ofMinutes(10);
 
     /**
-     * How far outside its validity window a token sits in the clock-skew cases.
-     *
-     * <p>Shorter than {@link IdentityProviderConfiguration#DEFAULT_CLOCK_SKEW}, which is the
-     * tolerance both entries inherit, so such a token must still be accepted.
+     * Offset outside the validity window in the clock-skew cases; within the inherited {@link
+     * IdentityProviderConfiguration#DEFAULT_CLOCK_SKEW}, so such a token is still accepted.
      */
     private static final Duration INSIDE_CLOCK_SKEW = Duration.ofSeconds(10);
 
@@ -179,30 +150,16 @@ class ConsentManagerTokenValidatorTest {
     private static ApplicationContext context;
     private static ConsentManagerTokenValidator validator;
 
-    /**
-     * Registry the {@link #meteredValidator} publishes its refusals to.
-     *
-     * <p>Separate from the context's own registry so a counter carries only what this suite
-     * produced, and so the assertions hold whether or not a metrics backend is configured.
-     */
+    /** Registry {@link #meteredValidator} publishes to, holding only this suite's refusals. */
     private static SimpleMeterRegistry claimMetrics;
 
-    /**
-     * The same validator wired to {@link #claimMetrics}.
-     *
-     * <p>Built from the context's beans rather than stubs, so the counted refusal is the one the
-     * real pipeline reaches.
-     */
+    /** The validator built from the context's real beans but wired to {@link #claimMetrics}. */
     private static ConsentManagerTokenValidator meteredValidator;
 
     /** A locally generated key no provider publishes, used for the forgery cases. */
     private static RSAKey foreignKey;
 
-    /**
-     * Starts both stub providers and a context trusting them, and waits for discovery.
-     *
-     * @throws JOSEException if the forgery key pair cannot be generated
-     */
+    /** Starts both stub providers and a context trusting them, and waits for discovery. */
     @BeforeAll
     static void startFixtures() throws JOSEException {
         foreignKey =
@@ -241,11 +198,7 @@ class ConsentManagerTokenValidatorTest {
         }
     }
 
-    /**
-     * Closes a fixture, ignoring any failure so one bad teardown cannot mask the rest.
-     *
-     * @param closeable the fixture to close; may be {@code null} if its setup never ran
-     */
+    /** Closes a possibly {@code null} fixture, ignoring failures so one cannot mask the rest. */
     private static void closeQuietly(AutoCloseable closeable) {
         if (closeable == null) {
             return;
@@ -258,12 +211,8 @@ class ConsentManagerTokenValidatorTest {
     }
 
     /**
-     * Every token that must not authenticate.
-     *
-     * <p>Tokens are minted lazily through a {@link Supplier} so that the time-dependent cases are
-     * built relative to the moment the test runs rather than to argument-resolution time.
-     *
-     * @return description and token supplier per case
+     * Every token that must not authenticate, minted lazily so time-dependent cases are relative to
+     * when the test runs.
      */
     private static Stream<Arguments> refusedTokens() {
         return Stream.of(
@@ -395,11 +344,7 @@ class ConsentManagerTokenValidatorTest {
                 .isEmpty();
     }
 
-    /**
-     * Tokens whose <em>header</em> alone disqualifies them, before any key is looked up.
-     *
-     * @return description and token supplier per case
-     */
+    /** Tokens whose header alone disqualifies them, before any key is looked up. */
     private static Stream<Arguments> refusedHeaders() {
         return Stream.of(
                 Arguments.of(
@@ -445,11 +390,7 @@ class ConsentManagerTokenValidatorTest {
                 .contains(JWSAlgorithm.parse(algorithm));
     }
 
-    /**
-     * The role strings each mapped role is reached through.
-     *
-     * @return raw role string and the role it grants
-     */
+    /** Each raw role string and the mapped role it grants. */
     private static Stream<Arguments> mappedRoles() {
         return Stream.of(
                 Arguments.of(USER_ROLE_VALUE, Role.USER),
@@ -491,11 +432,7 @@ class ConsentManagerTokenValidatorTest {
         assertThat(authentication.get().getRoles()).containsExactly(Role.USER.name());
     }
 
-    /**
-     * Roles claims that grant nothing, each of which must still authenticate.
-     *
-     * @return description and token supplier per case
-     */
+    /** Roles claims that grant nothing, each of which must still authenticate. */
     private static Stream<Arguments> tokensWithoutAuthorities() {
         return Stream.of(
                 Arguments.of(
@@ -608,13 +545,8 @@ class ConsentManagerTokenValidatorTest {
     }
 
     /**
-     * One refused token per value of {@link ConsentManagerTokenValidator#REASON_TAG}.
-     *
-     * <p>Every refusal renders as the same bare {@code 401}, so this counter is the only signal an
-     * operator has for telling a misconfigured audience from a clock-skew problem. A tag that was
-     * wrong, or a count that was silently dropped, would be invisible in production.
-     *
-     * @return description, expected {@code reason} tag and token supplier per case
+     * One refused token per {@link ConsentManagerTokenValidator#REASON_TAG} value; every refusal is
+     * a bare 401, so this counter is an operator's only way to tell the causes apart.
      */
     private static Stream<Arguments> countedClaimRejections() {
         return Stream.of(
@@ -692,23 +624,13 @@ class ConsentManagerTokenValidatorTest {
                 .isEqualTo(totalBefore);
     }
 
-    /**
-     * Runs a token through the validator wired to {@link #claimMetrics}.
-     *
-     * @param token the raw compact serialisation
-     * @return the authentication it produced, or empty if it produced none
-     */
+    /** Runs a token through the validator wired to {@link #claimMetrics}. */
     private static Optional<Authentication> meteredAuthenticate(String token) {
         return Mono.from(meteredValidator.validateToken(token, null))
                 .blockOptional(VALIDATION_TIMEOUT);
     }
 
-    /**
-     * Reads the refusal count carried by one {@code reason} tag for the primary provider.
-     *
-     * @param reason the {@link ConsentManagerTokenValidator#REASON_TAG} value
-     * @return the count, or zero if nothing has registered that counter yet
-     */
+    /** Refusal count for one {@code reason} tag of the primary provider; zero if unregistered. */
     private static double claimRejections(String reason) {
         Counter counter =
                 claimMetrics
@@ -719,11 +641,7 @@ class ConsentManagerTokenValidatorTest {
         return counter == null ? 0 : counter.count();
     }
 
-    /**
-     * Sums the refusal counts across every tag combination.
-     *
-     * @return the total, which pins that a refusal is counted once and under one reason only
-     */
+    /** Sums refusal counts across every tag, pinning that a refusal is counted exactly once. */
     private static double allClaimRejections() {
         return claimMetrics
                 .find(ConsentManagerTokenValidator.CLAIM_REJECTION_METRIC)
@@ -733,44 +651,22 @@ class ConsentManagerTokenValidatorTest {
                 .sum();
     }
 
-    /**
-     * Runs a token through the validator under test.
-     *
-     * @param token the raw compact serialisation, as the {@code Authorization} header would carry
-     * @return the authentication it produced, or empty if it produced none
-     */
+    /** Runs a raw compact token through the validator under test. */
     private static Optional<Authentication> authenticate(String token) {
         return Mono.from(validator.validateToken(token, null)).blockOptional(VALIDATION_TIMEOUT);
     }
 
-    /**
-     * Wraps a token-minting lambda so a case can be declared without a cast at every use.
-     *
-     * @param supplier mints the token when the case runs
-     * @return the same supplier, typed
-     */
+    /** Types a token-minting lambda so a case needs no cast. */
     private static Supplier<String> token(Supplier<String> supplier) {
         return supplier;
     }
 
-    /**
-     * Signs a claim set with a stub's current key and serialises it.
-     *
-     * @param provider the stub whose key signs
-     * @param claims the claims to sign
-     * @return the compact serialisation
-     */
+    /** Signs a claim set with a stub's current key and serialises it. */
     private static String sign(OidcDiscoveryStub provider, JWTClaimsSet claims) {
         return provider.signToken(provider.initialKeyId(), claims).serialize();
     }
 
-    /**
-     * Signs a claim set with a locally generated key no provider publishes.
-     *
-     * @param keyId the {@code kid} to advertise, which may well be one the provider does publish
-     * @param claims the claims to sign
-     * @return the compact serialisation
-     */
+    /** Signs a claim set with a local key no provider publishes, advertising any {@code kid}. */
     private static String signWithForeignKey(String keyId, JWTClaimsSet claims) {
         SignedJWT token =
                 new SignedJWT(
@@ -784,16 +680,8 @@ class ConsentManagerTokenValidatorTest {
     }
 
     /**
-     * Signs a claim set with {@code HS256}, keyed with the issuer's published RSA modulus.
-     *
-     * <p>This is the classic algorithm-confusion forgery: the modulus is public, so anybody can
-     * compute this signature. It verifies if - and only if - a service lets the token's header
-     * choose the algorithm and then hands the HMAC verifier whatever key material the {@code kid}
-     * resolves to.
-     *
-     * @param keyId the {@code kid} to advertise
-     * @param claims the claims to sign
-     * @return the compact serialisation
+     * Algorithm-confusion forgery: signs with {@code HS256} keyed by the issuer's public RSA
+     * modulus, which verifies only if the token's header may choose the algorithm.
      */
     private static String symmetricallySigned(String keyId, JWTClaimsSet claims) {
         SignedJWT token =
@@ -807,12 +695,7 @@ class ConsentManagerTokenValidatorTest {
         return token.serialize();
     }
 
-    /**
-     * Reads a stub's published RSA modulus straight off its JWK Set endpoint.
-     *
-     * @param provider the stub to read from
-     * @return the modulus bytes of its first published key
-     */
+    /** Reads the modulus of a stub's first published RSA key off its JWK Set endpoint. */
     private static byte[] publishedModulus(OidcDiscoveryStub provider) {
         try (HttpClient http = HttpClient.newHttpClient()) {
             HttpResponse<String> response =
@@ -837,25 +720,12 @@ class ConsentManagerTokenValidatorTest {
         }
     }
 
-    /**
-     * Builds the claim set a well-formed token for the given issuer carries.
-     *
-     * @param issuer the issuer to claim; {@code null} omits the claim entirely
-     * @return the claims
-     */
+    /** Builds a well-formed claim set for the issuer; {@code null} omits {@code iss}. */
     private static JWTClaimsSet claims(String issuer) {
         return builder(issuer).build();
     }
 
-    /**
-     * Builds a claim set whose time claims are stated explicitly.
-     *
-     * @param issuer the issuer to claim
-     * @param expiry the {@code exp} claim; {@code null} omits it
-     * @param issuedAt the {@code iat} claim; {@code null} omits it
-     * @param notBefore the {@code nbf} claim; {@code null} omits it
-     * @return the claims
-     */
+    /** Builds a claim set with explicit time claims; a {@code null} argument omits its claim. */
     private static JWTClaimsSet timed(
             String issuer, Instant expiry, Instant issuedAt, Instant notBefore) {
         return builder(issuer)
@@ -865,12 +735,7 @@ class ConsentManagerTokenValidatorTest {
                 .build();
     }
 
-    /**
-     * Starts a claim set that passes every check, so a case need only state what it breaks.
-     *
-     * @param issuer the issuer to claim; {@code null} omits the claim entirely
-     * @return a builder carrying a valid subject, audience, window and identifier claims
-     */
+    /** Starts a claim set that passes every check, so a case need only state what it breaks. */
     private static JWTClaimsSet.Builder builder(String issuer) {
         return new JWTClaimsSet.Builder()
                 .issuer(issuer)
@@ -882,35 +747,19 @@ class ConsentManagerTokenValidatorTest {
                 .claim(PARTICIPANT_IDENTIFIER_CLAIM, PARTICIPANT_ID);
     }
 
-    /**
-     * Adds a Keycloak-shaped nested roles claim.
-     *
-     * @param builder the claim set under construction
-     * @param rawRoles the raw role strings the provider emits
-     * @return the same builder
-     */
+    /** Adds a Keycloak-shaped nested roles claim. */
     private static JWTClaimsSet.Builder roles(JWTClaimsSet.Builder builder, String... rawRoles) {
         return builder.claim(REALM_ACCESS_CLAIM, Map.of(ROLES_SEGMENT, List.of(rawRoles)));
     }
 
-    /**
-     * Converts an instant to the date type Nimbus's time claims take.
-     *
-     * @param instant the instant, or {@code null} to omit the claim
-     * @return the date, or {@code null}
-     */
+    /** Converts an instant to a Nimbus time-claim date, passing {@code null} through. */
     private static Date toDate(Instant instant) {
         return instant == null ? null : Date.from(instant);
     }
 
     /**
-     * Starts a context trusting both stubs plus one provider that can never resolve.
-     *
-     * <p>{@code micronaut.security.enabled} is turned back on because {@code application-test.yml}
-     * switches it off for the tests that predate this ticket, and the validator is built from beans
-     * of the {@code io.micronaut.security} package.
-     *
-     * @return the started context, which {@link #stopFixtures()} closes
+     * Starts a context trusting both stubs plus one that never resolves, with security re-enabled
+     * because the validator is built from {@code io.micronaut.security} beans.
      */
     private static ApplicationContext startContext() {
         Map<String, Object> properties = new LinkedHashMap<>();
@@ -924,14 +773,7 @@ class ConsentManagerTokenValidatorTest {
         return ApplicationContext.builder(Environment.TEST).properties(properties).start();
     }
 
-    /**
-     * Builds the properties of one trust-list entry.
-     *
-     * @param name the entry name
-     * @param issuer the issuer it is trusted under
-     * @param discoveryUrl where its metadata is published
-     * @return the entry's properties
-     */
+    /** Builds the properties of one trust-list entry. */
     private static Map<String, Object> entry(String name, String issuer, String discoveryUrl) {
         String prefix = PROVIDER_PREFIX + name + ".";
         Map<String, Object> properties = new LinkedHashMap<>();

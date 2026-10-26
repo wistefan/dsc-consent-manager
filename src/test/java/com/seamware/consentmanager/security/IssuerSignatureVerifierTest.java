@@ -33,24 +33,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 import reactor.core.publisher.Mono;
 
 /**
- * Pins the signature half of the trust chain: whose keys a token is checked against, and how often
- * this service is willing to ask a provider for them.
- *
- * <p>The fetching, caching, {@code kid} matching and signature verification themselves belong to
- * {@code micronaut-security-jwt} (see {@code
- * docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md}) and are not retested
- * here. What is tested is everything that decision leaves to this service or makes observable from
- * outside it: that a token is only ever offered to the keys of the issuer it claims, that an issuer
- * which is not on the trust list costs no outbound request at all, that the cache lifetime bounds
- * both how fast a rotated key is honoured and how much traffic an attacker can aim at a reachable
- * provider, and that the case the cache does <em>not</em> bound - a key endpoint that is failing -
- * is bounded by the verifier's own cooldown instead.
- *
- * <p>Every assertion that matters is a <em>request count</em> against the stub rather than a return
- * value, because a cache that silently stopped caching would still return the right answers.
- *
- * <p>Each test owns its context and its stubs so that one test's cached key set cannot satisfy
- * another's fetch-count assertion.
+ * Tests that a token is checked only against its claimed issuer's keys, and how often this service
+ * fetches them, asserted as request counts against the stub. Fetching and caching are delegated;
+ * see ADR-0004.
  */
 @DisplayName("Signature verification against a trusted issuer's keys")
 class IssuerSignatureVerifierTest {
@@ -71,14 +56,8 @@ class IssuerSignatureVerifierTest {
     private static final String PROVIDER_PREFIX = "consent-manager.identity-providers.";
 
     /**
-     * Property that re-enables {@code micronaut-security}.
-     *
-     * <p>{@code src/test/resources/application-test.yml} sets this to {@code false} so that the
-     * tests written before this ticket are not asked for a token. The beans under test do not
-     * themselves depend on it - neither {@code DefaultJwkValidator} nor {@code
-     * CacheableJwkSetFetcher} nor {@link IdentityProviderRegistry} carries that condition - but a
-     * deployment runs with security on, and the bean graph a verification resolves through should
-     * be the deployed one rather than a configuration no deployment uses.
+     * Re-enables {@code micronaut-security}, which {@code application-test.yml} switches off, so
+     * verification resolves through the bean graph a deployment uses.
      */
     private static final String SECURITY_ENABLED_PROPERTY = "micronaut.security.enabled";
 
@@ -87,20 +66,12 @@ class IssuerSignatureVerifierTest {
             "micronaut.caches.jwks.expire-after-write";
 
     /**
-     * Cache lifetime used by the rotation test.
-     *
-     * <p>Short enough that a test need not sit out the production default, long enough that the
-     * tests which assert "fetched exactly once" are not racing it.
+     * Cache lifetime for the rotation test: short enough not to sit out the production default,
+     * long enough that "fetched exactly once" assertions do not race it.
      */
     private static final String SHORT_JWKS_CACHE_TTL = "2s";
 
-    /**
-     * Cache lifetime used by every test that counts requests.
-     *
-     * <p>Long enough that no entry can expire mid-test, so a fetch count means what the assertion
-     * says it means. Pinned rather than inherited from {@code application.yml}, so that retuning
-     * the production default cannot quietly turn one of these into a test of nothing.
-     */
+    /** Cache lifetime for request-counting tests; pinned so no entry expires mid-test. */
     private static final String LONG_JWKS_CACHE_TTL = "10m";
 
     /** Audience the stub entries declare; signature verification never looks at it. */
@@ -141,18 +112,14 @@ class IssuerSignatureVerifierTest {
     private static final Duration OUTAGE_TIMEOUT = Duration.ofSeconds(30);
 
     /**
-     * Tokens presented to a provider whose key endpoint is down and whose cache entry has gone.
-     *
-     * <p>Fired well inside {@link IssuerSignatureVerifier#KEY_SET_UNAVAILABLE_COOLDOWN}, since what
-     * is being measured is how many of them the verifier relays onto the failing provider.
+     * Tokens presented while the key endpoint is down and the cache entry gone; fired well inside
+     * {@link IssuerSignatureVerifier#KEY_SET_UNAVAILABLE_COOLDOWN}.
      */
     private static final int VERIFICATIONS_DURING_OUTAGE = 25;
 
     /**
-     * Verifications fired simultaneously against a provider whose key set has never been loaded.
-     *
-     * <p>Large enough that several threads are genuinely inside the first load at once, small
-     * enough to stay well inside the stub's capacity.
+     * Verifications fired simultaneously against a never-loaded key set; enough that several
+     * overlap the first load, few enough for the stub's capacity.
      */
     private static final int CONCURRENT_VERIFICATIONS = 8;
 
@@ -304,11 +271,8 @@ class IssuerSignatureVerifierTest {
                                     + " it for as long as the keys are still cached")
                     .isTrue();
 
-            // The other side of the same boundary, and the half an operator has to plan for: a
-            // failed fetch is never cached, so once the entry's lifetime is up there is nothing
-            // left to verify against and this provider's tokens are refused until it answers
-            // again. The cache lifetime is therefore also the length of the grace period an
-            // outage gets, which is why it is pinned here rather than inherited.
+            // A failed fetch is never cached, so once the entry expires this provider's tokens are
+            // refused until it answers again: the cache lifetime is the outage grace period.
             Await.until(
                     "the cached key set to expire and the outage to start refusing tokens",
                     OUTAGE_TIMEOUT,
@@ -579,15 +543,8 @@ class IssuerSignatureVerifierTest {
     }
 
     /**
-     * Builds a verifier on the context's own collaborators but publishing to a private registry.
-     *
-     * <p>A registry of this suite's own keeps the assertions independent of whether a metrics
-     * backend is configured, while the collaborators stay the real ones so the counted outcome is
-     * the one the real signature path reached.
-     *
-     * @param context the started application context
-     * @param metrics the registry to publish to
-     * @return the verifier under test
+     * Builds a verifier on the context's real collaborators, publishing to a private meter registry
+     * so the assertions do not depend on a configured metrics backend.
      */
     private static IssuerSignatureVerifier meteredVerifier(
             ApplicationContext context, SimpleMeterRegistry metrics) {
@@ -598,13 +555,7 @@ class IssuerSignatureVerifierTest {
                 metrics);
     }
 
-    /**
-     * Reads the count carried by one {@code outcome} tag for the primary provider.
-     *
-     * @param metrics the registry the verifier published to
-     * @param outcome the {@link IssuerSignatureVerifier#OUTCOME_TAG} value
-     * @return the count, or zero if nothing has registered that counter yet
-     */
+    /** Count for one {@code outcome} tag of the primary provider; zero if not yet registered. */
     private static double outcomes(SimpleMeterRegistry metrics, String outcome) {
         Counter counter =
                 metrics.find(IssuerSignatureVerifier.SIGNATURE_VERIFICATION_METRIC)
@@ -614,12 +565,7 @@ class IssuerSignatureVerifierTest {
         return counter == null ? 0 : counter.count();
     }
 
-    /**
-     * Sums the counts across every outcome tag.
-     *
-     * @param metrics the registry the verifier published to
-     * @return the total, which pins that a check is counted once and under one outcome only
-     */
+    /** Sums the counts across every outcome tag, pinning that a check is counted exactly once. */
     private static double totalOutcomes(SimpleMeterRegistry metrics) {
         return metrics
                 .find(IssuerSignatureVerifier.SIGNATURE_VERIFICATION_METRIC)
@@ -629,39 +575,18 @@ class IssuerSignatureVerifierTest {
                 .sum();
     }
 
-    /**
-     * Blocks on one signature check.
-     *
-     * @param verifier the verifier under test
-     * @param issuer the issuer the token claims
-     * @param token the token to check
-     * @return whether the signature verified against that issuer's keys
-     */
+    /** Blocks on one signature check against the claimed issuer's keys. */
     private static boolean verify(
             IssuerSignatureVerifier verifier, String issuer, SignedJWT token) {
         return Boolean.TRUE.equals(Mono.from(verifier.verify(issuer, token)).block());
     }
 
-    /**
-     * Builds the claim set of a test token.
-     *
-     * <p>Only {@code iss} carries meaning on the signature path; it is set so that a token read
-     * back in a failure message says which issuer it claimed.
-     *
-     * @param issuer the issuer to claim
-     * @return the claim set
-     */
+    /** Builds a test token's claim set; only {@code iss} matters on the signature path. */
     private static JWTClaimsSet claims(String issuer) {
         return new JWTClaimsSet.Builder().issuer(issuer).subject(SUBJECT).build();
     }
 
-    /**
-     * Waits for the stub provider to resolve and returns the verifier bound to that context.
-     *
-     * @param context the started application context
-     * @param provider the stub whose discovery must have succeeded
-     * @return the verifier under test
-     */
+    /** Waits for the stub provider to resolve and returns the verifier bound to that context. */
     private static IssuerSignatureVerifier awaitResolved(
             ApplicationContext context, OidcDiscoveryStub provider) {
         IdentityProviderRegistry registry = context.getBean(IdentityProviderRegistry.class);
@@ -672,21 +597,13 @@ class IssuerSignatureVerifierTest {
         return context.getBean(IssuerSignatureVerifier.class);
     }
 
-    /**
-     * Starts a context trusting the given stub, plus any extra properties the test needs.
-     *
-     * @param provider the stub to put on the trust list under {@link #PRIMARY}
-     * @param overrides extra configuration, applied last
-     * @return the started context, which the caller closes
-     */
+    /** Starts a context trusting the given stub under {@link #PRIMARY}; the caller closes it. */
     private static ApplicationContext startContext(
             OidcDiscoveryStub provider, Map<String, Object> overrides) {
         String prefix = PROVIDER_PREFIX + PRIMARY + ".";
         Map<String, Object> properties = new LinkedHashMap<>();
-        // The module's JWKS components - JwkValidator, JwkSetFetcher - are beans of the
-        // io.micronaut.security package, which application-test.yml switches off wholesale for
-        // the tests that predate this ticket. The verifier under test is built from them, so this
-        // context has to turn security back on.
+        // The verifier is built from io.micronaut.security JWKS beans, which application-test.yml
+        // switches off, so this context turns security back on.
         properties.put(SECURITY_ENABLED_PROPERTY, true);
         properties.put("datasources.default.enabled", false);
         properties.put("flyway.enabled", false);

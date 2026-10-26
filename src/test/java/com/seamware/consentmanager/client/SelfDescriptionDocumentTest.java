@@ -15,13 +15,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins which catalog documents a resolved retrieval can read.
- *
- * <p>No real catalog document was available to this ticket, so the shape of {@code dataResources}
- * is the one thing here that is not evidence but a decision: both plausible forms are accepted.
- * These cases are what keeps that decision true - a record committed to one form decodes the other
- * into an exception, and a decode failure is silent and total, leaving every notice's data section
- * unavailable with a green build.
+ * Pins which catalog documents a resolved retrieval can read; both plausible {@code dataResources}
+ * forms are accepted, since a silent decode failure would leave every data section unavailable.
  */
 @DisplayName("Self-description deserialization")
 class SelfDescriptionDocumentTest {
@@ -109,7 +104,7 @@ class SelfDescriptionDocumentTest {
                 .doesNotThrowAnyException();
     }
 
-    /** An offering document naming those resources, which is the only shape under test. */
+    /** An offering document naming those resources. */
     private static String offeringNaming(String resources) {
         return """
                {"_id": "trip-history", "name": "Trip history", "dataResources": %s}"""

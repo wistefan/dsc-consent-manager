@@ -36,14 +36,10 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 
 /**
- * Renders a consent as an ISO/IEC 29184 record or a Kantara KI-CR-v1.1.0 receipt.
+ * Renders a consent as a signed ISO/IEC 29184 record or Kantara KI-CR-v1.1.0 receipt.
  *
- * <p>Every term is read off {@link Consent#getSnapshot()} and {@link Consent#getContractUri()} -
- * never off the live notice - so archiving or regenerating the notice cannot rewrite a receipt.
- * Every receipt, in either format, leaves here beside its detached JWS from {@link
- * ConsentSigningService}: the ISO record is signed on each read, because it carries the live
- * status, while the Kantara receipt is the one {@link ConsentReceiptIssuer} signed and stored at
- * the grant.
+ * <p>Terms come from the frozen snapshot, never the live notice. The ISO record is signed per read
+ * as it carries live status; the Kantara receipt is the one stored at grant. See ADR-0012/0014.
  */
 @Singleton
 public class ConsentReceiptService {
@@ -132,10 +128,8 @@ public class ConsentReceiptService {
     }
 
     /**
-     * The KI-CR-v1.1.0 receipt issued when {@code details} was granted, served as stored and never
-     * re-signed. Throws {@link BadRequestException} unless the consent is {@code GRANTED}: the
-     * receipt attests that consent was given. A grant with no stored receipt is an invariant
-     * breach.
+     * The KI-CR-v1.1.0 receipt stored at grant, never re-signed; {@code 400} unless {@code
+     * GRANTED}. A grant with no stored receipt is an invariant breach.
      */
     @NonNull
     public SignedConsentReceiptKantara toKantara(@NonNull ConsentDetails details) {
@@ -154,8 +148,8 @@ public class ConsentReceiptService {
     }
 
     /**
-     * The unsigned KI-CR-v1.1.0 receipt of {@code details}, dated by {@code grantedAt} - the
-     * granting event's instant, never {@code updatedAt}, which a later write could move.
+     * The unsigned KI-CR-v1.1.0 receipt, dated by the granting event's {@code grantedAt}, never by
+     * {@code updatedAt}, which a later write could move.
      */
     @NonNull
     public ConsentReceiptKantara toKantara(
@@ -186,9 +180,7 @@ public class ConsentReceiptService {
         }
     }
 
-    /**
-     * The subject's identifier; the {@code consents.user_id} FK restricts deletion, so it exists.
-     */
+    /** The subject's identifier; the {@code consents.user_id} FK guarantees it exists. */
     private String subjectIdentifier(Consent consent) {
         return users.findById(consent.getUserId())
                 .orElseThrow(

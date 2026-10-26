@@ -2,20 +2,10 @@ package com.seamware.consentmanager;
 
 import io.micronaut.runtime.Micronaut;
 
-/**
- * Main entry point for the Consent Manager application.
- *
- * <p>Starts the Micronaut application context and embedded Netty HTTP server. All configuration is
- * externalized via environment variables; see {@code .env.sample} for documentation of available
- * variables.
- */
+/** Consent Manager entry point; configuration comes from env vars documented in .env.sample. */
 public class Application {
 
-    /**
-     * Launches the Micronaut application.
-     *
-     * @param args command-line arguments passed to the Micronaut runtime
-     */
+    /** Starts the Micronaut context and the embedded Netty server. */
     public static void main(String[] args) {
         Micronaut.run(Application.class, args);
     }

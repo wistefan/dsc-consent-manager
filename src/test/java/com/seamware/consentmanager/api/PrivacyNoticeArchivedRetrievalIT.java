@@ -15,12 +15,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Exercises retrieval of a notice a regeneration has superseded.
- *
- * <p>What only an end-to-end run can show: that archiving takes a notice out of the active lookup
- * without taking it out of reach, and that what it serves is still the document that was published.
- * A consent is given against the published notice, so resolution fills in its catalog documents and
- * its recipients but leaves the superseding contract unread.
+ * Retrieval of a superseded notice: guards against archiving putting it out of reach or serving
+ * anything but the published document, with the superseding contract left unread.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Archived privacy notice retrieval over HTTP")

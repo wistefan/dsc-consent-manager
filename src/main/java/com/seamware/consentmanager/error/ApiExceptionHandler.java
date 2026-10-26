@@ -12,10 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Renders any {@link ApiException} as the RFC 7807 problem detail its {@link ProblemType} declares.
- *
- * <p>Being typed on {@code ApiException} it wins over {@link GlobalExceptionHandler}, which stays
- * the last-resort 500 for everything a service did not refuse deliberately.
+ * Renders any {@link ApiException} as the RFC 7807 problem detail its {@link ProblemType} declares;
+ * being narrower, it wins over {@link GlobalExceptionHandler}.
  */
 @Singleton
 @Produces(ProblemType.MEDIA_TYPE)
@@ -31,10 +29,7 @@ public class ApiExceptionHandler
         this.serverErrorDetail = serverErrorDetail;
     }
 
-    /**
-     * Maps the exception to its declared status and body, publishing the message of a server error
-     * only as {@link ServerErrorDetail} allows.
-     */
+    /** Maps to the declared status; a server error's message is published as configured. */
     @Override
     public HttpResponse<ProblemDetail> handle(HttpRequest request, ApiException exception) {
         ProblemType problemType = exception.problemType();

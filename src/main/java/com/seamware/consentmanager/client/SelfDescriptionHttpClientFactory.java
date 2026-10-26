@@ -9,17 +9,10 @@ import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 
 /**
- * Defines the HTTP client a self-description is read over, as a bean the context owns and closes.
+ * Defines the context-owned HTTP client self-descriptions are read over; every URL is absolute.
  *
- * <p>A factory rather than a declarative {@code @Client}: every URL this client is given is
- * absolute and comes out of a fetched document, so there is no service to register a base URL
- * against. It is still a singleton bean, so the connection pool is shared and configured in one
- * place rather than built inside the collaborator that uses it.
- *
- * <p>Redirects are off, and that is the load-bearing setting here. {@link
- * SelfDescriptionClient#permits} vets the URL this service was handed; a followed redirect would
- * take the connection somewhere nothing vetted, and both URLs in play come from documents this
- * service does not own, so whoever publishes them would choose the destination.
+ * <p>Redirects are off, and that is load-bearing: {@link SelfDescriptionClient#permits} vets only
+ * the URL handed in, so a followed redirect would reach a destination nothing vetted.
  */
 @Factory
 public class SelfDescriptionHttpClientFactory {

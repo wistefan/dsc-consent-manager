@@ -30,18 +30,14 @@ class ProductionArtefactTest {
     private static final Path APPLICATION_CLASS =
             Path.of("com", "seamware", "consentmanager", "Application.class");
 
-    /**
-     * The runtime-scope dependency list {@code maven-dependency-plugin} writes before tests run.
-     */
+    /** Runtime-scope dependency list {@code maven-dependency-plugin} writes before tests run. */
     private static final Path RUNTIME_DEPENDENCIES = Path.of("target", "runtime-dependencies.txt");
 
     /** A runtime dependency the list must name, so an empty or stale list cannot pass. */
     private static final String KNOWN_RUNTIME_DEPENDENCY =
             "io.micronaut:micronaut-http-server-netty:";
 
-    /**
-     * Every file under {@link #CLASSES}; class files are read raw, their constant pool is ASCII.
-     */
+    /** Every file under {@link #CLASSES}, read raw; a class file's constant pool is ASCII. */
     private static List<Scanned> artefact;
 
     @BeforeAll

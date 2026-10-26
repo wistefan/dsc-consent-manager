@@ -8,8 +8,7 @@ import java.util.UUID;
 
 /**
  * The signed Kantara receipt a grant was issued with, stored as the exact bytes that were signed.
- *
- * <p>Immutable: written once in the granting transaction and served verbatim, never re-signed.
+ * Written once in the granting transaction and served verbatim, never re-signed. See ADR-0014.
  */
 @MappedEntity("consent_receipts")
 public record IssuedReceipt(

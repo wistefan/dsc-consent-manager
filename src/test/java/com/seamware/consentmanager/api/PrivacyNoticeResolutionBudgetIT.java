@@ -17,12 +17,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins the ceiling on how far one retrieval walks the catalog.
- *
- * <p>Both lists the walk follows are published by someone else - the offerings a contract names and
- * the resources each offering names - so without a ceiling a single authenticated GET fans out as
- * far as whoever wrote them decided. The budget is set to two here so that a notice naming one
- * offering with two resources behind it cannot be read to the end.
+ * Pins the document ceiling on one retrieval's catalog walk: guards a single GET fanning out as far
+ * as third-party offering and resource lists reach.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Privacy notice resolution under a catalog budget")

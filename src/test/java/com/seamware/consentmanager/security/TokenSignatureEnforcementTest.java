@@ -47,37 +47,9 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Pins the token behaviour around an issuer whose keys are <strong>not</strong> available:
- * <strong>no bearer token authenticates at all</strong>, least of all an unsigned one.
- *
- * <p>The trust list holds one entry and that entry is deliberately unreachable, so discovery never
- * resolves it and no signing key is ever known for it. {@link ConsentManagerTokenValidator} treats
- * an unresolved entry as no match at all, which is the fail-closed direction — but it is a property
- * worth pinning rather than assuming, because Micronaut's own token validator fails <em>open</em>
- * in exactly that situation: {@code AbstractJsonWebTokenValidator} latches
- *
- * <pre>{@code
- * this.noSignatures = imperativeSignatureConfigurations.isEmpty()
- *         && reactiveSignatureConfigurations.isEmpty();
- * }</pre>
- *
- * <p>in its constructor and reports a {@code PlainJWT} as validly signed whenever that flag is set.
- * {@link UnsignedTokenRejector} keeps the imperative collection non-empty so the flag is never set.
- * The control case {@link #acceptsUnsignedTokenWithoutTheRejector()} disables that bean and
- * requires the same unsigned token to be <em>accepted</em>, which is what stops every other
- * assertion here from passing for the wrong reason: a token is rejected for many reasons, so a
- * suite of rejection assertions alone would stay green even if the bypass re-opened.
- *
- * <p>{@link #serviceOwnValidatorIsTheOnlyTokenValidator()} closes the other half of the same hole.
- * {@code TokenAuthenticationFetcher} takes the first {@code Authentication} that <em>any</em>
- * registered {@code TokenValidator} returns, so a second, laxer validator beside {@link
- * ConsentManagerTokenValidator} would decide the outcome whenever it is the more permissive of the
- * two. The shipped {@code application.yml} switches Micronaut's own Nimbus validators off for that
- * reason, and that test is what keeps the switch honest.
- *
- * @see ConsentManagerTokenValidator
- * @see UnsignedTokenRejector
- * @see IdentityProviderRegistryValidator
+ * Tests that no bearer token authenticates while the only trusted issuer's keys are unavailable,
+ * least of all an unsigned one, despite Micronaut's fail-open {@code noSignatures} latch; {@link
+ * #acceptsUnsignedTokenWithoutTheRejector()} is the control proving the rejections meaningful.
  */
 @DisplayName("Token signature enforcement")
 class TokenSignatureEnforcementTest {
@@ -105,25 +77,14 @@ class TokenSignatureEnforcementTest {
     /** Issuer the configured provider is trusted under. Nothing listens on that port. */
     private static final String TRUSTED_ISSUER = "http://localhost:1/realms/dataspace";
 
-    /** Discovery URL of the configured provider. Resolved from step 3 on, not here. */
+    /** Discovery URL of the configured provider; never resolved by this test. */
     private static final String DISCOVERY_URL =
             TRUSTED_ISSUER + "/.well-known/openid-configuration";
 
-    /**
-     * Per-entry key that tolerates a cleartext provider URL.
-     *
-     * <p>{@link #TRUSTED_ISSUER} is deliberately an unreachable {@code http} address - this class
-     * mints its own tokens and never performs discovery - and the trust-list validator refuses
-     * cleartext unless the entry says so in writing.
-     */
+    /** Per-entry key allowing the deliberately unreachable cleartext {@link #TRUSTED_ISSUER}. */
     private static final String ALLOW_INSECURE_TRANSPORT_KEY = ".allow-insecure-transport";
 
-    /**
-     * Issuer no provider is configured under.
-     *
-     * <p>Its host is asserted absent from the rejection response, so it must be a string that
-     * cannot occur in a 401 body for any other reason.
-     */
+    /** Issuer no provider is configured under; its host must never occur in a 401 body. */
     private static final String UNTRUSTED_ISSUER = "https://untrusted.invalid/realms/dataspace";
 
     /** Host of {@link #UNTRUSTED_ISSUER}, the substring a leaking response would echo. */
@@ -163,10 +124,8 @@ class TokenSignatureEnforcementTest {
     private static final String SUBJECT = "subject-under-test";
 
     /**
-     * Challenge parameter RFC 9728 adds to {@code WWW-Authenticate}, which must never appear.
-     *
-     * <p>It names a {@code /.well-known/oauth-protected-resource} document this service does not
-     * serve, and leaks the service's own base URL to an unauthenticated caller.
+     * RFC 9728 challenge parameter that must never appear: it names a document this service does
+     * not serve and leaks its base URL to an unauthenticated caller.
      */
     private static final String RESOURCE_METADATA_CHALLENGE_PARAMETER = "resource_metadata";
 
@@ -180,11 +139,7 @@ class TokenSignatureEnforcementTest {
     private static EmbeddedServer shippedServer;
     private static HttpClient shippedClient;
 
-    /**
-     * Generates the key material and starts the application context and its server.
-     *
-     * @throws JOSEException if the RSA key pair cannot be generated
-     */
+    /** Generates the key material and starts the application context and its server. */
     @BeforeAll
     static void startFixtures() throws JOSEException {
         signingKey =
@@ -213,11 +168,7 @@ class TokenSignatureEnforcementTest {
         closeQuietly(context);
     }
 
-    /**
-     * Closes a fixture, ignoring any failure so one bad teardown cannot mask the rest.
-     *
-     * @param closeable the fixture to close; may be {@code null} if its setup never ran
-     */
+    /** Closes a possibly {@code null} fixture, ignoring failures so one cannot mask the rest. */
     private static void closeQuietly(AutoCloseable closeable) {
         if (closeable == null) {
             return;
@@ -230,16 +181,9 @@ class TokenSignatureEnforcementTest {
     }
 
     /**
-     * Starts an application context holding a single, valid, unreachable trust-list entry.
-     *
-     * <p>Default property sources are disabled so the result does not depend on {@code
-     * application.yml} or {@code application-test.yml}; everything the context needs is stated
-     * here. The {@code test} environment is activated explicitly because {@link
-     * IdentityProviderRegistryValidator#validate()} only tolerates a disabled {@link
-     * UnsignedTokenRejector} there, which the control case relies on.
-     *
-     * @param overrides properties layered on top, for control cases that switch a bean off
-     * @return the started context
+     * Starts a context with one valid, unreachable trust-list entry and no default property
+     * sources; the {@code test} environment lets the control case disable {@link
+     * UnsignedTokenRejector}.
      */
     private static ApplicationContext startContext(Map<String, Object> overrides) {
         String settings = IdentityProviderConfiguration.PREFIX + "." + PROVIDER;
@@ -269,25 +213,8 @@ class TokenSignatureEnforcementTest {
     }
 
     /**
-     * Starts a context under the <strong>shipped</strong> configuration, with {@code
-     * application.yml} and {@code application-test.yml} loaded as they are in a real run.
-     *
-     * <p>{@link #startContext(Map)} switches default property sources off on purpose, so a context
-     * it builds cannot say anything about what a deployment exposes. The route probes below are
-     * exactly a statement about a deployment: {@code micronaut-security-oauth2} is a compile
-     * dependency for its discovery components alone (ADR 0003), and its RFC 9728
-     * protected-resource-metadata controller is <em>enabled by default</em> — only the {@code
-     * micronaut.security.oauth2.protected-resource-metadata} block in {@code application.yml} keeps
-     * it off. Probing a context that never read that block would assert the opposite of the
-     * intended property and pass the moment the block is deleted.
-     *
-     * <p>Only the infrastructure a route probe has no use for is switched off, plus {@code
-     * micronaut.security.enabled}, which {@code application-test.yml} turns off for the rest of the
-     * suite and which the shipped {@code application.yml} turns on. The probe route is switched on
-     * here as well, so {@link #challengeCarriesNoResourceMetadataParameter()} has a secured route
-     * of the shipped deployment's own to be challenged by.
-     *
-     * @return the started context
+     * Starts a context under the shipped configuration, default property sources loaded. Route
+     * probes need it: only {@code application.yml} keeps RFC 9728 resource metadata switched off.
      */
     private static ApplicationContext startShippedContext() {
         return ApplicationContext.builder(Environment.TEST)
@@ -309,27 +236,14 @@ class TokenSignatureEnforcementTest {
                 .start();
     }
 
-    /**
-     * Builds the claim set a well-formed token for the trusted provider would carry.
-     *
-     * @return claims naming the trusted issuer and audience, valid now
-     */
+    /** Builds the claims of a well-formed token for the trusted issuer and audience, valid now. */
     private static JWTClaimsSet claims() {
         return claims(TRUSTED_ISSUER, AUDIENCE, Instant.now().plus(TOKEN_LIFETIME), null);
     }
 
     /**
-     * Builds a claim set, leaving every field not named by a parameter valid.
-     *
-     * <p>The roles claim grants {@link Role#USER}, so what these cases exercise is a token the
-     * published contract would call complete: a refusal is then attributable to the one field the
-     * case varies, and not to a claim the fixture happened to leave out.
-     *
-     * @param issuer value of the {@code iss} claim
-     * @param audience value of the {@code aud} claim
-     * @param expiresAt value of the {@code exp} claim
-     * @param notBefore value of the {@code nbf} claim, or {@code null} to omit it
-     * @return the assembled claim set
+     * Builds a complete claim set granting {@link Role#USER}, so a refusal is attributable to the
+     * one field a case varies; a {@code null} {@code notBefore} omits {@code nbf}.
      */
     private static JWTClaimsSet claims(
             String issuer, String audience, Instant expiresAt, Instant notBefore) {
@@ -349,21 +263,12 @@ class TokenSignatureEnforcementTest {
         return builder.build();
     }
 
-    /**
-     * Mints an unsigned {@code alg: none} token.
-     *
-     * @return the serialised token
-     */
+    /** Mints an unsigned {@code alg: none} token. */
     private static String unsignedToken() {
         return new PlainJWT(claims()).serialize();
     }
 
-    /**
-     * Mints a token signed with the generated RSA key.
-     *
-     * @param claims the claims to sign
-     * @return the serialised token
-     */
+    /** Mints a token signed with the generated RSA key. */
     private static String rsaToken(JWTClaimsSet claims) {
         try {
             SignedJWT token =
@@ -379,11 +284,7 @@ class TokenSignatureEnforcementTest {
         }
     }
 
-    /**
-     * Mints a token signed with an HMAC secret rather than an asymmetric key.
-     *
-     * @return the serialised token
-     */
+    /** Mints a token signed with an HMAC secret rather than an asymmetric key. */
     private static String symmetricToken() {
         try {
             SignedJWT token =
@@ -395,34 +296,17 @@ class TokenSignatureEnforcementTest {
         }
     }
 
-    /**
-     * Calls the secured probe route and reports the status.
-     *
-     * @param token the bearer token to present, or {@code null} to call anonymously
-     * @return the HTTP status code
-     */
+    /** Calls the probe route, anonymously for a {@code null} token, and returns the status. */
     private static int statusFor(String token) {
         return statusFor(client, token);
     }
 
-    /**
-     * Calls the secured probe route through the given client and reports the status.
-     *
-     * @param httpClient the client to call through
-     * @param token the bearer token to present, or {@code null} to call anonymously
-     * @return the HTTP status code
-     */
+    /** As {@link #statusFor(String)}, through the given client. */
     private static int statusFor(HttpClient httpClient, String token) {
         return responseFor(httpClient, token).getStatus().getCode();
     }
 
-    /**
-     * Calls the secured probe route and returns the response, successful or not.
-     *
-     * @param httpClient the client to call through
-     * @param token the bearer token to present, or {@code null} to call anonymously
-     * @return the response the server produced
-     */
+    /** Calls the probe route through the given client, returning the response even on refusal. */
     private static HttpResponse<?> responseFor(HttpClient httpClient, String token) {
         MutableHttpRequest<Object> request = HttpRequest.GET(PROBE_PATH);
         if (token != null) {
@@ -436,14 +320,9 @@ class TokenSignatureEnforcementTest {
     }
 
     /**
-     * Supplies the forged and well-formed tokens, every one of which must be refused.
-     *
-     * <p>The first three are the cryptographic forgeries; the remainder are tokens a conforming
-     * provider could have issued, and are refused because no signing key is registered at all. The
-     * time-based rows additionally guard the {@code exp} and {@code nbf} checks against a
-     * configuration or framework change that quietly switches them off once step 5 registers keys.
-     *
-     * @return {@code (description, token supplier)} rows
+     * {@code (description, token)} rows that must all be refused: three cryptographic forgeries,
+     * then well-formed tokens refused because no signing key is registered at all. The time-based
+     * rows also guard the {@code exp} and {@code nbf} checks.
      */
     static Stream<Arguments> refusedTokens() {
         return Stream.of(
@@ -655,11 +534,7 @@ class TokenSignatureEnforcementTest {
     @Controller(PROBE_PATH)
     static class ProbeController {
 
-        /**
-         * Answers any authenticated caller.
-         *
-         * @return a fixed body
-         */
+        /** Answers any authenticated caller with a fixed body. */
         @Get
         @Secured(SecurityRule.IS_AUTHENTICATED)
         String get() {

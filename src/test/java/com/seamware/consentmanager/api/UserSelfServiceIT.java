@@ -41,12 +41,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code POST /users/register} and {@code GET /users/me} end to end against a real
- * Keycloak and a real PostgreSQL.
- *
- * <p>Both routes are served from the principal the resolution filter already provisioned, so what
- * is under test is as much the wiring - the generated route, its typed principal parameter and the
- * created flag carried on it - as the two handler bodies.
+ * User registration and {@code GET /users/me} end to end: guards the principal wiring and created
+ * flag, representation properties, and authentication material leaking into a response.
  */
 @MicronautTest(transactional = false)
 @DisplayName("User self-service endpoints")
@@ -70,10 +66,9 @@ class UserSelfServiceIT extends KeycloakAndPostgresTestResource {
     private static final List<String> AUTHENTICATION_MATERIAL =
             List.of("token", "secret", "credential", "password", "bearer", "assertion");
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
-    /** Body of a request to an operation that specifies none; the route ignores it. */
     private static final String NO_BODY = "";
 
     private static final String PATH_REGISTER = "/users/register";
@@ -94,16 +89,12 @@ class UserSelfServiceIT extends KeycloakAndPostgresTestResource {
 
     @Inject UserParticipantRepository links;
 
-    /** The caller's global identifier, resolved once because reading it costs a token request. */
+    /** The caller's identifier, resolved once because reading it costs a token request. */
     private String identifier;
 
     /**
-     * The routes under test, each building a fresh request so no case mutates another's.
-     *
-     * <p>A parameterized test may not take the request factory directly: Micronaut's JUnit
-     * extension claims a {@code Supplier} parameter as a bean to inject and competes with the
-     * argument source, which fails the case before it runs. An enum declared here is claimed by
-     * neither.
+     * The routes under test, each building a fresh request; an enum because Micronaut's extension
+     * would inject a {@code Supplier} parameter.
      */
     enum Route {
         REGISTER("POST " + PATH_REGISTER, () -> HttpRequest.POST(PATH_REGISTER, NO_BODY)),
@@ -146,8 +137,7 @@ class UserSelfServiceIT extends KeycloakAndPostgresTestResource {
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
         identifier = KeycloakTestResource.subject(userToken());
-        // The realm holds a single dataspace-user, so "not registered yet" has to be re-established
-        // rather than assumed: otherwise only the first test to run would ever observe a 201.
+        // The realm has one dataspace-user, so each case re-establishes "not registered".
         removeCommittedRows();
         if (!participants.existsByIdentifier(LINKED_PARTICIPANT)) {
             participants.save(
@@ -253,7 +243,7 @@ class UserSelfServiceIT extends KeycloakAndPostgresTestResource {
         return KeycloakTestResource.accessToken(RealmPrincipal.USER);
     }
 
-    /** Commits a link row directly, because no endpoint creates one until a later step. */
+    /** Commits a link row directly through the repository. */
     private void link(User user) {
         Participant participant = participants.findByIdentifier(LINKED_PARTICIPANT).orElseThrow();
         links.save(new UserParticipant(user.getId(), participant.getId(), null));

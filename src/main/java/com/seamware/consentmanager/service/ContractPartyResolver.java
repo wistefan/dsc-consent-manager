@@ -16,26 +16,15 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Says who a contract's parties are: it reads the two off a contract that names them unambiguously,
- * and judges a pair a caller declared against the same evidence.
- *
- * <p>One definition of a party for both generation operations. Were the derived form to read the
- * document differently from the declared form's binding check, a contract could yield two parties
- * that the very next step refuses - so the sides are derived here from exactly the evidence {@link
- * #requireBound} tests against, and both operations share this bean rather than a convention.
- *
- * <p>Pure: it decides on the fetched document alone and never consults the participant directory,
- * which is what lets a refusal here be about the contract rather than about this deployment.
+ * The one definition of a contract's parties: derives them, and judges a declared pair by the same
+ * evidence {@link #requireBound} uses. Pure; never consults the participant directory.
  */
 @Singleton
 public class ContractPartyResolver {
 
     /**
-     * Role an ecosystem contract records for the member providing the data, lower-cased.
-     *
-     * <p>The two role names the Contract Service writes. A role outside this vocabulary is read as
-     * no role at all rather than as a contradiction, so an upstream wording change degrades to the
-     * service-offering evidence instead of refusing a well-formed request.
+     * Role an ecosystem contract records for the member providing the data, lower-cased. A role
+     * outside this vocabulary reads as no role, falling back to service-offering evidence.
      */
     private static final String DATA_PROVIDER_ROLE = "data provider";
 
@@ -49,12 +38,8 @@ public class ContractPartyResolver {
     private static final int UNAMBIGUOUS = 1;
 
     /**
-     * The two parties a contract names by itself; {@code 400} when it names no single pair.
-     *
-     * <p>A bilateral contract states both outright. An ecosystem contract names N members and no
-     * two of them inherently, so each side is read off the evidence the document carries - the role
-     * it records for a still-bound member first, and failing that who offers a service under it -
-     * and a side that resolves to anything other than one party is refused rather than guessed at.
+     * The two parties a contract names by itself; {@code 400} when it names no single pair. An
+     * ecosystem side is read off recorded roles first, then service offerings.
      */
     @NonNull
     public ContractParties resolve(@NonNull ContractResponse contract) {
@@ -64,10 +49,7 @@ public class ContractPartyResolver {
         };
     }
 
-    /**
-     * Whether the contract still puts the participant on the given side, read off exactly the
-     * evidence {@link #requireBound} judges a declared pair by, so the two cannot disagree.
-     */
+    /** Whether the contract puts the participant on the side, as {@link #requireBound} reads it. */
     public boolean binds(
             @NonNull ContractResponse contract,
             @NonNull String participant,
@@ -88,14 +70,8 @@ public class ContractPartyResolver {
     }
 
     /**
-     * Refuses a declared pair the fetched contract does not support.
-     *
-     * <p>Two conditions, reported apart because they fail for different reasons. The contract must
-     * name both participants as parties to it - without that a request body could name any
-     * registered participant as consumer and the published notice would misname a party, and a
-     * party that differs from the stored notice's could no longer be read as the contract itself
-     * having changed. And the contract must not contradict the direction declared, because a notice
-     * generated the wrong way round names the data's recipient as its controller.
+     * Refuses ({@code 400}) a declared pair the contract does not name as parties, or whose
+     * declared direction it contradicts.
      */
     public void requireBound(
             @NonNull ContractResponse contract,
@@ -116,9 +92,7 @@ public class ContractPartyResolver {
         }
     }
 
-    /**
-     * The two parties a bilateral contract states; {@code 400} when it states either as nothing.
-     */
+    /** The two parties a bilateral contract states; {@code 400} when either is absent. */
     private static ContractParties bilateralParties(ContractResponse contract) {
         String provider = contract.dataProviderIdentifier();
         String consumer = contract.dataConsumerIdentifier();
@@ -128,14 +102,8 @@ public class ContractPartyResolver {
     }
 
     /**
-     * The two parties an ecosystem contract evidences, one per side or {@code 400}.
-     *
-     * <p>Role evidence outranks offering evidence on each side independently: a contract that
-     * records roles says who is where, and one that does not still shows who offers the service.
-     * Where neither side's roles are recorded the offering participants are the providing side and
-     * every other still-bound member is the consuming side - the same reading {@link
-     * #requireEcosystemParties} applies to a declared pair, so a pair derived here always passes
-     * it.
+     * The two parties an ecosystem contract evidences, one per side or {@code 400}. Roles outrank
+     * offerings per side, the reading {@link #requireEcosystemParties} applies.
      */
     private static ContractParties ecosystemParties(ContractResponse contract) {
         Set<String> active = activeMembers(contract);
@@ -157,16 +125,8 @@ public class ContractPartyResolver {
     }
 
     /**
-     * Refuses a declared pair an ecosystem contract does not support, membership first and
-     * direction second.
-     *
-     * <p>An ecosystem contract names N parties and no two of them inherently, so the direction is
-     * read off whatever evidence the document gives: the role it records for a member, when that
-     * role is one of the two {@link #DATA_PROVIDER_ROLE this vocabulary} knows, and otherwise who
-     * offers a service under the contract. A member evidenced on one side may not be declared on
-     * the other. A contract that evidences neither side - members carrying no role, and no service
-     * offerings, which the Contract Service does serve - constrains membership only, and the
-     * request's own declaration stands.
+     * Refuses a declared pair an ecosystem contract does not support, membership first, then
+     * direction by role or offering; with neither evidenced, the declaration stands.
      */
     private static void requireEcosystemParties(
             ContractResponse contract, String provider, String consumer) {
@@ -219,15 +179,8 @@ public class ContractPartyResolver {
     }
 
     /**
-     * Refuses a side the contract does not narrow to one party.
-     *
-     * <p>Both counts are reported, because which side is ambiguous is rarely the whole story: a
-     * contract with two consumers against one provider and one with no evidence at all are read
-     * very differently by whoever has to declare the pair by hand. The participants themselves are
-     * <em>not</em> named: this refusal is reached before anything has established that the caller
-     * is a party, so naming them would hand a contract's membership to whoever can guess its URI. A
-     * party can read the names off the contract it already holds, and a count is all a caller needs
-     * in order to declare the pair.
+     * Refuses a side the contract does not narrow to one party, reporting counts only: the caller
+     * is not yet known to be a party, so naming members would leak a contract's membership.
      */
     private static void requireSingle(Set<String> side, String role, Set<String> other) {
         if (side.size() != UNAMBIGUOUS) {
@@ -311,10 +264,7 @@ public class ContractPartyResolver {
         return members == null ? Stream.of() : members.stream();
     }
 
-    /**
-     * Participants an ecosystem contract names as offering a service, which is the provider side
-     * whenever the document records no role to read it off instead.
-     */
+    /** Participants offering a service under the contract; the provider side absent any role. */
     private static Set<String> offeringParticipants(ContractResponse contract) {
         List<ServiceOffering> offerings = contract.serviceOfferings();
         return offerings == null

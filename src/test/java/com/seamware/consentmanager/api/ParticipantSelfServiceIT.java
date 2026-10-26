@@ -36,13 +36,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code GET /participants/me} and {@code PUT /participants/me} end to end against a real
- * Keycloak and a real PostgreSQL.
- *
- * <p>Both routes name their subject from the token alone, so what is under test is that the record
- * reached is the caller's whatever the body says, that a replacement really replaces, and that the
- * response is the row as stored. Who may reach the routes at all, and what an unregistered
- * participant gets, are asserted exhaustively by {@link EndpointRoleMatrixIT}.
+ * Participant read and replace of its own record end to end: guards the body steering the write to
+ * another record, a partial replacement, and a response differing from the stored row.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant self-service")
@@ -103,13 +98,12 @@ class ParticipantSelfServiceIT extends KeycloakAndPostgresTestResource {
                     "createdAt",
                     "updatedAt");
 
-    /** The media type every refusal is rendered as. */
     private static final String PROBLEM_JSON = "application/problem+json";
 
     /** The {@code maxLength} the update schema puts on a legal name. */
     private static final int MAX_LEGAL_NAME_LENGTH = 255;
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject
@@ -188,7 +182,7 @@ class ParticipantSelfServiceIT extends KeycloakAndPostgresTestResource {
         assertThat(stored.getLegalPerson()).isEqualTo(REPLACED_LEGAL_PERSON);
     }
 
-    /** AC 2: the property is simply absent from the schema, so it is ignored rather than a 400. */
+    /** The property is absent from the schema, so it is ignored rather than a 400. */
     @Test
     @DisplayName("an identifier in the update body is ignored rather than rejected")
     void anIdentifierInTheBodyIsIgnored() throws IOException {
@@ -218,11 +212,7 @@ class ParticipantSelfServiceIT extends KeycloakAndPostgresTestResource {
                 .doesNotContainKeys("selfDescriptionUri", "email", "legalPerson", "endpoints");
     }
 
-    /**
-     * The {@code 409} the operation declares, reached end to end. A deregistered row is retained
-     * only so the consents naming it stay legible, and the principal's snapshot of it predates the
-     * deregistration, so an applied update would publish the participant as active again.
-     */
+    /** The declared {@code 409}: an update to a deregistered row would republish it as active. */
     @Test
     @DisplayName("an update to a deregistered registration is a conflict, not a resurrection")
     void anUpdateToADeregisteredRegistrationIsAConflict() {
@@ -260,8 +250,7 @@ class ParticipantSelfServiceIT extends KeycloakAndPostgresTestResource {
                 Arguments.of(
                         "a malformed email",
                         Map.of("legalName", REPLACED_LEGAL_NAME, "email", "not-an-address")),
-                // The update body deserializes into its own generated model, so that validation
-                // cascades into the nested endpoints object is not inherited from the registration.
+                // The update has its own model, so nested validation is not inherited.
                 Arguments.of(
                         "a plaintext notification endpoint",
                         Map.of(

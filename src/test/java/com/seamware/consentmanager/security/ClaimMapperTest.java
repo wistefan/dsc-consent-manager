@@ -17,18 +17,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins how a configured claim name is turned into a value.
- *
- * <p>Every case here is reachable from a token an attacker writes, so the interesting assertions
- * are the ones about claim sets whose <em>shape</em> differs from the configured path: an
- * identifier claim holding an object, a roles claim holding a number, a path descending through
- * something that is not an object. None of those may throw, and none may be coerced into a value.
- *
- * <p>Because a claim name is configured as segments, a flat claim named {@code realm_access.roles}
- * is never read for the configured path {@code [realm_access, roles]} - whether the nested object
- * is present, present but missing its leaf, or absent entirely. Those three cases get their own
- * assertions: the third is the one Keycloak actually emits for a caller holding no realm role, and
- * is therefore the one an injected flat claim would exploit.
+ * Tests claim lookup by configured name, including attacker-shaped claim sets that must neither
+ * throw nor be coerced, and flat claims spelled like a nested path, which never resolve it.
  */
 @DisplayName("Claim lookup by configured name")
 class ClaimMapperTest {
@@ -89,12 +79,7 @@ class ClaimMapperTest {
 
     private final ClaimMapper mapper = new ClaimMapper();
 
-    /**
-     * Cases for {@link ClaimMapper#findString(JWTClaimsSet, List)}.
-     *
-     * @return description, claim set, configured claim-name segments, expected value or {@code
-     *     null}
-     */
+    /** Cases for {@link ClaimMapper#findString}: description, claims, path, expected or null. */
     private static Stream<Arguments> stringClaims() {
         return Stream.of(
                 Arguments.of(
@@ -200,11 +185,7 @@ class ClaimMapperTest {
                 .isEqualTo(Optional.ofNullable(expected));
     }
 
-    /**
-     * Cases for {@link ClaimMapper#findStrings(JWTClaimsSet, List)}.
-     *
-     * @return description, claim set, configured claim-name segments, expected values
-     */
+    /** Cases for {@link ClaimMapper#findStrings}: description, claims, path, expected values. */
     private static Stream<Arguments> stringListClaims() {
         return Stream.of(
                 Arguments.of(
@@ -290,11 +271,7 @@ class ClaimMapperTest {
                 .containsExactlyElementsOf(expected);
     }
 
-    /**
-     * Cases for {@link ClaimMapper#mapRoles(JWTClaimsSet, IdentityProviderConfiguration)}.
-     *
-     * @return description, the raw role strings a token carries, the roles they grant
-     */
+    /** Cases for {@link ClaimMapper#mapRoles}: description, raw role strings, granted roles. */
     private static Stream<Arguments> roleClaims() {
         return Stream.of(
                 Arguments.of("the user role string", List.of(USER_ROLE_VALUE), Set.of(Role.USER)),
@@ -357,13 +334,8 @@ class ClaimMapperTest {
     }
 
     /**
-     * Cases for {@link ClaimMapper#isTrue(Map, List)}.
-     *
-     * <p>Only the boolean {@code true} may read as true. The stringified and numeric spellings are
-     * listed because they are what a provider that serialises claims loosely actually emits, and
-     * accepting either would let an unverified address pass for a verified one.
-     *
-     * @return description, the claims by name, configured claim-name segments, expected verdict
+     * Cases for {@link ClaimMapper#isTrue}: only the boolean {@code true} reads as true; the
+     * stringified and numeric spellings are what loosely serialising providers emit.
      */
     private static Stream<Arguments> booleanClaims() {
         return Stream.of(
@@ -417,13 +389,8 @@ class ClaimMapperTest {
     }
 
     /**
-     * Builds a valid trust-list entry whose roles claim is {@link #NESTED_ROLES_PATH}.
-     *
-     * <p>{@link IdentityProviderConfiguration#validate()} is invoked because it is what derives the
-     * type-safe role mapping {@link ClaimMapper} reads; a configuration that skipped it would carry
-     * an empty mapping and make every role case pass for the wrong reason.
-     *
-     * @return a validated configuration mapping all three roles
+     * Builds a validated trust-list entry whose roles claim is {@link #NESTED_ROLES_PATH}. {@code
+     * validate()} derives the role mapping; skipping it would pass the role cases vacuously.
      */
     private static IdentityProviderConfiguration provider() {
         IdentityProviderConfiguration configuration = new IdentityProviderConfiguration("primary");
@@ -444,24 +411,14 @@ class ClaimMapperTest {
         return configuration;
     }
 
-    /**
-     * Builds a claim set holding exactly the given claims.
-     *
-     * @param values the claims to carry
-     * @return the claim set
-     */
+    /** Builds a claim set holding exactly the given claims. */
     private static JWTClaimsSet claims(Map<String, Object> values) {
         JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder();
         values.forEach(builder::claim);
         return builder.build();
     }
 
-    /**
-     * Builds a claim set in which the named claim is present but holds JSON {@code null}.
-     *
-     * @param claimName the claim to carry as null
-     * @return the claim set
-     */
+    /** Builds a claim set in which the named claim is present but holds JSON {@code null}. */
     private static JWTClaimsSet claimsWithNull(String claimName) {
         return new JWTClaimsSet.Builder().claim(claimName, null).build();
     }

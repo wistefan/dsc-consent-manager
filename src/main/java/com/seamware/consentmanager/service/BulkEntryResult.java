@@ -3,13 +3,9 @@ package com.seamware.consentmanager.service;
 import io.micronaut.core.annotation.Nullable;
 
 /**
- * What a bulk registration did with one entry of a batch.
- *
- * <p>{@code outcome} is null exactly when the entry was rejected, and {@code reason} is set exactly
- * then: {@link UserService#registerForParticipant} refuses an entry it cannot apply instead of
- * returning an outcome for it, so rejection is a state of the batch rather than a {@link
- * RegistrationOutcome}. {@code identifier} is echoed from the entry and is null when it named none.
- * The reason is published to the caller, so it must carry no detail a problem detail would not.
+ * What a bulk registration did with one entry of a batch. {@code outcome} is null exactly when
+ * rejected, and then {@code reason} is set; the reason is published, so it must carry no detail a
+ * problem detail would not.
  */
 public record BulkEntryResult(
         @Nullable String identifier,

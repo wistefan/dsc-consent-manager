@@ -1,11 +1,8 @@
 package com.seamware.consentmanager.service;
 
 /**
- * What a registration did with one user, which the API maps onto a status code or a per-entry
- * outcome.
- *
- * <p>Every constant is reachable: a registration that cannot be applied is refused rather than
- * described, so refusal is not modelled here but as a null outcome on {@link BulkEntryResult}.
+ * What a registration did with one user; mapped to a status code or a per-entry outcome. Refusal is
+ * not a constant here but a null outcome on {@link BulkEntryResult}.
  */
 public enum RegistrationOutcome {
 

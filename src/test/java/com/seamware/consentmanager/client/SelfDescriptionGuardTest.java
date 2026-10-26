@@ -25,16 +25,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins which URLs a self-description is read from, which is the whole of this service's exposure to
- * URLs it did not author.
- *
- * <p>Every refusal case asserts that the stub saw no request at all, because "returned nothing" and
- * "did not connect" are different claims and only the second is a guard. The two admitting cases
- * are here for the same reason in reverse: a guard that refused everything would pass every refusal
- * case and make the feature unreachable.
- *
- * <p>The allow-list is set per case rather than inherited from the test profile, so each case
- * refuses for the one reason it is about.
+ * Pins which URLs a self-description is read from. Refusals assert the stub saw no request, since
+ * only "did not connect" is a guard; the admitting cases show the guard does not refuse everything.
  */
 @DisplayName("Self-description guard")
 class SelfDescriptionGuardTest {
@@ -56,13 +48,7 @@ class SelfDescriptionGuardTest {
     private static final String PRIVATE_RANGE_URL =
             "https://10.1.2.3/v1/catalog/dataresources/trip-records";
 
-    /**
-     * A unique-local IPv6 literal, {@code fc00::/7}, which is what a private IPv6 network uses.
-     *
-     * <p>{@code InetAddress.isSiteLocalAddress} is false for it - it tests the deprecated {@code
-     * fec0::/10} - so this case fails against every heuristic that trusts the JDK's predicates
-     * alone, which is the only way an IPv6-addressed deployment stays guarded.
-     */
+    /** A unique-local IPv6 literal ({@code fc00::/7}); {@code isSiteLocalAddress} misses it. */
     private static final String UNIQUE_LOCAL_V6_URL =
             "https://[fd00::1234]/v1/catalog/dataresources/trip-records";
 
@@ -70,12 +56,7 @@ class SelfDescriptionGuardTest {
     private static final String SHARED_RANGE_URL =
             "https://100.64.7.9/v1/catalog/dataresources/trip-records";
 
-    /**
-     * A literal in no range this deployment's own network uses, named by no entry.
-     *
-     * <p>A literal and not a host name: with an empty allow-list the guard decides on the resolved
-     * addresses, and a name would make the case depend on the build machine having DNS.
-     */
+    /** A public literal named by no entry; a literal, so the case needs no DNS. */
     private static final String PUBLIC_RANGE_URL =
             "https://203.0.113.10/v1/catalog/dataresources/trip-records";
 
@@ -108,8 +89,6 @@ class SelfDescriptionGuardTest {
                 ApplicationContext.builder(Environment.TEST)
                         .properties(
                                 Map.of(
-                                        // The guard reads a URL and a configuration, never the
-                                        // database.
                                         "datasources.default.enabled",
                                         false,
                                         "flyway.enabled",
@@ -225,8 +204,7 @@ class SelfDescriptionGuardTest {
                                         -1,
                                         "consent-manager.contract-service.url",
                                         UNUSED_CONTRACT_SERVICE_URL,
-                                        // What ${SELF_DESCRIPTION_ALLOWED_HOSTS:} resolves to when
-                                        // the variable is unset, which is the default deployment.
+                                        // ${SELF_DESCRIPTION_ALLOWED_HOSTS:}, unset.
                                         "consent-manager.self-description.allowed-hosts",
                                         ""))
                         .start()) {
@@ -242,7 +220,7 @@ class SelfDescriptionGuardTest {
         }
     }
 
-    /** A client configured exactly as the case names, over the context's own HTTP client. */
+    /** A client configured as the case names, over the context's own HTTP client. */
     private static SelfDescriptionClient client(List<String> allowedHosts, boolean plaintext) {
         ConsentManagerConfiguration.SelfDescription configuration =
                 new ConsentManagerConfiguration.SelfDescription();

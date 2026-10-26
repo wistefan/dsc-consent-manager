@@ -40,12 +40,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 
 /**
- * Exercises {@link ParticipantService#deregister} against a real PostgreSQL, because the two
- * branches it turns on - delete the record or retain it marked - are decided by foreign keys
- * declared {@code ON DELETE RESTRICT}, which only a real database enforces.
- *
- * <p>Every case puts the departing participant on both sides of the consent or notice in turn: the
- * cascade must not care whether the organization was the one sharing data or the one receiving it.
+ * Tests {@link ParticipantService#deregister} against a real PostgreSQL, whose {@code ON DELETE
+ * RESTRICT} keys decide delete versus retain; each case puts the participant on either side.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant deregistration")
@@ -91,9 +87,7 @@ class ParticipantDeregistrationIT extends PostgresTestResource {
 
     @Inject UserRepository users;
 
-    /**
-     * Rows this test commits outlive its own transaction, so they are tracked and removed by hand.
-     */
+    /** Committed rows outlive the test transaction, so they are tracked and removed by hand. */
     private final List<Participant> seeded = new ArrayList<>();
 
     private User user;
@@ -337,10 +331,7 @@ class ParticipantDeregistrationIT extends PostgresTestResource {
                 .isEqualTo(departedAt);
     }
 
-    /**
-     * The caller hands in the row as it stood when the request was authenticated. Writing that
-     * snapshot back would revert anything committed since, so the cascade re-reads under a lock.
-     */
+    /** Writing the caller's stale snapshot back would revert later commits; it re-reads instead. */
     @Test
     @DisplayName("writes the row as it stands, not the stale snapshot it was handed")
     void doesNotRevertAnUpdateCommittedSinceAuthentication() {

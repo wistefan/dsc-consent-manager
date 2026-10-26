@@ -41,12 +41,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.LoggerFactory;
 
 /**
- * Drives every client-error status over a real server, so the mapping is asserted where it actually
- * matters: an exception handler that is never selected, or a body rendered as {@code
- * application/json}, would still satisfy the unit test.
- *
- * <p>The routes exercised here exist only for this test. Real endpoints arrive with the later steps
- * of this ticket and bring their own status assertions.
+ * Drives every problem-detail rendering over a real server, through probe routes that exist only
+ * for this test, catching an unselected handler or a body rendered as {@code application/json}.
  */
 @MicronautTest
 @Property(name = ProblemResponseIT.PROBE_ENABLED, value = "true")
@@ -65,10 +61,7 @@ class ProblemResponseIT extends PostgresTestResource {
     /** Namespace every problem type URI is minted under. */
     private static final String TYPE_PREFIX = "https://consent-manager.example/problems/";
 
-    /**
-     * RFC 7807's "no semantics beyond the status", used for statuses this service mints no type
-     * for.
-     */
+    /** RFC 7807's type for statuses this service mints no type for. */
     private static final String UNTYPED = "about:blank";
 
     /** A body that is not JSON at all, so the request fails before any model is bound. */
@@ -127,9 +120,7 @@ class ProblemResponseIT extends PostgresTestResource {
                 .doesNotContainKey("_links");
     }
 
-    /**
-     * One case per refusal the framework produces before any handler of this service is reached.
-     */
+    /** One case per refusal the framework produces before any handler of this service runs. */
     static Stream<Arguments> frameworkErrors() {
         return Stream.of(
                 Arguments.of(
@@ -173,14 +164,7 @@ class ProblemResponseIT extends PostgresTestResource {
                 .doesNotContainKey("_links");
     }
 
-    /**
-     * A refusal carrying no message publishes no {@code detail} at all.
-     *
-     * <p>Serialization is configured {@code non-absent} rather than the default {@code non-empty},
-     * so empty strings and empty collections are published everywhere. This pins the half of that
-     * which problem details depend on: a null stays absent, so an unexplained refusal does not grow
-     * a {@code "detail": ""} field that reads as an explanation the service failed to produce.
-     */
+    /** Serialization is {@code non-absent}: a null stays absent, empty values are published. */
     @Test
     @DisplayName("a refusal with nothing to explain omits detail rather than publishing it empty")
     void omitsAnAbsentDetailRatherThanPublishingItEmpty() throws IOException {
@@ -306,7 +290,7 @@ class ProblemResponseIT extends PostgresTestResource {
         return json.readValue(response.body(), Argument.mapOf(String.class, Object.class));
     }
 
-    /** Performs a GET, returning the response even when it is a refusal. */
+    /** Performs a GET, returning even a refusal as a response. */
     private HttpResponse<String> get(String path) {
         return exchange(HttpRequest.GET(path));
     }
@@ -354,13 +338,13 @@ class ProblemResponseIT extends PostgresTestResource {
             };
         }
 
-        /** Accepts nothing; the point is the constraint the request fails. */
+        /** Exists for the constraint the request fails. */
         @Post("/validate")
         String validate(@Body @Valid Payload payload) {
             return payload.identifier();
         }
 
-        /** Accepts nothing; the point is the two constraints the request fails. */
+        /** Exists for the two constraints the request fails. */
         @Post("/validate-pair")
         String validatePair(@Body @Valid PairPayload payload) {
             return payload.identifier();

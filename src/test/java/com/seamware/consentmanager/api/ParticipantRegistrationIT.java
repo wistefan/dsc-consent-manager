@@ -35,12 +35,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code POST /participants} end to end against a real Keycloak and a real PostgreSQL.
- *
- * <p>What is under test is the registration rule as the API publishes it: that an unregistered
- * participant token reaches the route at all, that the identifier is taken from the token however
- * the body tries to name one, that a second registration is refused rather than silently applied,
- * and that the representation carries no credential.
+ * {@code POST /participants} end to end: an unregistered token reaches it, the identifier comes
+ * from the token, re-registration is refused, and the representation carries no credential.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant self-registration")
@@ -88,7 +84,7 @@ class ParticipantRegistrationIT extends KeycloakAndPostgresTestResource {
     /** The {@code maxLength} the registration schema puts on a legal name. */
     private static final int MAX_LEGAL_NAME_LENGTH = 255;
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject
@@ -145,7 +141,7 @@ class ParticipantRegistrationIT extends KeycloakAndPostgresTestResource {
                 .containsEntry("registrationNumber", REGISTRATION_NUMBER);
     }
 
-    /** AC 2: the property is simply absent from the schema, so it is ignored rather than a 400. */
+    /** The property is absent from the schema, so it is ignored rather than a 400. */
     @Test
     @DisplayName("an identifier in the body is ignored rather than rejected")
     void anIdentifierInTheBodyIsIgnored() throws IOException {
@@ -175,7 +171,7 @@ class ParticipantRegistrationIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo(LEGAL_NAME);
     }
 
-    /** AC 14 for this surface, plus the rule that an active participant has no deregistration. */
+    /** No credential in the representation, and no deregistration on an active participant. */
     @Test
     @DisplayName("publishes the self-description and nothing else")
     void publishesTheSelfDescriptionAndNothingElse() throws IOException {

@@ -22,15 +22,8 @@ import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
 /**
- * Renders a bean-validation failure on a generated request model as a 400 problem detail.
- *
- * <p>Replaces {@link ConstraintExceptionHandler} rather than sitting beside it: two handlers for
- * one exception type is ambiguous bean resolution, and the built-in one emits a Hateoas error body
- * that no other failure of this service looks like.
- *
- * <p>Only the leaf of each property path is published. The full path is prefixed with the
- * controller method and parameter names, which are an implementation detail the caller cannot act
- * on and should not learn.
+ * Renders a bean-validation failure as a 400 problem detail. Publishes only each property path's
+ * leaf, since the full path names controller methods and parameters.
  */
 @Singleton
 @Produces(ProblemType.MEDIA_TYPE)
@@ -38,10 +31,8 @@ import java.util.stream.StreamSupport;
 public class ConstraintViolationProblemHandler
         implements ExceptionHandler<ConstraintViolationException, HttpResponse<?>> {
 
-    /** Separator between the individual violations listed in one detail string. */
     private static final String VIOLATION_SEPARATOR = "; ";
 
-    /** Separator between a violated field and the reason it was rejected. */
     private static final String FIELD_SEPARATOR = ": ";
 
     /** Detail used when the exception carries no violation to describe. */
@@ -52,10 +43,7 @@ public class ConstraintViolationProblemHandler
             Comparator.comparing(ProblemFieldError::getField)
                     .thenComparing(ProblemFieldError::getMessage);
 
-    /**
-     * Maps every violation to a single 400 listing each rejected field in {@code errors} and,
-     * joined, in {@code detail}.
-     */
+    /** One 400 listing each rejected field in {@code errors} and, joined, in {@code detail}. */
     @Override
     public HttpResponse<?> handle(HttpRequest request, ConstraintViolationException exception) {
         List<ProblemFieldError> errors = fieldErrorsOf(exception.getConstraintViolations());

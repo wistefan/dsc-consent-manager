@@ -21,23 +21,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * Integration test for {@link ApiStatusController} and for the served OpenAPI bundle.
- *
- * <p>Two things are verified here:
- *
- * <ul>
- *   <li>{@code GET /api-status} is actually <em>routed</em>. The OpenAPI generator emits only an
- *       abstract controller, which is not a bean, so without the hand-written concrete subclass the
- *       endpoint would return 404 and any test written against it would pass vacuously.
- *   <li>The token contract documented on the {@code bearerAuth} scheme is <em>rendered</em> as the
- *       markdown it is written as. The contract is a deliverable that integrators configure their
- *       identity provider against, so the served bundle is parsed and the description asserted line
- *       by line: substring matching on the raw YAML would still pass if a folded block scalar
- *       collapsed every table into a single run-on line.
- * </ul>
- *
- * <p>The {@code test} environment clears {@code consent-manager.api-prefix}, so endpoints are
- * addressed without the {@code /v1} prefix that the {@code servers} block declares.
+ * {@link ApiStatusController} is actually routed, and the served {@code bearerAuth} token contract
+ * renders line by line rather than collapsing into one folded line.
  */
 @MicronautTest
 @DisplayName("API status endpoint and published OpenAPI specification")
@@ -49,14 +34,9 @@ class ApiStatusControllerIT extends PostgresTestResource {
     /** Where the bundled specification is served. */
     private static final String SPEC_PATH = "/openapi.yaml";
 
-    /**
-     * Status value the specification declares as the {@code example} for {@code ApiStatus.status}.
-     * Asserted as a literal rather than against the controller's own constant, so that changing the
-     * constant breaks the test instead of silently redefining the documented contract.
-     */
+    /** The spec's example status, as a literal so changing the controller constant fails here. */
     private static final String EXPECTED_STATUS_VALUE = "ok";
 
-    /** HTTP client targeting the embedded test server. */
     @Inject
     @Client("/")
     HttpClient httpClient;
@@ -133,14 +113,7 @@ class ApiStatusControllerIT extends PostgresTestResource {
         return new Yaml().load(body);
     }
 
-    /**
-     * Reads a nested string value from a parsed YAML document, failing the test with the traversed
-     * path when any segment is missing.
-     *
-     * @param document the parsed document
-     * @param path the sequence of mapping keys to follow
-     * @return the string value found at that path
-     */
+    /** Reads a nested string from parsed YAML, failing with the path when a segment is missing. */
     @SuppressWarnings("unchecked")
     private static String stringAt(Map<String, Object> document, String... path) {
         Object current = document;

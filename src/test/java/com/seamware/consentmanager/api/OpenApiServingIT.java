@@ -32,9 +32,7 @@ class OpenApiServingIT extends KeycloakAndPostgresTestResource {
     /** Where the bundle is served, at the origin root outside the API prefix. */
     private static final String SPEC_PATH = "/openapi.yaml";
 
-    /**
-     * System property Failsafe sets from the pom's {@code openapi.bundle.file}, the bundle's path.
-     */
+    /** System property Failsafe sets from the pom's {@code openapi.bundle.file}. */
     private static final String BUNDLE_FILE_PROPERTY = "openapi.bundle.file";
 
     /** OpenAPI version the authored specification declares. */

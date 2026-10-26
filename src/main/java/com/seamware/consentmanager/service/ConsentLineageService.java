@@ -13,12 +13,9 @@ import java.util.UUID;
 /**
  * Reads the chain of consents a record supersedes, newest first, for {@code includeLineage}.
  *
- * <p>Each chain is one recursive query whose every hop is held to the entry point's predicate - the
- * subject's own {@code user_id}, or the participant as provider or consumer - so the chain stops at
- * the first record the caller may not read and that record is never rendered; its id still reaches
- * the caller as the last link's {@code parentConsentId}, as the entry point's own does. The query
- * also stops at the configured depth and at a record already on the path: {@code
- * consents_parent_not_self} forbids a one-row loop but not one across rows.
+ * <p>Every hop is held to the caller's own predicate, so the chain stops before the first record
+ * the caller may not read. It also stops at the configured depth and at a cycle across rows, which
+ * {@code consents_parent_not_self} does not forbid.
  */
 @Singleton
 public class ConsentLineageService {
@@ -43,9 +40,7 @@ public class ConsentLineageService {
                         consent.getId(), parentId, subject.getId(), settings.getLineageMaxDepth());
     }
 
-    /**
-     * The records {@code consent} supersedes that name the participant as a party, newest first.
-     */
+    /** The records {@code consent} supersedes that name the participant, newest first. */
     @NonNull
     public List<Consent> forParticipant(@NonNull Participant caller, @NonNull Consent consent) {
         UUID parentId = consent.getParentConsentId();

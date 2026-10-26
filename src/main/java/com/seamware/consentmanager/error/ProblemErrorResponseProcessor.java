@@ -15,15 +15,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Renders every error the framework itself produces as an RFC 7807 problem detail, replacing the
- * Hateoas body Micronaut ships with.
- *
- * <p>The exception handlers in this package only cover what this service throws. A malformed
- * request body, a missing required parameter, a 405, a 415 and an unroutable 404 never reach them:
- * the framework builds those responses through this processor. Without the replacement the same API
- * would answer {@code application/problem+json} for a refusal it chose and {@code application/json}
- * with {@code _embedded.errors} for one the framework chose, and the shared {@code BadRequest}
- * response component would be a promise the service does not keep.
+ * Renders framework-produced errors (malformed body, missing parameter, 405, 415, unroutable 404)
+ * as RFC 7807 problem details, replacing Micronaut's Hateoas body.
  */
 @Singleton
 @Replaces(ErrorResponseProcessor.class)
@@ -41,9 +34,7 @@ public class ProblemErrorResponseProcessor implements ErrorResponseProcessor<Pro
         this.serverErrorDetail = serverErrorDetail;
     }
 
-    /**
-     * Renders the error as a problem, withholding the cause of anything that is this side's fault.
-     */
+    /** Renders the error as a problem, withholding the cause of a server-side fault. */
     @Override
     public MutableHttpResponse<ProblemDetail> processResponse(
             ErrorContext errorContext, MutableHttpResponse<?> baseResponse) {

@@ -307,9 +307,7 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
         return KeycloakTestResource.accessToken(RealmPrincipal.USER);
     }
 
-    /**
-     * The ephemeral key's {@code d}, recovered from its signer since the store never exposes it.
-     */
+    /** The ephemeral key's {@code d}, recovered from its signer since the store hides it. */
     private static Set<String> ephemeralSecrets(SigningKeyStore ephemeral) {
         ECPrivateKey key = (ECPrivateKey) ((ECDSASigner) ephemeral.signer()).getPrivateKey();
         ECKey published = ephemeral.verificationKeys().getFirst().toECKey();
@@ -324,10 +322,7 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    /**
-     * The configured store, whose signer can be broken so Nimbus itself refuses to sign: it is
-     * handed a header naming an algorithm the configured key cannot sign with.
-     */
+    /** The configured store, breakable so Nimbus refuses to sign with a foreign algorithm. */
     @Singleton
     @Replaces(SigningKeyStore.class)
     @Requires(property = BREAKABLE_STORE, value = "true")

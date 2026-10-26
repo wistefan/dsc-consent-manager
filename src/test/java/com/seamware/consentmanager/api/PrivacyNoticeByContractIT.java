@@ -14,17 +14,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Exercises {@code POST /privacy-notices/by-contract} end to end against a stubbed Contract
- * Service.
- *
- * <p>Two things only an end-to-end run shows. That the derived form and the declared form produce
- * the same notice from the same contract - asserted on the stored rows rather than on the status,
- * because the point is that one code path serves both. And that the rules the declared form is held
- * to still hold here: a caller that is no party, a party this deployment has no registration for,
- * the duplicate that writes nothing and the contract edit that archives.
- *
- * <p>Each case uses a contract identifier of its own, the class-wide {@code contracts} cache being
- * shared.
+ * By-contract generation against a stubbed Contract Service: guards parity of stored rows with the
+ * declared form, and its party, registration, duplicate and archive rules. One contract per case.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Privacy notice generation from a contract alone")
@@ -95,11 +86,7 @@ class PrivacyNoticeByContractIT extends PrivacyNoticeApiTestSupport {
         assertThat(allNotices(contractUri)).isEmpty();
     }
 
-    /**
-     * The identifiers are read off the contract rather than off the request here, so the order of
-     * the two refusals is what keeps them from leaking: a stranger must not learn a party's
-     * identifier from the {@code 404} that reports it unregistered.
-     */
+    /** A stranger must not learn a party's identifier from the unregistered-party {@code 404}. */
     @Test
     @DisplayName("a caller that is neither party is refused before either party is looked up")
     void refusesANonPartyBeforeReportingAnUnregisteredParty() {
@@ -143,11 +130,7 @@ class PrivacyNoticeByContractIT extends PrivacyNoticeApiTestSupport {
         assertThat(allNotices(contractUri)).isEmpty();
     }
 
-    /**
-     * The ambiguity is settled on the document alone, so it is refused before anything has
-     * established that the caller is a party - which is why the refusal may count the contract's
-     * participants but may not name them.
-     */
+    /** Refused before party membership is known, so it may count participants but not name them. */
     @Test
     @DisplayName("the ambiguity refusal tells a caller that is no party how many, not which")
     void refusesAnAmbiguousContractWithoutNamingItsParticipants() {

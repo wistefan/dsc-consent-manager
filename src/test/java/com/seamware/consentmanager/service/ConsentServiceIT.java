@@ -37,12 +37,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Proves what a data subject's decision is checked against and what it leaves behind: the notice it
- * is recorded against, the scope it may narrow to, the consent it supersedes and the chain it
- * joins.
- *
- * <p>Every assertion reads the database rather than the returned record where the two could
- * disagree, because the point of most cases is what the writer committed, not what it answered.
+ * Tests what a data subject's decision is checked against and what it commits: its notice, scope,
+ * superseded consent and chain. Assertions read the database, not the returned record.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent decisions")

@@ -28,16 +28,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
 /**
- * Harness every privacy-notice API suite runs on: a stubbed Contract Service, the participants a
- * contract fixture names, and the reads that look behind the response at the stored rows.
- *
- * <p>Shared rather than copied because the parts that would drift are the ones no suite asserts. A
- * cleanup that stops removing a row one suite still writes, or a retry budget raised in one copy
- * only, fails in whichever suite was not updated and is diagnosed there.
- *
- * <p>The stub is an instance field, so each concrete suite owns one:
- * {@code @TestInstance(PER_CLASS)} is inherited from {@link PostgresTestResource}, which is also
- * what lets the {@code @AfterAll} that closes it run per suite rather than once for the first.
+ * Shared harness for privacy-notice API suites: a stubbed Contract Service, registered parties and
+ * reads of the stored rows. Each suite owns its stub via the inherited {@code PER_CLASS}.
  */
 public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTestResource {
 
@@ -60,26 +52,21 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
     /** Identifier no participant is registered under. */
     protected static final String UNREGISTERED = "urn:test:participant:never-registered";
 
-    /** Content type every refusal renders. */
     protected static final String PROBLEM_JSON = "application/problem+json";
 
-    /** Retry budget these suites run under, so an upstream case costs milliseconds. */
+    /** Retry budget, so an upstream case costs milliseconds. */
     private static final String RETRY_ATTEMPTS = "1";
 
     private static final String RETRY_DELAY = "10ms";
 
     /**
-     * Participants registered before each case and removed after it.
-     *
-     * <p>A notice holds its parties against {@code ON DELETE RESTRICT} and these rows outlive the
-     * case's transaction, so a leftover would make every later suite's participant cleanup fail.
+     * Participants registered before each case and removed after it. Notices restrict their
+     * parties' deletion, so a leftover row breaks later suites' cleanup.
      */
     private static final List<String> PARTIES =
             List.of(CALLER, FIXTURE_PROVIDER, CONSUMER, OTHER_CONSUMER);
 
-    /**
-     * The stubbed Contract Service, named by {@link #getProperties()} before the context starts.
-     */
+    /** Stubbed Contract Service, named by {@link #getProperties()} before the context starts. */
     protected final ContractServiceStub contracts = new ContractServiceStub();
 
     @Inject
@@ -150,11 +137,8 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
     }
 
     /**
-     * Writes a notice straight to the table, bypassing generation.
-     *
-     * <p>What a resolution case needs: generating through the API would fetch the contract and
-     * leave it cached, so the retrieval under test would be served from the cache and never reach
-     * the stub it is about.
+     * Writes a notice straight to the table, bypassing generation. Generating via the API would
+     * cache the contract, hiding the retrieval under test.
      */
     protected PrivacyNotice seed(
             String contractUri,
@@ -229,9 +213,8 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
     }
 
     /**
-     * An ecosystem document with one more consumer than it had, which is what leaves its consuming
-     * side open. Takes the document so a case can make a contract ambiguous for a caller that is no
-     * party to it.
+     * An ecosystem document with one more consumer, leaving its consuming side open. Takes the
+     * document so a case can make a contract ambiguous for a non-party caller.
      */
     protected static String withSecondConsumer(String document) {
         return document.replace(
@@ -258,12 +241,7 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
                 .toList();
     }
 
-    /**
-     * Every row written for a contract, archived ones included.
-     *
-     * <p>Filtered here rather than queried: nothing in {@code src/main} reads a contract's whole
-     * notice history, so the repository carries no method for it.
-     */
+    /** Every row written for a contract, archived included; no repository method reads this. */
     protected List<PrivacyNotice> allNotices(String contractUri) {
         return StreamSupport.stream(notices.findAll().spliterator(), false)
                 .filter(notice -> contractUri.equals(notice.getContractUri()))
@@ -279,12 +257,8 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
     }
 
     /**
-     * Registers a party under a legal name and a contact neither of which is its identifier.
-     *
-     * <p>Distinct on purpose: a row whose legal name equals its identifier makes every assertion
-     * that a recipient was read from this service's own registration equally true of a resolver
-     * that echoed the stored identifier back, so the assertion could not fail for the reason it
-     * names.
+     * Registers a party with a legal name and contact distinct from its identifier, so a resolver
+     * echoing the identifier back cannot pass an assertion meant for the registration.
      */
     protected void register(String identifier) {
         if (participants.findByIdentifier(identifier).isEmpty()) {

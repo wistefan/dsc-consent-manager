@@ -44,20 +44,14 @@ public enum ConsentFormat {
                                                         .collect(Collectors.joining(", ")))));
     }
 
-    /**
-     * Admits {@link #FULL} alone, the only format a listing renders; anything else is a {@code
-     * 400}.
-     */
+    /** Admits {@link #FULL} alone, the only format a listing renders; else a {@code 400}. */
     public static void requireListable(@Nullable String value) {
         if (of(value) != FULL) {
             throw new BadRequestException(LISTING_FULL_ONLY);
         }
     }
 
-    /**
-     * The format {@code value} names, refusing a receipt asked for with its lineage as a {@code
-     * 400}.
-     */
+    /** The format {@code value} names; a receipt asked for with lineage is a {@code 400}. */
     public static ConsentFormat of(@Nullable String value, boolean includeLineage) {
         ConsentFormat format = of(value);
         if (includeLineage && format != FULL) {

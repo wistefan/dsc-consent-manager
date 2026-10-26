@@ -19,17 +19,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 /**
- * Exercises {@code POST /privacy-notices} end to end against a stubbed Contract Service.
- *
- * <p>What only an end-to-end run can show: that the two success codes report what the operation
- * decided rather than what the route returns, and that a contract edit reaches generation through
- * the cache and not around it. The staleness window the cache opens is asserted as deliberate - the
- * same upstream edit is shown to be invisible until its key is invalidated - so a later change to
- * {@code cache-ttl} cannot quietly turn that into a surprise.
- *
- * <p>Each case uses a contract identifier of its own. The context, and with it the {@code
- * contracts} cache, is shared by the whole class, so a shared identifier would let one case serve
- * another's contract.
+ * Notice generation against a stubbed Contract Service: guards the two success codes and the cache
+ * staleness window, which an edit must not bypass. One contract per case, as the cache is shared.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Privacy notice generation over HTTP")
@@ -178,10 +169,7 @@ class PrivacyNoticeGenerationIT extends PrivacyNoticeApiTestSupport {
         }
     }
 
-    /**
-     * The provider side of this rule is reached only by a caller that is the consumer, and this
-     * suite holds a token for one participant; {@code PrivacyNoticeServiceTest} covers both sides.
-     */
+    /** Covers the consumer side only; {@code PrivacyNoticeServiceTest} covers both. */
     @Test
     @DisplayName("a deregistered party is a 404, so no new notice republishes its retained record")
     void refusesADeregisteredParty() {

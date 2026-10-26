@@ -15,6 +15,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.LoggerFactory;
 
+/** Pins that a failure summary names classes and the top frame, never a message, path or query. */
 @DisplayName("Failure summary")
 class FailureSummaryTest {
 

@@ -29,14 +29,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Proves the consent listings and the validity check are served by an index, not a sequential scan
- * of {@code consents}.
- *
- * <p>Each plan is taken for the SQL Micronaut Data compiled onto the repository method - read off
- * its {@link Query} metadata, so the assertion follows the query rather than a copy of it - with
- * the parameters inlined as literals. The table is seeded with enough subjects and participants
- * that one caller's rows are a sliver of it, and analysed, so the planner's choice is the one it
- * makes on a populated deployment rather than the seq scan any planner picks for a tiny table.
+ * Proves the consent listings and validity check use an index, not a seq scan of {@code consents}.
+ * Plans are taken for each method's compiled {@link Query} SQL over a seeded, analysed table.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent query index usage")
@@ -70,7 +64,6 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
     /** The partial unique index over grants, which serves any {@code GRANTED}-only lookup. */
     private static final String GRANT_INDEX = "uq_consents_granted_per_user_notice";
 
-    /** A subject's consents, reached by either index keyed on the subject. */
     private static final String PRIMARY_KEY = "consents_pkey";
 
     /** A lineage entry point no seeded row has, so the walk starts from the probe's consent. */
@@ -79,6 +72,7 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
     /** Lineage depth bound into the planned walk; the plan does not depend on its value. */
     private static final String LINEAGE_DEPTH = "20";
 
+    /** A subject's consents, reached by either index keyed on the subject. */
     private static final Set<String> BY_SUBJECT = Set.of(USER_INDEX, GRANT_INDEX);
 
     /** The sort and limit Micronaut appends to a page query ordered newest first. */
@@ -273,10 +267,7 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
                 "NULL");
     }
 
-    /**
-     * A subject, a participant party to its consents, one notice it holds a grant under, and that
-     * grant.
-     */
+    /** A subject, a participant party to its consents, a notice it holds a grant under, and it. */
     private Probe probe() throws SQLException {
         try (Connection connection = connect();
                 Statement statement = connection.createStatement();
@@ -317,9 +308,7 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
         }
     }
 
-    /**
-     * A pooled connection outside Micronaut's transaction-aware proxy, which needs a transaction.
-     */
+    /** A pooled connection outside the transaction-aware proxy, which needs a transaction. */
     private Connection connect() throws SQLException {
         return dataSources.resolve(dataSource).getConnection();
     }

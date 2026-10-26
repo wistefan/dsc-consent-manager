@@ -30,7 +30,7 @@ record NotificationModel(
         @Nullable String clientUrl,
         @Nullable String terminatedAt) {
 
-    /** Greeting name for a user who gave neither a first nor a last name. */
+    /** Greeting for a user with neither a first nor a last name. */
     static final String FALLBACK_DISPLAY_NAME = "there";
 
     static final String FALLBACK_PARTICIPANT_NAME = "A participant";

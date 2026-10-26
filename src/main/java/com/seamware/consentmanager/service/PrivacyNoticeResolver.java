@@ -25,24 +25,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Fills in what a stored notice only names, and reports per section how far that got.
+ * Fills in what a stored notice only names, reporting per section how far that got. Read-only;
+ * never fails the request (catches {@link UpstreamServiceException}) nor drops a stored value.
  *
- * <p>Read-only: it produces a view beside the row and never writes one back, so what is stored
- * stays what generation extracted rather than drifting with read traffic. Resolution also never
- * takes a value away - a section that resolved to nothing keeps the stored text, because a live
- * document that says less than the contract did is no reason to publish less.
- *
- * <p>An archived notice is the one case where the contract is deliberately left unread, and both
- * contract-fed sections report {@code NOT_REQUESTED} for it. A notice is archived precisely because
- * the contract changed, so reading the live one would print the superseding contract's title,
- * purposes and terms under the superseded notice's id - a document that was never published. The
- * catalog and the recipients are still resolved, because those fill in the URIs and parties the
- * archived notice itself names.
- *
- * <p>It is the one place {@link UpstreamServiceException} is caught. The gateway raises it when the
- * Contract Service cannot be reached, and letting it out of a GET would answer the 502 that
- * resolution exists to avoid; {@link SelfDescriptionClient} never throws, so the obligation is
- * one-sided.
+ * <p>For an archived notice the live contract is left unread and its sections report {@code
+ * NOT_REQUESTED}, since it would describe the superseding contract; catalog and recipients still
+ * resolve.
  */
 @Singleton
 public class PrivacyNoticeResolver {
@@ -56,7 +44,7 @@ public class PrivacyNoticeResolver {
     private final int maxDocuments;
     private final Duration maxDuration;
 
-    /** Takes the catalog budget from configuration; everything else is a collaborator. */
+    /** Takes the catalog budget from configuration. */
     public PrivacyNoticeResolver(
             ContractGateway contracts,
             ContractContentExtractor extractor,
@@ -72,10 +60,8 @@ public class PrivacyNoticeResolver {
     }
 
     /**
-     * The notice as a retrieval serves it, with every external document read when asked for.
-     *
-     * <p>{@code resolve} false makes no external call at all and reports {@code NOT_REQUESTED}
-     * throughout, which is a different claim from everything having been read successfully.
+     * The notice as a retrieval serves it, external documents read when {@code resolve}; false
+     * makes no call and reports {@code NOT_REQUESTED} throughout.
      */
     @NonNull
     public ResolvedNotice resolve(
@@ -96,8 +82,6 @@ public class PrivacyNoticeResolver {
                     NoticeResolution.notRequested());
         }
 
-        // An archived notice is a published document the contract has since moved past, so the
-        // live contract is deliberately not read for it; the class comment says why.
         boolean superseded = notice.getArchivedAt() != null;
         Optional<NoticeContent> live =
                 superseded ? Optional.empty() : live(notice.getContractUri(), provider);
@@ -133,12 +117,8 @@ public class PrivacyNoticeResolver {
     }
 
     /**
-     * What the contract says now, or empty when it could not be read or is no longer known.
-     *
-     * <p>Every runtime failure is caught, not only the gateway's {@link UpstreamServiceException}:
-     * extraction runs in here too, and an odd-but-decodable contract that tripped it would escape a
-     * GET as the 500 this class exists to prevent. The catch is what makes "resolution never fails
-     * the request" true by construction rather than by the extractor staying defensive.
+     * What the contract says now, or empty when unreadable or unknown; catches every runtime
+     * failure, extraction's included, so resolution never fails the request.
      */
     private Optional<NoticeContent> live(String contractUri, Participant provider) {
         try {
@@ -155,15 +135,8 @@ public class PrivacyNoticeResolver {
     }
 
     /**
-     * The catalog walk: each stored entry names a service offering, whose own document names the
-     * data resources behind it, and both hops are read.
-     *
-     * <p>The resources are appended as entries of their own carrying {@code partOf}, because that
-     * is where a resource's title and description belong and the contract carries nothing about
-     * them. A failure at either hop leaves the affected entry bare and marks the whole section
-     * unavailable: a list that is only partly filled in while claiming to be resolved would
-     * misreport itself. Running out of either budget - the documents one walk may read, or the time
-     * it may spend reading them - is reported the same way, and for the same reason.
+     * Walks offering then data resources, appending resources as {@code partOf} entries. Any failed
+     * read or exhausted budget leaves that entry bare and marks the whole section unavailable.
      */
     private Section<List<DataReference>> data(@Nullable List<DataReference> stored) {
         if (stored == null) {
@@ -175,13 +148,8 @@ public class PrivacyNoticeResolver {
     }
 
     /**
-     * Each recipient as this service has it registered, the ones it has no row for left bare.
-     *
-     * <p>A missing row marks the section unavailable rather than failing: a contract may well name
-     * a party this deployment never registered, and the notice still has to be readable. A stored
-     * entry carrying no identifier at all is dropped instead, because it names nobody - a blank row
-     * in the recipient list of a published notice tells a reader strictly less than the section
-     * being marked incomplete does, which dropping it also does.
+     * Each recipient as registered here; one with no row is left bare and marks the section
+     * unavailable, and one with no identifier is dropped.
      */
     private Section<List<Recipient>> recipients(@Nullable List<Recipient> stored) {
         if (stored == null) {
@@ -240,20 +208,14 @@ public class PrivacyNoticeResolver {
     }
 
     /**
-     * One retrieval's walk over the catalog, carrying the budgets and what has already been read.
-     *
-     * <p>Both lists it walks come out of documents this service does not author, so without a
-     * budget a single authenticated GET fans out as far as whoever publishes them decides. It takes
-     * two to bound that: a document ceiling, and a deadline, because a ceiling alone still admits
-     * the ceiling many reads each sitting out the read timeout. The de-duplication is the same
-     * concern from the other side: two offerings naming one resource read it once and publish it
-     * once.
+     * One retrieval's catalog walk, bounded by a document ceiling and a deadline because the
+     * documents are third-party; each URL is read at most once.
      */
     private final class CatalogWalk {
 
         private final Set<String> read = new LinkedHashSet<>();
 
-        /** When this walk stops reading, however many documents it has got through by then. */
+        /** When this walk stops reading. */
         private final long deadline = System.nanoTime() + maxDuration.toNanos();
 
         /** False once any document could not be read, or a budget ran out before it was tried. */

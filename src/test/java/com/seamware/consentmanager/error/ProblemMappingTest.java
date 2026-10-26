@@ -37,10 +37,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Pins every exception this service refuses a request with to the problem detail it is rendered as.
- *
- * <p>The {@code type} URIs asserted here are literals on purpose: they are a published part of the
- * API contract that clients branch on, so a renamed slug has to fail here rather than silently in a
- * client.
+ * The {@code type} URIs are literals on purpose: clients branch on them.
  */
 @DisplayName("domain exceptions render as the problem detail their type declares")
 class ProblemMappingTest {
@@ -203,10 +200,7 @@ class ProblemMappingTest {
             assertThat(problem.getDetail()).isEqualTo(expected);
         }
 
-        /**
-         * Above DEBUG a site logs the failure's class chain, never its message, its cause's message
-         * or the concrete path and query, all of which can carry a personal identifier.
-         */
+        /** Above DEBUG only the class chain is logged; messages and paths may carry PII. */
         @ParameterizedTest(name = "{0}")
         @EnumSource(Site.class)
         void logsNoMessageOrPathAtError(Site site) {
@@ -269,10 +263,7 @@ class ProblemMappingTest {
         assertThat(itemType).isEqualTo(ProblemFieldError.class);
     }
 
-    /**
-     * Netty hands the raw request target through, so the path reaching a handler is not guaranteed
-     * to be a URI. Rendering must never fail on one.
-     */
+    /** Netty passes the raw request target, which need not be a URI; rendering must not fail. */
     @Nested
     @DisplayName("request paths that are not URIs")
     class RequestPaths {
@@ -390,28 +381,19 @@ class ProblemMappingTest {
         }
     }
 
-    /** The helper with exception detail exposed or withheld. */
     private static ServerErrorDetail serverErrorDetail(boolean exposed) {
         ConsentManagerConfiguration.Errors errors = new ConsentManagerConfiguration.Errors();
         errors.setExposeExceptionDetail(exposed);
         return new ServerErrorDetail(errors);
     }
 
-    /**
-     * Bundles violations in the order given; the handler is responsible for ordering the output.
-     */
+    /** Bundles violations in the order given; ordering the output is the handler's job. */
     private static ConstraintViolationException violationException(
             ConstraintViolation<?>... violations) {
         return new ConstraintViolationException(new LinkedHashSet<>(Arrays.asList(violations)));
     }
 
-    /**
-     * A violation of {@code propertyPath} with {@code message}.
-     *
-     * <p>Hand-built rather than produced by a validator: the project has no mocking framework, and
-     * driving a real validator would pull a bean context into a plain unit test for the two members
-     * the handler reads.
-     */
+    /** A hand-built violation, sparing a plain unit test a validator and its bean context. */
     private static ConstraintViolation<?> violation(String propertyPath, String message) {
         return new StubViolation(new StubPath(propertyPath), message);
     }

@@ -12,17 +12,9 @@ import io.micronaut.http.annotation.Controller;
 import java.util.UUID;
 
 /**
- * Serves the {@code /consents/{id}/…} operations that move a consent after it exists.
- *
- * <p>Every one of them is authorised against the consent itself rather than against the token's
- * role: the subject comes from {@link UserPrincipal#user()}, and a consent naming anyone else is a
- * {@code 404}. Terminating acts in the dataspace in the participant's name, so it resolves the
- * caller through {@link ParticipantPrincipal#requireActive()} and a departed participant reaches it
- * no more than an unregistered one does.
- *
- * <p>Resuming is the one route here open to two kinds of caller, so it takes the sealed principal
- * and lets the service decide what each may do; its body is optional, because a subject resuming
- * their own consent has nothing to state.
+ * Serves the {@code /consents/{id}/…} moves, each authorised against the consent itself: one naming
+ * another subject is a {@code 404}. Terminate requires {@link
+ * ParticipantPrincipal#requireActive()}.
  */
 @Controller
 public class ConsentLifecycleController extends AbstractConsentLifecycleController {
@@ -52,16 +44,8 @@ public class ConsentLifecycleController extends AbstractConsentLifecycleControll
     }
 
     /**
-     * Grants an unanswered request, for the subject itself or for a catalog relaying its decision.
-     *
-     * <p>{@code request} is null when the caller sends no body at all, which the spec permits (its
-     * {@code requestBody} is not required, so the generated parameter is nullable) and which is the
-     * ordinary shape of a subject resuming its own consent: the token already states who decided,
-     * and the body has nothing to add. There is no response peculiar to a null body — it says
-     * exactly what a body naming no subject says, so both reach the service as a null identifier
-     * and are answered by the rule for the caller's role: a {@code USER} ignores it and is answered
-     * {@code 200}, a {@code CATALOG} must name the subject its relay is for and is answered {@code
-     * 400} without it.
+     * Grants an unanswered request for the subject or a relaying catalog. A missing body equals one
+     * naming no subject: fine for a {@code USER}, a {@code 400} for a {@code CATALOG}.
      */
     @Override
     public HttpResponse<Consent> resumeConsent(

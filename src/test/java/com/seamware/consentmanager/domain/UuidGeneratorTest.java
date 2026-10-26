@@ -9,12 +9,7 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
-/**
- * Unit tests for {@link UuidGenerator}.
- *
- * <p>Validates that generated UUIDs conform to the UUIDv7 specification (RFC 9562): correct
- * version, correct variant, embedded timestamp, chronological ordering, and uniqueness.
- */
+/** Pins that {@link UuidGenerator} produces unique, time-ordered RFC 9562 UUIDv7 values. */
 class UuidGeneratorTest {
 
     /** UUIDv7 version number (bits 48–51 of the most-significant long). */
@@ -23,7 +18,6 @@ class UuidGeneratorTest {
     /** RFC 9562 variant value (bits 64–65 = 10 → variant() returns 2). */
     private static final int EXPECTED_VARIANT = 2;
 
-    /** Number of UUIDs to generate in batch tests. */
     private static final int BATCH_SIZE = 1000;
 
     @Test
@@ -46,7 +40,7 @@ class UuidGeneratorTest {
         UUID uuid = UuidGenerator.uuidV7();
         long afterMillis = System.currentTimeMillis();
 
-        // Extract the 48-bit timestamp from the most-significant long
+        // The top 48 bits are the Unix millisecond timestamp.
         long embeddedTimestamp = uuid.getMostSignificantBits() >>> 16;
 
         assertThat(embeddedTimestamp)
@@ -70,9 +64,6 @@ class UuidGeneratorTest {
         UUID first = UuidGenerator.uuidV7();
         UUID second = UuidGenerator.uuidV7();
 
-        // UUIDv7 natural (unsigned) ordering follows timestamp, so the second UUID
-        // should be >= the first when compared by their string representation
-        // (which preserves the timestamp-based lexicographic order).
         long firstTimestamp = first.getMostSignificantBits() >>> 16;
         long secondTimestamp = second.getMostSignificantBits() >>> 16;
 

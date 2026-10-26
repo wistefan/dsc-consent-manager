@@ -17,10 +17,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins what each contract document becomes as a privacy notice.
- *
- * <p>Every case asserts the whole content rather than the section it is named after, so a heading
- * this mapping leaves absent cannot quietly start arriving as an empty string or an empty list.
+ * Pins what each contract document becomes as a privacy notice. Each case asserts the whole
+ * content, so an absent heading cannot quietly start arriving as an empty string or list.
  */
 @DisplayName("Contract content extraction")
 class ContractContentExtractorTest {
@@ -142,9 +140,8 @@ class ContractContentExtractorTest {
                                                 "Trip history may be read by signed members of this"
                                                         + " ecosystem only."),
                                         null,
-                                        // The consumer offers route-quality under the same
-                                        // contract; it stays out of a notice this provider
-                                        // controls, which names only what that provider offers.
+                                        // The consumer's route-quality offering stays out: the
+                                        // notice names only what this provider offers.
                                         List.of(reference(TRIP_HISTORY_URI)),
                                         List.of(PROVIDER_IDENTIFIER, CONSUMER_IDENTIFIER),
                                         null,
@@ -245,10 +242,7 @@ class ContractContentExtractorTest {
                 null);
     }
 
-    /**
-     * The recipients as generation stores them: the identifiers the contract names, nothing
-     * resolved.
-     */
+    /** The recipients as generation stores them: the contract's identifiers, nothing resolved. */
     private static List<Recipient> recipients(List<String> identifiers) {
         return identifiers == null
                 ? null

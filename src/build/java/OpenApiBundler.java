@@ -19,11 +19,8 @@ import org.yaml.snakeyaml.representer.Representer;
 import org.yaml.snakeyaml.resolver.Resolver;
 
 /**
- * Bundles the authored specification into one document without external {@code $ref}. Every file
- * the root's {@code components} section points at is inlined there, and every other reference to
- * it becomes an internal pointer, so key order and component names stay as authored. Fails on a
- * reference to a file no component names, and on two components naming one file. Run by the build
- * in single-file source mode.
+ * Bundles the authored spec into one document, inlining each file a root component names and
+ * pointing other refs at it. Fails on an unnamed file or one named twice; run by the build.
  */
 public final class OpenApiBundler {
 
@@ -96,9 +93,8 @@ public final class OpenApiBundler {
     }
 
     /**
-     * Replaces every external reference under {@code node} with the component that inlines it.
-     * {@code inRoot} says the node was read from the root document, the only place an internal ref
-     * keeps its meaning; {@code directory} resolves its relative refs.
+     * Replaces every external ref under {@code node} with its component's pointer. Only in the root
+     * document ({@code inRoot}) does an internal ref keep its meaning.
      */
     @SuppressWarnings("unchecked")
     private Object rewrite(Object node, Path directory, boolean inRoot) {
@@ -187,9 +183,8 @@ public final class OpenApiBundler {
     }
 
     /**
-     * Loads booleans by the YAML 1.2 core rule and resolves no timestamps, so an unquoted date or
-     * {@code on} stays the string it was written as. Integers and floats keep SnakeYAML's YAML 1.1
-     * patterns (sexagesimal, {@code 0b}, leading-zero octal); the authored spec writes none of them.
+     * YAML 1.2 core booleans and no timestamps, so an unquoted date or {@code on} stays a string.
+     * Numbers keep SnakeYAML's YAML 1.1 patterns, which the authored spec does not use.
      */
     private static Yaml newReader() {
         Resolver resolver = new Resolver() {

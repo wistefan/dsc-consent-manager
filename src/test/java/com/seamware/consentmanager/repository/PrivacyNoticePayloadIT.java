@@ -26,13 +26,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Proves a notice payload survives the JSONB column unchanged, nested records and absences
- * included.
- *
- * <p>Repeated generation decides whether a contract changed by comparing a freshly extracted
- * payload against the one read back from the row, so a lossy round-trip - an absent list returning
- * as an empty one, a nested record failing to introspect - would make the two never equal and turn
- * every regeneration into an archive-and-recreate with nothing to show for it. This is the first
- * payload in the repo carrying nested record types, so nothing else pins that.
+ * included; regeneration compares payloads, so a lossy round-trip would archive on every run.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Privacy notice payload persistence")

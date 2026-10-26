@@ -17,88 +17,60 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Testcontainers Keycloak fixture issuing real tokens from the realm imported by {@value
- * #REALM_IMPORT_FILE}, and the trust-list properties pointing this service at it.
- *
- * <p>The container is a JVM-wide singleton, as in {@link PostgresTestResource}: Keycloak takes
- * several seconds to boot, and the realm is read-only apart from the signing-key rotation in {@link
- * #rotateRealmSigningKey(String)}, which only ever <em>adds</em> a key - and so cannot invalidate
- * tokens another test class already holds - and is undone through {@link
- * #deleteRealmComponent(String)}.
- *
- * <p>This is a static fixture, not a base class. Tests reach it through {@link
- * KeycloakAndPostgresTestResource}, which merges {@link #keycloakProperties()} into the
- * Testcontainers datasource properties and puts back the {@code micronaut.security.enabled} that
- * {@code src/test/resources/application-test.yml} switches off.
- *
- * <p>Transport is plain http, which the trust list refuses unless {@code allow-insecure-transport}
- * is set; {@code application-test.yml} already sets it for the {@code primary} entry this fixture
- * overrides.
+ * Testcontainers Keycloak fixture issuing real tokens, and the trust-list properties naming it. A
+ * JVM-wide singleton; {@link #rotateRealmSigningKey(String)} only adds a key, so held tokens stay
+ * valid. Tests reach it through {@link KeycloakAndPostgresTestResource}.
  */
 public final class KeycloakTestResource {
 
-    /** Pinned Keycloak image, so a library upgrade cannot silently change the IDP under test. */
+    /** Pinned image, so a library upgrade cannot silently change the IDP under test. */
     private static final String KEYCLOAK_IMAGE = "quay.io/keycloak/keycloak:26.1";
 
-    /** Classpath location of the imported realm definition. */
     private static final String REALM_IMPORT_FILE = "/keycloak/consent-manager-realm.json";
 
-    /** Realm name declared in the import file. */
     public static final String REALM = "consent-manager-test";
 
     /**
-     * Audience this realm's tokens carry, which the trust list entry must demand.
-     *
-     * <p>Must equal the {@code included.custom.audience} of the audience mapper in {@value
-     * #REALM_IMPORT_FILE}; a mismatch refuses every Keycloak-issued token with a bare 401.
+     * Audience this realm's tokens carry, which the trust list entry must demand. Must match the
+     * realm's audience mapper, or every Keycloak-issued token gets a bare 401.
      */
     public static final String AUDIENCE = "consent-manager";
 
     /**
-     * Participant identifier hard-coded into {@link RealmPrincipal#PARTICIPANT}'s {@code
-     * participant_id} claim. A test exercising that client must have committed a {@code
-     * participants} row with this identifier, or the token resolves to no principal and the request
-     * is refused with 403.
+     * Identifier in {@link RealmPrincipal#PARTICIPANT}'s {@code participant_id} claim. Tests using
+     * that client must commit a {@code participants} row with it, or get 403.
      */
     public static final String PARTICIPANT_IDENTIFIER = "urn:test:participant:keycloak";
 
     /** Confidential client in the imported realm with the password grant enabled. */
     private static final String TEST_CLIENT_ID = "consent-manager-test-client";
 
-    /** Secret of {@link #TEST_CLIENT_ID}, as declared in the realm import file. */
     private static final String TEST_CLIENT_SECRET = "test-client-secret";
 
-    /** Password shared by every {@link RealmPrincipal}, as declared in the realm import file. */
+    /** Password shared by every {@link RealmPrincipal}. */
     private static final String TEST_PASSWORD = "test-password";
 
     /** Trust-list entry this fixture overrides; the name is fixed by {@code application.yml}. */
     private static final String PROVIDER_NAME = "primary";
 
-    /** Realm path segment preceding every realm-scoped Keycloak endpoint. */
     private static final String REALMS_PATH = "/realms/";
 
-    /** Path of the OpenID Connect discovery document, relative to the issuer. */
     private static final String DISCOVERY_PATH = "/.well-known/openid-configuration";
 
-    /** Path of the token endpoint, relative to the issuer. */
     private static final String TOKEN_PATH = "/protocol/openid-connect/token";
 
-    /** Timeout for the token and admin calls this fixture makes against the container. */
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(30);
 
-    /** HTTP status Keycloak returns when a component is created. */
     private static final int HTTP_CREATED = 201;
 
     /** Lowest HTTP status counting as a failure. */
     private static final int HTTP_BAD_REQUEST = 400;
 
-    /** HTTP status Keycloak returns for a component that no longer exists. */
     private static final int HTTP_NOT_FOUND = 404;
 
     /**
-     * Priority of the signing key added by {@link #rotateRealmSigningKey(String)}. Keycloak signs
-     * with the active key of highest priority, and the realm's built-in generated key sits at 100,
-     * so anything above that takes over without removing the old key.
+     * Priority of a rotated-in key: above the built-in key's 100, so it signs without removing the
+     * old key.
      */
     private static final String ROTATED_KEY_PRIORITY = "200";
 
@@ -111,18 +83,12 @@ public final class KeycloakTestResource {
         KEYCLOAK.start();
     }
 
-    /** Client used for the token and admin calls. */
     private static final HttpClient HTTP =
             HttpClient.newBuilder().connectTimeout(HTTP_TIMEOUT).build();
 
     /**
-     * Realm users in the imported realm, one per role the matrix needs.
-     *
-     * <p>Each holds exactly one realm role and authenticates with the resource-owner password grant
-     * against {@link #TEST_CLIENT_ID}, so the role a token carries is decided by which constant
-     * minted it. The realm uses password-grant users rather than service accounts because a client
-     * with {@code serviceAccountsEnabled} crashes Keycloak's bootstrap realm import with "Session
-     * not bound to a realm"; the tokens are equally real either way.
+     * Realm users, one per role, each holding exactly one realm role. Password-grant users, since
+     * {@code serviceAccountsEnabled} breaks Keycloak's realm import.
      */
     public enum RealmPrincipal {
         /** Holds {@code dataspace-user}, mapped to this service's {@code USER} role. */
@@ -152,10 +118,8 @@ public final class KeycloakTestResource {
     /** Raw provider role mapped to {@code USER}, as declared in the realm import file. */
     private static final String RAW_USER_ROLE = "dataspace-user";
 
-    /** Raw provider role mapped to {@code PARTICIPANT}. */
     private static final String RAW_PARTICIPANT_ROLE = "dataspace-participant";
 
-    /** Raw provider role mapped to {@code CATALOG}. */
     private static final String RAW_CATALOG_ROLE = "dataspace-catalog";
 
     /** The realm's issuer identifier, which is also what its tokens carry in {@code iss}. */
@@ -174,12 +138,8 @@ public final class KeycloakTestResource {
     }
 
     /**
-     * Trust-list properties pointing the {@code primary} provider at this realm.
-     *
-     * <p>The role mapping is overridden because the realm names its roles {@code dataspace-*} while
-     * {@code application.yml} defaults to {@code consent-*}, and the audience is pinned here
-     * because this fixture owns the realm that mints it. Claim paths and clock skew are inherited:
-     * their defaults were chosen for Keycloak's own token shape, which is worth exercising.
+     * Trust-list properties pointing the {@code primary} provider at this realm. Overrides the role
+     * mapping ({@code dataspace-*}) and audience; claim paths are inherited.
      */
     public static Map<String, String> keycloakProperties() {
         String prefix = IdentityProviderConfiguration.PREFIX + "." + PROVIDER_NAME + ".";
@@ -211,9 +171,7 @@ public final class KeycloakTestResource {
         return accessToken;
     }
 
-    /**
-     * The {@code sub} claim of a token, which is also the identifier a user is provisioned under.
-     */
+    /** A token's {@code sub} claim, also the identifier a user is provisioned under. */
     public static String subject(String accessToken) {
         try {
             return SignedJWT.parse(accessToken).getJWTClaimsSet().getSubject();
@@ -232,16 +190,8 @@ public final class KeycloakTestResource {
     }
 
     /**
-     * Adds a new RSA signing key to the realm at a priority above the built-in one, so tokens
-     * issued from now on are signed by it. The previous key stays published in the JWK Set, which
-     * is what keeps already-issued tokens verifiable.
-     *
-     * <p>Keycloak does not enforce unique component names, and a second provider at the same
-     * priority leaves which key signs undecided, so the caller must pass a name unique to the run
-     * and hand the returned id to {@link #deleteRealmComponent(String)} when done.
-     *
-     * @param componentName name for the new key provider
-     * @return the id Keycloak assigned to the created key provider
+     * Adds an RSA signing key above the built-in one, so new tokens are signed by it; the old key
+     * stays published. Pass a run-unique name and delete the returned component id after.
      */
     public static String rotateRealmSigningKey(String componentName) {
         String body =
@@ -272,14 +222,7 @@ public final class KeycloakTestResource {
         return createdComponentId(response);
     }
 
-    /**
-     * Removes a realm component, restoring the realm to its imported state.
-     *
-     * <p>Tolerates a component that is already gone, so cleanup never masks the failure that left
-     * it behind.
-     *
-     * @param componentId id returned by {@link #rotateRealmSigningKey(String)}
-     */
+    /** Removes a realm component; tolerates one already gone, so cleanup never masks a failure. */
     public static void deleteRealmComponent(String componentId) {
         URI component =
                 URI.create(
@@ -302,10 +245,7 @@ public final class KeycloakTestResource {
         }
     }
 
-    /**
-     * The component id from a creation response, which Keycloak returns only as the last segment of
-     * the {@code Location} header.
-     */
+    /** The created component id: the last segment of Keycloak's {@code Location} header. */
     private static String createdComponentId(HttpResponse<String> response) {
         String location =
                 response.headers()
@@ -319,10 +259,8 @@ public final class KeycloakTestResource {
     }
 
     /**
-     * The realm's internal identifier, which a key provider component must name as its {@code
-     * parentId}. Keycloak assigns a UUID on import rather than reusing {@link #REALM}, and accepts
-     * a component whose {@code parentId} matches neither — returning 201 while attaching the key to
-     * nothing — so the identifier has to be read back rather than assumed.
+     * The realm's internal UUID, needed as a key provider's {@code parentId}. Keycloak accepts a
+     * wrong {@code parentId} with 201 and attaches the key to nothing.
      */
     private static String realmId() {
         URI realm = URI.create(adminBaseUrl() + "/admin/realms/" + REALM);
@@ -354,7 +292,7 @@ public final class KeycloakTestResource {
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
 
-    /** Access token for the container's bootstrap admin, scoped to the master realm. */
+    /** Bootstrap admin's access token, scoped to the master realm. */
     private static String adminToken() {
         Map<String, String> form =
                 Map.of(
@@ -410,7 +348,7 @@ public final class KeycloakTestResource {
         }
     }
 
-    /** Sends {@code request}, translating the checked failures into unchecked ones. */
+    /** Sends {@code request}, rethrowing checked failures unchecked. */
     private static HttpResponse<String> send(HttpRequest request) {
         try {
             return HTTP.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));

@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Everything one decision or request wrote: its primary consent, the status that row held under the
- * lock (empty when the row was inserted), and the collateral moves, in the order they were written.
+ * Everything one decision or request wrote: its primary consent, the status it held under the lock
+ * (empty when inserted), and the collateral moves in write order.
  */
 public record ConsentWrite(
         RecordedConsent primary, Optional<ConsentStatus> held, List<ConsentMove> collateral) {

@@ -1,10 +1,8 @@
 package com.seamware.consentmanager.error;
 
 /**
- * The request conflicts with the current state of the resource (HTTP 409).
- *
- * <p>Thrown where a uniqueness constraint or a lifecycle rule refuses an otherwise well-formed
- * request, such as linking a user to a participant it is already linked to.
+ * The request conflicts with the resource's current state (HTTP 409), e.g. a uniqueness constraint
+ * or lifecycle rule refuses an otherwise well-formed request.
  */
 public class ConflictException extends ApiException {
 

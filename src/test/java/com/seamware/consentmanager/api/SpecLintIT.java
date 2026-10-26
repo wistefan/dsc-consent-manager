@@ -36,16 +36,14 @@ import org.yaml.snakeyaml.Yaml;
 @DisplayName("Linting the OpenAPI specification with Spectral")
 class SpecLintIT {
 
-    /** Pinned Spectral CLI; bump deliberately, since a release can change the built-in rules. */
+    /** Pinned Spectral CLI; a release can change the built-in rules. */
     private static final String SPECTRAL_IMAGE = "stoplight/spectral:6.15.0";
 
     private static final String RULESET_IN_CONTAINER = "/work/.spectral.yaml";
     private static final String SPEC_IN_CONTAINER = "/work/openapi.yaml";
     private static final Path RULESET = Path.of("api", ".spectral.yaml");
 
-    /**
-     * System property Failsafe sets from the pom's {@code openapi.bundle.file}, the bundle's path.
-     */
+    /** System property Failsafe sets from the pom's {@code openapi.bundle.file}. */
     private static final String BUNDLE_FILE_PROPERTY = "openapi.bundle.file";
 
     private static final String FIXTURE_DIRECTORY = "spectral/";

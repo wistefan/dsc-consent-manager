@@ -18,29 +18,13 @@ import jakarta.inject.Singleton;
 import java.util.List;
 
 /**
- * Translates a stored privacy notice into the API's {@code PrivacyNotice} representation.
- *
- * <p>Shared by every operation that returns a notice, so the published shape of a legal document
- * does not drift between generation and retrieval. The parties are passed in rather than read: the
- * row holds participant keys while the representation names global identifiers. The resolution
- * block is a parameter for the same reason - generation always reports {@link #unresolved()}, and a
- * resolved retrieval says how far it got.
- *
- * <p>A section the payload carries no value for is set to {@code null} and dropped by the service's
- * {@code non-absent} serialization: absent is how this API says "no source for this heading".
- *
- * <p>{@code PrivacyNotice} here is the generated API model; the stored row is named in full to keep
- * the two apart.
+ * Renders a stored privacy notice as the generated API {@code PrivacyNotice}, with parties passed
+ * in as global identifiers. A section without a value is omitted: "no source for this heading".
  */
 @Singleton
 public class PrivacyNoticeMapper {
 
-    /**
-     * A fresh resolution block for a notice nothing was dereferenced for.
-     *
-     * <p>A new instance per call rather than a shared constant: the generated model is mutable, so
-     * a shared one could be aliased into every response and mutated by a single caller.
-     */
+    /** A fresh all-NOT_REQUESTED resolution block; new per call, as the model is mutable. */
     @NonNull
     public static PrivacyNoticeResolution unresolved() {
         return new PrivacyNoticeResolution(
@@ -66,12 +50,7 @@ public class PrivacyNoticeMapper {
                 resolution);
     }
 
-    /**
-     * A retrieved notice as the API publishes it, with whatever resolution filled in.
-     *
-     * <p>The title and payload come off the resolved view rather than off the row, because
-     * resolution is read-only: the row still holds what generation extracted.
-     */
+    /** A retrieved notice; title and payload come off the read-only resolved view, not the row. */
     @NonNull
     public PrivacyNotice toApi(@NonNull ResolvedNotice resolved) {
         return render(
@@ -94,8 +73,7 @@ public class PrivacyNoticeMapper {
     }
 
     private static ResolutionState state(NoticeResolution.State state) {
-        // Written out rather than matched by name: the two enums are a service record and a
-        // generated model, and a compiler error beats a runtime one when either is extended.
+        // Exhaustive switch, not by name, so extending either enum is a compile error.
         return switch (state) {
             case RESOLVED -> ResolutionState.RESOLVED;
             case UNAVAILABLE -> ResolutionState.UNAVAILABLE;

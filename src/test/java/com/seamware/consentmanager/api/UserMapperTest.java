@@ -33,9 +33,7 @@ class UserMapperTest {
     /** What the same user's links narrow to for a participant caller: its own, never the other. */
     private static final List<String> SCOPED_LINKS = List.of("urn:a");
 
-    /**
-     * The reading participant. Only its presence matters: the stub answers by overload, not by row.
-     */
+    /** The reading participant; only its presence matters, as the stub answers by overload. */
     private static final Participant CALLER =
             new Participant("urn:a", "Participant A", null, null, Map.of(), null);
 

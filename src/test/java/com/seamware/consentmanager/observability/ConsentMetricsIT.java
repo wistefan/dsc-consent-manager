@@ -59,11 +59,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Drives every consent move some HTTP route can make and asserts it increments exactly its {@code
- * (from,to)} transition counter, while a refused write increments nothing.
- *
- * <p>The counters are process-wide, so each case compares the counters after the call with those
- * before it rather than reading absolute values.
+ * Drives every consent move an HTTP route can make and asserts it increments exactly its {@code
+ * (from,to)} counter while a refused write increments nothing; counters are process-wide, so each
+ * case compares deltas.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent transition metrics")
@@ -115,12 +113,7 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
 
     private static final String NONE = ConsentMetrics.NO_STATUS;
 
-    /**
-     * Edges of the state table no code path makes today, so no case can drive them.
-     *
-     * <p>GRANTED → EXPIRED: nothing in {@code src/main} expires a consent; the edge is in the table
-     * for the expiry job a later ticket adds.
-     */
+    /** State-table edges no code path makes, e.g. GRANTED → EXPIRED: nothing expires a consent. */
     private static final Set<Edge> NOT_YET_REACHABLE =
             Set.of(new Edge(ConsentStatus.GRANTED.name(), ConsentStatus.EXPIRED.name()));
 
@@ -311,10 +304,8 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
-     * Rows committed by these cases outlive the transaction, so they are removed by hand.
-     *
-     * <p>Consents hold their user and both participants against {@code ON DELETE RESTRICT}, so they
-     * go first; an erased subject survives under its pseudonym, so it is removed by id.
+     * Removes committed rows: consents first ({@code ON DELETE RESTRICT}), and an erased subject,
+     * surviving under its pseudonym, by id.
      */
     @AfterEach
     void removeCommittedRows() {
@@ -357,11 +348,7 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
         assertThat(delta(before, transitions())).isEmpty();
     }
 
-    /**
-     * The driven edges and {@link #NOT_YET_REACHABLE} together are the state table plus its
-     * creations, so a table edge nobody drives fails the build. An edge wrongly listed as
-     * unreachable is not caught; keep the list to edges with no code path.
-     */
+    /** An edge wrongly listed in {@link #NOT_YET_REACHABLE} is not caught; list only dead ones. */
     @Test
     @DisplayName("drives every edge of the state table except those no code path makes")
     void drivesEveryEdgeOfTheStateTable() {
@@ -387,10 +374,7 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
         assertThat(covered).isEqualTo(table);
     }
 
-    /**
-     * Two grants racing with nothing to lock: either the second supersedes the first, or it loses
-     * on the one-grant index with {@code 409} and its rolled-back write counts nothing.
-     */
+    /** The second grant supersedes the first, or loses on the one-grant index and counts none. */
     @Test
     @DisplayName("counts only what committed when two grants race on an empty pair")
     void countsOnlyWhatCommittedWhenTwoGrantsRace() throws Exception {
@@ -410,10 +394,7 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
         assertThat(delta(before, transitions())).isEqualTo(expected);
     }
 
-    /**
-     * An erasure racing a grant of the subject's open request: both lock the row, so whichever
-     * commits second reads the status the first left, and exactly one move leaves the PENDING.
-     */
+    /** Both writers lock the row, so the second reads what the first left. */
     @Test
     @DisplayName("counts exactly one move out of a PENDING an erasure and a grant race for")
     void countsOneMoveOutOfARacedPending() throws Exception {
@@ -439,11 +420,7 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    /**
-     * A deregistration racing a grant of a PENDING naming the participant: the deregistration locks
-     * the row before counting grants, so it either terminates the PENDING or sees the committed
-     * grant and refuses. It never succeeds while leaving the grant standing.
-     */
+    /** Deregistration locks the row before counting grants, so it terminates or refuses. */
     @Test
     @DisplayName("never deregisters past a grant a racing decision committed")
     void neverDeregistersPastARacedGrant() throws Exception {

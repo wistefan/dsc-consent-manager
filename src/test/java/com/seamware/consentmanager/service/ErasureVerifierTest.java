@@ -10,10 +10,9 @@ import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Pins the verifier an erased record keeps: an operator has to be able to recompute it outside this
- * service, so the algorithm and the encoding are a published contract rather than an internal one.
- * The salt is equally load-bearing - without it the column would correlate two erasures of the same
- * person for anyone who can read the table.
+ * Tests the verifier an erased record keeps: its algorithm and encoding are a published contract an
+ * operator recomputes outside this service, and its salt keeps two erasures of one person
+ * uncorrelated.
  */
 @DisplayName("Erasure verifier")
 class ErasureVerifierTest {

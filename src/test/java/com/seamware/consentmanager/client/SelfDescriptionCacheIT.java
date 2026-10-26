@@ -18,15 +18,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins what the self-description cache stores and, more importantly, what it refuses to store.
- *
- * <p>The client's own doc comment argues that {@code @Cacheable} is wrong here because it cannot
- * decline to store a result and would pin a momentarily unreachable catalog to {@code UNAVAILABLE}
- * for a whole lifetime. These cases are what makes that argument checkable: a hit is served from
- * the cache, and an unreadable, an unparseable and a refused read each leave nothing behind.
- *
- * <p>A resolution IT cannot stand in for this. One retrieval reads each URL once by construction,
- * so the walk would look identical if the {@code put} moved out of the successful branch.
+ * Pins what the self-description cache stores: a hit is served from it, while an unreadable, an
+ * unparseable and a refused read each leave nothing behind.
  */
 @DisplayName("Self-description caching")
 class SelfDescriptionCacheIT {
@@ -41,7 +34,7 @@ class SelfDescriptionCacheIT {
     /** Status standing in for a catalog that is reachable but not answering documents. */
     private static final int CATALOG_FAILURE = 500;
 
-    /** A body that is not a document, which is the failure the parse rather than the transport. */
+    /** A body that is not a document: a parse failure rather than a transport one. */
     private static final String MALFORMED_BODY = "{\"name\": ";
 
     /** Stands in for the Contract Service, which no case here reads; only the URL has to bind. */

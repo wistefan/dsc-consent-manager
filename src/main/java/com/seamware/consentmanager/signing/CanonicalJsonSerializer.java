@@ -9,9 +9,8 @@ import java.nio.charset.StandardCharsets;
 import org.erdtman.jcs.JsonCanonicalizer;
 
 /**
- * The RFC 8785 (JCS) form of a value: the bytes a receipt signature covers.
- *
- * <p>Throws {@link UncheckedIOException} when the value does not serialise or the text is not JSON.
+ * The RFC 8785 (JCS) form of a value: the bytes a receipt signature covers. Throws {@link
+ * UncheckedIOException} when the value does not serialise or the text is not JSON.
  */
 @Singleton
 public class CanonicalJsonSerializer {

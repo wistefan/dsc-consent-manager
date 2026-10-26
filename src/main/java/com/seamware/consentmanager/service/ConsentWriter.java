@@ -20,11 +20,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The transactional half of the grant flow, on its own bean because Micronaut AOP does not apply to
- * self-invocation, so {@link ConsentService} calling these methods on itself would run them with no
- * transaction at all - and a decision writes a consent and its event, and may close a prior consent
- * first, which only holds together as one unit. A request is the same unit minus the closing.
- * Mirrors {@link PrivacyNoticeWriter}.
+ * The transactional half of the consent flow: every consent write and its event as one unit. A
+ * separate bean from {@link ConsentService} because Micronaut AOP skips self-invocation.
  */
 @Singleton
 public class ConsentWriter {
@@ -32,10 +29,7 @@ public class ConsentWriter {
     /** A decision taken by the data subject in person is never an automated move. */
     private static final ConsentEventTrigger SUBJECT_TRIGGER = ConsentEventTrigger.EXPLICIT;
 
-    /**
-     * Closing the requests a decision leaves redundant is housekeeping, not an act of the subject,
-     * who answered one offer rather than terminating the others.
-     */
+    /** Closing requests a decision leaves redundant is housekeeping, not an act of the subject. */
     private static final ConsentEventTrigger CLEANUP_TRIGGER = ConsentEventTrigger.SYSTEM;
 
     private static final String UNKNOWN_CONSENT = "No consent exists with identifier '%s'.";
@@ -61,12 +55,11 @@ public class ConsentWriter {
     }
 
     /**
-     * Records {@code decision} for the subject against {@code notice}, closing whatever it
-     * supersedes and returning each of those closings as collateral.
+     * Records {@code decision} under the {@code (user, notice)} lock, returning what it closed as
+     * collateral.
      *
-     * <p>Throws {@link io.micronaut.data.exceptions.DataAccessException} when a concurrent grant
-     * already holds {@code uq_consents_granted_per_user_notice}: this transaction rolls back whole
-     * and the caller answers outside it, as {@link PrivacyNoticeWriter#archiveAndCreate} does.
+     * @throws io.micronaut.data.exceptions.DataAccessException when a concurrent grant holds {@code
+     *     uq_consents_granted_per_user_notice}; the caller answers it outside the transaction
      */
     @NonNull
     @Transactional
@@ -97,7 +90,7 @@ public class ConsentWriter {
         if (!unanswered.isEmpty()) {
             collateral.addAll(closeRedundant(unanswered.subList(1, unanswered.size()), actor));
             Consent adopted = unanswered.getFirst();
-            // Read before answer(...) overwrites it; always PENDING, which is what selected it.
+            // Read before answer(...) overwrites it.
             ConsentStatus adoptedHeld = adopted.getStatus();
             return ConsentWrite.moved(
                     new ConsentMove(
@@ -110,18 +103,11 @@ public class ConsentWriter {
 
     /**
      * Opens an unanswered request for the subject to decide on {@code notice}, in {@code actor}'s
-     * name.
+     * name; refuses with {@link ConflictException} a pair already holding an open consent.
      *
-     * <p>Refuses with {@link ConflictException} a pair that already holds an open consent, so a
-     * user is neither asked twice nor asked for a decision already given. The duplicate check runs
-     * behind the same locking read the decision path takes, which is also what settles the parent,
-     * and that lock is decisive only where the row already held is itself open: both racers read it
-     * and both refuse. It covers nothing beyond that. Under {@code READ COMMITTED} a locked row is
-     * re-read as its holder left it, but a row the holder <em>inserted</em> was never in this
-     * statement's snapshot and no lock makes it appear - so two asks for a pair holding only closed
-     * rows, and an ask racing a decision that opens one, can both land a {@code PENDING}. At most
-     * one open request is therefore a best effort here rather than an invariant, and it is settled
-     * where it is answered: {@code decide} closes every open request it does not adopt.
+     * <p>The lock cannot see a row another transaction inserted under {@code READ COMMITTED}, so
+     * two racing asks can both land a {@code PENDING}: one open request is best effort here, and
+     * {@link #decide} closes every open request it does not adopt.
      */
     @NonNull
     @Transactional
@@ -147,15 +133,11 @@ public class ConsentWriter {
     /**
      * Moves one stored consent to {@code target} and appends the event recording the move.
      *
-     * <p>Re-reads the row under {@link ConsentRepository#findByIdForUpdate} and guards the
-     * transition on <em>that</em> read, not on whatever the caller loaded to authorise itself, so
-     * two moves sent at once cannot both be written: the loser sees the status the winner left and
-     * {@link ConsentStateMachine} refuses it. Status and event are one unit of work, so neither can
-     * be stored without the other, and a refused move throws before anything is written. The status
-     * reported back is the one that locked read held, which is what a caller reporting the move
-     * names rather than its own earlier read.
+     * <p>Guards the transition on the row re-read under {@link
+     * ConsentRepository#findByIdForUpdate}, not the caller's read, so of two concurrent moves the
+     * loser is refused by {@link ConsentStateMachine}; the reported held status is the locked one.
      *
-     * <p>Throws {@link NotFoundException} when the row vanished between the two reads.
+     * @throws NotFoundException when the row vanished between the two reads
      */
     @NonNull
     @Transactional
@@ -172,15 +154,10 @@ public class ConsentWriter {
     }
 
     /**
-     * Appends an affirmation of one stored consent, leaving the record itself alone.
+     * Appends an affirmation of one stored consent, leaving the row (and its {@code updatedAt})
+     * alone; checked on the row re-read under lock, so one racing a revocation is refused.
      *
-     * <p>Re-reads the row under {@link ConsentRepository#findByIdForUpdate} and checks the status
-     * on <em>that</em> read, so an affirmation racing a revocation is refused rather than written
-     * against a consent no longer in force. The consent row is deliberately not updated: {@code
-     * updatedAt} dates state changes, and a re-confirmation changes no state — it is dated by its
-     * own event.
-     *
-     * <p>Throws {@link NotFoundException} when the row vanished between the two reads.
+     * @throws NotFoundException when the row vanished between the two reads
      */
     @NonNull
     @Transactional
@@ -196,32 +173,16 @@ public class ConsentWriter {
     }
 
     /**
-     * Grants the addressed request, closing whatever grant the pair already holds.
+     * Grants the addressed request, revoking the pair's grant in force and closing redundant open
+     * requests, and reports every closing as collateral.
      *
-     * <p>Deliberately symmetric with {@link #decide}: it takes the same {@code (user, notice)} lock
-     * before reading, so a resume and a concurrent decision on the same pair serialise instead of
-     * interleaving, and it reuses the same supersede — the grant in force is revoked and the
-     * resumed row is re-pointed at it, but only where this call revoked something, so a request
-     * answered with nothing in force keeps the parent it was opened with. The revocation, the
-     * status, the event and the link are one unit of work.
+     * <p>Takes the same {@code (user, notice)} lock as {@link #decide}, so the two serialise. The
+     * request is re-parented only when this call revoked a grant.
      *
-     * <p>Only the addressed row is <em>answered</em>, but the open requests it leaves redundant are
-     * closed here as {@code decide} closes them, and for the same reason: a stranded {@code
-     * PENDING} refuses every later request for the pair as a duplicate, forever. A relay cannot
-     * fall back on {@code decide} to clear one — {@code POST /consents} is {@code USER}-only — so
-     * the straggler would outlive the grant that made it redundant. The addressed row itself is
-     * excluded from both searches: a consent cannot close itself, and one already {@code GRANTED}
-     * is refused by {@link ConsentStateMachine} rather than revoked in favour of itself.
-     *
-     * <p>Every one of those closings is reported back alongside the answered row, because each is a
-     * status change of its own and the caller is the one that reports moves onward. Returning only
-     * the addressed consent would leave a superseded grant looking as though it still stood to
-     * anything reading those reports.
-     *
-     * <p>Throws {@link NotFoundException} when no such consent exists, and {@link
-     * io.micronaut.data.exceptions.DataAccessException} when a grant inserted outside this
-     * statement's snapshot holds {@code uq_consents_granted_per_user_notice} — invisible to the
-     * locking read, so the caller answers it outside the transaction as {@code decide}'s does.
+     * @throws NotFoundException when no such consent exists
+     * @throws io.micronaut.data.exceptions.DataAccessException when a grant invisible to the lock
+     *     holds {@code uq_consents_granted_per_user_notice}; the caller answers it outside the
+     *     transaction
      */
     @NonNull
     @Transactional
@@ -268,10 +229,7 @@ public class ConsentWriter {
         return new ResumedConsent(new ConsentMove(held, answered), List.copyOf(collateral));
     }
 
-    /**
-     * Revokes the consent in force, if there is one, and reports the move so the decision can link
-     * what it superseded and a caller can report what it closed.
-     */
+    /** Revokes the consent in force, if any, reporting the move or null. */
     @Nullable
     private ConsentMove revokeOpenGrant(List<Consent> open, String actor) {
         Consent inForce = held(open, ConsentStatus.GRANTED);
@@ -282,14 +240,8 @@ public class ConsentWriter {
     }
 
     /**
-     * Answers the open request in place rather than leaving it stranded, re-freezing its terms as
-     * the subject elected them now.
-     *
-     * <p>The row keeps its id and its own parent, so the request a participant opened is the
-     * consent that answers it. It is re-pointed only when this same decision revoked a consent,
-     * because then that revocation is what it superseded. Keeping the row means its {@code
-     * createdAt} dates the offer rather than the answer: when the subject decided is the timestamp
-     * of the event this appends, which is where a receipt or a lineage walk must read it from.
+     * Answers the open request in place, re-freezing its terms; re-parented only onto a consent
+     * this decision revoked. Its {@code createdAt} dates the offer, the appended event the answer.
      */
     private RecordedConsent answer(
             Consent unanswered,
@@ -305,17 +257,8 @@ public class ConsentWriter {
     }
 
     /**
-     * Terminates the open requests the answered one leaves redundant, so none is stranded.
-     *
-     * <p>Normally there are none: a pair holds at most one open request. But the locking read
-     * cannot show a row another transaction inserted after this statement's snapshot, and no index
-     * covers {@code PENDING}, so two asks racing for a pair holding no open row - or an ask racing
-     * this very decision - can both land one. Answering only the newest would leave the other open
-     * forever, permanently refusing every later request for the pair as a duplicate. Closing them
-     * here settles that without a second guard the duplicate check could drift from.
-     *
-     * <p>Each termination is reported back, and both {@link #decide} and {@link #resume} pass them
-     * on to the lifecycle seam.
+     * Terminates open requests the answered one leaves redundant; racing asks can land extras that
+     * no index prevents, and a stranded {@code PENDING} would refuse every later request.
      */
     private List<ConsentMove> closeRedundant(List<Consent> redundant, String actor) {
         return redundant.stream()
@@ -323,9 +266,7 @@ public class ConsentWriter {
                 .toList();
     }
 
-    /**
-     * Applies one move, reading the status it leaves behind before the transition overwrites it.
-     */
+    /** Applies one move, capturing the held status before the transition overwrites it. */
     private ConsentMove moved(
             Consent consent, ConsentStatus target, String actor, ConsentEventTrigger trigger) {
         ConsentStatus held = consent.getStatus();
@@ -369,9 +310,8 @@ public class ConsentWriter {
     }
 
     /**
-     * Issues the grant receipt of a write that recorded {@code GRANTED}. Hooked here rather than at
-     * any caller, so every route into {@code GRANTED} - present or future - issues one; a signing
-     * failure throws and rolls the whole write back.
+     * Issues the receipt of a write recording {@code GRANTED}, so every route into it issues one; a
+     * signing failure rolls the whole write back. See ADR-0014.
      */
     private RecordedConsent issueIfGranted(RecordedConsent recorded) {
         if (recorded.consent().getStatus() == ConsentStatus.GRANTED) {
@@ -380,10 +320,7 @@ public class ConsentWriter {
         return recorded;
     }
 
-    /**
-     * What a new consent for the pair descends from: the most recent row whatever its status, so a
-     * grant after a refusal or an expiry records what it followed instead of starting a fresh root.
-     */
+    /** Parent of a new consent for the pair: the most recent row, whatever its status. */
     @Nullable
     private static UUID parentOf(List<Consent> held) {
         return held.isEmpty() ? null : held.getFirst().getId();

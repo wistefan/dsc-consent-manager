@@ -3,9 +3,8 @@ package com.seamware.consentmanager.signing;
 import io.micronaut.core.annotation.NonNull;
 
 /**
- * A receipt beside its detached JWS, with the RFC 8785 text the JWS covers.
- *
- * <p>{@code canonicalJson} is what a stored receipt must keep: it verifies without re-serialising.
+ * A receipt beside its detached JWS and the RFC 8785 text the JWS covers. Store {@code
+ * canonicalJson}: it verifies without re-serialising.
  */
 public record SignedReceipt<R>(
         @NonNull R receipt,

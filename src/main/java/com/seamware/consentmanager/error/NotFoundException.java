@@ -1,10 +1,8 @@
 package com.seamware.consentmanager.error;
 
 /**
- * The addressed resource does not exist (HTTP 404).
- *
- * <p>Also the answer when a resource exists but not for this caller - a participant asking about a
- * user it is not linked to gets 404 rather than 403, because 403 would confirm the identifier.
+ * The addressed resource does not exist (HTTP 404), or exists but not for this caller: answering
+ * 403 there would confirm the identifier.
  */
 public class NotFoundException extends ApiException {
 

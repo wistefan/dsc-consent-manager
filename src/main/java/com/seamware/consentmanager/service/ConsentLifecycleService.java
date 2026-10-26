@@ -27,13 +27,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The moves a consent makes after it exists: who is allowed to make each one, and what it reads
- * back as.
+ * The moves a consent makes after it exists, and who may make each one.
  *
- * <p>Authorisation is against the consent itself rather than against the caller's role, so the role
- * a token carries is never on its own enough. Everything transactional lives in {@link
- * ConsentWriter}; this bean resolves the record, checks who is asking, and renders the result
- * through {@link ConsentReporter}.
+ * <p>Authorisation is against the consent itself, so a token's role is never enough on its own. Not
+ * transactional: writes go through {@link ConsentWriter} and races are caught here as 409.
  */
 @Singleton
 public class ConsentLifecycleService {
@@ -55,13 +52,7 @@ public class ConsentLifecycleService {
             "Participant '%s' is named by consent '%s' as neither provider nor consumer, so it"
                     + " cannot terminate it.";
 
-    /**
-     * How a relaying catalog names itself in the audit trail.
-     *
-     * <p>Issuer and subject both, because {@link ConsentManagerPrincipal#subject()} is unique per
-     * issuer only and the trust list admits more than one catalog. The prefix is what keeps a
-     * relayed grant from reading as one the subject made here directly.
-     */
+    /** A relaying catalog's audit actor; includes the issuer, as subject is unique per issuer. */
     private static final String CATALOG_ACTOR = "catalog:%s:%s";
 
     private static final String SUBJECT_NOT_NAMED =
@@ -100,34 +91,21 @@ public class ConsentLifecycleService {
         this.notifications = notifications;
     }
 
-    /**
-     * Withdraws a consent the subject has given.
-     *
-     * <p>Permitted from {@code GRANTED} only; any other status is {@code 400} naming both it and
-     * the move attempted.
-     */
+    /** Withdraws a consent the subject has given; from {@code GRANTED} only, else {@code 400}. */
     @NonNull
     public ConsentDetails revoke(@NonNull User subject, @NonNull UUID consentId) {
         return move(subject, consentId, ConsentStatus.REVOKED);
     }
 
-    /**
-     * Declines an unanswered request on the subject's behalf.
-     *
-     * <p>Permitted from {@code PENDING} and {@code DRAFT} only; a consent already decided, {@code
-     * GRANTED} included, is {@code 400} naming both statuses.
-     */
+    /** Declines an unanswered request; from PENDING or DRAFT only, else {@code 400}. */
     @NonNull
     public ConsentDetails refuse(@NonNull User subject, @NonNull UUID consentId) {
         return move(subject, consentId, ConsentStatus.REFUSED);
     }
 
     /**
-     * Records that the subject still stands by a consent in force, without moving it.
-     *
-     * <p>Permitted from {@code GRANTED} only; any other status is {@code 400} naming it. Nothing
-     * about the record changes, so the body read back is the consent as it already was and the
-     * affirmation shows only in the audit trail.
+     * Records that the subject still stands by a {@code GRANTED} consent, else {@code 400}. The
+     * record is unchanged; the affirmation shows only in the audit trail.
      */
     @NonNull
     public ConsentDetails reConfirm(@NonNull User subject, @NonNull UUID consentId) {
@@ -136,19 +114,11 @@ public class ConsentLifecycleService {
     }
 
     /**
-     * Ends an arrangement from the organisational side, in the name of a participant the consent
-     * names as provider or as consumer.
+     * Ends a granted or unanswered consent in the name of a participant it names as a party.
      *
-     * <p>A participant that is party to neither side is {@code 403} rather than the {@code 404} a
-     * foreign subject gets: it may legitimately know the consent exists through its own records, so
-     * there is nothing to conceal, only standing to refuse. Permitted from {@code GRANTED} and
-     * equally from the unanswered statuses, because a party may end an arrangement before the
-     * subject has answered; a terminal status is {@code 400} naming both it and the move attempted.
-     *
-     * <p>The subject is notified once the move has committed. This is the only termination that
-     * notifies: the collateral ones a resume or decision performs, and those erasure and
-     * deregistration perform, do not — see ADR-0015. Nothing after the commit, the subject lookup
-     * included, can turn the committed termination into an error; a failure is logged instead.
+     * <p>A non-party is {@code 403}, not {@code 404}: it may know the consent exists, so there is
+     * nothing to conceal. A terminal status is {@code 400}. The subject is notified after commit,
+     * and nothing after the commit can fail the call. See ADR-0015.
      */
     @NonNull
     public ConsentDetails terminate(@NonNull Participant caller, @NonNull UUID consentId) {
@@ -184,24 +154,11 @@ public class ConsentLifecycleService {
     }
 
     /**
-     * Grants a request nobody answered, for the subject or for a catalog relaying their decision.
+     * Grants an unanswered request, for the subject or a catalog relaying their decision.
      *
-     * <p>Permitted from {@code PENDING} and {@code DRAFT} only; a consent already decided is {@code
-     * 400} naming both statuses. A {@code USER} caller resumes its own consent and {@code
-     * userIdentifier} is ignored; a {@code CATALOG} caller must name the subject, which is checked
-     * against the addressed consent rather than used to find one, so it chooses neither the subject
-     * nor the notice — see ADR-0010. A participant reaches neither branch under the route's
-     * {@code @Secured} rule and is refused outright.
-     *
-     * <p>The notice must still be one that may be consented to: a request can outlive the notice it
-     * was opened against, and granting under archived terms is refused exactly as {@code POST
-     * /consents} refuses it. The stored snapshot is kept — a resume records a decision taken
-     * elsewhere rather than electing scope here.
-     *
-     * <p>The record's own status is checked before the notice is, so a consent already decided is
-     * refused by naming both statuses rather than by naming something about a notice that was never
-     * the reason. {@link ConsentWriter#resume} checks it again under the row lock, which is the
-     * check that settles a race; this one only chooses which refusal the caller is told about.
+     * <p>A catalog must name the subject, which is checked against the consent, never used to find
+     * it (ADR-0010); a participant is refused. The status check here only picks the refusal; the
+     * one under the row lock in {@link ConsentWriter#resume} settles races. The snapshot is kept.
      */
     @NonNull
     public ConsentDetails resume(
@@ -233,11 +190,8 @@ public class ConsentLifecycleService {
     private record Resumable(Consent consent, String actor) {}
 
     /**
-     * The consent a catalog's relayed decision addresses, once the subject it names is the one the
-     * consent names.
-     *
-     * <p>A consent that does not exist and one belonging to another subject are the same {@code
-     * 404}, so a catalog cannot learn whose consent an identifier addresses, let alone grant it.
+     * The consent a relayed decision addresses, if the named subject owns it. Unknown and foreign
+     * consents are the same {@code 404}, so ownership is never disclosed.
      */
     private Consent relayed(UUID consentId, @Nullable String userIdentifier) {
         if (userIdentifier == null || userIdentifier.isBlank()) {
@@ -253,10 +207,7 @@ public class ConsentLifecycleService {
                 .orElseThrow(() -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
     }
 
-    /**
-     * The resumed record and every row the resume closed to answer it, with a race on the
-     * one-grant-per-notice index answered as 409.
-     */
+    /** The resume's writes, with a race on the one-grant-per-notice index answered as 409. */
     private ResumedConsent resumed(Consent consent, String actor) {
         try {
             return writer.resume(consent.getId(), actor);
@@ -269,12 +220,7 @@ public class ConsentLifecycleService {
         }
     }
 
-    /**
-     * Refuses a caller the consent names on neither side.
-     *
-     * <p>Both parties may end it: the provider holds the terms, and the consumer is where the data
-     * would flow, so either has an arrangement to end. Anyone else has none.
-     */
+    /** Refuses a caller the consent names on neither side. */
     private static void requireParty(Participant caller, Consent consent) {
         if (!caller.getId().equals(consent.getProviderId())
                 && !caller.getId().equals(consent.getConsumerId())) {
@@ -283,12 +229,7 @@ public class ConsentLifecycleService {
         }
     }
 
-    /**
-     * Resolves a consent the subject owns.
-     *
-     * <p>A consent that does not exist and one belonging to somebody else are the same {@code 404},
-     * so the subject's routes answer nothing about which identifiers are real.
-     */
+    /** A consent the subject owns; unknown and foreign are the same {@code 404}. */
     private Consent ownedBy(User subject, UUID consentId) {
         return consents.findById(consentId)
                 .filter(consent -> consent.getUserId().equals(subject.getId()))

@@ -55,13 +55,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 /**
- * Exercises {@code DELETE /users/me} end to end against a real Keycloak and a real PostgreSQL.
- *
- * <p>What is under test is the shape of the erasure rather than the bare status code: that the
- * person is gone from the record while the consents and their events stay, with their original ids,
- * as the evidence of what was once authorised; that a record no consent refers to is deleted
- * outright, so a replayed token cannot accumulate husks; and that the subject is a stranger to this
- * service afterwards - a later token provisions a new row instead of resurrecting the erased one.
+ * {@code DELETE /users/me} end to end: the person goes while consents and events stay, an
+ * unreferenced row is deleted outright, and a later token never resurrects the erased row.
  */
 @MicronautTest(transactional = false)
 @DisplayName("User erasure")
@@ -88,7 +83,6 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
     /** A second subject, seeded so an erasure can be shown not to reach past its own rows. */
     private static final String BYSTANDER_IDENTIFIER = "urn:test:user:erasure-bystander";
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
     /** Stand-ins for a stored receipt's content, which erasure never reads. */
     private static final String PLACEHOLDER_RECEIPT = "{}";
 
@@ -96,6 +90,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
 
     private static final String PLACEHOLDER_KEY_ID = "erasure-it";
 
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject
@@ -122,7 +117,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
 
     @Inject ErasureVerifier verifier;
 
-    /** The caller's global identifier, resolved once because reading it costs a token request. */
+    /** The caller's identifier, resolved once because reading it costs a token request. */
     private String identifier;
 
     @BeforeEach
@@ -132,8 +127,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
         identifier = KeycloakTestResource.subject(userToken());
-        // The realm holds a single dataspace-user, so every case has to re-establish "not erased
-        // yet" rather than assume it: rows committed by an earlier case outlive its transaction.
+        // The realm has one dataspace-user, so each case re-establishes "not erased".
         removeCommittedRows();
         SEEDED_PARTICIPANTS.forEach(this::participant);
     }
@@ -147,8 +141,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
                         .map(participants::findByIdentifier)
                         .flatMap(Optional::stream)
                         .toList();
-        // A notice names a participant on both sides, so every notice has to go before the first
-        // participant does - otherwise the consumer side of a notice still standing blocks it.
+        // Notices name participants on both sides, so all notices go before any participant.
         seeded.forEach(
                 stored ->
                         notices.findByProviderIdAndArchivedAtIsNull(stored.getId())
@@ -424,10 +417,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
                 .getId();
     }
 
-    /**
-     * Stores a grant receipt for a seeded consent, with the granting event it is dated by. Its
-     * content is a placeholder: erasure deletes the row and never reads it.
-     */
+    /** Stores a placeholder grant receipt for a seeded consent; erasure never reads it. */
     private void issueReceipt(UUID consentId, User subject) {
         Instant grantedAt = Instant.now().minus(1, ChronoUnit.HOURS).truncatedTo(ChronoUnit.MICROS);
         ConsentEvent given =
@@ -450,11 +440,8 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
-     * The active notice between the two participants, seeded on first use.
-     *
-     * <p>Reused rather than re-created: {@code uq_privacy_notices_active_contract} admits one
-     * unarchived notice per (contract, provider), so two consents from the same provider have to
-     * hang off the same notice.
+     * The active notice between the two participants, seeded once and reused, since only one
+     * unarchived notice per (contract, provider) may exist.
      */
     private PrivacyNotice notice(String provider, String consumer) {
         UUID providerId = participantId(provider);

@@ -130,7 +130,7 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
 
     private static final RSAKey SIGNING_KEY = rsaKey();
 
-    /** A server failure the replaced discovery service raises, with the status it must answer. */
+    /** A server failure the stand-in discovery service raises, with the status it must answer. */
     enum ForcedFailure {
         UNHANDLED_DATA_ACCESS(HttpStatus.INTERNAL_SERVER_ERROR, DataAccessException.class),
         UPSTREAM(HttpStatus.BAD_GATEWAY, UpstreamServiceException.class);
@@ -157,10 +157,7 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    /**
-     * What no event at INFO or above may contain. The subject values cover both the sentinel the
-     * participant registers and the token user who is provisioned, grants, revokes and is erased.
-     */
+    /** What no event at INFO or above may contain, for both the sentinel and the token user. */
     enum Forbidden {
         BEARER_TOKEN,
         MALFORMED_TOKEN,

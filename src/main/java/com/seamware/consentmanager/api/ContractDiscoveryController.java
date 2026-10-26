@@ -14,12 +14,8 @@ import io.micronaut.http.annotation.Controller;
 import java.util.List;
 
 /**
- * Serves contract discovery: {@code /contracts/available} for a data subject across the
- * participants they are linked to, {@code /contracts/available/{role}} for a participant on one
- * side.
- *
- * <p>The participant is resolved through {@link ParticipantPrincipal#requireRegistered()} before
- * {@code role} is read, so an unregistered token is refused {@code 403} whatever it asked for.
+ * Serves contract discovery for a data subject and, per side, for a participant. The participant is
+ * resolved before {@code role} is read, so an unregistered token gets {@code 403} regardless.
  */
 @Controller
 public class ContractDiscoveryController extends AbstractContractDiscoveryController {

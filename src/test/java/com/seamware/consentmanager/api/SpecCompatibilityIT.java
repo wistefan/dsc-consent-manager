@@ -40,9 +40,7 @@ import org.yaml.snakeyaml.Yaml;
 @DisplayName("Detecting breaking changes against the baseline specification")
 class SpecCompatibilityIT {
 
-    /**
-     * Pinned oasdiff CLI; bump deliberately, since a release can change what counts as breaking.
-     */
+    /** Pinned oasdiff CLI; a release can change what counts as breaking. */
     private static final String OASDIFF_IMAGE = "tufin/oasdiff:v1.34.1";
 
     private static final String BASE_IN_CONTAINER = "/work/base.yaml";

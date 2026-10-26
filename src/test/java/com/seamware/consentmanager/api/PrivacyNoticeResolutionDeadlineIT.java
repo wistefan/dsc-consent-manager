@@ -18,13 +18,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins the deadline on how long one retrieval spends walking the catalog.
- *
- * <p>The companion of the document ceiling rather than a duplicate of it: a ceiling bounds how many
- * documents a walk reads but not how long each one takes, so a catalog that answers slowly without
- * ever timing out would hold a request for the ceiling times the read timeout. The offering here
- * answers well inside the read timeout and well outside the deadline, so only the deadline can stop
- * the walk and the stub itself records that it did.
+ * Pins the deadline on one retrieval's catalog walk: guards a slow catalog that never times out
+ * holding a request for the document ceiling times the read timeout.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Privacy notice resolution under a catalog deadline")

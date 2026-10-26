@@ -52,14 +52,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code PATCH} and {@code DELETE /participants/me/users/{identifier}} end to end against
- * a real Keycloak and a real PostgreSQL.
- *
- * <p>What is under test is the blast radius of both operations: that the update reaches the
- * caller's own link and nothing else, that the unlink ends an affiliation without erasing the
- * person or any consent, that a granted consent the caller is party to blocks it while a revoked
- * one and a stranger's granted one do not, and that a caller holding no link is told {@code 404}
- * rather than {@code 403}.
+ * Link update and unlink end to end: guards against touching anything beyond the caller's link,
+ * unlinking past the caller's granted consent, and answering {@code 403} where {@code 404} is due.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant user link maintenance")
@@ -110,7 +104,7 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
     /** Contract URI of the privacy notice every seeded consent is frozen from. */
     private static final String NOTICE_CONTRACT_URI = "urn:test:contract:link";
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject
@@ -163,8 +157,7 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
                         .map(participants::findByIdentifier)
                         .flatMap(Optional::stream)
                         .toList();
-        // A notice names a participant on both sides, so every notice has to go before the first
-        // participant does - otherwise the consumer side of a notice still standing blocks it.
+        // Notices name participants on both sides, so all notices go before any participant.
         seeded.forEach(
                 stored ->
                         notices.findByProviderIdAndArchivedAtIsNull(stored.getId())
@@ -245,10 +238,7 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
         assertThat(response.code()).isEqualTo(HttpStatus.NOT_FOUND.getCode());
     }
 
-    /**
-     * A user linked only to somebody else and an identifier naming nobody at all: both answer 404,
-     * which is what keeps the first from confirming that the identifier is registered.
-     */
+    /** A user linked elsewhere and an unknown identifier both answer 404, confirming nothing. */
     static Stream<Arguments> unheldLinks() {
         return Stream.of(UNLINKED_USER, UNKNOWN_USER)
                 .flatMap(
@@ -387,9 +377,7 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
                 KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
     }
 
-    /**
-     * The update body, written out rather than mapped: only raw JSON can carry an explicit null.
-     */
+    /** The update body as raw JSON, the only form that carries an explicit null. */
     private static String sets(String localIdentifier) {
         return "{\"localIdentifier\":\"" + localIdentifier + "\"}";
     }

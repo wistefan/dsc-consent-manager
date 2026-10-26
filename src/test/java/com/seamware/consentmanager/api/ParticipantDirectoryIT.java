@@ -41,14 +41,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code GET /participants} and {@code GET /participants/{identifier}} end to end against
- * a real Keycloak and a real PostgreSQL.
- *
- * <p>What is under test is the read surface of the directory: what a page publishes, where its
- * boundaries fall, which sizes are clamped rather than refused, and which records a listing hides
- * but a lookup still resolves. A page boundary and a total can only be asserted over a directory
- * whose every row is known, so the suite needs the {@code participants} table to itself while it
- * runs - it seeds it, asserts it found nothing else there, and removes only the rows it seeded.
+ * Directory read surface end to end: guards page boundaries, size clamping, and a listing that
+ * hides deregistered rows a lookup still resolves. Needs the {@code participants} table to itself.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant directory")
@@ -56,10 +50,7 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH = "/participants";
 
-    /**
-     * Seeded participants, in the order the directory must return them - by identifier ascending,
-     * which puts the URI-shaped one ahead of the DID-shaped ones.
-     */
+    /** Seeded participants in directory order, by identifier ascending. */
     private static final String URI_SHAPED =
             "https://directory.example.org/participants/uri-shaped";
 
@@ -71,11 +62,7 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
 
     private static final String FOURTH_DID = "urn:test:participant:directory-e";
 
-    /**
-     * Active participants in directory order, which is what an unfiltered listing must page. Five
-     * of them, an odd number, so neither page size exercised below divides the directory evenly and
-     * an expectation that only happened to match a whole number of pages would fail.
-     */
+    /** Five active participants in directory order, so no page size below divides them evenly. */
     private static final List<String> ACTIVE =
             List.of(URI_SHAPED, FIRST_DID, SECOND_DID, THIRD_DID, FOURTH_DID);
 
@@ -104,10 +91,9 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
     /** A second size, dividing the directory differently, so no boundary is a coincidence. */
     private static final int WIDER_SPLIT_SIZE = 3;
 
-    /** The media type every refusal is rendered as. */
     private static final String PROBLEM_JSON = "application/problem+json";
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject
@@ -150,11 +136,7 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
         participants.save(deregistered);
     }
 
-    /**
-     * Rows committed by these tests outlive the transaction, so they are removed by hand - only the
-     * ones seeded here, because a participant another suite committed may be named by a consent or
-     * a privacy notice, whose foreign keys restrict its deletion.
-     */
+    /** Removes only the rows seeded here; another suite's may be held by restricting FKs. */
     @AfterAll
     void removeCommittedRows() {
         users.findByIdentifier(userIdentifier)
@@ -203,13 +185,11 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
         return Stream.of(
                 Arguments.of(0, SPLIT_SIZE, List.of(URI_SHAPED, FIRST_DID)),
                 Arguments.of(1, SPLIT_SIZE, List.of(SECOND_DID, THIRD_DID)),
-                // The directory does not fill its last page, which is where an expectation
-                // computed by truncating division would be one page short.
+                // A partial last page, which truncating division would miss.
                 Arguments.of(2, SPLIT_SIZE, List.of(FOURTH_DID)),
                 Arguments.of(0, WIDER_SPLIT_SIZE, List.of(URI_SHAPED, FIRST_DID, SECOND_DID)),
                 Arguments.of(1, WIDER_SPLIT_SIZE, List.of(THIRD_DID, FOURTH_DID)),
-                // Past the end is an empty page rather than a 404: the page is a view of a
-                // collection, not a record that does or does not exist.
+                // Past the end is an empty page, not a 404.
                 Arguments.of(3, SPLIT_SIZE, List.of()));
     }
 
@@ -264,14 +244,7 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
         assertThat(absent.getContentType().orElseThrow().toString()).startsWith(PROBLEM_JSON);
     }
 
-    /**
-     * A URI-shaped identifier fits a path segment only percent-encoded, and whether an encoded
-     * slash survives routing is a property of the deployment rather than of this service - an
-     * intermediary that rejects or decodes {@code %2F} first leaves the path route unable to
-     * address it. The filter matches the identifier whole either way, which is the reason it
-     * exists, so the contract asserted here is the filter's: it answers about exactly the record
-     * named, deregistered or absent, and never refuses.
-     */
+    /** The filter answers about exactly the record named, in any state, and never refuses. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("filteredLookups")
     @DisplayName("the identifier filter answers about exactly the record it names")
@@ -326,10 +299,7 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo(HttpStatus.OK.getCode());
     }
 
-    /**
-     * The caller's own row is never seeded here, so every participant-token case above already runs
-     * unregistered; this names the property so a later change cannot quietly take it away.
-     */
+    /** The participant-token cases here all run unregistered; this pins that property. */
     @Test
     @DisplayName("a participant that has not registered yet may still read the directory")
     void anUnregisteredParticipantMayRead() {
@@ -339,11 +309,7 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
         assertThat(get(PATH).code()).isEqualTo(HttpStatus.OK.getCode());
     }
 
-    /**
-     * Reading the directory with a {@code USER} token provisions that user, like every other
-     * authenticated route. Asserted against the repository rather than through {@code GET
-     * /users/{identifier}}, which would provision the row itself and prove nothing.
-     */
+    /** Checked via the repository, since reading the user over HTTP would provision it too. */
     @Test
     @DisplayName("a directory read by an unseen user provisions that user just in time")
     void aDirectoryReadProvisionsTheCallingUser() {

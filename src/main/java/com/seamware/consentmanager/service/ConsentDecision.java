@@ -6,14 +6,9 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * What a data subject decided about one privacy notice, and how far they narrowed it.
- *
- * <p>The decision is carried as a status rather than a boolean so it needs no translation on the
- * way to the lifecycle table; the record itself constrains nothing, and {@link
- * ConsentService#decide} is what refuses a status that is not a subject's decision, against {@link
- * ConsentStateMachine#requireDecision}. An absent election means the notice's own scope is
- * consented to, while an empty one is a malformed narrowing the service refuses - the two are
- * different, so neither is normalised away here.
+ * What a data subject decided about one privacy notice, and how far they narrowed it. Unvalidated:
+ * {@link ConsentService#decide} refuses a non-decision status. An absent election takes the
+ * notice's scope; an empty one is a malformed narrowing, so neither is normalised here.
  */
 public record ConsentDecision(
         UUID privacyNoticeId,

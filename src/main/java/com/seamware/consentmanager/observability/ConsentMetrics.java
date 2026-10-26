@@ -8,9 +8,7 @@ import jakarta.inject.Singleton;
 import java.util.Optional;
 
 /**
- * Counts committed consent status changes, tagged by the status left and the status reached.
- *
- * <p>Called only after the write has committed, so a rolled-back move is never counted.
+ * Counts consent status changes by status left and reached; called only after the write commits.
  */
 @Singleton
 public class ConsentMetrics {

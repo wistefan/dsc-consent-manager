@@ -32,13 +32,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins the paging arithmetic of both consent listings at its edges: an empty result, a single page,
- * an exact multiple of the page size, a partial last page, a page past the end, and an oversized
- * {@code size} clamped to the configured ceiling rather than refused.
- *
- * <p>The ceiling is configured to {@link #PAGE_MAX_SIZE} so the clamp is reached with a handful of
- * rows. Every seeded consent is a {@code GRANTED} one under its own notice, so the participant
- * listing's default status filter admits all of them and one grant per notice is never violated.
+ * Tests both consent listings' paging at its edges, including an oversized {@code size} clamped to
+ * {@link #PAGE_MAX_SIZE} rather than refused. Each seeded consent is GRANTED under its own notice.
  */
 @MicronautTest(transactional = false)
 @Property(name = "consent-manager.consents.page-max-size", value = ConsentPaginationBoundaryIT.MAX)

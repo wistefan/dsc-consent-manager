@@ -19,13 +19,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Exercises {@code GET /privacy-notices/{id}} end to end, with both upstreams stubbed.
- *
- * <p>What only an end-to-end run can show: that a resolved retrieval reads the contract and walks
- * the catalog rather than serving what generation stored, and that {@code resolve=false} is an
- * actual absence of traffic rather than a differently-labelled resolution. The notice is seeded
- * straight into the table, because generating it through the API would leave the contract cached
- * and the retrieval under test would then never reach the stub.
+ * Notice retrieval with both upstreams stubbed: guards a resolved read serving stored text instead
+ * of the live documents, and {@code resolve=false} still sending upstream traffic.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Privacy notice retrieval over HTTP")
@@ -65,12 +60,7 @@ class PrivacyNoticeRetrievalIT extends PrivacyNoticeApiTestSupport {
 
     private static final String RESOURCE_NAME = "Trip records";
 
-    /**
-     * Text only the second-hop document carries.
-     *
-     * <p>Asserted on purpose: a resolution that stopped at the service offering would fill the list
-     * and report {@code RESOLVED} without this ever appearing.
-     */
+    /** Text only the second-hop document carries, so a walk stopping one hop short shows. */
     private static final String RESOURCE_DESCRIPTION =
             "One record per trip: start, end and duration.";
 

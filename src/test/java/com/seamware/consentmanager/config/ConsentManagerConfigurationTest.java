@@ -17,13 +17,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins that every configuration section still binds now that Lombok writes the accessors.
- *
- * <p>Micronaut binds a {@code @ConfigurationProperties} bean through the setters it can see at
- * annotation-processing time, so Lombok has to run before {@code micronaut-inject-java}. Get the
- * {@code annotationProcessorPaths} order wrong and nothing fails to compile - the beans simply bind
- * nothing and every deployment silently runs on its defaults. This suite is what makes that a build
- * failure.
+ * Pins that every configuration section binds through its Lombok-written setters; a wrong {@code
+ * annotationProcessorPaths} order still compiles but silently binds nothing.
  */
 @DisplayName("Consent Manager configuration binding")
 class ConsentManagerConfigurationTest {
@@ -164,15 +159,7 @@ class ConsentManagerConfigurationTest {
         }
     }
 
-    /**
-     * Pins that {@code application.yml} still carries the {@code ${CONTRACT_SERVICE_URL:...}}
-     * placeholder after the key move, which is the half of the deployment contract this repo owns.
-     *
-     * <p>The stand-in is deliberate: the placeholder is resolved against the whole environment, so
-     * supplying the name as an ordinary property exercises the same lookup without a real process
-     * variable, which an in-process context cannot set. Micronaut's env-var relaxed binding is the
-     * framework's to test, not this suite's.
-     */
+    /** Supplies the variable as a property, which the placeholder lookup resolves alike. */
     @Test
     @DisplayName("the contract-service url still resolves the CONTRACT_SERVICE_URL placeholder")
     void resolvesTheContractServiceUrlPlaceholder() {

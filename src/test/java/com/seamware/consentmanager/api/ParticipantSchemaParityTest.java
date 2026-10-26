@@ -17,14 +17,9 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * Keeps {@code ParticipantRegistration} and {@code ParticipantUpdate} accepting the same values.
- *
- * <p>The two schemas are separate files so they can diverge once a property becomes settable only
- * at registration, and every byte of their validation is duplicated until one does. Nothing else
- * keeps them in step: tightening a bound on registration would otherwise leave the update path
- * silently accepting the old one. A deliberate divergence is recorded here, in {@link
- * #REGISTRATION_ONLY_PROPERTIES} or {@link #DIVERGENT_KEYWORDS}, rather than discovered in
- * production.
+ * Keeps {@code ParticipantRegistration} and {@code ParticipantUpdate} accepting the same values; a
+ * deliberate divergence goes in {@link #REGISTRATION_ONLY_PROPERTIES} or {@link
+ * #DIVERGENT_KEYWORDS}.
  */
 @DisplayName("Participant registration and update schemas")
 class ParticipantSchemaParityTest {
@@ -40,15 +35,10 @@ class ParticipantSchemaParityTest {
     /** Properties a participant may set at registration but never change afterwards. */
     private static final Set<String> REGISTRATION_ONLY_PROPERTIES = Set.of();
 
-    /**
-     * Prose, not validation: the update schema says "cleared when left out" where this says why.
-     */
+    /** Prose, not validation, so the two schemas may word them differently. */
     private static final Set<String> DIVERGENT_KEYWORDS = Set.of("description", "example");
 
-    /**
-     * The property that must be absent from both, which is what makes "the identifier comes from
-     * the token" structural rather than a rule a handler has to remember.
-     */
+    /** Absent from both, so the identifier can only come from the token. */
     private static final String IDENTIFIER_PROPERTY = "identifier";
 
     @Test

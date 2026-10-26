@@ -10,13 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * Resolves a stored consent's two participant foreign keys to the identifiers the API renders.
- *
- * <p>Its own bean so the grant flow and the lifecycle flow build the read projection in one place:
- * both answer with a {@code Consent} body, and a second copy of this resolution would be a second
- * chance for the two to drift.
- */
+/** Resolves a stored consent's two participant foreign keys to the identifiers the API renders. */
 @Singleton
 public class ConsentParties {
 
@@ -35,10 +29,7 @@ public class ConsentParties {
         return details(recorded.consent(), recorded.created());
     }
 
-    /**
-     * Each recorded consent with both parties named, in order, reading each distinct participant
-     * once however many of the consents name it.
-     */
+    /** Each recorded consent with both parties named, in order; each participant is read once. */
     @NonNull
     public List<ConsentDetails> details(@NonNull List<RecordedConsent> recorded) {
         Map<UUID, String> identifiers = new HashMap<>();
@@ -59,12 +50,7 @@ public class ConsentParties {
                 .toList();
     }
 
-    /**
-     * The consent with both parties named.
-     *
-     * <p>{@code created} is what the API answers {@code 201} rather than {@code 200} on; every
-     * lifecycle move passes false, because it writes a record that was already there.
-     */
+    /** The consent with both parties named; lifecycle moves pass {@code created = false}. */
     @NonNull
     public ConsentDetails details(@NonNull Consent consent, boolean created) {
         return new ConsentDetails(
@@ -74,10 +60,7 @@ public class ConsentParties {
                 created);
     }
 
-    /**
-     * A participant the consent names. Absence is corruption rather than a client error - the
-     * consent's foreign keys forbid it - so it fails loudly instead of as a {@code 404}.
-     */
+    /** A participant the consent names; absence is corruption, so it fails loudly, not as 404. */
     private Participant party(Consent consent, UUID participantId) {
         return participants
                 .findById(participantId)

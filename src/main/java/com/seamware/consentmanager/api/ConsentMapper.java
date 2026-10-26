@@ -16,15 +16,8 @@ import jakarta.inject.Singleton;
 import java.util.List;
 
 /**
- * Translates between the API's consent types and the domain's.
- *
- * <p>{@code purposes} and {@code data} are read off the stored snapshot rather than off the notice:
- * the snapshot is what was elected when the decision was taken, and that is what a consent is
- * evidence of. {@code contractUri} comes off the consent's own column for the same reason.
- *
- * <p>{@code Consent} here is the generated API model; the stored row is named in full to keep the
- * two apart. Both enum bridges below go by name, which no compiler checks, so {@code
- * ConsentEnumParityTest} fails the build when the served and the stored vocabularies drift.
+ * Translates between API and domain consent types. Scope comes off the stored snapshot, never the
+ * live notice; enums bridge by name, guarded by {@code ConsentEnumParityTest}.
  */
 @Singleton
 public class ConsentMapper {
@@ -52,14 +45,7 @@ public class ConsentMapper {
                 .contractUri(consent.getContractUri());
     }
 
-    /**
-     * The stored consent as a query returns it, with its two parties named globally.
-     *
-     * <p>{@code purposes} and {@code data} are read off the stored snapshot - the scope elected
-     * when the decision was taken - and {@code contractUri} off the consent's own column, so a
-     * later regeneration of the notice cannot alter what a query reports. {@code StatusEnum}
-     * bridges by name, which {@code ConsentEnumParityTest} guards against drift.
-     */
+    /** The stored consent as a query returns it, with its two parties named globally. */
     @NonNull
     public ConsentResponse toResponse(@NonNull ConsentDetails details) {
         com.seamware.consentmanager.domain.Consent consent = details.consent();
@@ -87,7 +73,7 @@ public class ConsentMapper {
         return toResponse(details).lineage(lineage.stream().map(ConsentMapper::toLink).toList());
     }
 
-    /** One superseded record as a lineage link; {@code StatusEnum} bridges by name. */
+    /** One superseded record as a lineage link. */
     private static ConsentLineageLink toLink(com.seamware.consentmanager.domain.Consent consent) {
         return new ConsentLineageLink(
                         consent.getId(),
@@ -99,12 +85,8 @@ public class ConsentMapper {
     }
 
     /**
-     * A validity check's outcome as the API publishes it.
-     *
-     * <p>The grant fields are filled only when a grant was found, so the no-grant answer carries
-     * nothing beyond {@code valid}, {@code checkedAt} and its reason - the same shape whether the
-     * subject is unknown or merely holds no consent. {@code grantedAt} is the grant's last update,
-     * which for a {@code GRANTED} row is when it became the decision it now records.
+     * A validity check's outcome; grant fields only when a grant was found, so an unknown subject
+     * and one without consent look alike. {@code grantedAt} is the grant's last update.
      */
     @NonNull
     public ConsentValidity toValidity(@NonNull ConsentValidityResult result) {
@@ -122,12 +104,7 @@ public class ConsentMapper {
         return body;
     }
 
-    /**
-     * The lifecycle states a {@code status} query filter names, or null when it named none.
-     *
-     * <p>The query carries raw strings - the generated parameter is unconstrained - so an
-     * unrecognised state is refused here as a {@code 400} rather than silently dropped.
-     */
+    /** The states a {@code status} filter names, or null for none; an unknown one is a 400. */
     @Nullable
     public List<ConsentStatus> toStatuses(@Nullable List<String> statuses) {
         return statuses == null ? null : statuses.stream().map(ConsentMapper::toStatus).toList();
@@ -141,12 +118,7 @@ public class ConsentMapper {
         }
     }
 
-    /**
-     * The decision a request body states, as the lifecycle names it.
-     *
-     * <p>The enum is narrowed to the two decisions a subject can take in the specification, so this
-     * cannot widen into a status only a lifecycle move produces.
-     */
+    /** The body's decision as a status; the spec narrows it to the two a subject can take. */
     @NonNull
     public ConsentStatus toStatus(@NonNull GrantConsent.DecisionEnum decision) {
         return ConsentStatus.valueOf(decision.getValue());

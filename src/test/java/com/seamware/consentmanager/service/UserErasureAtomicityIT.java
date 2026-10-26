@@ -34,14 +34,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Proves the {@code @Transactional} on {@link UserService#erase} is load-bearing rather than
- * decorative: every happy-path assertion elsewhere passes whether the advice applies or not, so
- * only a failure part-way through an erasure tells the two apart.
- *
- * <p>The failure is injected by replacing {@link UserParticipantRepository} with one that refuses
- * every call. {@code erase} reaches it only after it has already moved each open consent to its
- * closing status and appended an event to each trail, so without a transaction those writes would
- * stand and leave the subject closed out but still named.
+ * Tests that {@link UserService#erase} is atomic: a {@link UserParticipantRepository} failing after
+ * the consents were closed must roll those closures and their events back.
  */
 @MicronautTest(transactional = false)
 @Property(name = UserErasureAtomicityIT.FAILING_LINKS, value = "true")
@@ -51,7 +45,7 @@ class UserErasureAtomicityIT extends PostgresTestResource {
     /** Gates the refusing link repository, so it exists only for this test class. */
     static final String FAILING_LINKS = "test.failing-link-repository.enabled";
 
-    /** Carried by the injected failure, so the assertion can name what it expected to go wrong. */
+    /** Carried by the injected failure, so the assertion can recognise it. */
     static final String FAILURE_MESSAGE = "link deletion refused by the atomicity fixture";
 
     private static final String PROVIDER_PARTICIPANT = "urn:test:participant:atomicity-provider";
@@ -167,11 +161,8 @@ class UserErasureAtomicityIT extends PostgresTestResource {
     }
 
     /**
-     * Supplies a {@link UserParticipantRepository} that refuses every call, standing in for any
-     * write that can fail part-way through an erasure.
-     *
-     * <p>A dynamic proxy rather than a hand-written stub: nothing in this test calls the repository
-     * except the erasure under test, so every method but {@link Object}'s own is a refusal.
+     * Supplies a {@link UserParticipantRepository} proxy that refuses every call but {@link
+     * Object}'s own, standing in for any write that can fail part-way through an erasure.
      */
     @Factory
     @Requires(property = FAILING_LINKS, value = "true")

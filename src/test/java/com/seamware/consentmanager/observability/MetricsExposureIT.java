@@ -30,9 +30,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins that the meters operators scrape are published on {@code /metrics} and {@code /prometheus}.
- *
- * <p>Security is enabled, so both endpoints are read with a token the stub provider signed.
+ * Pins that the meters operators scrape are published on {@code /metrics} and {@code /prometheus},
+ * read with security enabled and a token the stub provider signed.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Metrics exposure")
@@ -80,10 +79,7 @@ class MetricsExposureIT extends PostgresTestResource {
         provider.close();
     }
 
-    /**
-     * Starts the stub provider here, because the context reads its issuer before any
-     * {@code @BeforeAll}.
-     */
+    /** Starts the stub provider: the context reads its issuer before any {@code @BeforeAll}. */
     @Override
     public Map<String, String> getProperties() {
         Map<String, String> properties = new HashMap<>(super.getProperties());

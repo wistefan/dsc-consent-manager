@@ -4,11 +4,7 @@ import io.micronaut.core.annotation.NonNull;
 
 /**
  * How far each section of a notice could be filled in from documents this service does not own.
- *
- * <p>Four sections rather than one verdict, because a retrieval serves the notice whatever
- * happened: a caller has to be able to tell which heading was read live and which is the stored
- * text. {@code contract} and {@code purposes} move together by construction - the purposes are read
- * off the contract - and that is reported rather than hidden.
+ * {@code contract} and {@code purposes} move together: purposes are read off the contract.
  */
 public record NoticeResolution(
         @NonNull State contract,
