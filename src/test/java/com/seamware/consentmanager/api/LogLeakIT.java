@@ -55,6 +55,7 @@ import java.text.ParseException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -194,6 +195,9 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
 
     private String userToken;
 
+    /** Every bearer token the run sends, so each is searched for, not only {@link #userToken}. */
+    private final Set<String> sentTokens = new LinkedHashSet<>();
+
     private UUID subjectId;
 
     /** The token user's row as provisioned, read before erasure clears it. */
@@ -225,7 +229,7 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        userToken = KeycloakTestResource.accessToken(RealmPrincipal.USER);
+        userToken = mint(RealmPrincipal.USER);
         notice = seedNotice();
 
         assertThat(exchange(HttpRequest.POST(PATH_REGISTER, ""), userToken).code())
@@ -253,8 +257,7 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
         for (ForcedFailure failure : ForcedFailure.values()) {
             discovery.failure = failure::raise;
-            String freshToken = KeycloakTestResource.accessToken(RealmPrincipal.USER);
-            assertThat(exchange(HttpRequest.GET(PATH_DISCOVERY), freshToken).code())
+            assertThat(exchange(HttpRequest.GET(PATH_DISCOVERY), mint(RealmPrincipal.USER)).code())
                     .isEqualTo(failure.status.getCode());
         }
         discovery.failure = null;
@@ -324,13 +327,18 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
     private Set<String> valuesOf(Forbidden forbidden) {
         return switch (forbidden) {
             case BEARER_TOKEN ->
-                    Stream.concat(
-                                    Stream.of(userToken),
-                                    Arrays.stream(userToken.split(TOKEN_SEGMENT_SEPARATOR))
-                                            .filter(
-                                                    segment ->
-                                                            segment.length()
-                                                                    >= MIN_SECRET_SEGMENT_LENGTH))
+                    sentTokens.stream()
+                            .flatMap(
+                                    token ->
+                                            Stream.concat(
+                                                    Stream.of(token),
+                                                    Arrays.stream(
+                                                                    token.split(
+                                                                            TOKEN_SEGMENT_SEPARATOR))
+                                                            .filter(
+                                                                    segment ->
+                                                                            segment.length()
+                                                                                    >= MIN_SECRET_SEGMENT_LENGTH)))
                             .collect(Collectors.toSet());
             case MALFORMED_TOKEN -> Set.of(MALFORMED_TOKEN);
             case PRIVATE_KEY_MEMBER -> KeyMaterialForms.of(SIGNING_KEY);
@@ -368,7 +376,7 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
                                         "email", SENTINEL_EMAIL,
                                         "firstName", SENTINEL_FIRST_NAME,
                                         "lastName", SENTINEL_LAST_NAME)),
-                        KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
+                        mint(RealmPrincipal.PARTICIPANT));
         assertThat(registered.code()).isEqualTo(HttpStatus.CREATED.getCode());
     }
 
@@ -390,6 +398,13 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
 
     private static String revokePath(UUID consent) {
         return UriBuilder.of(PATH_REVOKE).expand(Map.of(MEMBER_ID, consent.toString())).toString();
+    }
+
+    /** Issues a token for {@code principal} and records it as one the scan must not find. */
+    private String mint(RealmPrincipal principal) {
+        String token = KeycloakTestResource.accessToken(principal);
+        sentTokens.add(token);
+        return token;
     }
 
     /** Sends {@code request} with {@code token} as bearer, if any; a refusal is returned. */
