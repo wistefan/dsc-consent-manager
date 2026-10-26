@@ -62,7 +62,7 @@ public class ConsentWriter {
 
     /**
      * Records {@code decision} for the subject against {@code notice}, closing whatever it
-     * supersedes.
+     * supersedes and returning each of those closings as collateral.
      *
      * <p>Throws {@link io.micronaut.data.exceptions.DataAccessException} when a concurrent grant
      * already holds {@code uq_consents_granted_per_user_notice}: this transaction rolls back whole
@@ -70,7 +70,7 @@ public class ConsentWriter {
      */
     @NonNull
     @Transactional
-    public RecordedConsent decide(
+    public ConsentWrite decide(
             @NonNull User subject,
             @NonNull PrivacyNotice notice,
             @NonNull ConsentStatus decision,
@@ -86,14 +86,26 @@ public class ConsentWriter {
                         .toList();
         String actor = subject.getIdentifier();
 
+        List<ConsentMove> collateral = new ArrayList<>();
         ConsentMove revoked = revokeOpenGrant(open, actor);
-        UUID superseded = revoked == null ? null : revoked.recorded().consent().getId();
+        UUID superseded = null;
+        if (revoked != null) {
+            superseded = revoked.recorded().consent().getId();
+            collateral.add(revoked);
+        }
         List<Consent> unanswered = allHeld(open, ConsentStatus.PENDING);
         if (!unanswered.isEmpty()) {
-            closeRedundant(unanswered.subList(1, unanswered.size()), actor);
-            return answer(unanswered.getFirst(), decision, snapshot, superseded, actor);
+            collateral.addAll(closeRedundant(unanswered.subList(1, unanswered.size()), actor));
+            Consent adopted = unanswered.getFirst();
+            // Read before answer(...) overwrites it; always PENDING, which is what selected it.
+            ConsentStatus adoptedHeld = adopted.getStatus();
+            return ConsentWrite.moved(
+                    new ConsentMove(
+                            adoptedHeld, answer(adopted, decision, snapshot, superseded, actor)),
+                    collateral);
         }
-        return create(subject, notice, decision, snapshot, parentOf(held), actor);
+        return ConsentWrite.created(
+                create(subject, notice, decision, snapshot, parentOf(held), actor), collateral);
     }
 
     /**
@@ -113,7 +125,7 @@ public class ConsentWriter {
      */
     @NonNull
     @Transactional
-    public RecordedConsent request(
+    public ConsentWrite request(
             @NonNull User subject,
             @NonNull PrivacyNotice notice,
             @NonNull ConsentSnapshot snapshot,
@@ -127,7 +139,9 @@ public class ConsentWriter {
             throw new ConflictException(
                     ALREADY_OPEN.formatted(subject.getIdentifier(), notice.getId()));
         }
-        return create(subject, notice, ConsentStatus.PENDING, snapshot, parentOf(held), actor);
+        return ConsentWrite.created(
+                create(subject, notice, ConsentStatus.PENDING, snapshot, parentOf(held), actor),
+                List.of());
     }
 
     /**
@@ -300,8 +314,8 @@ public class ConsentWriter {
      * forever, permanently refusing every later request for the pair as a duplicate. Closing them
      * here settles that without a second guard the duplicate check could drift from.
      *
-     * <p>Each termination is reported back; {@link #decide} has nobody to report to and discards
-     * them, while {@link #resume} passes them on to the lifecycle seam.
+     * <p>Each termination is reported back, and both {@link #decide} and {@link #resume} pass them
+     * on to the lifecycle seam.
      */
     private List<ConsentMove> closeRedundant(List<Consent> redundant, String actor) {
         return redundant.stream()

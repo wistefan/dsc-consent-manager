@@ -8,6 +8,7 @@ import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.security.ConsentManagerPrincipal;
 import com.seamware.consentmanager.security.UserPrincipal;
 import com.seamware.consentmanager.service.CallerScope;
+import com.seamware.consentmanager.service.ConsentReporter;
 import com.seamware.consentmanager.service.ErasureResult;
 import com.seamware.consentmanager.service.UserSearchCriteria;
 import com.seamware.consentmanager.service.UserService;
@@ -33,10 +34,13 @@ public class UserController extends AbstractUsersController {
 
     private final UserService users;
 
+    private final ConsentReporter reporter;
+
     private final UserMapper mapper;
 
-    public UserController(UserService users, UserMapper mapper) {
+    public UserController(UserService users, UserMapper mapper, ConsentReporter reporter) {
         this.users = users;
+        this.reporter = reporter;
         this.mapper = mapper;
     }
 
@@ -62,11 +66,13 @@ public class UserController extends AbstractUsersController {
      * authentication before the route runs, so there is always a record here to erase - and, having
      * consented to nothing, that record is deleted rather than kept, which is why the pseudonym is
      * omitted from such a response. When it is present it is published exactly once, because it is
-     * the only handle left on the consent records that are deliberately retained.
+     * the only handle left on the consent records that are deliberately retained. The consents it
+     * closed are reported only once the erasure has committed.
      */
     @Override
     public HttpResponse<ErasureSummary> eraseCurrentUser(UserPrincipal principal) {
         ErasureResult erased = users.erase(principal.user());
+        reporter.report(erased.moves());
         return HttpResponse.ok(
                 new ErasureSummary(
                                 erased.consentsRevoked(),

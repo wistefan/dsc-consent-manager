@@ -33,7 +33,7 @@ import org.slf4j.LoggerFactory;
  * <p>Authorisation is against the consent itself rather than against the caller's role, so the role
  * a token carries is never on its own enough. Everything transactional lives in {@link
  * ConsentWriter}; this bean resolves the record, checks who is asking, and renders the result
- * through {@link ConsentParties}.
+ * through {@link ConsentReporter}.
  */
 @Singleton
 public class ConsentLifecycleService {
@@ -80,8 +80,7 @@ public class ConsentLifecycleService {
     private final ConsentStateMachine states;
     private final ConsentNoticeGuard noticeGuard;
     private final ConsentWriter writer;
-    private final ConsentParties parties;
-    private final ConsentStateChangeLog changeLog;
+    private final ConsentReporter reporter;
     private final UserNotificationService notifications;
 
     public ConsentLifecycleService(
@@ -90,16 +89,14 @@ public class ConsentLifecycleService {
             ConsentStateMachine states,
             ConsentNoticeGuard noticeGuard,
             ConsentWriter writer,
-            ConsentParties parties,
-            ConsentStateChangeLog changeLog,
+            ConsentReporter reporter,
             UserNotificationService notifications) {
         this.consents = consents;
         this.users = users;
         this.states = states;
         this.noticeGuard = noticeGuard;
         this.writer = writer;
-        this.parties = parties;
-        this.changeLog = changeLog;
+        this.reporter = reporter;
         this.notifications = notifications;
     }
 
@@ -135,7 +132,7 @@ public class ConsentLifecycleService {
     @NonNull
     public ConsentDetails reConfirm(@NonNull User subject, @NonNull UUID consentId) {
         Consent owned = ownedBy(subject, consentId);
-        return report(writer.affirm(owned.getId(), subject.getIdentifier()));
+        return reporter.report(writer.affirm(owned.getId(), subject.getIdentifier()));
     }
 
     /**
@@ -161,7 +158,7 @@ public class ConsentLifecycleService {
                                 () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
         requireParty(caller, consent);
         ConsentDetails details =
-                report(
+                reporter.report(
                         writer.move(
                                 consent.getId(),
                                 ConsentStatus.TERMINATED,
@@ -228,8 +225,8 @@ public class ConsentLifecycleService {
         states.requireTransition(consent.getStatus(), ConsentStatus.GRANTED);
         noticeGuard.consentable(consent.getPrivacyNoticeId());
         ResumedConsent written = resumed(consent, resumable.actor());
-        written.collateral().forEach(this::report);
-        return report(written.answered());
+        written.collateral().forEach(reporter::report);
+        return reporter.report(written.answered());
     }
 
     /** A consent a resume may move, and the actor its event records. */
@@ -301,25 +298,7 @@ public class ConsentLifecycleService {
     /** Moves the subject's own consent to {@code target}, in the subject's name. */
     private ConsentDetails move(User subject, UUID consentId, ConsentStatus target) {
         Consent owned = ownedBy(subject, consentId);
-        return report(
+        return reporter.report(
                 writer.move(owned.getId(), target, subject.getIdentifier(), EXPLICIT_TRIGGER));
-    }
-
-    /**
-     * Reports a committed move to the lifecycle seam and renders it for the caller.
-     *
-     * <p>The one path every lifecycle write passes through — including the revocation and the
-     * terminations a resume performs collaterally, which {@link #resume} hands here one at a time —
-     * so {@link ConsentStateChangeLog} cannot be left off a route or a collateral write added
-     * later. Subject notification deliberately does not live here, because it must skip the
-     * collateral moves; {@link #terminate} calls it directly (ADR-0015). The held status is the one
-     * {@link ConsentWriter} read under the row lock, not an earlier unlocked read, so a concurrent
-     * move cannot leave the reported {@code held} naming a status the write did not actually move
-     * from.
-     */
-    private ConsentDetails report(ConsentMove move) {
-        ConsentDetails details = parties.details(move.recorded());
-        changeLog.recorded(move.held(), details, move.recorded().event());
-        return details;
     }
 }

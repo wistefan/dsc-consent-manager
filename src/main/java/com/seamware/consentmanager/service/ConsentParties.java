@@ -5,6 +5,9 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import io.micronaut.core.annotation.NonNull;
 import jakarta.inject.Singleton;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -30,6 +33,30 @@ public class ConsentParties {
     @NonNull
     public ConsentDetails details(@NonNull RecordedConsent recorded) {
         return details(recorded.consent(), recorded.created());
+    }
+
+    /**
+     * Each recorded consent with both parties named, in order, reading each distinct participant
+     * once however many of the consents name it.
+     */
+    @NonNull
+    public List<ConsentDetails> details(@NonNull List<RecordedConsent> recorded) {
+        Map<UUID, String> identifiers = new HashMap<>();
+        return recorded.stream()
+                .map(
+                        written -> {
+                            Consent consent = written.consent();
+                            return new ConsentDetails(
+                                    consent,
+                                    identifiers.computeIfAbsent(
+                                            consent.getProviderId(),
+                                            id -> party(consent, id).getIdentifier()),
+                                    identifiers.computeIfAbsent(
+                                            consent.getConsumerId(),
+                                            id -> party(consent, id).getIdentifier()),
+                                    written.created());
+                        })
+                .toList();
     }
 
     /**

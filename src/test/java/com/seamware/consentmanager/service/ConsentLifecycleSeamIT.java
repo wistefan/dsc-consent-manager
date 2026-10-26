@@ -13,6 +13,7 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.BadRequestException;
+import com.seamware.consentmanager.observability.ConsentMetrics;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
@@ -272,6 +273,10 @@ class ConsentLifecycleSeamIT extends PostgresTestResource {
     static class CapturingChangeLog extends ConsentStateChangeLog {
 
         private final List<Reported> captured = new CopyOnWriteArrayList<>();
+
+        CapturingChangeLog(ConsentMetrics metrics) {
+            super(metrics);
+        }
 
         @Override
         public void recorded(

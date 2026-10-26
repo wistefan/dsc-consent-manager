@@ -344,7 +344,7 @@ public class ParticipantService {
         UUID participantId = participant.getId();
         refuseWhileGranted(participant, participantId);
 
-        int consentsTerminated = terminateUnanswered(participantId);
+        List<ConsentMove> terminated = terminateUnanswered(participantId);
         int linksRemoved = links.deleteByIdParticipantId(participantId);
         int noticesArchived = archiveNotices(participantId);
         int consentsRetained = consents.countByParticipant(participantId);
@@ -354,17 +354,13 @@ public class ParticipantService {
                 "Deregistered participant {}: terminated {}, retained {}, archived {}, unlinked {},"
                         + " record {}",
                 participant.getIdentifier(),
-                consentsTerminated,
+                terminated.size(),
                 consentsRetained,
                 noticesArchived,
                 linksRemoved,
                 deregisteredAt == null ? "deleted" : "retained");
         return new DeregistrationResult(
-                deregisteredAt,
-                consentsTerminated,
-                consentsRetained,
-                noticesArchived,
-                linksRemoved);
+                deregisteredAt, terminated, consentsRetained, noticesArchived, linksRemoved);
     }
 
     /**
@@ -406,20 +402,6 @@ public class ParticipantService {
         }
     }
 
-    /**
-     * Every consent in one of the given statuses that names the participant on either side.
-     *
-     * <p>The two sides are read separately so the derived queries can bind the status enums; a
-     * self-dealing consent comes back from both and is de-duplicated by id here.
-     */
-    private List<Consent> naming(UUID participantId, Set<ConsentStatus> statuses) {
-        return distinctById(
-                Stream.concat(
-                        consents.findByProviderIdAndStatusIn(participantId, statuses).stream(),
-                        consents.findByConsumerIdAndStatusIn(participantId, statuses).stream()),
-                Consent::getId);
-    }
-
     /** The items in encounter order, keeping the first of each id. */
     private static <T> List<T> distinctById(Stream<T> items, Function<T, UUID> id) {
         Map<UUID, T> byId = new LinkedHashMap<>();
@@ -441,17 +423,27 @@ public class ParticipantService {
 
     /**
      * Moves every unanswered consent naming the participant to {@code TERMINATED}, appending a
-     * {@code CONSENT_TERMINATED} event to each trail, and reports how many moved.
+     * {@code CONSENT_TERMINATED} event to each trail, and returns each move with the status it was
+     * locked in.
+     *
+     * <p>The read locks the rows, so one a concurrent decision granted meanwhile is skipped rather
+     * than terminated from a stale read. The moves are not reported here: this runs inside {@link
+     * #deregister}'s transaction, and only a committed move may be counted.
      */
-    private int terminateUnanswered(UUID participantId) {
-        List<RecordedConsent> closed =
-                naming(participantId, UNANSWERED_STATUSES).stream().map(this::terminated).toList();
-        if (closed.isEmpty()) {
-            return 0;
+    private List<ConsentMove> terminateUnanswered(UUID participantId) {
+        List<ConsentMove> closed =
+                consents.findNamingParticipantForUpdate(participantId, UNANSWERED_STATUSES).stream()
+                        .map(
+                                consent -> {
+                                    ConsentStatus held = consent.getStatus();
+                                    return new ConsentMove(held, terminated(consent));
+                                })
+                        .toList();
+        if (!closed.isEmpty()) {
+            consents.updateAll(closed.stream().map(move -> move.recorded().consent()).toList());
+            consentEvents.saveAll(closed.stream().map(move -> move.recorded().event()).toList());
         }
-        consents.updateAll(closed.stream().map(RecordedConsent::consent).toList());
-        consentEvents.saveAll(closed.stream().map(RecordedConsent::event).toList());
-        return closed.size();
+        return closed;
     }
 
     /**

@@ -102,9 +102,14 @@ public class ConsentStateMachine {
         return TRANSITIONS.getOrDefault(from, Set.of()).contains(to);
     }
 
+    /** Whether a consent may be created holding {@code status}. */
+    public boolean permitsCreation(@NonNull ConsentStatus status) {
+        return CREATABLE.contains(status);
+    }
+
     /** Refuses a creation in a status this service does not create, naming that status. */
     public void requireCreatable(@NonNull ConsentStatus target) {
-        if (!CREATABLE.contains(target)) {
+        if (!permitsCreation(target)) {
             throw new BadRequestException(NOT_CREATABLE.formatted(target));
         }
     }

@@ -21,11 +21,11 @@ import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Property;
 import io.micronaut.context.annotation.Replaces;
 import io.micronaut.context.annotation.Requires;
+import io.micronaut.data.model.Pageable;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import java.lang.reflect.Proxy;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -89,8 +89,8 @@ class ParticipantDeregistrationAtomicityIT extends PostgresTestResource {
         participant(SUBJECT_PARTICIPANT)
                 .ifPresent(
                         subject -> {
-                            consents.findByProviderIdAndStatusIn(
-                                            subject.getId(), List.of(ConsentStatus.values()))
+                            consents.findByProviderId(subject.getId(), Pageable.UNPAGED)
+                                    .getContent()
                                     .forEach(
                                             consent -> {
                                                 events.findByConsentIdOrderByOccurredAtAsc(
