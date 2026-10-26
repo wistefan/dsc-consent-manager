@@ -10,6 +10,7 @@ import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.notification.UserNotificationService;
+import com.seamware.consentmanager.observability.FailureSummary;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.CatalogPrincipal;
@@ -40,7 +41,7 @@ public class ConsentLifecycleService {
     private static final Logger LOG = LoggerFactory.getLogger(ConsentLifecycleService.class);
 
     private static final String NOTIFICATION_FAILED =
-            "Consent {} was terminated, but notifying its subject failed";
+            "Consent {} was terminated, but notifying its subject failed: {}";
 
     private static final String SUBJECT_MISSING =
             "Consent {} was terminated, but its subject {} no longer exists to be notified";
@@ -180,7 +181,8 @@ public class ConsentLifecycleService {
             }
             notifications.consentTerminated(subject.get(), terminated, caller);
         } catch (RuntimeException e) {
-            LOG.error(NOTIFICATION_FAILED, terminated.getId(), e);
+            LOG.error(NOTIFICATION_FAILED, terminated.getId(), FailureSummary.of(e));
+            LOG.debug(NOTIFICATION_FAILED, terminated.getId(), e.getMessage(), e);
         }
     }
 

@@ -383,6 +383,27 @@ notice title and the user's name. A bare domain is left intact, and that risk is
 name the user id and the consent id, never the address. `SmtpUserNotificationServiceIT` scans
 delivered mail for any URL the service did not configure.
 
+## Log hygiene
+
+Nothing at INFO or above quotes a bearer token, key material, the pseudonym key, a user's external
+identifier, email or name, a request path or a query string.
+
+- **Failures.** The three error handlers log one `FailureSummary` line at ERROR: the method, the
+  matched route template (`/consents/{id}`, never the concrete path), the problem type, the
+  exception class chain and the root cause's top frame. Exception messages are free text that
+  quotes identifiers (a unique violation reads `Key (identifier)=(alice@example.com)`), so the
+  message and full throwable go to DEBUG only, under the same `correlationId`.
+- **People.** A line that must correlate a person at INFO or above logs
+  `LogPseudonymizer.pseudonym(identifier)`: HMAC-SHA-256 under `LOG_PSEUDONYM_KEY`, truncated hex.
+  A plain hash would fall to a list of candidate emails or DIDs and would stay linkable after an
+  erasure. Startup fails when the key is unset or short. Pseudonyms are stable while the key is,
+  and rotating it unlinks every pseudonym already logged.
+- **Allowed as is.** The internal `userId` UUID and participant (legal-person) identifiers are
+  logged unchanged. The UUID is opaque and is unlinked from the person by erasure, which is the
+  reasoning of [ADR 0007](adr/0007-erasure-pseudonymises-the-user-and-retains-the-audit-trail.md).
+  A participant identifier names an organisation, not a natural person. A JWS `kid` names a key,
+  not key material.
+
 ## Spec layout
 
 `api/openapi.yaml` is the root document and `$ref`s into `api/components/`:
@@ -417,6 +438,9 @@ The consent flow follows the rule: `/consents` and `/consents/requests` are inli
   receipts signed by the active and by a retired key verify against it with plain Nimbus.
 - `KeyMaterialLeakIT` — no log event, MDC value, throwable chain or response body carries any
   private member of the signing key, across signing, the ephemeral-key warning and signing failures.
+- `LogLeakIT` — across registration, grant, revoke, erasure, a malformed token, a token in a query
+  string and two forced server failures, no event at INFO or above quotes a token, a private key
+  member, the pseudonym key or the sentinel identifier, email or name.
 - `ConsentReceiptIssuanceIT`, `SigningFailureIT` — every grant path stores exactly one receipt that
   reads never re-sign; a signing failure rolls the grant back and answers `500`.
 

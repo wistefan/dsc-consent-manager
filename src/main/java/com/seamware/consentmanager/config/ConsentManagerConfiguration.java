@@ -45,6 +45,7 @@ import lombok.Setter;
  *   <li>{@code NOTIFICATION_CLIENT_URL} &rarr; {@code consent-manager.notifications.client-url}
  *   <li>{@code ERRORS_EXPOSE_EXCEPTION_DETAIL} &rarr; {@code
  *       consent-manager.errors.expose-exception-detail}
+ *   <li>{@code LOG_PSEUDONYM_KEY} &rarr; {@code consent-manager.logging.pseudonym-key}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut
@@ -466,5 +467,18 @@ public class ConsentManagerConfiguration {
          * {@code ERRORS_EXPOSE_EXCEPTION_DETAIL}; a debugging aid that must stay off in production.
          */
         private boolean exposeExceptionDetail;
+    }
+
+    /** How log lines refer to people, bound under {@code consent-manager.logging}. */
+    @Getter
+    @Setter
+    @ConfigurationProperties("logging")
+    public static class Logging {
+
+        /**
+         * HMAC key log pseudonyms are computed under, bound to {@code LOG_PSEUDONYM_KEY}; a secret.
+         * Unset or short fails startup, and changing it unlinks every pseudonym already logged.
+         */
+        @Nullable private String pseudonymKey;
     }
 }

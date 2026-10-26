@@ -12,6 +12,7 @@ import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
+import com.seamware.consentmanager.support.TestPseudonymizer;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.context.env.Environment;
@@ -81,9 +82,16 @@ import org.junit.jupiter.params.provider.ValueSource;
 @DisplayName("Token signature enforcement")
 class TokenSignatureEnforcementTest {
 
-    /** No property file is read, so the receipt signer, which fails startup keyless, needs this. */
-    private static final Map<String, Object> EPHEMERAL_RECEIPT_KEY =
-            Map.of("consent-manager.receipts.ephemeral-signing-key", true);
+    /**
+     * No property file is read, so the receipt signer and the log pseudonymizer, which both fail
+     * startup keyless, need these.
+     */
+    private static final Map<String, Object> STARTUP_KEYS =
+            Map.of(
+                    "consent-manager.receipts.ephemeral-signing-key",
+                    true,
+                    "consent-manager.logging.pseudonym-key",
+                    TestPseudonymizer.KEY);
 
     /** Property that switches the probe route below on, so it exists only for this test. */
     private static final String PROBE_ROUTE_ENABLED = "test.token-signature-enforcement.enabled";
@@ -254,7 +262,7 @@ class TokenSignatureEnforcementTest {
 
         return ApplicationContext.builder(Environment.TEST)
                 .enableDefaultPropertySources(false)
-                .properties(EPHEMERAL_RECEIPT_KEY)
+                .properties(STARTUP_KEYS)
                 .properties(properties)
                 .build()
                 .start();

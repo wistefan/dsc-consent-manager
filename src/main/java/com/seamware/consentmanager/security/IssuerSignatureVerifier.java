@@ -306,6 +306,8 @@ public class IssuerSignatureVerifier {
         }
         boolean verified = OUTCOME_VERIFIED.equals(outcome);
         boolean changed = state.markChecked(verified);
+        // A kid is a public key-set index, not key material or a personal identifier, so it is
+        // safe above DEBUG and is what an operator matches against the provider's JWKS.
         if (!verified && changed && LOG.isWarnEnabled()) {
             LOG.warn(
                     "No key published by provider '{}' verified a token presenting kid '{}'; "

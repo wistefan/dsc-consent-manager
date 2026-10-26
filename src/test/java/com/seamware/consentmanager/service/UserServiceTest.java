@@ -19,6 +19,7 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
+import com.seamware.consentmanager.observability.LogPseudonymizer;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.IssuedReceiptRepository;
@@ -27,6 +28,7 @@ import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.Role;
 import com.seamware.consentmanager.security.UserPrincipal;
+import com.seamware.consentmanager.support.TestPseudonymizer;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import io.micronaut.data.model.Page;
@@ -124,6 +126,8 @@ class UserServiceTest {
 
     private final ErasureVerifier erasureVerifier = verifierWith(VERIFICATION_SECRET);
 
+    private static final LogPseudonymizer PSEUDONYMIZER = TestPseudonymizer.create();
+
     private final ConsentFactory consentFactory = new ConsentFactory(new ConsentStateMachine());
 
     private final UserService service =
@@ -136,6 +140,7 @@ class UserServiceTest {
                     issuedReceipts,
                     consentFactory,
                     erasureVerifier,
+                    PSEUDONYMIZER,
                     limits);
 
     /** An identifier no row exists for is inserted from the claims, and reported as created. */
@@ -717,6 +722,7 @@ class UserServiceTest {
                         issuedReceipts,
                         consentFactory,
                         verifierWith(null),
+                        PSEUDONYMIZER,
                         limits);
         Participant alpha = participants.put(participant());
         User user = users.put(stored());
