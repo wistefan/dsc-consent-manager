@@ -405,7 +405,9 @@ server context path separately, through `ServerContextPathProvider`.
 - **Proving detection.** Add a parameterized test against fixtures: a removed operation, a
   removed response property, and a newly required request property are detected; an added
   optional property is not.
-- **Docs.** Document the acknowledgement workflow in `docs/` and in AGENTS.md.
+- **Docs.** Document the acknowledgement workflow in `docs/api-compatibility.md`. The AGENTS.md
+  entry lands with Step 8's AGENTS.md pass ("the lint/diff tests, and the baseline workflow"),
+  because step agents do not edit AGENTS.md.
 - **Acceptance.** AC 11 holds.
 
 ### Step 8: Local WireMock contract stubs, docs and AGENTS.md

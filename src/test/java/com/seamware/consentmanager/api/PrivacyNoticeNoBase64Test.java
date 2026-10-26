@@ -112,7 +112,8 @@ class PrivacyNoticeNoBase64Test {
     }
 
     static Stream<Path> specificationDocuments() {
-        return filesUnder(SPEC_ROOT, YAML_SUFFIX);
+        return filesUnder(SPEC_ROOT, YAML_SUFFIX)
+                .filter(document -> !document.startsWith(SpecBaseline.DIRECTORY));
     }
 
     static Stream<Path> moduleSources() {

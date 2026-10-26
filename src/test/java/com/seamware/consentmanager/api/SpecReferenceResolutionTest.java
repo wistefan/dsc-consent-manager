@@ -367,6 +367,7 @@ class SpecReferenceResolutionTest {
         try (Stream<Path> tree = Files.walk(SOURCE_ROOT)) {
             List<String> documents =
                     tree.filter(Files::isRegularFile)
+                            .filter(file -> !file.startsWith(SpecBaseline.DIRECTORY))
                             .filter(file -> file.getFileName().toString().endsWith(YAML_SUFFIX))
                             .filter(
                                     file ->
