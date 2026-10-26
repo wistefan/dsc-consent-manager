@@ -134,11 +134,14 @@ public class UserService {
     private static final String ERASED_IDENTIFIER_PREFIX = "urn:consent-manager:erased:";
 
     /**
-     * Statuses an erasure terminates rather than revokes: offers that were never answered and now
-     * never can be, because the person they were put to is gone.
+     * Where an erasure moves each open status: a grant is revoked, and an offer that was never
+     * answered, and now never can be because the person it was put to is gone, is terminated.
      */
-    private static final Set<ConsentStatus> UNANSWERED_STATUSES =
-            Set.of(ConsentStatus.PENDING, ConsentStatus.DRAFT);
+    private static final Map<ConsentStatus, ConsentStatus> ERASURE_CLOSINGS =
+            Map.of(
+                    ConsentStatus.GRANTED, ConsentStatus.REVOKED,
+                    ConsentStatus.PENDING, ConsentStatus.TERMINATED,
+                    ConsentStatus.DRAFT, ConsentStatus.TERMINATED);
 
     /** Attributed to the service rather than to a person, who no longer exists by then. */
     private static final String ERASURE_ACTOR = "consent-manager";
@@ -550,43 +553,51 @@ public class UserService {
     @Transactional
     public ErasureResult erase(User user) {
         UUID userId = user.getId();
-        int revoked = close(userId, Set.of(ConsentStatus.GRANTED), ConsentStatus.REVOKED);
-        int terminated = close(userId, UNANSWERED_STATUSES, ConsentStatus.TERMINATED);
+        List<ConsentMove> closed = close(userId);
         // A signed receipt names the subject and cannot be pseudonymised without breaking it.
         issuedReceipts.deleteByUserId(userId);
         long linksRemoved = links.deleteByIdUserId(userId);
         String pseudonym = pseudonymiseOrDelete(user);
 
+        ErasureResult result = new ErasureResult(pseudonym, closed, Math.toIntExact(linksRemoved));
         LOG.info(
                 "Erased user {}: revoked {}, terminated {}, unlinked {}, record {}",
                 userId,
-                revoked,
-                terminated,
+                result.consentsRevoked(),
+                result.consentsTerminated(),
                 linksRemoved,
                 pseudonym == null ? "deleted" : "pseudonymised");
-        return new ErasureResult(pseudonym, revoked, terminated, Math.toIntExact(linksRemoved));
+        return result;
     }
 
     /**
-     * Moves every consent of the user in {@code from} to {@code to}, appending the matching trail
-     * entry to each, and reports how many moved.
+     * Closes every open consent of the user as {@link #ERASURE_CLOSINGS} says, appending the
+     * matching trail entry to each, and returns each move with the status it was locked in.
      *
-     * <p>Through {@link ConsentFactory} like every other transition, so the lifecycle table is
-     * consulted and the event state is derived from {@code to} rather than restated here. Batched
-     * rather than updated row by row: an erasure costs two statements however long the subject has
-     * been a member.
+     * <p>One locked read over every open status, so a request a concurrent decision granted in the
+     * meantime is read as the grant it now is and revoked, never terminated from a stale read and
+     * never left standing. Through {@link ConsentFactory} like every other transition, and batched:
+     * an erasure costs two writes however long the subject has been a member. The moves are not
+     * reported here: this runs inside {@link #erase}'s transaction, and only a committed move may
+     * be counted.
      */
-    private int close(UUID userId, Set<ConsentStatus> from, ConsentStatus to) {
-        List<RecordedConsent> closed =
-                consents.findByUserIdAndStatusIn(userId, from).stream()
-                        .map(consent -> terminate(consent, to))
+    private List<ConsentMove> close(UUID userId) {
+        List<ConsentMove> closed =
+                consents
+                        .findByUserIdAndStatusInForUpdate(userId, ERASURE_CLOSINGS.keySet())
+                        .stream()
+                        .map(
+                                consent -> {
+                                    ConsentStatus held = consent.getStatus();
+                                    return new ConsentMove(
+                                            held, terminate(consent, ERASURE_CLOSINGS.get(held)));
+                                })
                         .toList();
-        if (closed.isEmpty()) {
-            return 0;
+        if (!closed.isEmpty()) {
+            consents.updateAll(closed.stream().map(move -> move.recorded().consent()).toList());
+            consentEvents.saveAll(closed.stream().map(move -> move.recorded().event()).toList());
         }
-        consents.updateAll(closed.stream().map(RecordedConsent::consent).toList());
-        consentEvents.saveAll(closed.stream().map(RecordedConsent::event).toList());
-        return closed.size();
+        return closed;
     }
 
     /**

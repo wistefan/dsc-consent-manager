@@ -8,6 +8,7 @@ import com.seamware.consentmanager.api.generated.model.ParticipantRegistration;
 import com.seamware.consentmanager.api.generated.model.ParticipantUpdate;
 import com.seamware.consentmanager.security.ConsentManagerPrincipal;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
+import com.seamware.consentmanager.service.ConsentReporter;
 import com.seamware.consentmanager.service.DeregistrationResult;
 import com.seamware.consentmanager.service.ParticipantService;
 import io.micronaut.data.model.Page;
@@ -31,8 +32,12 @@ public class ParticipantController extends AbstractParticipantsController {
 
     private final ParticipantMapper mapper;
 
-    public ParticipantController(ParticipantService participants, ParticipantMapper mapper) {
+    private final ConsentReporter reporter;
+
+    public ParticipantController(
+            ParticipantService participants, ParticipantMapper mapper, ConsentReporter reporter) {
         this.participants = participants;
+        this.reporter = reporter;
         this.mapper = mapper;
     }
 
@@ -75,12 +80,14 @@ public class ParticipantController extends AbstractParticipantsController {
      * Deregisters the caller's own organization and reports what the cascade closed.
      *
      * <p>A {@code 200} with a summary rather than a {@code 204}: the caller has to be able to see
-     * that its record was retained rather than deleted, and what was terminated on the way out.
+     * that its record was retained rather than deleted, and what was terminated on the way out. The
+     * terminations are reported only once the deregistration has committed.
      */
     @Override
     public HttpResponse<DeregistrationSummary> deregisterCurrentParticipant(
             ParticipantPrincipal principal) {
         DeregistrationResult result = participants.deregister(principal.requireRegistered());
+        reporter.report(result.moves());
         return HttpResponse.ok(
                 new DeregistrationSummary(
                                 result.consentsTerminated(),

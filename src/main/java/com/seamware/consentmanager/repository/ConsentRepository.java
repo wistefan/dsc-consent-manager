@@ -87,17 +87,22 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
      */
     List<Consent> findByUserIdAndStatus(UUID userId, ConsentStatus status);
 
-    /**
-     * Finds all consents for the given user in any of the given statuses.
-     *
-     * <p>The erasure path uses this to sweep every consent still open - granted ones and unanswered
-     * ones alike - in a single statement.
-     *
-     * @param userId the UUID of the user
-     * @param statuses the consent statuses to filter by
-     * @return a list of consents matching the user and any of the statuses
-     */
+    /** Every consent of the user in any of the given statuses. */
     List<Consent> findByUserIdAndStatusIn(UUID userId, Collection<ConsentStatus> statuses);
+
+    /**
+     * Every consent of the user in any of the given statuses, newest first, locked for the rest of
+     * the transaction.
+     *
+     * <p>Erasure's single read, so a status it closes from is the one the row still holds. Under
+     * {@code READ COMMITTED} the status predicate is re-checked on a row whose lock was waited for,
+     * so a request a concurrent decision granted is read as granted rather than as the stale
+     * request. Locks in the order {@link #findByUserIdAndPrivacyNoticeIdForUpdate} does.
+     */
+    @Query(
+            "SELECT * FROM consents WHERE user_id = :userId AND status IN (:statuses)"
+                    + " ORDER BY created_at DESC, id DESC FOR UPDATE")
+    List<Consent> findByUserIdAndStatusInForUpdate(UUID userId, Collection<ConsentStatus> statuses);
 
     /**
      * Checks whether any consent at all refers to the given user.
@@ -150,16 +155,19 @@ public interface ConsentRepository extends PageableRepository<Consent, UUID> {
     List<Consent> findByParentConsentId(UUID parentConsentId);
 
     /**
-     * Consents in any of the given statuses where the participant is the provider.
+     * Every consent in any of the given statuses naming the participant on either side, newest
+     * first, locked for the rest of the transaction.
      *
-     * <p>Deregistration reads the two sides separately rather than through one {@code OR} query
-     * because a derived query binds the status enums for us; a consent naming the participant on
-     * both sides comes back from both calls and is de-duplicated by id.
+     * <p>Deregistration's single read; a self-dealing consent comes back once. The status predicate
+     * is re-checked under the lock as in {@link #findByUserIdAndStatusInForUpdate}, and the lock
+     * order is the same.
      */
-    List<Consent> findByProviderIdAndStatusIn(UUID providerId, Collection<ConsentStatus> statuses);
-
-    /** Consents in any of the given statuses where the participant is the consumer. */
-    List<Consent> findByConsumerIdAndStatusIn(UUID consumerId, Collection<ConsentStatus> statuses);
+    @Query(
+            "SELECT * FROM consents"
+                    + " WHERE (provider_id = :participantId OR consumer_id = :participantId)"
+                    + " AND status IN (:statuses) ORDER BY created_at DESC, id DESC FOR UPDATE")
+    List<Consent> findNamingParticipantForUpdate(
+            UUID participantId, Collection<ConsentStatus> statuses);
 
     /**
      * Every consent for the pair, newest first, locked against concurrent decisions.

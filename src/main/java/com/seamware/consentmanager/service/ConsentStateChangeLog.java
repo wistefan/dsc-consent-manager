@@ -5,21 +5,24 @@ import static net.logstash.logback.argument.StructuredArguments.v;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentStatus;
+import com.seamware.consentmanager.observability.ConsentMetrics;
 import io.micronaut.core.annotation.NonNull;
 import jakarta.inject.Singleton;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Emits one event per lifecycle move, and is the seam a notification subsystem attaches to.
+ * Emits one event per consent creation or move, and is the seam a notification subsystem attaches
+ * to.
  *
- * <p>Every move {@link ConsentLifecycleService} records passes through here once the write has
- * committed, so TICKET-020's participant notification has a single call site to grow from. Subject
- * notification (TICKET-013) does not: it skips collateral moves, so it is called from {@code
- * ConsentService.request} and {@code ConsentLifecycleService.terminate} directly — see ADR-0015. It
- * is a log and not a queue: nothing here is buffered, retried or delivered to anyone, and a
- * deployment that needs a revocation to reach the parties needs the subsystem those tickets own —
- * see ADR-0011.
+ * <p>Every write passes through here once it has committed, by way of {@link ConsentReporter}, so
+ * TICKET-020's participant notification has a single call site to grow from, and {@link
+ * ConsentMetrics} counts exactly the writes logged here. Subject notification (TICKET-013) does
+ * not: it skips collateral moves, so it is called from {@code ConsentService.request} and {@code
+ * ConsentLifecycleService.terminate} directly — see ADR-0015. It is a log and not a queue: nothing
+ * here is buffered, retried or delivered to anyone, and a deployment that needs a revocation to
+ * reach the parties needs the subsystem those tickets own — see ADR-0011.
  */
 @Singleton
 public class ConsentStateChangeLog {
@@ -37,6 +40,12 @@ public class ConsentStateChangeLog {
     private static final String MOVED =
             "Consent {} of subject {} between provider {} and consumer {}: {} -> {}, recorded as"
                     + " {} ({})";
+
+    private final ConsentMetrics metrics;
+
+    public ConsentStateChangeLog(ConsentMetrics metrics) {
+        this.metrics = metrics;
+    }
 
     /**
      * Records a move that has been written, naming what it concerns and the trail entry it left.
@@ -60,16 +69,39 @@ public class ConsentStateChangeLog {
             @NonNull ConsentStatus held,
             @NonNull ConsentDetails moved,
             @NonNull ConsentEvent event) {
-        Consent consent = moved.consent();
+        emit(Optional.of(held), moved, event);
+    }
+
+    /**
+     * Records a consent that has been inserted. Its line omits {@code heldStatus} rather than
+     * emitting {@code null}, and its message reads {@code none -> <status>}.
+     */
+    public void created(@NonNull ConsentDetails created, @NonNull ConsentEvent event) {
+        emit(Optional.empty(), created, event);
+    }
+
+    /**
+     * Logs the write and counts it. An affirmation leaves the status where it was, so it is logged
+     * but not counted as a transition.
+     */
+    private void emit(Optional<ConsentStatus> held, ConsentDetails written, ConsentEvent event) {
+        Consent consent = written.consent();
+        // A plain argument is interpolated but, unlike v(...), adds no JSON field.
+        Object heldArgument =
+                held.<Object>map(status -> v("heldStatus", status))
+                        .orElse(ConsentMetrics.NO_STATUS);
         LOG.info(
                 MOVED,
                 v("consentId", consent.getId()),
                 v("subjectUserId", consent.getUserId()),
-                v("provider", moved.providerIdentifier()),
-                v("consumer", moved.consumerIdentifier()),
-                v("heldStatus", held),
+                v("provider", written.providerIdentifier()),
+                v("consumer", written.consumerIdentifier()),
+                heldArgument,
                 v("newStatus", consent.getStatus()),
                 v("eventState", event.getEventState()),
                 v("eventType", event.getEventType()));
+        if (held.filter(consent.getStatus()::equals).isEmpty()) {
+            metrics.transitioned(held, consent.getStatus());
+        }
     }
 }

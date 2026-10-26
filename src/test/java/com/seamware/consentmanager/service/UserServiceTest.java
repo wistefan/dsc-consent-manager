@@ -3,6 +3,7 @@ package com.seamware.consentmanager.service;
 import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 import ch.qos.logback.classic.Level;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
@@ -636,6 +637,16 @@ class UserServiceTest {
 
         assertThat(result.consentsRevoked()).isEqualTo(1);
         assertThat(result.consentsTerminated()).isEqualTo(2);
+        assertThat(result.moves())
+                .as("each closing names the status it was locked in, and the published counts")
+                .extracting(
+                        move -> move.recorded().consent().getId(),
+                        ConsentMove::held,
+                        move -> move.recorded().consent().getStatus())
+                .containsExactlyInAnyOrder(
+                        tuple(granted.getId(), ConsentStatus.GRANTED, ConsentStatus.REVOKED),
+                        tuple(pending.getId(), ConsentStatus.PENDING, ConsentStatus.TERMINATED),
+                        tuple(draft.getId(), ConsentStatus.DRAFT, ConsentStatus.TERMINATED));
         assertThat(result.linksRemoved()).isEqualTo(2);
         assertThat(result.pseudonym()).startsWith(ERASED_PREFIX).isNotEqualTo(IDENTIFIER);
 
@@ -1303,6 +1314,12 @@ class UserServiceTest {
         }
 
         @Override
+        public List<Consent> findByUserIdAndStatusInForUpdate(
+                UUID userId, Collection<ConsentStatus> statuses) {
+            return findByUserIdAndStatusIn(userId, statuses);
+        }
+
+        @Override
         public boolean existsByUserId(UUID userId) {
             return rows().values().stream().anyMatch(c -> c.getUserId().equals(userId));
         }
@@ -1375,14 +1392,8 @@ class UserServiceTest {
         }
 
         @Override
-        public List<Consent> findByProviderIdAndStatusIn(
-                UUID providerId, Collection<ConsentStatus> statuses) {
-            throw unsupported();
-        }
-
-        @Override
-        public List<Consent> findByConsumerIdAndStatusIn(
-                UUID consumerId, Collection<ConsentStatus> statuses) {
+        public List<Consent> findNamingParticipantForUpdate(
+                UUID participantId, Collection<ConsentStatus> statuses) {
             throw unsupported();
         }
 

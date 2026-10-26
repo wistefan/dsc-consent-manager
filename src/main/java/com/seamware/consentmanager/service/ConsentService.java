@@ -63,7 +63,7 @@ public class ConsentService {
     private final UserParticipantRepository links;
     private final ConsentWriter writer;
     private final ConsentStateMachine lifecycle;
-    private final ConsentParties parties;
+    private final ConsentReporter reporter;
     private final UserNotificationService notifications;
 
     public ConsentService(
@@ -72,14 +72,14 @@ public class ConsentService {
             UserParticipantRepository links,
             ConsentWriter writer,
             ConsentStateMachine lifecycle,
-            ConsentParties parties,
+            ConsentReporter reporter,
             UserNotificationService notifications) {
         this.noticeGuard = noticeGuard;
         this.users = users;
         this.links = links;
         this.writer = writer;
         this.lifecycle = lifecycle;
-        this.parties = parties;
+        this.reporter = reporter;
         this.notifications = notifications;
     }
 
@@ -108,7 +108,7 @@ public class ConsentService {
 
         ConsentSnapshot snapshot =
                 ConsentSnapshot.of(notice, decision.purposes(), decision.dataCategories());
-        return parties.details(record(subject, notice, decision, snapshot));
+        return reporter.report(record(subject, notice, decision, snapshot));
     }
 
     /**
@@ -135,15 +135,15 @@ public class ConsentService {
         User subject = affiliated(caller, command.userIdentifier());
 
         ConsentSnapshot snapshot = ConsentSnapshot.of(notice, null, null);
-        RecordedConsent recorded =
-                writer.request(subject, notice, snapshot, caller.getIdentifier());
+        ConsentWrite written = writer.request(subject, notice, snapshot, caller.getIdentifier());
+        RecordedConsent recorded = written.primary();
         try {
             notifications.consentRequested(subject, recorded.consent(), caller);
         } catch (RuntimeException e) {
             LOG.error(NOTIFICATION_FAILED, recorded.consent().getId(), FailureSummary.of(e));
             LOG.debug(NOTIFICATION_FAILED, recorded.consent().getId(), e.getMessage(), e);
         }
-        return parties.details(recorded);
+        return reporter.report(written);
     }
 
     /**
@@ -181,7 +181,7 @@ public class ConsentService {
     }
 
     /** The decision as stored, with a race on the one-grant-per-notice index answered as 409. */
-    private RecordedConsent record(
+    private ConsentWrite record(
             User subject,
             PrivacyNotice notice,
             ConsentDecision decision,
