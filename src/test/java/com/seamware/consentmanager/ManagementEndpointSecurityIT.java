@@ -3,6 +3,7 @@ package com.seamware.consentmanager;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micronaut.context.ApplicationContext;
+import io.micronaut.context.env.yaml.YamlPropertySourceLoader;
 import io.micronaut.core.io.socket.SocketUtils;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
@@ -10,6 +11,9 @@ import io.micronaut.http.HttpStatus;
 import io.micronaut.http.client.HttpClient;
 import io.micronaut.http.client.exceptions.HttpClientResponseException;
 import io.micronaut.runtime.server.EmbeddedServer;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.util.LinkedHashMap;
@@ -31,8 +35,8 @@ import org.junit.jupiter.params.provider.MethodSource;
  * consent-manager.api-prefix}, everything else at the origin root, and management endpoints only on
  * their own port. {@code intercept-url-map} patterns therefore match the full request path, which
  * {@link #swaggerUiIsReachableOnlyBecauseItsInterceptEntryAllowsIt()} asserts rather than assumes.
- * Metrics access follows {@code consent-manager.management.metrics-authentication}, so two
- * deployments run side by side: one with the flag on, one with it off.
+ * Metrics access follows Micronaut's {@code endpoints.<id>.sensitive}, so two deployments run side
+ * by side: one with {@code application.yml}'s sensitive default, one with it switched off.
  *
  * <p>Every other integration test runs with security disabled and an empty API prefix, so none of
  * this is covered anywhere else.
@@ -66,15 +70,27 @@ class ManagementEndpointSecurityIT {
     /** Well-known JWKS consent receipts verify against, declared {@code security: []}. */
     private static final String RECEIPT_JWKS_PATH = "/.well-known/jwks.json";
 
-    /** Micrometer metrics endpoint, governed by {@code MetricsAccessRule}. */
+    /** Micrometer metrics endpoint, governed by {@code endpoints.metrics.sensitive}. */
     private static final String METRICS_PATH = "/metrics";
 
-    /** Prometheus scrape endpoint, governed by {@code MetricsAccessRule}. */
+    /** Prometheus scrape endpoint, governed by {@code endpoints.prometheus.sensitive}. */
     private static final String PROMETHEUS_PATH = "/prometheus";
 
-    /** Property switching authentication of the two metrics endpoints. */
-    private static final String METRICS_AUTHENTICATION_PROPERTY =
-            "consent-manager.management.metrics-authentication";
+    /** Micronaut's switch for whether {@link #METRICS_PATH} needs authentication. */
+    private static final String METRICS_SENSITIVE_PROPERTY = "endpoints.metrics.sensitive";
+
+    /** Micronaut's switch for whether {@link #PROMETHEUS_PATH} needs authentication. */
+    private static final String PROMETHEUS_SENSITIVE_PROPERTY = "endpoints.prometheus.sensitive";
+
+    /** Health detail visibility, which {@code application-test.yml} relaxes. */
+    private static final String HEALTH_DETAILS_VISIBLE_PROPERTY =
+            "endpoints.health.details-visible";
+
+    /** Production configuration, read directly so the test environment cannot mask it. */
+    private static final String BASE_CONFIGURATION = "application.yml";
+
+    /** Health detail visibility production must ship (AC 16). */
+    private static final String SHIPPED_DETAILS_VISIBLE = "AUTHENTICATED";
 
     /** Member of a health body that carries per-indicator detail. */
     private static final String HEALTH_DETAILS_MEMBER = "\"details\"";
@@ -154,19 +170,15 @@ class ManagementEndpointSecurityIT {
 
     @BeforeAll
     static void startDeployments() throws MalformedURLException {
-        // Waiving Micronaut's own endpoint-level check leaves MetricsAccessRule as the only thing
-        // that can refuse an anonymous metrics read here.
-        metricsAuthenticated =
+        // No override: the endpoints keep application.yml's sensitive default.
+        metricsAuthenticated = Deployment.start(Map.of());
+        metricsAnonymous =
                 Deployment.start(
                         Map.of(
-                                METRICS_AUTHENTICATION_PROPERTY,
-                                true,
-                                "endpoints.metrics.sensitive",
+                                METRICS_SENSITIVE_PROPERTY,
                                 false,
-                                "endpoints.prometheus.sensitive",
+                                PROMETHEUS_SENSITIVE_PROPERTY,
                                 false));
-        // Keeping the endpoints sensitive shows MetricsAccessRule answers ahead of that check.
-        metricsAnonymous = Deployment.start(Map.of(METRICS_AUTHENTICATION_PROPERTY, false));
     }
 
     /** Starts a security-enabled context: API under {@link #API_PREFIX}, management on its port. */
@@ -177,8 +189,8 @@ class ManagementEndpointSecurityIT {
         properties.put("micronaut.server.port", -1);
         properties.put("endpoints.all.enabled", true);
         properties.put("endpoints.all.port", port);
-        // application.yml's value, which application-test.yml relaxes.
-        properties.put("endpoints.health.details-visible", "AUTHENTICATED");
+        properties.put(
+                HEALTH_DETAILS_VISIBLE_PROPERTY, shippedProperty(HEALTH_DETAILS_VISIBLE_PROPERTY));
         properties.put("datasources.default.enabled", false);
         properties.put("flyway.enabled", false);
         properties.put(PROVIDER_PREFIX + "issuer", UNREACHABLE_PROVIDER_BASE_URL);
@@ -194,6 +206,18 @@ class ManagementEndpointSecurityIT {
                 ApplicationContext.builder().environments("test").properties(properties).build();
         started.start();
         return started;
+    }
+
+    /** Reads a property from {@link #BASE_CONFIGURATION} alone, without any environment overlay. */
+    private static Object shippedProperty(String name) {
+        try (InputStream yaml =
+                ManagementEndpointSecurityIT.class
+                        .getClassLoader()
+                        .getResourceAsStream(BASE_CONFIGURATION)) {
+            return new YamlPropertySourceLoader().read(BASE_CONFIGURATION, yaml).get(name);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     @AfterAll
@@ -282,30 +306,47 @@ class ManagementEndpointSecurityIT {
     private static Stream<Arguments> metricsMatrix() {
         return Stream.of(true, false)
                 .flatMap(
-                        authenticated ->
+                        sensitive ->
                                 Stream.of(METRICS_PATH, PROMETHEUS_PATH)
-                                        .flatMap(path -> metricsRows(authenticated, path)));
+                                        .flatMap(path -> metricsRows(sensitive, path)));
     }
 
-    private static Stream<Arguments> metricsRows(boolean authenticated, String path) {
-        HttpStatus onManagementPort = authenticated ? HttpStatus.UNAUTHORIZED : HttpStatus.OK;
+    private static Stream<Arguments> metricsRows(boolean sensitive, String path) {
+        HttpStatus onManagementPort = sensitive ? HttpStatus.UNAUTHORIZED : HttpStatus.OK;
         return Stream.of(
-                Arguments.of(authenticated, Port.MANAGEMENT, path, onManagementPort),
-                Arguments.of(authenticated, Port.API, path, HttpStatus.UNAUTHORIZED));
+                Arguments.of(sensitive, Port.MANAGEMENT, path, onManagementPort),
+                Arguments.of(sensitive, Port.API, path, HttpStatus.UNAUTHORIZED));
     }
 
     /**
-     * The flag decides anonymous access on the management port. On the API port the endpoints are
-     * unrouted, so the request is refused like any unrouted one whatever the flag says.
+     * Sensitivity decides anonymous access on the management port. On the API port the endpoints
+     * are unrouted, so the request is refused like any unrouted one whatever it says. A token's
+     * read of a sensitive endpoint is covered by {@code MetricsSensitiveEndpointRuleIT}.
      */
-    @ParameterizedTest(name = "metrics-authentication={0}: GET {2} on the {1} port answers {3}")
+    @ParameterizedTest(name = "sensitive={0}: anonymous GET {2} on the {1} port answers {3}")
     @MethodSource("metricsMatrix")
-    @DisplayName("metrics authentication follows its flag on the management port only")
-    void metricsAccessFollowsTheFlag(
-            boolean authenticated, Port port, String path, HttpStatus expected) {
-        Deployment deployment = authenticated ? metricsAuthenticated : metricsAnonymous;
+    @DisplayName("anonymous metrics access follows endpoint sensitivity on the management port")
+    void metricsAccessFollowsSensitivity(
+            boolean sensitive, Port port, String path, HttpStatus expected) {
+        Deployment deployment = sensitive ? metricsAuthenticated : metricsAnonymous;
 
         assertThat(statusOf(deployment.client(port), path).getCode()).isEqualTo(expected.getCode());
+    }
+
+    @Test
+    @DisplayName("production ships metrics sensitive and health details hidden from anonymous")
+    void productionDefaultsAreTheSecureOnes() {
+        assertThat(shippedProperty(HEALTH_DETAILS_VISIBLE_PROPERTY))
+                .isEqualTo(SHIPPED_DETAILS_VISIBLE);
+        assertThat(Stream.of(METRICS_SENSITIVE_PROPERTY, PROMETHEUS_SENSITIVE_PROPERTY))
+                .allSatisfy(
+                        property ->
+                                assertThat(
+                                                metricsAuthenticated
+                                                        .context()
+                                                        .getProperty(property, Boolean.class))
+                                        .as(property)
+                                        .hasValue(true));
     }
 
     @Test

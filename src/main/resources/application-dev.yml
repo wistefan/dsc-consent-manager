@@ -17,9 +17,9 @@ datasources:
     username: ${DB_USER:consent_manager}
     password: ${DB_PASSWORD:consent_manager}
 
-# Management endpoints. /metrics and /prometheus follow METRICS_AUTHENTICATION_ENABLED
-# as in every environment, so they require a bearer token from the local Keycloak
-# unless it is set false. /health stays anonymous and shows details here.
+# Management endpoints. /metrics and /prometheus keep application.yml's
+# `endpoints.<id>.sensitive`, so they need a token from the local Keycloak unless
+# METRICS_AUTHENTICATION_ENABLED=false. /health stays anonymous and shows details here.
 endpoints:
   all:
     port: ${MANAGEMENT_PORT:9090}

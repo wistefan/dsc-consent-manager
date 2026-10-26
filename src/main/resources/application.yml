@@ -118,8 +118,8 @@ micronaut:
     # With no server context path these patterns are matched against the full request
     # path. API routes have no entry: they are governed by `@Secured` from the spec's
     # `x-roles`, so no pattern needs the configurable `consent-manager.api-prefix`.
-    # `/metrics/**` and `/prometheus/**` have none either: `MetricsAccessRule`, ordered
-    # ahead of this map, applies `METRICS_AUTHENTICATION_ENABLED` to them.
+    # `/metrics/**` and `/prometheus/**` have none either: Micronaut's own
+    # `SensitiveEndpointRule` (`endpoints.<id>.sensitive` below) governs them.
     #
     # Both `/health` and `/health/**` are listed: the bare path is what a liveness
     # probe actually requests, and relying on `/**` to also match the empty remainder
@@ -315,7 +315,10 @@ endpoints:
     # dependency must wait for an instance that can actually serve; its restart
     # policy deliberately does not act on that signal. ManagementEndpointSecurityIT
     # pins where these routes resolve.
-  # Both follow METRICS_AUTHENTICATION_ENABLED, as `MetricsAccessRule` does.
+  # Whether /metrics and /prometheus require a bearer token. Set
+  # METRICS_AUTHENTICATION_ENABLED false only where the management port is protected by
+  # network policy, a service mesh or a scraping sidecar instead. Any valid token opens
+  # them (`MetricsSensitiveEndpointRule`); every other sensitive endpoint stays refused.
   metrics:
     enabled: true
     sensitive: ${METRICS_AUTHENTICATION_ENABLED:true}
@@ -345,12 +348,6 @@ consent-manager:
   # Path prefix of every generated API controller. Management endpoints, the Swagger
   # UI and `@OriginRoot` routes stay at the origin root.
   api-prefix: ${API_PREFIX:/v1}
-
-  management:
-    # Whether /metrics and /prometheus on the management port require a bearer token.
-    # Set false only where the port is protected by network policy, a service mesh or
-    # a scraping sidecar instead. Health stays anonymous either way.
-    metrics-authentication: ${METRICS_AUTHENTICATION_ENABLED:true}
 
   contract-service:
     # Base URL of the Contract Service, the owner of the contracts a privacy notice is
