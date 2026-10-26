@@ -4,7 +4,9 @@ micronaut:
 
   server:
     port: ${PORT:8080}
-    context-path: ${API_PREFIX:/v1}
+    # No `context-path`: only the generated API controllers sit under
+    # `consent-manager.api-prefix`. Management endpoints, the Swagger UI and the
+    # `@OriginRoot` JWKS are served at the origin root.
 
   router:
     # Static resources for Swagger UI and the OpenAPI specification.
@@ -111,17 +113,13 @@ micronaut:
         enabled: false
         www-authenticate: false
 
-    # Allow unauthenticated access to the health endpoints.
+    # Allow unauthenticated access to the health endpoints and the Swagger UI.
     #
-    # These patterns are matched against the request path with the server context
-    # path already stripped, so `/swagger-ui/**` still covers `${API_PREFIX}/swagger-ui/**`.
-    # ManagementEndpointSecurityIT pins that, including a control case that tightens
-    # the Swagger UI entry and requires the request to be challenged.
-    #
-    # Note that `endpoints.all.port` moves management endpoints to their own port but
-    # does NOT take them out of the context path: the health endpoint is reached at
-    # `http://<host>:${MANAGEMENT_PORT}${API_PREFIX}/health`. That is the URL the
-    # compose healthcheck and any orchestrator probe must use.
+    # With no server context path these patterns are matched against the full request
+    # path. API routes have no entry: they are governed by `@Secured` from the spec's
+    # `x-roles`, so no pattern needs the configurable `consent-manager.api-prefix`.
+    # `/metrics/**` and `/prometheus/**` have none either: `MetricsAccessRule`, ordered
+    # ahead of this map, applies `METRICS_AUTHENTICATION_ENABLED` to them.
     #
     # Both `/health` and `/health/**` are listed: the bare path is what a liveness
     # probe actually requests, and relying on `/**` to also match the empty remainder
@@ -143,14 +141,6 @@ micronaut:
         http-method: GET
         access:
           - isAnonymous()
-      - pattern: /metrics/**
-        http-method: GET
-        access:
-          - isAuthenticated()
-      - pattern: /prometheus/**
-        http-method: GET
-        access:
-          - isAuthenticated()
     # Micronaut's own JWT support stays ENABLED: the flag gates the `TokenValidator`
     # SPI that `ConsentManagerTokenValidator` plugs into, along with the security filter
     # and the bearer-token reader.
@@ -285,15 +275,16 @@ flyway:
 
 endpoints:
   all:
-    # Serve management endpoints on a dedicated port so they can be exposed to an
-    # orchestrator without exposing the API port. The dedicated port does NOT take
-    # them out of `micronaut.server.context-path`: with a context path of /v1 the
-    # health endpoints are under http://<host>:${MANAGEMENT_PORT}/v1/health. The
-    # healthcheck in compose.yaml probes the readiness branch of that tree,
-    # .../v1/health/readiness, not the aggregate .../v1/health - the aggregate also
-    # folds in liveness, so an identity provider outage would restart the container
-    # instead of draining it. ManagementEndpointSecurityIT pins both paths.
+    # Serve management endpoints on a dedicated port, never routed on the API port.
+    # Expose it only inside the cluster. Endpoints sit at the origin root:
+    # http://<host>:${MANAGEMENT_PORT}/health/readiness, /metrics, /prometheus.
+    # `context-path: /` bypasses the URI naming strategy for endpoints, a second guard
+    # that keeps them out of `consent-manager.api-prefix`. compose.yaml probes
+    # /health/readiness, not the aggregate /health - the aggregate also folds in
+    # liveness, so an identity provider outage would restart the container instead of
+    # draining it. ManagementEndpointSecurityIT pins these paths.
     port: ${MANAGEMENT_PORT:9090}
+    context-path: /
   health:
     enabled: true
     sensitive: false
@@ -324,12 +315,13 @@ endpoints:
     # dependency must wait for an instance that can actually serve; its restart
     # policy deliberately does not act on that signal. ManagementEndpointSecurityIT
     # pins where these routes resolve.
+  # Both follow METRICS_AUTHENTICATION_ENABLED, as `MetricsAccessRule` does.
   metrics:
     enabled: true
-    sensitive: true
+    sensitive: ${METRICS_AUTHENTICATION_ENABLED:true}
   prometheus:
     enabled: true
-    sensitive: true
+    sensitive: ${METRICS_AUTHENTICATION_ENABLED:true}
 
 # OpenTelemetry tracing configuration.
 # The Micronaut OTel module autoconfigures the SDK from standard OTel environment
@@ -338,6 +330,7 @@ endpoints:
 tracing:
   opentelemetry:
     enabled: ${OTEL_TRACING_ENABLED:true}
+  # Matched against the full path; every excluded route sits at the origin root.
   exclusions:
     - /health/**
     - /metrics/**
@@ -348,6 +341,16 @@ tracing:
 # Custom application configuration bound to environment variables
 consent-manager:
   url: ${CONSENT_MANAGER_URL:`http://localhost:8080`}
+
+  # Path prefix of every generated API controller. Management endpoints, the Swagger
+  # UI and `@OriginRoot` routes stay at the origin root.
+  api-prefix: ${API_PREFIX:/v1}
+
+  management:
+    # Whether /metrics and /prometheus on the management port require a bearer token.
+    # Set false only where the port is protected by network policy, a service mesh or
+    # a scraping sidecar instead. Health stays anonymous either way.
+    metrics-authentication: ${METRICS_AUTHENTICATION_ENABLED:true}
 
   contract-service:
     # Base URL of the Contract Service, the owner of the contracts a privacy notice is

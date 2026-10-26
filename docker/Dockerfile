@@ -60,11 +60,11 @@ USER appuser
 # Expose the application port and management port
 EXPOSE 8080 9090
 
-# Health check against the management endpoint.
-# Uses MANAGEMENT_PORT (default 9090) and API_PREFIX (default /v1) so the
-# check stays correct when those variables are overridden at runtime.
+# Liveness check against the management port, at its origin root. Liveness, not
+# the aggregate /health, so an outage elsewhere never marks this container unhealthy.
+# Uses MANAGEMENT_PORT (default 9090) so it follows a runtime override.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
-    CMD wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}${API_PREFIX:-/v1}/health || exit 1
+    CMD wget -qO- http://localhost:${MANAGEMENT_PORT:-9090}/health/liveness || exit 1
 
 # JVM flags for container environments:
 #   -XX:MaxRAMPercentage=75.0  — use up to 75% of container memory for the heap
