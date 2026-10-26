@@ -384,7 +384,7 @@ class TokenSignatureEnforcementTest {
     void refusesEveryToken(String description, Supplier<String> token) {
         assertThat(statusFor(token.get()))
                 .as(
-                        "%s must not authenticate: no signing key is registered until step 5, so"
+                        "%s must not authenticate: no signing key is registered in this context, so"
                                 + " the only safe answer is 401",
                         description)
                 .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
