@@ -3,7 +3,6 @@ package com.seamware.consentmanager.api;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -13,6 +12,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -111,13 +111,15 @@ class ParticipantCredentialAbsenceTest {
      * contribute a case with nothing left to assert.
      */
     static Stream<Arguments> participantModels() {
-        Deque<Type> pending = new ArrayDeque<>();
-        for (Class<?> controller : PARTICIPANT_CONTROLLERS) {
-            for (Method method : controller.getDeclaredMethods()) {
-                pending.add(method.getGenericReturnType());
-                pending.addAll(List.of(method.getGenericParameterTypes()));
-            }
-        }
+        Deque<Type> pending =
+                PARTICIPANT_CONTROLLERS.stream()
+                        .flatMap(controller -> Stream.of(controller.getDeclaredMethods()))
+                        .flatMap(
+                                method ->
+                                        Stream.concat(
+                                                Stream.of(method.getGenericReturnType()),
+                                                Stream.of(method.getGenericParameterTypes())))
+                        .collect(Collectors.toCollection(ArrayDeque::new));
         Set<Class<?>> models = new LinkedHashSet<>();
         while (!pending.isEmpty()) {
             Type type = pending.poll();

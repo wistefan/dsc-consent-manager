@@ -4,8 +4,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.json.tree.JsonNode;
 import io.micronaut.serde.annotation.Serdeable;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 /**
  * A contract as the Contract Service serves it, covering both the ecosystem and the bilateral
@@ -152,13 +153,10 @@ public record ContractResponse(
             if (!piiCategory.isArray()) {
                 return List.of(piiCategory.coerceStringValue());
             }
-            List<String> categories = new ArrayList<>();
-            for (JsonNode element : piiCategory.values()) {
-                if (!element.isNull()) {
-                    categories.add(element.coerceStringValue());
-                }
-            }
-            return List.copyOf(categories);
+            return StreamSupport.stream(piiCategory.values().spliterator(), false)
+                    .filter(element -> !element.isNull())
+                    .map(JsonNode::coerceStringValue)
+                    .collect(Collectors.toUnmodifiableList());
         }
     }
 

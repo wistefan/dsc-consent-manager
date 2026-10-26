@@ -23,6 +23,7 @@ import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -252,18 +253,21 @@ public final class OidcDiscoveryStub implements AutoCloseable {
      * @return the generated key set, private halves included
      */
     private static JWKSet generateKeySet(String... keyIds) {
-        List<JWK> keys = new ArrayList<>(keyIds.length);
-        for (String keyId : keyIds) {
-            try {
-                keys.add(
-                        new RSAKeyGenerator(KEY_SIZE_BITS)
-                                .keyID(keyId)
-                                .keyUse(KeyUse.SIGNATURE)
-                                .generate());
-            } catch (JOSEException failure) {
-                throw new IllegalStateException("Could not generate a test signing key", failure);
-            }
-        }
+        List<JWK> keys =
+                Arrays.stream(keyIds)
+                        .<JWK>map(
+                                keyId -> {
+                                    try {
+                                        return new RSAKeyGenerator(KEY_SIZE_BITS)
+                                                .keyID(keyId)
+                                                .keyUse(KeyUse.SIGNATURE)
+                                                .generate();
+                                    } catch (JOSEException failure) {
+                                        throw new IllegalStateException(
+                                                "Could not generate a test signing key", failure);
+                                    }
+                                })
+                        .toList();
         return new JWKSet(keys);
     }
 

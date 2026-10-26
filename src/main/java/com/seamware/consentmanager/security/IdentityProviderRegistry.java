@@ -16,12 +16,11 @@ import jakarta.inject.Named;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -337,14 +336,7 @@ public class IdentityProviderRegistry implements AutoCloseable {
      * @return an unmodifiable snapshot of the trust list
      */
     public List<ResolvedIdentityProvider> snapshot() {
-        List<ResolvedIdentityProvider> snapshot = new ArrayList<>(issuersInOrder.size());
-        for (String issuer : issuersInOrder) {
-            ResolvedIdentityProvider entry = entries.get(issuer);
-            if (entry != null) {
-                snapshot.add(entry);
-            }
-        }
-        return Collections.unmodifiableList(snapshot);
+        return issuersInOrder.stream().map(entries::get).filter(Objects::nonNull).toList();
     }
 
     /**

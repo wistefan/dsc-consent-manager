@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -232,11 +233,7 @@ class ConsentQueryServiceIT extends PostgresTestResource {
     }
 
     private List<UUID> fourNotices() {
-        List<UUID> ids = new ArrayList<>();
-        for (int i = 0; i < 4; i++) {
-            ids.add(notice().getId());
-        }
-        return ids;
+        return IntStream.range(0, 4).mapToObj(i -> notice().getId()).toList();
     }
 
     private PrivacyNotice notice() {

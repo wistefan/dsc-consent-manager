@@ -7,8 +7,10 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Reads claims by the names a provider was configured with; makes no trust decision.
@@ -139,14 +141,10 @@ public class ClaimMapper {
      */
     public Set<Role> mapRoles(Map<String, Object> claims, IdentityProviderConfiguration provider) {
         Map<String, Role> rolesByRawValue = invert(provider.getResolvedRoleMapping());
-        Set<Role> granted = EnumSet.noneOf(Role.class);
-        for (String rawRole : findStrings(claims, provider.getClaims().getRoles())) {
-            Role role = rolesByRawValue.get(rawRole);
-            if (role != null) {
-                granted.add(role);
-            }
-        }
-        return granted;
+        return findStrings(claims, provider.getClaims().getRoles()).stream()
+                .map(rolesByRawValue::get)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(() -> EnumSet.noneOf(Role.class)));
     }
 
     /**

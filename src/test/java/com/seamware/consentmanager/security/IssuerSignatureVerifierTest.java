@@ -17,7 +17,6 @@ import io.micronaut.security.token.jwt.signature.jwks.JwkSetFetcher;
 import io.micronaut.security.token.jwt.signature.jwks.JwkValidator;
 import io.micronaut.security.token.jwt.signature.jwks.JwksSignatureConfiguration;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -459,15 +459,19 @@ class IssuerSignatureVerifierTest {
             ExecutorService executor = Executors.newFixedThreadPool(CONCURRENT_VERIFICATIONS);
             CountDownLatch release = new CountDownLatch(1);
             try {
-                List<Future<Boolean>> burst = new ArrayList<>();
-                for (int i = 0; i < CONCURRENT_VERIFICATIONS; i++) {
-                    burst.add(
-                            executor.submit(
-                                    () -> {
-                                        release.await();
-                                        return verify(verifier, provider.issuer(), token);
-                                    }));
-                }
+                List<Future<Boolean>> burst =
+                        IntStream.range(0, CONCURRENT_VERIFICATIONS)
+                                .mapToObj(
+                                        i ->
+                                                executor.submit(
+                                                        () -> {
+                                                            release.await();
+                                                            return verify(
+                                                                    verifier,
+                                                                    provider.issuer(),
+                                                                    token);
+                                                        }))
+                                .toList();
                 release.countDown();
                 for (Future<Boolean> result : burst) {
                     assertThat(result.get(BURST_TIMEOUT.toSeconds(), TimeUnit.SECONDS))

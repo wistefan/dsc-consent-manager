@@ -146,11 +146,10 @@ public class ContractDiscoveryService {
                                                 }
                                             })));
             long deadline = System.nanoTime() + maxDuration.toNanos();
-            List<DiscoveredContract> discovered = new ArrayList<>(pending.size());
-            for (Future<Optional<DiscoveredContract>> fetch : pending) {
-                awaitBy(fetch, deadline).ifPresent(discovered::add);
-            }
-            return List.copyOf(discovered);
+            return pending.stream()
+                    .map(fetch -> awaitBy(fetch, deadline))
+                    .flatMap(Optional::stream)
+                    .toList();
         } finally {
             pending.forEach(fetch -> fetch.cancel(true));
         }

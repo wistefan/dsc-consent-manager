@@ -47,6 +47,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
@@ -427,15 +428,17 @@ class UserServiceIT extends PostgresTestResource {
         Participant participant = participant();
         String identifier = unknownIdentifier();
         CountDownLatch start = new CountDownLatch(1);
-        List<Callable<RegistrationResult>> racers = new ArrayList<>();
-        for (int i = 0; i < CONCURRENT_FIRST_REQUESTS; i++) {
-            racers.add(
-                    () -> {
-                        start.await();
-                        return service.registerForParticipant(
-                                participant, registration(identifier, LOCAL_IDENTIFIER));
-                    });
-        }
+        List<Callable<RegistrationResult>> racers =
+                IntStream.range(0, CONCURRENT_FIRST_REQUESTS)
+                        .<Callable<RegistrationResult>>mapToObj(
+                                i ->
+                                        () -> {
+                                            start.await();
+                                            return service.registerForParticipant(
+                                                    participant,
+                                                    registration(identifier, LOCAL_IDENTIFIER));
+                                        })
+                        .toList();
 
         List<RegistrationOutcome> outcomes = new ArrayList<>();
         ExecutorService pool = Executors.newFixedThreadPool(CONCURRENT_FIRST_REQUESTS);

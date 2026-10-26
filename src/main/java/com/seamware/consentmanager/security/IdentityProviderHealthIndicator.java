@@ -11,6 +11,7 @@ import jakarta.inject.Singleton;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.reactivestreams.Publisher;
 
 /**
@@ -103,10 +104,14 @@ public class IdentityProviderHealthIndicator implements HealthIndicator {
     @Override
     public Publisher<HealthResult> getResult() {
         List<ResolvedIdentityProvider> providers = registry.snapshot();
-        Map<String, Object> details = new LinkedHashMap<>();
-        for (ResolvedIdentityProvider provider : providers) {
-            details.put(provider.name(), describe(provider));
-        }
+        Map<String, Object> details =
+                providers.stream()
+                        .collect(
+                                Collectors.toMap(
+                                        ResolvedIdentityProvider::name,
+                                        IdentityProviderHealthIndicator::describe,
+                                        (earlier, later) -> later,
+                                        LinkedHashMap::new));
         HealthStatus status =
                 providers.stream().allMatch(ResolvedIdentityProvider::isUsable)
                         ? HealthStatus.UP
