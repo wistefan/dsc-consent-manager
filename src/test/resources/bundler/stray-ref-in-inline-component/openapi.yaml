@@ -1,0 +1,10 @@
+openapi: 3.0.3
+info: {title: Stray ref in an inline component, version: '1'}
+paths: {}
+components:
+  schemas:
+    PetPage:
+      type: object
+      properties:
+        first:
+          $ref: ./schemas/Pet.yaml

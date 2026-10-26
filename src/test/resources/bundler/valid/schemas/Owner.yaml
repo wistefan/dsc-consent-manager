@@ -1,0 +1,6 @@
+Owner:
+  type: object
+  properties:
+    active:
+      type: boolean
+      default: true

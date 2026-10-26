@@ -62,7 +62,7 @@ class ManagementEndpointSecurityIT {
     private static final String SWAGGER_UI_PATH = "/swagger-ui/index.html";
 
     /** Static-resource mapping serving the published OpenAPI specification. */
-    private static final String OPENAPI_SPEC_PATH = "/static/openapi.yaml";
+    private static final String OPENAPI_SPEC_PATH = "/openapi.yaml";
 
     /** The one real API operation, declared {@code security: []} in the specification. */
     private static final String API_STATUS_PATH = "/api-status";

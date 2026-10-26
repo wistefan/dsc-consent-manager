@@ -8,7 +8,7 @@ micronaut:
     # fetched and bearer tokens are actually verified. Running without that Keycloak
     # (plain `./mvnw mn:run`) still starts the service — discovery simply fails, no
     # signing key is registered and every bearer token is rejected, while the
-    # anonymous routes (/health, /swagger-ui, /static) stay reachable.
+    # anonymous routes (/health, /swagger-ui, /openapi.yaml) stay reachable.
     enabled: true
 
 datasources:

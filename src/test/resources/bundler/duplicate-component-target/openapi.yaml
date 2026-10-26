@@ -1,0 +1,9 @@
+openapi: 3.0.3
+info: {title: Two components naming one file, version: '1'}
+paths: {}
+components:
+  schemas:
+    Pet:
+      $ref: ./schemas/Pet.yaml
+    Animal:
+      $ref: ./schemas/Pet.yaml

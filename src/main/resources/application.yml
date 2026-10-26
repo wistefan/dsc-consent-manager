@@ -10,14 +10,19 @@ micronaut:
 
   router:
     # Static resources for Swagger UI and the OpenAPI specification.
-    # The openapi.yaml is copied from api/ to target/classes/static/ at build time.
+    # The build bundles api/ into one document and places it at
+    # target/classes/static/openapi.yaml, served byte-for-byte at /openapi.yaml.
+    # The mapping is `/*.yaml` rather than the literal path because an exact
+    # mapping leaves no remainder and resolves to `index.html`; `*` spans one
+    # segment, so only top-level files of static/ are served and the bundle is the
+    # only YAML file there.
     static-resources:
       swagger-ui:
         paths: classpath:static/swagger-ui
         mapping: /swagger-ui/**
       openapi-spec:
         paths: classpath:static
-        mapping: /static/**
+        mapping: /*.yaml
 
   serde:
     serialization:
@@ -113,7 +118,8 @@ micronaut:
         enabled: false
         www-authenticate: false
 
-    # Allow unauthenticated access to the health endpoints and the Swagger UI.
+    # Allow unauthenticated access to the health endpoints, the Swagger UI and the
+    # published specification.
     #
     # With no server context path these patterns are matched against the full request
     # path. API routes have no entry: they are governed by `@Secured` from the spec's
@@ -137,7 +143,7 @@ micronaut:
         http-method: GET
         access:
           - isAnonymous()
-      - pattern: /static/**
+      - pattern: /openapi.yaml
         http-method: GET
         access:
           - isAnonymous()
@@ -339,7 +345,7 @@ tracing:
     - /metrics/**
     - /prometheus/**
     - /swagger-ui/**
-    - /static/**
+    - /openapi.yaml
 
 # Custom application configuration bound to environment variables
 consent-manager:

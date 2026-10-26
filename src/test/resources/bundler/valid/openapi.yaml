@@ -1,0 +1,39 @@
+openapi: 3.0.3
+info:
+  title: Bundler fixture
+  version: 2026-10-26
+  description: |
+    Two lines,
+    kept literal.
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      x-roles: [on]
+      responses:
+        '200':
+          description: The pets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PetList'
+  /pets/{id}:
+    get:
+      operationId: getPet
+      responses:
+        '200':
+          description: One pet.
+          content:
+            application/json:
+              schema:
+                $ref: ./schemas/Pet.yaml
+components:
+  schemas:
+    Pet:
+      $ref: ./schemas/Pet.yaml
+    Owner:
+      $ref: ./schemas/Owner.yaml#/Owner
+    PetList:
+      type: array
+      items:
+        $ref: '#/components/schemas/Pet'

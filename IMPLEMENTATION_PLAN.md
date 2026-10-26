@@ -356,6 +356,12 @@ server context path separately, through `ServerContextPathProvider`.
   document with every external `$ref` resolved. Verify the output keeps `x-roles`/`x-principal`,
   the security schemes and descriptions. If the generator rewrites the spec unacceptably, use a
   pinned `redocly/cli bundle` container instead and record why.
+  *Done differently:* the `openapi-yaml` generator and swagger-parser both hoist inline schemas
+  into invented components, reorder keys and leave nested relative refs dangling, and a Docker
+  container in `generate-resources` would make every compile need Docker. The build instead runs
+  `src/build/java/OpenApiBundler.java` (SnakeYAML, single-file source mode, via
+  `exec-maven-plugin`), which inlines each file the root's `components` names and rewrites refs to
+  internal pointers, keeping key order and component names as authored.
 - **Packaging.** Copy the bundle to `target/classes/static/openapi.yaml` and serve it at
   `GET /openapi.yaml` on the API port, outside the prefix, through a static-resources mapping.
   Point Swagger UI at it.

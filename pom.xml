@@ -44,6 +44,9 @@
         <!-- OpenAPI Generator and generated-code dependencies -->
         <openapi.generator.version>7.12.0</openapi.generator.version>
         <swagger-annotations.version>2.2.28</swagger-annotations.version>
+        <swagger-parser.version>2.1.38</swagger-parser.version>
+        <openapi.bundle.directory>${project.build.directory}/openapi-bundle</openapi.bundle.directory>
+        <openapi.bundle.file>${openapi.bundle.directory}/openapi.yaml</openapi.bundle.file>
         <jackson-databind-nullable.version>0.2.6</jackson-databind-nullable.version>
 
         <!-- Code coverage -->
@@ -419,6 +422,14 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Parses the served bundle as OpenAPI in OpenApiServingIT -->
+        <dependency>
+            <groupId>io.swagger.parser.v3</groupId>
+            <artifactId>swagger-parser-v3</artifactId>
+            <version>${swagger-parser.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- In-process SMTP server for the notification ITs -->
         <dependency>
             <groupId>com.icegreen</groupId>
@@ -558,32 +569,62 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <!-- OpenApiServingIT compares the served spec against this file. -->
+                    <systemPropertyVariables>
+                        <openapi.bundle.file>${openapi.bundle.file}</openapi.bundle.file>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
 
-            <!-- Copy hand-authored OpenAPI spec into static resources for Swagger UI -->
+            <!--
+                Bundle api/ into one document with no external $ref. A SnakeYAML pass, not the
+                generator's openapi-yaml target or swagger-parser: both hoist inline schemas
+                into invented components, reorder keys and leave nested relative refs dangling.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>bundle-openapi-spec</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>${java.home}/bin/java</executable>
+                            <classpathScope>runtime</classpathScope>
+                            <arguments>
+                                <argument>-classpath</argument>
+                                <classpath />
+                                <argument>${project.basedir}/src/build/java/OpenApiBundler.java</argument>
+                                <argument>${project.basedir}/api/openapi.yaml</argument>
+                                <argument>${openapi.bundle.file}</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Publish the bundle as the one specification the service serves -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-resources-plugin</artifactId>
                 <executions>
                     <execution>
-                        <id>copy-openapi-spec</id>
-                        <phase>generate-resources</phase>
+                        <id>copy-openapi-bundle</id>
+                        <phase>process-resources</phase>
                         <goals>
                             <goal>copy-resources</goal>
                         </goals>
                         <configuration>
                             <outputDirectory>${project.build.outputDirectory}/static</outputDirectory>
                             <resources>
-                                <!--
-                                    Copy the whole api/ tree (root spec plus the
-                                    components/ subdirectory) so the relative $refs in
-                                    openapi.yaml still resolve when Swagger UI loads the
-                                    spec from /static/openapi.yaml.
-                                -->
                                 <resource>
-                                    <directory>${project.basedir}/api</directory>
+                                    <directory>${openapi.bundle.directory}</directory>
                                     <includes>
-                                        <include>**/*.yaml</include>
+                                        <include>openapi.yaml</include>
                                     </includes>
                                 </resource>
                             </resources>
