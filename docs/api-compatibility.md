@@ -11,11 +11,14 @@ would break an existing client must be a decision someone made, not an accident 
 oasdiff breaking --fail-on ERR api/baseline/openapi.yaml target/openapi-bundle/openapi.yaml
 ```
 
-Any error-level finding fails `./mvnw verify`, and the assertion message lists each finding's
-level, rule id, operation and path. Warnings and informational changes, such as an added optional
-property, do not fail the build. The same test proves the detection works. It applies one edit at a
-time to the baseline and checks each result: a removed operation, a removed response property and a
-newly required request property are reported, and an added optional request property is not.
+Any error-level (`ERR`) finding fails `./mvnw verify`, and the assertion message lists every
+finding's level, rule id, operation and path. Warnings (`WARN`) and informational changes are
+listed in that message but do not fail the build; the test gates on the `ERR` findings and on
+oasdiff's exit status, which `--fail-on ERR` sets. The same test proves the detection works. It
+applies one edit at a time to the baseline and checks each result: a removed operation, a removed
+response property and a newly required request property are reported as `ERR` and fail; a removed
+optional request property is reported as `WARN` and passes; and an added optional request property
+is not reported at all.
 
 ## Acknowledging a breaking change
 

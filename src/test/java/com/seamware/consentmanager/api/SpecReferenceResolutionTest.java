@@ -68,9 +68,6 @@ class SpecReferenceResolutionTest {
     /** Marks tool configuration such as the Spectral ruleset, which is not part of the spec. */
     private static final String TOOL_CONFIGURATION_PREFIX = ".";
 
-    /** The frozen copy oasdiff compares against, a whole document rather than a component. */
-    private static final Path BASELINE_DIRECTORY = SOURCE_ROOT.resolve("baseline");
-
     /** Reads one document of a layout, addressed by its path relative to that layout's root. */
     @FunctionalInterface
     interface Layout {
@@ -370,7 +367,7 @@ class SpecReferenceResolutionTest {
         try (Stream<Path> tree = Files.walk(SOURCE_ROOT)) {
             List<String> documents =
                     tree.filter(Files::isRegularFile)
-                            .filter(file -> !file.startsWith(BASELINE_DIRECTORY))
+                            .filter(file -> !file.startsWith(SpecBaseline.DIRECTORY))
                             .filter(file -> file.getFileName().toString().endsWith(YAML_SUFFIX))
                             .filter(
                                     file ->

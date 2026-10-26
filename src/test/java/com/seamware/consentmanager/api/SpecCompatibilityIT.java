@@ -13,11 +13,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
+import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.DisplayName;
@@ -46,7 +47,7 @@ class SpecCompatibilityIT {
 
     private static final String BASE_IN_CONTAINER = "/work/base.yaml";
     private static final String REVISION_IN_CONTAINER = "/work/revision.yaml";
-    private static final Path BASELINE = Path.of("api", "baseline", "openapi.yaml");
+    private static final Path BASELINE = SpecBaseline.DOCUMENT;
 
     /** System property Failsafe sets from the pom's {@code openapi.bundle.file}. */
     private static final String BUNDLE_FILE_PROPERTY = "openapi.bundle.file";
@@ -57,6 +58,7 @@ class SpecCompatibilityIT {
     private static final String STATUS_PROPERTY = "status";
     private static final String GRANT_SCHEMA = "GrantConsent";
     private static final String ADDED_PROPERTY = "note";
+    private static final String OPTIONAL_GRANT_PROPERTY = "purposes";
 
     /** oasdiff's exit status when it found nothing at or above {@code --fail-on}. */
     private static final long EXIT_COMPATIBLE = 0;
@@ -77,7 +79,7 @@ class SpecCompatibilityIT {
 
         Diff diff = diff(MountableFile.forHostPath(bundle));
 
-        assertThat(diff.findings()).as(diff.report()).isEmpty();
+        assertThat(diff.errors()).as(diff.report()).isEmpty();
         assertThat(diff.exitCode()).as(diff.report()).isEqualTo(EXIT_COMPATIBLE);
     }
 
@@ -87,12 +89,16 @@ class SpecCompatibilityIT {
     void changeIsClassified(Change change) {
         Diff diff = diff(Transferable.of(change.applyTo(baseline())));
 
-        if (change.breakingRule == null) {
+        if (change.rule == null) {
             assertThat(diff.findings()).as(diff.report()).isEmpty();
-            assertThat(diff.exitCode()).as(diff.report()).isEqualTo(EXIT_COMPATIBLE);
         } else {
-            assertThat(diff.ruleIds()).as(diff.report()).contains(change.breakingRule);
+            assertThat(diff.levelOf(change.rule)).as(diff.report()).contains(change.level);
+        }
+        if (change.level == Level.ERR) {
             assertThat(diff.exitCode()).as(diff.report()).isEqualTo(EXIT_BREAKING);
+        } else {
+            assertThat(diff.errors()).as(diff.report()).isEmpty();
+            assertThat(diff.exitCode()).as(diff.report()).isEqualTo(EXIT_COMPATIBLE);
         }
     }
 
@@ -133,13 +139,40 @@ class SpecCompatibilityIT {
         }
     }
 
-    /** One edit to the baseline and the oasdiff rule it must trip, or null for a compatible one. */
+    /** oasdiff's severities, by the integer its JSON {@code level} carries; only ERR fails. */
+    enum Level {
+        INFO(1),
+        WARN(2),
+        ERR(3);
+
+        private final int code;
+
+        Level(int code) {
+            this.code = code;
+        }
+
+        /** The level a finding's {@code level} value encodes. */
+        static Level of(Object code) {
+            int value = ((Number) Objects.requireNonNull(code, "level")).intValue();
+            return Arrays.stream(values())
+                    .filter(level -> level.code == value)
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("oasdiff level " + value));
+        }
+    }
+
+    /**
+     * One edit to the baseline, the oasdiff rule it must trip and that rule's level; a null rule
+     * means the edit must produce no finding at all.
+     */
     enum Change {
         REMOVED_OPERATION(
                 "api-path-removed-without-deprecation",
+                Level.ERR,
                 spec -> child(spec, "paths").remove(STATUS_PATH)),
         REMOVED_RESPONSE_PROPERTY(
                 "response-required-property-removed",
+                Level.ERR,
                 spec -> {
                     Map<String, Object> schema = schema(spec, STATUS_SCHEMA);
                     child(schema, "properties").remove(STATUS_PROPERTY);
@@ -147,19 +180,28 @@ class SpecCompatibilityIT {
                 }),
         NEWLY_REQUIRED_REQUEST_PROPERTY(
                 "new-required-request-property",
+                Level.ERR,
                 spec -> {
                     Map<String, Object> schema = addProperty(spec, GRANT_SCHEMA);
                     List<Object> required = new ArrayList<>(list(schema, "required"));
                     required.add(ADDED_PROPERTY);
                     schema.put("required", required);
                 }),
-        ADDED_OPTIONAL_REQUEST_PROPERTY(null, spec -> addProperty(spec, GRANT_SCHEMA));
+        REMOVED_OPTIONAL_REQUEST_PROPERTY(
+                "request-property-removed",
+                Level.WARN,
+                spec ->
+                        child(schema(spec, GRANT_SCHEMA), "properties")
+                                .remove(OPTIONAL_GRANT_PROPERTY)),
+        ADDED_OPTIONAL_REQUEST_PROPERTY(null, null, spec -> addProperty(spec, GRANT_SCHEMA));
 
-        private final String breakingRule;
+        private final String rule;
+        private final Level level;
         private final Consumer<Map<String, Object>> mutation;
 
-        Change(String breakingRule, Consumer<Map<String, Object>> mutation) {
-            this.breakingRule = breakingRule;
+        Change(String rule, Level level, Consumer<Map<String, Object>> mutation) {
+            this.rule = rule;
+            this.level = level;
             this.mutation = mutation;
         }
 
@@ -170,7 +212,9 @@ class SpecCompatibilityIT {
 
         @Override
         public String toString() {
-            return breakingRule == null ? name() + " (compatible)" : name() + " -> " + breakingRule;
+            return rule == null
+                    ? name() + " (no finding)"
+                    : "%s -> %s %s".formatted(name(), level, rule);
         }
 
         private static Map<String, Object> addProperty(Map<String, Object> spec, String name) {
@@ -216,10 +260,18 @@ class SpecCompatibilityIT {
             }
         }
 
-        Set<String> ruleIds() {
+        /** The findings that fail the build, the ones {@code --fail-on ERR} counts. */
+        List<Map<String, Object>> errors() {
             return findings.stream()
-                    .map(finding -> (String) finding.get("id"))
-                    .collect(Collectors.toSet());
+                    .filter(finding -> Level.of(finding.get("level")) == Level.ERR)
+                    .toList();
+        }
+
+        Optional<Level> levelOf(String rule) {
+            return findings.stream()
+                    .filter(finding -> rule.equals(finding.get("id")))
+                    .map(finding -> Level.of(finding.get("level")))
+                    .findFirst();
         }
 
         /** The findings one per line, for the assertion message. */
@@ -230,7 +282,7 @@ class SpecCompatibilityIT {
                                     finding ->
                                             "%s %s %s %s %s"
                                                     .formatted(
-                                                            finding.get("level"),
+                                                            Level.of(finding.get("level")),
                                                             finding.get("id"),
                                                             finding.get("operation"),
                                                             finding.get("path"),
