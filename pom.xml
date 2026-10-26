@@ -641,6 +641,25 @@
                 </executions>
             </plugin>
 
+            <!-- What the jar and image ship besides our classes; ProductionArtefactTest reads it -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>list-runtime-dependencies</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>list</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>runtime</includeScope>
+                            <outputFile>${project.build.directory}/runtime-dependencies.txt</outputFile>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <!-- JaCoCo: code coverage measurement and enforcement -->
             <plugin>
                 <groupId>org.jacoco</groupId>

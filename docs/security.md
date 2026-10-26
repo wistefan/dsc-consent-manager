@@ -383,6 +383,40 @@ notice title and the user's name. A bare domain is left intact, and that risk is
 name the user id and the consent id, never the address. `SmtpUserNotificationServiceIT` scans
 delivered mail for any URL the service did not configure.
 
+## Correlation IDs
+
+`observability/CorrelationIdFilter` runs ahead of every other filter, the security filter included,
+so a `401`/`403` carries the ID too. It adopts an inbound `X-Request-ID` only when it matches
+`[A-Za-z0-9._~-]{1,128}`. Any other value is replaced by a fresh UUIDv7, so a caller cannot inject a
+forged log line or an unbounded value. The ID goes to the SLF4J MDC as `correlationId`, which is
+propagated to every thread the request runs on. It is echoed in the `X-Request-ID` response header
+and set as `correlationId` on every problem detail. It identifies a request and nothing more:
+it is never a credential and never authorises anything.
+
+## Server error detail
+
+A `5xx` problem detail publishes a fixed sentence, never the exception message, because messages
+name internal hosts, dependencies and identifiers. `error/ServerErrorDetail` is the one place that
+decides this, for unhandled exceptions, `5xx` `ApiException`s (the `502` included) and
+framework-raised errors. `ERRORS_EXPOSE_EXCEPTION_DETAIL`
+(`consent-manager.errors.expose-exception-detail`) publishes the message instead. It is `false` in
+`application.yml` and `true` only in the `dev` environment. A stack trace is never published either
+way.
+
+## Management port and metrics authentication
+
+Health, `/metrics` and `/prometheus` are served at the origin root of `MANAGEMENT_PORT` (default
+`9090`), never on the API port. Expose that port only inside the cluster. `/health/liveness` and
+`/health/readiness` are anonymous. The aggregate `/health` shows details to authenticated callers
+only, except in `dev`.
+
+`METRICS_AUTHENTICATION_ENABLED` (default `true`, in every environment, `dev` included) drives
+`endpoints.metrics.sensitive` and `endpoints.prometheus.sensitive`. While it is on, both need a valid
+bearer token from a trusted provider, and `MetricsSensitiveEndpointRule` admits any such token
+there and refuses it on every other sensitive endpoint. Set it to `false` only where network
+policy, a service mesh or a scraping sidecar protects the management port instead.
+`ManagementEndpointSecurityIT` pins both settings and where each route resolves.
+
 ## Log hygiene
 
 Nothing at INFO or above quotes a bearer token, key material, the pseudonym key, a user's external

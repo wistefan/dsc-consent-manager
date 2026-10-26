@@ -7,6 +7,8 @@
 #   3. Health check: curl http://localhost:${MANAGEMENT_PORT:-9090}/health
 #      (management port, at the origin root - see endpoints.all in application.yml)
 #   4. API base:     http://localhost:8080/v1
+#   5. Contract Service stub (WireMock): http://localhost:${WIREMOCK_PORT:-8081}
+#      (contracts in docker/wiremock, see its README.md)
 # =============================================================================
 
 services:
@@ -24,6 +26,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      wiremock:
+        # Contracts are fetched on demand and retried, so started is enough.
+        condition: service_started
       keycloak:
         # service_healthy, NOT service_started. Keycloak needs ~30-60s with --import-realm
         # before /realms/consent-manager/.well-known/... answers, while the app container
@@ -51,6 +56,8 @@ services:
       # `iss: http://keycloak:8180/...` and is accepted here.
       IDP_ISSUER: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager
       IDP_DISCOVERY_URL: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager/.well-known/openid-configuration
+      # The stubbed Contract Service below, never a real one.
+      CONTRACT_SERVICE_URL: http://wiremock:8080
     healthcheck:
       # Management endpoints sit at the origin root of their own port, outside
       # ${API_PREFIX}. Pinned by ManagementEndpointSecurityIT.
@@ -106,8 +113,9 @@ services:
   # docker/keycloak/consent-manager-realm.json: it defines the consent-user,
   # consent-participant and consent-catalog roles, a `participant_id` claim mapper
   # and an audience mapper for `consent-manager`, matching the trust-list entry in
-  # application-dev.yml. Test users (test-user / test-participant / test-catalog,
-  # password `test-password`) are included for manual probing.
+  # application-dev.yml. Test users (test-user / test-participant / test-participant-2 /
+  # test-catalog, password `test-password`) are included for manual probing; the two
+  # participants are the provider and consumer of the docker/wiremock contracts.
   #
   # KC_HOSTNAME pins the issuer to the in-network URL so the `iss` claim is the same
   # whichever side asks. Without it Keycloak derives the issuer from the request host
@@ -153,6 +161,23 @@ services:
       timeout: 5s
       start_period: 60s
       retries: 20
+    restart: unless-stopped
+    networks:
+      - consent-manager-net
+
+  # ---------------------------------------------------------------------------
+  # WireMock — stubbed Contract Service (local development only)
+  # ---------------------------------------------------------------------------
+  # Serves the contracts in docker/wiremock/__files on the two endpoints
+  # ContractServiceClient calls; see docker/wiremock/README.md. Published on the
+  # host at the port application.yml's CONTRACT_SERVICE_URL default names, so
+  # `./mvnw mn:run` reaches it too. Pinned to the WireMock version the tests use.
+  wiremock:
+    image: wiremock/wiremock:3.10.0
+    ports:
+      - "${WIREMOCK_PORT:-8081}:8080"
+    volumes:
+      - ./docker/wiremock:/home/wiremock:ro
     restart: unless-stopped
     networks:
       - consent-manager-net

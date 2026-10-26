@@ -1,0 +1,10 @@
+{
+  "priority": 10,
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/(contracts|bilaterals)/[^/]+"
+  },
+  "response": {
+    "status": 404
+  }
+}

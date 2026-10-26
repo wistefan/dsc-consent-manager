@@ -431,6 +431,37 @@ server context path separately, through `ServerContextPathProvider`.
       `METRICS_AUTHENTICATION_ENABLED`).
 - **Final check.** Run `./mvnw verify` once more for the whole ticket.
 - **Acceptance.** AC 26 holds, and every AC is checked off against the merged steps.
+- *Done differently:* step agents may not edit AGENTS.md, so the AGENTS.md items above are left to
+  a plan-mode agent (requested with `[plan-update]`). Apply them on the plan branch:
+  - **Project Structure.** Add `observability/` (`CorrelationIdFilter`, `LogPseudonymizer`,
+    `FailureSummary`, `ConsentMetrics`), `error/ServerErrorDetail`,
+    `security/MetricsSensitiveEndpointRule`, `api/OriginRootUriNamingStrategy`,
+    `src/build/java/OpenApiBundler.java`, `api/.spectral.yaml`, `api/baseline/` (oasdiff
+    baseline, not served), `docker/wiremock/` (dev Contract Service stub) and the tests
+    `SpecLintIT`, `SpecCompatibilityIT`, `OpenApiServingIT`, `ProductionArtefactTest` and
+    `DevContractStubTest`.
+  - **Important Files.** Replace the `copy-openapi-spec` entry with the `bundle-openapi-spec`
+    execution: `OpenApiBundler` inlines the root's components into
+    `target/openapi-bundle/openapi.yaml`, which is copied to `target/classes/static/openapi.yaml`.
+  - **Management routes** (currently stale). `micronaut.server.context-path` is unset everywhere.
+    Generated controllers are prefixed by `consent-manager.api-prefix` (`API_PREFIX`, default
+    `/v1`; empty in tests) through `OriginRootUriNamingStrategy`. Health, `/metrics` and
+    `/prometheus` are at the origin root of `MANAGEMENT_PORT`. `/openapi.yaml`, `/swagger-ui/**`
+    and `@OriginRoot` JWKS are at the origin root of the API port.
+  - **Conventions.** `SpecReferenceResolutionTest` checks the authored tree, and that the served
+    bundle has no external `$ref` (no more `target/classes/static/` component copy).
+    `SpecLintIT` runs pinned Spectral over the bundle and fails on an error-level finding.
+    `SpecCompatibilityIT` runs pinned oasdiff against `api/baseline/openapi.yaml` and fails on
+    `ERR`. A deliberate break is acknowledged by regenerating the baseline in the same PR
+    (`./mvnw generate-resources && cp target/openapi-bundle/openapi.yaml api/baseline/`); see
+    `docs/api-compatibility.md`. Every log line at INFO+ uses `LogPseudonymizer` for personal
+    identifiers, and a failure logs only the `FailureSummary`.
+  - **Config.** New env vars: `ERRORS_EXPOSE_EXCEPTION_DETAIL` (default false, true in dev),
+    `LOG_PSEUDONYM_KEY` (required, at least 32 bytes), `METRICS_AUTHENTICATION_ENABLED` (default
+    true, every environment), `API_PREFIX`, and `WIREMOCK_PORT` (compose only).
+- **AC check-off.** AC 10: Step 6. AC 11: Step 7. ACs 12 and 13: Step 5. ACs 14 and 16: Step 4.
+  ACs 15 and 17: Step 3. AC 19: Step 2. ACs 18, 20, 22, 24 and 25: Step 1. AC 26: this step.
+  The remaining ACs were already met on `main` (see Overview).
 
 ### Step 9: Code hygiene: loops to streams
 A behaviour-preserving refactor across `src/main/java` and `src/test/java`, including code added
