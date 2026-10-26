@@ -342,9 +342,13 @@ public class ParticipantService {
     public DeregistrationResult deregister(Participant current) {
         Participant participant = lockActive(current);
         UUID participantId = participant.getId();
+        // Lock the unanswered rows before counting grants: a decision that granted one commits
+        // before this read returns, so the count below sees it and refuses rather than skipping it.
+        List<Consent> unanswered =
+                consents.findNamingParticipantForUpdate(participantId, UNANSWERED_STATUSES);
         refuseWhileGranted(participant, participantId);
 
-        List<ConsentMove> terminated = terminateUnanswered(participantId);
+        List<ConsentMove> terminated = terminate(unanswered);
         int linksRemoved = links.deleteByIdParticipantId(participantId);
         int noticesArchived = archiveNotices(participantId);
         int consentsRetained = consents.countByParticipant(participantId);
@@ -422,17 +426,16 @@ public class ParticipantService {
     }
 
     /**
-     * Moves every unanswered consent naming the participant to {@code TERMINATED}, appending a
-     * {@code CONSENT_TERMINATED} event to each trail, and returns each move with the status it was
-     * locked in.
+     * Moves the locked unanswered consents to {@code TERMINATED}, appending a {@code
+     * CONSENT_TERMINATED} event to each trail, and returns each move with the status it was locked
+     * in.
      *
-     * <p>The read locks the rows, so one a concurrent decision granted meanwhile is skipped rather
-     * than terminated from a stale read. The moves are not reported here: this runs inside {@link
-     * #deregister}'s transaction, and only a committed move may be counted.
+     * <p>The moves are not reported here: this runs inside {@link #deregister}'s transaction, and
+     * only a committed move may be counted.
      */
-    private List<ConsentMove> terminateUnanswered(UUID participantId) {
+    private List<ConsentMove> terminate(List<Consent> unanswered) {
         List<ConsentMove> closed =
-                consents.findNamingParticipantForUpdate(participantId, UNANSWERED_STATUSES).stream()
+                unanswered.stream()
                         .map(
                                 consent -> {
                                     ConsentStatus held = consent.getStatus();

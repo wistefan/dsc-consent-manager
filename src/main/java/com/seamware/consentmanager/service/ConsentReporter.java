@@ -1,9 +1,12 @@
 package com.seamware.consentmanager.service;
 
+import com.seamware.consentmanager.observability.FailureSummary;
 import io.micronaut.core.annotation.NonNull;
 import jakarta.inject.Singleton;
 import java.util.List;
 import java.util.stream.IntStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The one path every committed consent write takes to {@link ConsentStateChangeLog}, and so to the
@@ -15,6 +18,11 @@ import java.util.stream.IntStream;
  */
 @Singleton
 public class ConsentReporter {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ConsentReporter.class);
+
+    private static final String BULK_REPORT_FAILED =
+            "Reporting {} committed consent moves failed; they stay uncounted: {}";
 
     private final ConsentParties parties;
     private final ConsentStateChangeLog changeLog;
@@ -49,17 +57,23 @@ public class ConsentReporter {
 
     /**
      * Reports the moves of an erasure or a deregistration, resolving each distinct participant once
-     * rather than twice per consent.
+     * rather than twice per consent. Never throws: the caller's summary, which may carry the
+     * once-only pseudonym, must reach the caller even when reporting fails.
      */
     public void report(@NonNull List<ConsentMove> moves) {
-        List<ConsentDetails> details =
-                parties.details(moves.stream().map(ConsentMove::recorded).toList());
-        IntStream.range(0, moves.size())
-                .forEach(
-                        i ->
-                                changeLog.recorded(
-                                        moves.get(i).held(),
-                                        details.get(i),
-                                        moves.get(i).recorded().event()));
+        try {
+            List<ConsentDetails> details =
+                    parties.details(moves.stream().map(ConsentMove::recorded).toList());
+            IntStream.range(0, moves.size())
+                    .forEach(
+                            i ->
+                                    changeLog.recorded(
+                                            moves.get(i).held(),
+                                            details.get(i),
+                                            moves.get(i).recorded().event()));
+        } catch (RuntimeException e) {
+            LOG.error(BULK_REPORT_FAILED, moves.size(), FailureSummary.of(e));
+            LOG.debug(BULK_REPORT_FAILED, moves.size(), e.getMessage(), e);
+        }
     }
 }

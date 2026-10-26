@@ -439,6 +439,35 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
         }
     }
 
+    /**
+     * A deregistration racing a grant of a PENDING naming the participant: the deregistration locks
+     * the row before counting grants, so it either terminates the PENDING or sees the committed
+     * grant and refuses. It never succeeds while leaving the grant standing.
+     */
+    @Test
+    @DisplayName("never deregisters past a grant a racing decision committed")
+    void neverDeregistersPastARacedGrant() throws Exception {
+        UUID pending = seed(ConsentStatus.PENDING);
+        Map<Edge, Long> before = transitions();
+
+        HttpResponse<String> deregistration =
+                race(this::deregister, () -> decide(ConsentStatus.GRANTED)).getFirst();
+
+        Map<Edge, Long> moved = delta(before, transitions());
+        long granted =
+                moved.getOrDefault(Edge.of(ConsentStatus.PENDING, ConsentStatus.GRANTED), 0L);
+        long terminated =
+                moved.getOrDefault(Edge.of(ConsentStatus.PENDING, ConsentStatus.TERMINATED), 0L);
+        assertThat(granted + terminated).as("moves out of the raced PENDING").isEqualTo(1L);
+        boolean deregistered = deregistration.code() == HttpStatus.OK.getCode();
+        assertThat(deregistered || deregistration.code() == HttpStatus.CONFLICT.getCode())
+                .as("deregistration answered %d", deregistration.code())
+                .isTrue();
+        assertThat(consents.findById(pending).orElseThrow().getStatus())
+                .as("a successful deregistration terminated the row, a refused one left the grant")
+                .isEqualTo(deregistered ? ConsentStatus.TERMINATED : ConsentStatus.GRANTED);
+    }
+
     /** Releases both callers together and waits for both answers. */
     private static List<HttpResponse<String>> race(
             Supplier<HttpResponse<String>> first, Supplier<HttpResponse<String>> second)

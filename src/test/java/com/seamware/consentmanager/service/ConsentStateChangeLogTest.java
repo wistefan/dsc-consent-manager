@@ -19,6 +19,7 @@ import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 import net.logstash.logback.encoder.LogstashEncoder;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -72,6 +73,23 @@ class ConsentStateChangeLogTest {
                                 .counter()
                                 .count())
                 .isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("logs an affirmation but counts no transition, since the status did not move")
+    void logsButDoesNotCountAnAffirmation() {
+        MeterRegistry registry = new SimpleMeterRegistry();
+        ConsentStateChangeLog log = new ConsentStateChangeLog(new ConsentMetrics(registry));
+        ConsentDetails details = granted();
+
+        String line;
+        try (LogCapture capture = LogCapture.attach()) {
+            log.recorded(ConsentStatus.GRANTED, details, event(details));
+            line = encode(lineFor(capture, details.consent()));
+        }
+
+        assertThat(line).contains("GRANTED -> GRANTED");
+        assertThat(registry.find(ConsentMetrics.TRANSITIONS_METRIC).counters()).isEmpty();
     }
 
     private static ConsentDetails granted() {
