@@ -76,39 +76,45 @@ public final class OpenApiBundler {
                         POINTER_SEPARATOR, INTERNAL_PREFIX, COMPONENTS, section.getKey(), entry.getKey()));
                 if (key != null) {
                     Path file = Path.of(fileOf(key));
-                    entry.setValue(rewrite(resolvePointer(load(file), key), file.getParent()));
+                    entry.setValue(rewrite(resolvePointer(load(file), key), file.getParent(), false));
+                } else {
+                    entry.setValue(rewrite(entry.getValue(), rootDirectory, true));
                 }
             }
         }
         for (Map.Entry<String, Object> entry : root.entrySet()) {
             if (!COMPONENTS.equals(entry.getKey())) {
-                entry.setValue(rewrite(entry.getValue(), rootDirectory));
+                entry.setValue(rewrite(entry.getValue(), rootDirectory, true));
             }
         }
         return root;
     }
 
-    /** Replaces every external reference under {@code node} with the component that inlines it. */
+    /**
+     * Replaces every external reference under {@code node} with the component that inlines it.
+     * {@code inRoot} says the node was read from the root document, the only place an internal ref
+     * keeps its meaning; {@code directory} resolves its relative refs.
+     */
     @SuppressWarnings("unchecked")
-    private Object rewrite(Object node, Path directory) {
+    private Object rewrite(Object node, Path directory, boolean inRoot) {
         if (node instanceof Map<?, ?> map) {
             Map<String, Object> object = (Map<String, Object>) map;
             for (Map.Entry<String, Object> entry : object.entrySet()) {
                 if (REF.equals(entry.getKey()) && entry.getValue() instanceof String ref) {
-                    entry.setValue(internalPointer(ref, directory));
+                    entry.setValue(internalPointer(ref, directory, inRoot));
                 } else {
-                    entry.setValue(rewrite(entry.getValue(), directory));
+                    entry.setValue(rewrite(entry.getValue(), directory, inRoot));
                 }
             }
         } else if (node instanceof List<?> list) {
-            ((List<Object>) list).replaceAll(item -> rewrite(item, directory));
+            ((List<Object>) list).replaceAll(item -> rewrite(item, directory, inRoot));
         }
         return node;
     }
 
-    private String internalPointer(String ref, Path directory) {
+    private String internalPointer(String ref, Path directory, boolean inRoot) {
         if (ref.startsWith(INTERNAL_PREFIX)) {
-            if (!directory.equals(rootDirectory)) {
+            if (!inRoot) {
                 throw new IllegalStateException(
                         "Internal $ref " + ref + " in " + directory + " cannot survive bundling");
             }
@@ -175,7 +181,11 @@ public final class OpenApiBundler {
         }
     }
 
-    /** Loads with YAML 1.2 core scalars, so an unquoted date or {@code on} stays the string it was written as. */
+    /**
+     * Loads booleans by the YAML 1.2 core rule and resolves no timestamps, so an unquoted date or
+     * {@code on} stays the string it was written as. Integers and floats keep SnakeYAML's YAML 1.1
+     * patterns (sexagesimal, {@code 0b}, leading-zero octal); the authored spec writes none of them.
+     */
     private static Yaml newReader() {
         Resolver resolver = new Resolver() {
             @Override

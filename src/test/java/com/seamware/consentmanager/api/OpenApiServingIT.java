@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Objects;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -31,8 +32,10 @@ class OpenApiServingIT extends KeycloakAndPostgresTestResource {
     /** Where the bundle is served, at the origin root outside the API prefix. */
     private static final String SPEC_PATH = "/openapi.yaml";
 
-    /** The file the build's bundling execution writes, relative to the module directory. */
-    private static final Path BUNDLE_FILE = Path.of("target", "openapi-bundle", "openapi.yaml");
+    /**
+     * System property Failsafe sets from the pom's {@code openapi.bundle.file}, the bundle's path.
+     */
+    private static final String BUNDLE_FILE_PROPERTY = "openapi.bundle.file";
 
     /** OpenAPI version the authored specification declares. */
     private static final String OPENAPI_VERSION = "3.0.3";
@@ -44,7 +47,13 @@ class OpenApiServingIT extends KeycloakAndPostgresTestResource {
     @Test
     @DisplayName("the served bytes are the build's bundle, byte for byte")
     void servesTheBundleUnchanged() throws IOException {
-        assertThat(fetch().body()).isEqualTo(Files.readAllBytes(BUNDLE_FILE));
+        Path bundleFile =
+                Path.of(
+                        Objects.requireNonNull(
+                                System.getProperty(BUNDLE_FILE_PROPERTY),
+                                BUNDLE_FILE_PROPERTY + " is unset; run under Failsafe"));
+
+        assertThat(fetch().body()).isEqualTo(Files.readAllBytes(bundleFile));
     }
 
     @Test

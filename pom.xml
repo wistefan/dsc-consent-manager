@@ -569,6 +569,12 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <!-- OpenApiServingIT compares the served spec against this file. -->
+                    <systemPropertyVariables>
+                        <openapi.bundle.file>${openapi.bundle.file}</openapi.bundle.file>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
 
             <!--
