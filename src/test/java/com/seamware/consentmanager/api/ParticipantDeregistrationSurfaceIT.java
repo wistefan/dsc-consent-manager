@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -316,15 +317,11 @@ class ParticipantDeregistrationSurfaceIT extends KeycloakAndPostgresTestResource
         Participant caller = caller();
         Participant counterparty = participants.save(participant(COUNTERPARTY_PREFIX + "other"));
         links.save(new UserParticipant(user.getId(), caller.getId(), LOCAL_IDENTIFIER));
-        for (int i = 0; i < UNANSWERED_CONSENTS; i++) {
-            seedConsent(caller, counterparty, ConsentStatus.PENDING);
-        }
-        for (int i = 0; i < ANSWERED_CONSENTS; i++) {
-            seedConsent(caller, counterparty, ConsentStatus.REVOKED);
-        }
-        for (int i = 0; i < STANDALONE_NOTICES; i++) {
-            seedNotice(caller, counterparty);
-        }
+        IntStream.range(0, UNANSWERED_CONSENTS)
+                .forEach(i -> seedConsent(caller, counterparty, ConsentStatus.PENDING));
+        IntStream.range(0, ANSWERED_CONSENTS)
+                .forEach(i -> seedConsent(caller, counterparty, ConsentStatus.REVOKED));
+        IntStream.range(0, STANDALONE_NOTICES).forEach(i -> seedNotice(caller, counterparty));
     }
 
     private Participant caller() {

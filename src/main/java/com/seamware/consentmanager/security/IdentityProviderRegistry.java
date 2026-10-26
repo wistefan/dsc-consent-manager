@@ -16,18 +16,18 @@ import jakarta.inject.Named;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.stream.LongStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -337,14 +337,7 @@ public class IdentityProviderRegistry implements AutoCloseable {
      * @return an unmodifiable snapshot of the trust list
      */
     public List<ResolvedIdentityProvider> snapshot() {
-        List<ResolvedIdentityProvider> snapshot = new ArrayList<>(issuersInOrder.size());
-        for (String issuer : issuersInOrder) {
-            ResolvedIdentityProvider entry = entries.get(issuer);
-            if (entry != null) {
-                snapshot.add(entry);
-            }
-        }
-        return Collections.unmodifiableList(snapshot);
+        return issuersInOrder.stream().map(entries::get).filter(Objects::nonNull).toList();
     }
 
     /**
@@ -624,13 +617,15 @@ public class IdentityProviderRegistry implements AutoCloseable {
      */
     static Duration retryDelay(int attempt) {
         long maxMillis = MAX_DISCOVERY_RETRY_DELAY.toMillis();
-        long millis = MIN_DISCOVERY_RETRY_DELAY.toMillis();
-        for (int earlierFailures = 1;
-                earlierFailures < attempt && millis < maxMillis;
-                earlierFailures++) {
-            millis *= DISCOVERY_RETRY_BACKOFF_MULTIPLIER;
-        }
-        return Duration.ofMillis(Math.min(millis, maxMillis));
+        long millis =
+                LongStream.iterate(
+                                MIN_DISCOVERY_RETRY_DELAY.toMillis(),
+                                delay -> delay < maxMillis,
+                                delay -> delay * DISCOVERY_RETRY_BACKOFF_MULTIPLIER)
+                        .skip(Math.max(0, attempt - 1))
+                        .findFirst()
+                        .orElse(maxMillis);
+        return Duration.ofMillis(millis);
     }
 
     /**

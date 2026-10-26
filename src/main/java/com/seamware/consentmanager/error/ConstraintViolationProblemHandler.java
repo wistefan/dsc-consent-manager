@@ -16,8 +16,10 @@ import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 /**
  * Renders a bean-validation failure on a generated request model as a 400 problem detail.
@@ -96,12 +98,10 @@ public class ConstraintViolationProblemHandler
 
     /** The last named node of a property path, or the whole path when no node is named. */
     private static String leafOf(Path propertyPath) {
-        String leaf = null;
-        for (Path.Node node : propertyPath) {
-            if (node.getName() != null) {
-                leaf = node.getName();
-            }
-        }
-        return leaf != null ? leaf : propertyPath.toString();
+        return StreamSupport.stream(propertyPath.spliterator(), false)
+                .map(Path.Node::getName)
+                .filter(Objects::nonNull)
+                .reduce((earlier, later) -> later)
+                .orElseGet(propertyPath::toString);
     }
 }

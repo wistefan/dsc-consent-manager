@@ -537,11 +537,17 @@ class TokenSignatureEnforcementTest {
                         "US-ID-008: the rejection must not tell the caller which issuers are"
                                 + " registered, not even by repeating the one it submitted")
                 .doesNotContain(UNTRUSTED_ISSUER_HOST);
-        for (String name : response.getHeaders().names()) {
-            assertThat(response.getHeaders().getAll(name))
-                    .as("header %s must not echo the submitted issuer", name)
-                    .allSatisfy(value -> assertThat(value).doesNotContain(UNTRUSTED_ISSUER_HOST));
-        }
+        response.getHeaders()
+                .names()
+                .forEach(
+                        name ->
+                                assertThat(response.getHeaders().getAll(name))
+                                        .as("header %s must not echo the submitted issuer", name)
+                                        .allSatisfy(
+                                                value ->
+                                                        assertThat(value)
+                                                                .doesNotContain(
+                                                                        UNTRUSTED_ISSUER_HOST)));
     }
 
     @Test

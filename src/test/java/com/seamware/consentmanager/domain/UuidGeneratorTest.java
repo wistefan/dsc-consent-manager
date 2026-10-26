@@ -2,9 +2,10 @@ package com.seamware.consentmanager.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
@@ -56,11 +57,10 @@ class UuidGeneratorTest {
 
     @Test
     void uuidV7_shouldProduceUniqueValues() {
-        Set<UUID> generated = new HashSet<>();
-
-        for (int i = 0; i < BATCH_SIZE; i++) {
-            generated.add(UuidGenerator.uuidV7());
-        }
+        Set<UUID> generated =
+                IntStream.range(0, BATCH_SIZE)
+                        .mapToObj(i -> UuidGenerator.uuidV7())
+                        .collect(Collectors.toSet());
 
         assertThat(generated).hasSize(BATCH_SIZE);
     }

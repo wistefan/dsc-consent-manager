@@ -255,11 +255,17 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
                                         null)
                                 .code())
                 .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
-        for (ForcedFailure failure : ForcedFailure.values()) {
-            discovery.failure = failure::raise;
-            assertThat(exchange(HttpRequest.GET(PATH_DISCOVERY), mint(RealmPrincipal.USER)).code())
-                    .isEqualTo(failure.status.getCode());
-        }
+        Stream.of(ForcedFailure.values())
+                .forEach(
+                        failure -> {
+                            discovery.failure = failure::raise;
+                            assertThat(
+                                            exchange(
+                                                            HttpRequest.GET(PATH_DISCOVERY),
+                                                            mint(RealmPrincipal.USER))
+                                                    .code())
+                                    .isEqualTo(failure.status.getCode());
+                        });
         discovery.failure = null;
 
         List<ILoggingEvent> events = captured.events();
@@ -308,9 +314,7 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
         Set<String> values = valuesOf(forbidden);
 
         assertThat(values).isNotEmpty();
-        for (String value : values) {
-            assertThat(rendered).noneMatch(event -> event.contains(value));
-        }
+        values.forEach(value -> assertThat(rendered).noneMatch(event -> event.contains(value)));
     }
 
     @ParameterizedTest

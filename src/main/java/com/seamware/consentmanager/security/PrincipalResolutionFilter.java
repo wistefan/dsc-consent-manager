@@ -6,7 +6,6 @@ import com.seamware.consentmanager.service.ProvisionedUser;
 import com.seamware.consentmanager.service.UserService;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.core.order.Ordered;
-import io.micronaut.core.type.Argument;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.annotation.RequestFilter;
 import io.micronaut.http.annotation.ServerFilter;
@@ -21,12 +20,15 @@ import io.micronaut.web.router.RouteAttributes;
 import io.micronaut.web.router.RouteMatch;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -160,12 +162,10 @@ public class PrincipalResolutionFilter implements Ordered {
         if (!(route instanceof MethodBasedRouteMatch<?, ?> method)) {
             return false;
         }
-        for (Argument<?> argument : method.getArguments()) {
-            if (ConsentManagerPrincipal.class.isAssignableFrom(argument.getType())) {
-                return true;
-            }
-        }
-        return false;
+        return Arrays.stream(method.getArguments())
+                .anyMatch(
+                        argument ->
+                                ConsentManagerPrincipal.class.isAssignableFrom(argument.getType()));
     }
 
     /**
@@ -227,11 +227,7 @@ public class PrincipalResolutionFilter implements Ordered {
      * same fact twice and disagreeing.
      */
     private static Set<Role> grantedRoles(Authentication authentication) {
-        EnumSet<Role> granted = EnumSet.noneOf(Role.class);
-        for (String authority : authentication.getRoles()) {
-            Role.fromConfiguredName(authority).ifPresent(granted::add);
-        }
-        return granted;
+        return toRoles(authentication.getRoles().stream());
     }
 
     /**
@@ -242,11 +238,14 @@ public class PrincipalResolutionFilter implements Ordered {
      * route-blind precedence happened to pick.
      */
     private static Set<Role> acceptedRoles(RouteMatch<?> route) {
-        EnumSet<Role> accepted = EnumSet.noneOf(Role.class);
-        for (String value : route.getAnnotationMetadata().stringValues(Secured.class)) {
-            Role.fromConfiguredName(value).ifPresent(accepted::add);
-        }
-        return accepted;
+        return toRoles(Arrays.stream(route.getAnnotationMetadata().stringValues(Secured.class)));
+    }
+
+    /** The roles the names denote; a name that is no role is skipped. */
+    private static Set<Role> toRoles(Stream<String> names) {
+        return names.map(Role::fromConfiguredName)
+                .flatMap(Optional::stream)
+                .collect(Collectors.toCollection(() -> EnumSet.noneOf(Role.class)));
     }
 
     /**

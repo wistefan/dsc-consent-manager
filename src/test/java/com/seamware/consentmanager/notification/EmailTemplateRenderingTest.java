@@ -264,15 +264,22 @@ class EmailTemplateRenderingTest {
         User user = NotificationTestFixtures.user(RECIPIENT, FIRST_NAME, LAST_NAME);
         Participant participant = NotificationTestFixtures.participant(HOSTILE_URL_NAME);
         Consent consent = NotificationTestFixtures.consent(user, participant, HOSTILE_TITLE);
-        for (NotificationKind kind : NotificationKind.values()) {
-            Email email =
-                    SmtpUserNotificationService.email(
-                                    FROM,
-                                    RECIPIENT,
-                                    model(kind, user, consent, participant, CLIENT_URL))
-                            .build();
-            assertThat(email.getSubject()).isEqualTo(kind.subject());
-        }
+        Arrays.stream(NotificationKind.values())
+                .forEach(
+                        kind -> {
+                            Email email =
+                                    SmtpUserNotificationService.email(
+                                                    FROM,
+                                                    RECIPIENT,
+                                                    model(
+                                                            kind,
+                                                            user,
+                                                            consent,
+                                                            participant,
+                                                            CLIENT_URL))
+                                            .build();
+                            assertThat(email.getSubject()).isEqualTo(kind.subject());
+                        });
     }
 
     private static NotificationModel model(

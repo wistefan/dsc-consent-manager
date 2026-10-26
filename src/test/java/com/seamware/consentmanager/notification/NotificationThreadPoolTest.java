@@ -11,6 +11,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -48,17 +49,16 @@ class NotificationThreadPoolTest {
         CountDownLatch release = new CountDownLatch(1);
         AtomicBoolean daemon = new AtomicBoolean();
         AtomicInteger queuedRuns = new AtomicInteger();
-        for (int i = 0; i < NotificationExecutorFactory.NOTIFICATION_SENDER_THREADS; i++) {
-            pool.execute(
-                    () -> {
-                        daemon.set(Thread.currentThread().isDaemon());
-                        started.countDown();
-                        awaitUninterruptibly(release);
-                    });
-        }
-        for (int i = 0; i < QUEUED_TASKS; i++) {
-            pool.execute(queuedRuns::incrementAndGet);
-        }
+        IntStream.range(0, NotificationExecutorFactory.NOTIFICATION_SENDER_THREADS)
+                .forEach(
+                        i ->
+                                pool.execute(
+                                        () -> {
+                                            daemon.set(Thread.currentThread().isDaemon());
+                                            started.countDown();
+                                            awaitUninterruptibly(release);
+                                        }));
+        IntStream.range(0, QUEUED_TASKS).forEach(i -> pool.execute(queuedRuns::incrementAndGet));
         assertThat(started.await(TASK_START_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
 
         long begin = System.nanoTime();

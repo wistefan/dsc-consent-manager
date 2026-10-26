@@ -279,9 +279,7 @@ class SigningKeyStoreTest {
                                 .toList());
         said.add(trace.toString());
 
-        for (String secret : secrets) {
-            assertThat(said).noneMatch(text -> text.contains(secret));
-        }
+        secrets.forEach(secret -> assertThat(said).noneMatch(text -> text.contains(secret)));
     }
 
     private static List<Throwable> causes(Throwable failure) {

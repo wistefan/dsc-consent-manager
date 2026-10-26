@@ -17,7 +17,6 @@ import io.micronaut.security.token.jwt.signature.jwks.JwkSetFetcher;
 import io.micronaut.security.token.jwt.signature.jwks.JwkValidator;
 import io.micronaut.security.token.jwt.signature.jwks.JwksSignatureConfiguration;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -187,9 +187,8 @@ class IssuerSignatureVerifierTest {
             SignedJWT token =
                     provider.signToken(provider.initialKeyId(), claims(provider.issuer()));
 
-            for (int i = 0; i < verifications; i++) {
-                assertThat(verify(verifier, provider.issuer(), token)).isTrue();
-            }
+            IntStream.range(0, verifications)
+                    .forEach(i -> assertThat(verify(verifier, provider.issuer(), token)).isTrue());
 
             assertThat(provider.jwksRequestCount())
                     .as(
@@ -272,9 +271,9 @@ class IssuerSignatureVerifierTest {
 
             forger.rotateKeysTo(UNPUBLISHED_KEY_ID);
             SignedJWT forged = forger.signToken(UNPUBLISHED_KEY_ID, claims(provider.issuer()));
-            for (int i = 0; i < tokens; i++) {
-                assertThat(verify(verifier, provider.issuer(), forged)).isFalse();
-            }
+            IntStream.range(0, tokens)
+                    .forEach(
+                            i -> assertThat(verify(verifier, provider.issuer(), forged)).isFalse());
 
             assertThat(provider.jwksRequestCount())
                     .as(
@@ -335,9 +334,8 @@ class IssuerSignatureVerifierTest {
                     () -> !verify(verifier, provider.issuer(), token));
             int requestsWhenTheOutageWasNoticed = provider.jwksRequestCount();
 
-            for (int i = 0; i < VERIFICATIONS_DURING_OUTAGE; i++) {
-                assertThat(verify(verifier, provider.issuer(), token)).isFalse();
-            }
+            IntStream.range(0, VERIFICATIONS_DURING_OUTAGE)
+                    .forEach(i -> assertThat(verify(verifier, provider.issuer(), token)).isFalse());
 
             assertThat(provider.jwksRequestCount())
                     .as(
@@ -459,15 +457,19 @@ class IssuerSignatureVerifierTest {
             ExecutorService executor = Executors.newFixedThreadPool(CONCURRENT_VERIFICATIONS);
             CountDownLatch release = new CountDownLatch(1);
             try {
-                List<Future<Boolean>> burst = new ArrayList<>();
-                for (int i = 0; i < CONCURRENT_VERIFICATIONS; i++) {
-                    burst.add(
-                            executor.submit(
-                                    () -> {
-                                        release.await();
-                                        return verify(verifier, provider.issuer(), token);
-                                    }));
-                }
+                List<Future<Boolean>> burst =
+                        IntStream.range(0, CONCURRENT_VERIFICATIONS)
+                                .mapToObj(
+                                        i ->
+                                                executor.submit(
+                                                        () -> {
+                                                            release.await();
+                                                            return verify(
+                                                                    verifier,
+                                                                    provider.issuer(),
+                                                                    token);
+                                                        }))
+                                .toList();
                 release.countDown();
                 for (Future<Boolean> result : burst) {
                     assertThat(result.get(BURST_TIMEOUT.toSeconds(), TimeUnit.SECONDS))
@@ -482,9 +484,11 @@ class IssuerSignatureVerifierTest {
                                         + " by traffic")
                         .isBetween(1, CONCURRENT_VERIFICATIONS);
 
-                for (int i = 0; i < CONCURRENT_VERIFICATIONS; i++) {
-                    assertThat(verify(verifier, provider.issuer(), token)).isTrue();
-                }
+                IntStream.range(0, CONCURRENT_VERIFICATIONS)
+                        .forEach(
+                                i ->
+                                        assertThat(verify(verifier, provider.issuer(), token))
+                                                .isTrue());
                 assertThat(provider.jwksRequestCount())
                         .as(
                                 "once the burst has settled the cache serves everything, which is"

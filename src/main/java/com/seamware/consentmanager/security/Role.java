@@ -1,5 +1,6 @@
 package com.seamware.consentmanager.security;
 
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
@@ -96,11 +97,6 @@ public enum Role {
             return Optional.empty();
         }
         String normalized = configuredName.strip().toUpperCase(Locale.ROOT);
-        for (Role role : values()) {
-            if (role.name().equals(normalized)) {
-                return Optional.of(role);
-            }
-        }
-        return Optional.empty();
+        return Arrays.stream(values()).filter(role -> role.name().equals(normalized)).findFirst();
     }
 }

@@ -94,13 +94,14 @@ public class ContractGateway {
      * verbatim, because it is the key of the partial unique index.
      */
     static String contractIdOf(String contractUri) {
-        String path = contractUri;
-        for (int i = 0; i < PATH_TERMINATORS.length(); i++) {
-            int terminator = path.indexOf(PATH_TERMINATORS.charAt(i));
-            if (terminator >= 0) {
-                path = path.substring(0, terminator);
-            }
-        }
+        int end =
+                PATH_TERMINATORS
+                        .chars()
+                        .map(contractUri::indexOf)
+                        .filter(terminator -> terminator >= 0)
+                        .min()
+                        .orElse(contractUri.length());
+        String path = contractUri.substring(0, end);
         while (!path.isEmpty() && path.charAt(path.length() - 1) == PATH_SEPARATOR) {
             path = path.substring(0, path.length() - 1);
         }

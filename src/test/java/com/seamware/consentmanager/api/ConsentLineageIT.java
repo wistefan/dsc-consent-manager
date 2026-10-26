@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -276,14 +277,20 @@ class ConsentLineageIT extends KeycloakAndPostgresTestResource {
     void refusesAReceiptWithLineage(String format) {
         UUID granted = chain(subject, notice, 1).getFirst();
 
-        for (Route route : Route.values()) {
-            HttpResponse<String> response =
-                    exchange(
-                            path(route, granted),
-                            Map.of(PARAM_INCLUDE_LINEAGE, "true", PARAM_FORMAT, format),
-                            route.caller);
-            assertThat(response.code()).isEqualTo(HttpStatus.BAD_REQUEST.getCode());
-        }
+        Stream.of(Route.values())
+                .forEach(
+                        route -> {
+                            HttpResponse<String> response =
+                                    exchange(
+                                            path(route, granted),
+                                            Map.of(
+                                                    PARAM_INCLUDE_LINEAGE,
+                                                    "true",
+                                                    PARAM_FORMAT,
+                                                    format),
+                                            route.caller);
+                            assertThat(response.code()).isEqualTo(HttpStatus.BAD_REQUEST.getCode());
+                        });
     }
 
     /**
