@@ -253,6 +253,25 @@
       }
     },
     {
+      "username": "test-participant-2",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "test-participant-2@example.com",
+      "firstName": "Test",
+      "lastName": "Participant Two",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "test-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["consent-participant"],
+      "attributes": {
+        "participant_id": ["did:example:participant-2"]
+      }
+    },
+    {
       "username": "test-catalog",
       "enabled": true,
       "emailVerified": true,

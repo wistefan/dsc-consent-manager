@@ -113,8 +113,9 @@ services:
   # docker/keycloak/consent-manager-realm.json: it defines the consent-user,
   # consent-participant and consent-catalog roles, a `participant_id` claim mapper
   # and an audience mapper for `consent-manager`, matching the trust-list entry in
-  # application-dev.yml. Test users (test-user / test-participant / test-catalog,
-  # password `test-password`) are included for manual probing.
+  # application-dev.yml. Test users (test-user / test-participant / test-participant-2 /
+  # test-catalog, password `test-password`) are included for manual probing; the two
+  # participants are the provider and consumer of the docker/wiremock contracts.
   #
   # KC_HOSTNAME pins the issuer to the in-network URL so the `iss` claim is the same
   # whichever side asks. Without it Keycloak derives the issuer from the request host
