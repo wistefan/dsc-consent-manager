@@ -187,8 +187,9 @@ class IssuerSignatureVerifierTest {
             SignedJWT token =
                     provider.signToken(provider.initialKeyId(), claims(provider.issuer()));
 
-            IntStream.range(0, verifications)
-                    .forEach(i -> assertThat(verify(verifier, provider.issuer(), token)).isTrue());
+            for (int i = 0; i < verifications; i++) {
+                assertThat(verify(verifier, provider.issuer(), token)).isTrue();
+            }
 
             assertThat(provider.jwksRequestCount())
                     .as(
@@ -271,9 +272,9 @@ class IssuerSignatureVerifierTest {
 
             forger.rotateKeysTo(UNPUBLISHED_KEY_ID);
             SignedJWT forged = forger.signToken(UNPUBLISHED_KEY_ID, claims(provider.issuer()));
-            IntStream.range(0, tokens)
-                    .forEach(
-                            i -> assertThat(verify(verifier, provider.issuer(), forged)).isFalse());
+            for (int i = 0; i < tokens; i++) {
+                assertThat(verify(verifier, provider.issuer(), forged)).isFalse();
+            }
 
             assertThat(provider.jwksRequestCount())
                     .as(
@@ -334,8 +335,9 @@ class IssuerSignatureVerifierTest {
                     () -> !verify(verifier, provider.issuer(), token));
             int requestsWhenTheOutageWasNoticed = provider.jwksRequestCount();
 
-            IntStream.range(0, VERIFICATIONS_DURING_OUTAGE)
-                    .forEach(i -> assertThat(verify(verifier, provider.issuer(), token)).isFalse());
+            for (int i = 0; i < VERIFICATIONS_DURING_OUTAGE; i++) {
+                assertThat(verify(verifier, provider.issuer(), token)).isFalse();
+            }
 
             assertThat(provider.jwksRequestCount())
                     .as(
@@ -484,11 +486,9 @@ class IssuerSignatureVerifierTest {
                                         + " by traffic")
                         .isBetween(1, CONCURRENT_VERIFICATIONS);
 
-                IntStream.range(0, CONCURRENT_VERIFICATIONS)
-                        .forEach(
-                                i ->
-                                        assertThat(verify(verifier, provider.issuer(), token))
-                                                .isTrue());
+                for (int i = 0; i < CONCURRENT_VERIFICATIONS; i++) {
+                    assertThat(verify(verifier, provider.issuer(), token)).isTrue();
+                }
                 assertThat(provider.jwksRequestCount())
                         .as(
                                 "once the burst has settled the cache serves everything, which is"

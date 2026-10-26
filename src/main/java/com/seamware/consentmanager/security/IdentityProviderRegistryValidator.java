@@ -212,15 +212,12 @@ public class IdentityProviderRegistryValidator {
      * @throws ConfigurationException if either value is not such a URL
      */
     private void requireAbsoluteHttpUrls() {
-        providers.forEach(
-                provider -> {
-                    requireAbsoluteHttpUrl(
-                            provider.getPropertyPath() + ".issuer", provider.getIssuer());
-                    requireAbsoluteHttpUrl(
-                            provider.getPropertyPath() + ".discovery-url",
-                            provider.getDiscoveryUrl());
-                    requireSecureTransport(provider);
-                });
+        for (IdentityProviderConfiguration provider : providers) {
+            requireAbsoluteHttpUrl(provider.getPropertyPath() + ".issuer", provider.getIssuer());
+            requireAbsoluteHttpUrl(
+                    provider.getPropertyPath() + ".discovery-url", provider.getDiscoveryUrl());
+            requireSecureTransport(provider);
+        }
     }
 
     /**
@@ -358,12 +355,11 @@ public class IdentityProviderRegistryValidator {
      *     #SUPPORTED_CLAIM_KEYS}
      */
     private void rejectUnrecognisedSettingKeys() {
-        providers.forEach(
-                provider -> {
-                    String prefix = provider.getPropertyPath();
-                    rejectUnrecognisedKeys(prefix, SUPPORTED_SETTING_KEYS);
-                    rejectUnrecognisedKeys(prefix + "." + CLAIMS_KEY, SUPPORTED_CLAIM_KEYS);
-                });
+        for (IdentityProviderConfiguration provider : providers) {
+            String prefix = provider.getPropertyPath();
+            rejectUnrecognisedKeys(prefix, SUPPORTED_SETTING_KEYS);
+            rejectUnrecognisedKeys(prefix + "." + CLAIMS_KEY, SUPPORTED_CLAIM_KEYS);
+        }
     }
 
     /**
@@ -433,12 +429,11 @@ public class IdentityProviderRegistryValidator {
                                         .reversed())
                         .map(provider -> normaliseKey(provider.getPropertyPath()) + KEY_SEPARATOR)
                         .toList();
-        environmentVariableNames().stream()
-                .filter(variable -> normaliseKey(variable).startsWith(registryPrefix))
-                .forEach(
-                        variable ->
-                                rejectUnrecognisedEnvironmentVariable(
-                                        variable, entryPrefixesByLength));
+        for (String variable : environmentVariableNames()) {
+            if (normaliseKey(variable).startsWith(registryPrefix)) {
+                rejectUnrecognisedEnvironmentVariable(variable, entryPrefixesByLength);
+            }
+        }
     }
 
     /**
@@ -453,27 +448,7 @@ public class IdentityProviderRegistryValidator {
                 entryPrefixesByLength.stream()
                         .filter(normalised::startsWith)
                         .findFirst()
-                        .orElseThrow(
-                                () ->
-                                        new ConfigurationException(
-                                                "Environment variable '"
-                                                        + variable
-                                                        + "' addresses an identity provider that"
-                                                        + " is not declared. An environment"
-                                                        + " variable fills in the values of an"
-                                                        + " existing '"
-                                                        + IdentityProviderConfiguration.PREFIX
-                                                        + ".<name>' block; it cannot create one,"
-                                                        + " so this variable is bound to nothing"
-                                                        + " and the provider it names is not"
-                                                        + " trusted. Declared provider(s): "
-                                                        + providers.stream()
-                                                                .map(
-                                                                        IdentityProviderConfiguration
-                                                                                ::getName)
-                                                                .sorted()
-                                                                .toList()
-                                                        + "."));
+                        .orElseThrow(() -> undeclaredProvider(variable));
         String keyPath = normalised.substring(entryPrefix.length());
         if (!isSupportedEntryKeyPath(keyPath)) {
             throw new ConfigurationException(
@@ -488,6 +463,23 @@ public class IdentityProviderRegistryValidator {
                             + "<role>'. An unrecognised key is bound to nothing and silently has no"
                             + " effect.");
         }
+    }
+
+    /** Refusal for a registry variable whose provider no configuration block declares. */
+    private ConfigurationException undeclaredProvider(String variable) {
+        List<String> declared =
+                providers.stream().map(IdentityProviderConfiguration::getName).sorted().toList();
+        return new ConfigurationException(
+                "Environment variable '"
+                        + variable
+                        + "' addresses an identity provider that is not declared. An environment"
+                        + " variable fills in the values of an existing '"
+                        + IdentityProviderConfiguration.PREFIX
+                        + ".<name>' block; it cannot create one, so this variable is bound to"
+                        + " nothing and the provider it names is not trusted. Declared"
+                        + " provider(s): "
+                        + declared
+                        + ".");
     }
 
     /**

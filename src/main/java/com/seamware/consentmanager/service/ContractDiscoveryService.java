@@ -16,7 +16,6 @@ import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -93,12 +92,11 @@ public class ContractDiscoveryService {
             return List.of();
         }
         SortedMap<String, List<Claim>> candidates = new TreeMap<>();
-        participants
-                .findByIdIn(linked)
-                .forEach(
-                        participant ->
-                                Arrays.stream(ContractSide.values())
-                                        .forEach(side -> collect(candidates, participant, side)));
+        for (Participant participant : participants.findByIdIn(linked)) {
+            for (ContractSide side : ContractSide.values()) {
+                collect(candidates, participant, side);
+            }
+        }
         return hydrate(candidates);
     }
 

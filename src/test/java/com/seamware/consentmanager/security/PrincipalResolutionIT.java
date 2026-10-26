@@ -601,15 +601,10 @@ class PrincipalResolutionIT extends PostgresTestResource {
         assertThat(body)
                 .as("a refusal says nothing about the trust list")
                 .doesNotContain(ISSUER_HOST);
-        response.getHeaders()
-                .names()
-                .forEach(
-                        name ->
-                                assertThat(response.getHeaders().getAll(name))
-                                        .allSatisfy(
-                                                value ->
-                                                        assertThat(value)
-                                                                .doesNotContain(ISSUER_HOST)));
+        for (String name : response.getHeaders().names()) {
+            assertThat(response.getHeaders().getAll(name))
+                    .allSatisfy(value -> assertThat(value).doesNotContain(ISSUER_HOST));
+        }
     }
 
     /**

@@ -406,14 +406,11 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
     private void seedUser(String identifier, String... linkedParticipants) {
         User stored =
                 users.save(new User(identifier, SEEDED_EMAIL, SEEDED_FIRST_NAME, SEEDED_LAST_NAME));
-        Stream.of(linkedParticipants)
-                .forEach(
-                        participant ->
-                                links.save(
-                                        new UserParticipant(
-                                                stored.getId(),
-                                                participantId(participant),
-                                                ORIGINAL_LOCAL_IDENTIFIER)));
+        for (String participant : linkedParticipants) {
+            links.save(
+                    new UserParticipant(
+                            stored.getId(), participantId(participant), ORIGINAL_LOCAL_IDENTIFIER));
+        }
     }
 
     /** Seeds one consent for the user in the given status between the two named participants. */

@@ -183,19 +183,17 @@ class SmtpUserNotificationServiceIT {
         assertThat(greenMail.waitForIncomingEmail(DELIVERY_TIMEOUT.toMillis(), 1)).isTrue();
         MimeMultipart alternative =
                 findAlternative(greenMail.getReceivedMessages()[0].getContent());
-        bodies(alternative)
-                .forEach(
-                        body -> {
-                            assertThat(body)
-                                    .doesNotContain(FORBIDDEN_MARKERS)
-                                    .doesNotContain(String.valueOf(consent.getId()))
-                                    .doesNotContain(AUTOLINK_SEQUENCES);
-                            if (fixture == Fixture.BENIGN) {
-                                assertThat(body).doesNotContainIgnoringCase(VERIFY);
-                            }
-                            assertThat(URL.matcher(body).results().map(match -> match.group()))
-                                    .allSatisfy(url -> assertThat(url).startsWith(CLIENT_URL));
-                        });
+        for (String body : bodies(alternative)) {
+            assertThat(body)
+                    .doesNotContain(FORBIDDEN_MARKERS)
+                    .doesNotContain(String.valueOf(consent.getId()))
+                    .doesNotContain(AUTOLINK_SEQUENCES);
+            if (fixture == Fixture.BENIGN) {
+                assertThat(body).doesNotContainIgnoringCase(VERIFY);
+            }
+            assertThat(URL.matcher(body).results().map(match -> match.group()))
+                    .allSatisfy(url -> assertThat(url).startsWith(CLIENT_URL));
+        }
     }
 
     @ParameterizedTest

@@ -27,7 +27,6 @@ import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -299,14 +298,10 @@ class ConsentRequestIT extends PostgresTestResource {
                                 null,
                                 null));
         seededUsers.add(subject);
-        Arrays.stream(affiliations)
-                .forEach(
-                        affiliation ->
-                                links.save(
-                                        new UserParticipant(
-                                                subject.getId(),
-                                                participant(affiliation).getId(),
-                                                null)));
+        for (String affiliation : affiliations) {
+            links.save(
+                    new UserParticipant(subject.getId(), participant(affiliation).getId(), null));
+        }
         return subject;
     }
 

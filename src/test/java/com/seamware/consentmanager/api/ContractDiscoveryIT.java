@@ -287,14 +287,11 @@ class ContractDiscoveryIT extends PrivacyNoticeApiTestSupport {
         User user =
                 users.findByIdentifier(subject)
                         .orElseGet(() -> users.save(new User(subject, null, null, null)));
-        Stream.of(identifiers)
-                .forEach(
-                        identifier ->
-                                links.save(
-                                        new UserParticipant(
-                                                user.getId(),
-                                                participant(identifier).getId(),
-                                                LOCAL_IDENTIFIER)));
+        for (String identifier : identifiers) {
+            links.save(
+                    new UserParticipant(
+                            user.getId(), participant(identifier).getId(), LOCAL_IDENTIFIER));
+        }
     }
 
     private HttpResponse<String> exchange(String path, RealmPrincipal caller) {

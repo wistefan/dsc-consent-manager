@@ -472,17 +472,16 @@ class SpecSecurityConsistencyTest {
                         .toList();
         assertThat(required).as("the specification requires authentication somewhere").isNotEmpty();
 
-        required.forEach(
-                scheme -> {
-                    Map<String, Object> resolved = resolve(declared.get(scheme), SPEC_RESOURCE);
-                    assertThat(resolved).as("security scheme `%s` is declared", scheme).isNotNull();
-                    assertThat(resolved.get("type"))
-                            .as("`%s` type", scheme)
-                            .isEqualTo(EXPECTED_SCHEME_TYPE);
-                    assertThat(resolved.get("scheme"))
-                            .as("`%s` scheme", scheme)
-                            .isEqualTo(EXPECTED_SCHEME_NAME);
-                });
+        for (String scheme : required) {
+            Map<String, Object> resolved = resolve(declared.get(scheme), SPEC_RESOURCE);
+            assertThat(resolved).as("security scheme `%s` is declared", scheme).isNotNull();
+            assertThat(resolved.get("type"))
+                    .as("`%s` type", scheme)
+                    .isEqualTo(EXPECTED_SCHEME_TYPE);
+            assertThat(resolved.get("scheme"))
+                    .as("`%s` scheme", scheme)
+                    .isEqualTo(EXPECTED_SCHEME_NAME);
+        }
     }
 
     /** Builds the operation record for one path item entry. */
@@ -585,36 +584,39 @@ class SpecSecurityConsistencyTest {
 
     /** Finds the routed method implementing an operation, failing when nothing implements it. */
     private static RoutedMethod routedMethodFor(SpecOperation operation) {
-        return controllerClasses().stream()
-                .flatMap(
-                        controller ->
-                                Stream.of(controller.getMethods())
-                                        .map(method -> new RoutedMethod(controller, method)))
-                .filter(
-                        routed -> {
-                            Operation annotation = routed.method().getAnnotation(Operation.class);
-                            return annotation != null
-                                    && operation.operationId().equals(annotation.operationId());
-                        })
-                .findFirst()
-                .map(
-                        routed -> {
-                            assertThat(routeOf(routed.controller(), routed.method()))
-                                    .as(
-                                            "the route implementing `%s` is mapped where the"
-                                                    + " specification says",
-                                            operation.operationId())
-                                    .isEqualTo(operation.httpMethod() + " " + operation.path());
-                            return routed;
-                        })
-                .orElseGet(
-                        () ->
-                                fail(
-                                        "%s has no implementing controller method. Every specified"
-                                                + " operation must be implemented by a @Controller"
-                                                + " in %s whose routed method carries"
-                                                + " @Operation(operationId = \"%s\").",
-                                        operation, CONTROLLER_PACKAGE, operation.operationId()));
+        RoutedMethod routed =
+                controllerClasses().stream()
+                        .flatMap(SpecSecurityConsistencyTest::routedMethodsOf)
+                        .filter(candidate -> implementsOperation(candidate.method(), operation))
+                        .findFirst()
+                        .orElseGet(() -> unimplemented(operation));
+        assertThat(routeOf(routed.controller(), routed.method()))
+                .as(
+                        "the route implementing `%s` is mapped where the specification says",
+                        operation.operationId())
+                .isEqualTo(operation.httpMethod() + " " + operation.path());
+        return routed;
+    }
+
+    /** Pairs each public method of a controller with the controller declaring its route. */
+    private static Stream<RoutedMethod> routedMethodsOf(Class<?> controller) {
+        return Stream.of(controller.getMethods())
+                .map(method -> new RoutedMethod(controller, method));
+    }
+
+    /** Fails the test for an operation that no controller method implements. */
+    private static RoutedMethod unimplemented(SpecOperation operation) {
+        return fail(
+                "%s has no implementing controller method. Every specified operation must be"
+                        + " implemented by a @Controller in %s whose routed method carries"
+                        + " @Operation(operationId = \"%s\").",
+                operation, CONTROLLER_PACKAGE, operation.operationId());
+    }
+
+    /** Whether a method carries the {@code @Operation} naming the operation's id. */
+    private static boolean implementsOperation(Method method, SpecOperation operation) {
+        Operation annotation = method.getAnnotation(Operation.class);
+        return annotation != null && operation.operationId().equals(annotation.operationId());
     }
 
     /** The delegate the routed wrapper calls, which is the method a controller has to override. */
@@ -695,29 +697,26 @@ class SpecSecurityConsistencyTest {
      * test, and keeps it honest: it sees the annotations as they were compiled.
      */
     private static List<Class<?>> controllerClasses() {
-        List<Class<?>> controllers = new ArrayList<>();
-        packageRoots()
-                .forEach(
-                        root -> {
-                            try (Stream<Path> files = Files.walk(root)) {
-                                files.filter(
-                                                file ->
-                                                        file.getFileName()
-                                                                .toString()
-                                                                .endsWith(CLASS_SUFFIX))
-                                        .map(file -> className(root, file))
-                                        .filter(name -> !name.contains(NESTED_CLASS_MARKER))
-                                        .map(SpecSecurityConsistencyTest::load)
-                                        .filter(type -> type.isAnnotationPresent(Controller.class))
-                                        .forEach(controllers::add);
-                            } catch (IOException e) {
-                                throw new IllegalStateException("Unable to scan " + root, e);
-                            }
-                        });
+        List<Class<?>> controllers =
+                packageRoots().stream().flatMap(root -> controllersUnder(root).stream()).toList();
         assertThat(controllers)
                 .as("%s contains at least one @Controller", CONTROLLER_PACKAGE)
                 .isNotEmpty();
         return controllers;
+    }
+
+    /** Lists the top-level {@code @Controller} classes compiled under one package root. */
+    private static List<Class<?>> controllersUnder(Path root) {
+        try (Stream<Path> files = Files.walk(root)) {
+            return files.filter(file -> file.getFileName().toString().endsWith(CLASS_SUFFIX))
+                    .map(file -> className(root, file))
+                    .filter(name -> !name.contains(NESTED_CLASS_MARKER))
+                    .<Class<?>>map(SpecSecurityConsistencyTest::load)
+                    .filter(type -> type.isAnnotationPresent(Controller.class))
+                    .toList();
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to scan " + root, e);
+        }
     }
 
     /** Resolves the compiled-output directories holding the controller package. */

@@ -221,11 +221,10 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
         }
         assertThat(bodies).isNotEmpty();
         List<String> rendered = events.stream().map(LogCapture::render).toList();
-        secrets.forEach(
-                secret -> {
-                    assertThat(rendered).noneMatch(event -> event.contains(secret));
-                    assertThat(bodies).noneMatch(body -> body.contains(secret));
-                });
+        for (String secret : secrets) {
+            assertThat(rendered).noneMatch(event -> event.contains(secret));
+            assertThat(bodies).noneMatch(body -> body.contains(secret));
+        }
     }
 
     private List<String> run(Scenario scenario) throws ParseException {
@@ -235,13 +234,11 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
                 assertThat(grant.code()).isEqualTo(HttpStatus.CREATED.getCode());
                 UUID id = UUID.fromString(JSONObjectUtils.getString(parse(grant), MEMBER_ID));
                 List<String> bodies = new ArrayList<>(List.of(grant.body()));
-                List.of(FORMAT_KANTARA, FORMAT_ISO)
-                        .forEach(
-                                format -> {
-                                    HttpResponse<String> read = read(id, format);
-                                    assertThat(read.code()).isEqualTo(HttpStatus.OK.getCode());
-                                    bodies.add(read.body());
-                                });
+                for (String format : List.of(FORMAT_KANTARA, FORMAT_ISO)) {
+                    HttpResponse<String> read = read(id, format);
+                    assertThat(read.code()).isEqualTo(HttpStatus.OK.getCode());
+                    bodies.add(read.body());
+                }
                 bodies.add(exchange(HttpRequest.GET(PATH_JWKS)).body());
                 yield bodies;
             }

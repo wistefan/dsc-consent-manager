@@ -13,7 +13,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -144,9 +143,9 @@ class PrivacyNoticeNoBase64Test {
                         found.addAll(encodedDeclarations(value, nested));
                     });
         } else if (node instanceof List<?> items) {
-            IntStream.range(0, items.size())
-                    .mapToObj(index -> encodedDeclarations(items.get(index), pointer + "/" + index))
-                    .forEach(found::addAll);
+            for (int index = 0; index < items.size(); index++) {
+                found.addAll(encodedDeclarations(items.get(index), pointer + "/" + index));
+            }
         }
         return found;
     }

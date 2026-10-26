@@ -8,7 +8,6 @@ import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.env.Environment;
 import io.micronaut.context.env.PropertySource;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -248,7 +247,9 @@ class IdentityProviderConfigurationTest {
         AbstractThrowableAssert<?, ? extends Throwable> thrown =
                 assertThatThrownBy(() -> startContext(properties).close())
                         .as("startup should fail, naming the offending property");
-        Arrays.stream(expectedMessageFragments).forEach(thrown::hasStackTraceContaining);
+        for (String fragment : expectedMessageFragments) {
+            thrown.hasStackTraceContaining(fragment);
+        }
     }
 
     @Nested

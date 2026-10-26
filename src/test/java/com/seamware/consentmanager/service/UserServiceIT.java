@@ -336,15 +336,14 @@ class UserServiceIT extends PostgresTestResource {
 
         ExecutorService racers = Executors.newFixedThreadPool(CONCURRENT_FIRST_REQUESTS);
         try {
-            IntStream.range(0, CONCURRENT_FIRST_REQUESTS)
-                    .forEach(
-                            i ->
-                                    responses.add(
-                                            racers.submit(
-                                                    () -> {
-                                                        start.await();
-                                                        return get(token);
-                                                    })));
+            for (int i = 0; i < CONCURRENT_FIRST_REQUESTS; i++) {
+                responses.add(
+                        racers.submit(
+                                () -> {
+                                    start.await();
+                                    return get(token);
+                                }));
+            }
             start.countDown();
             racers.shutdown();
             assertThat(racers.awaitTermination(CONCURRENCY_TIMEOUT.toSeconds(), TimeUnit.SECONDS))
