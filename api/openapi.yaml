@@ -2590,6 +2590,9 @@ components:
     ProblemDetail:
       $ref: "./components/schemas/ProblemDetail.yaml"
 
+    ProblemFieldError:
+      $ref: "./components/schemas/ProblemFieldError.yaml"
+
     User:
       $ref: "./components/schemas/User.yaml"
 

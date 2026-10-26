@@ -3,18 +3,24 @@ package com.seamware.consentmanager.error;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.api.generated.model.ProblemDetail;
+import com.seamware.consentmanager.api.generated.model.ProblemFieldError;
+import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.MediaType;
+import io.micronaut.http.server.exceptions.response.ErrorContext;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.ElementKind;
 import jakarta.validation.Path;
 import jakarta.validation.metadata.ConstraintDescriptor;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.net.URI;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -48,7 +54,7 @@ class ProblemMappingTest {
     private static final String UPSTREAM_MESSAGE =
             "contract-service at 10.0.0.7 refused the TCP connection";
 
-    private final ApiExceptionHandler handler = new ApiExceptionHandler();
+    private final ApiExceptionHandler handler = new ApiExceptionHandler(serverErrorDetail(false));
 
     /** One case per exception, with the status, type and title it is contractually rendered as. */
     static Stream<Arguments> refusals() {
@@ -120,6 +126,99 @@ class ProblemMappingTest {
                 .doesNotContain("10.0.0.7");
     }
 
+    /** Whether a 5xx publishes its message is one setting, honoured by every site rendering one. */
+    @Nested
+    @DisplayName("consent-manager.errors.expose-exception-detail")
+    class ExposedServerErrorDetail {
+
+        /** A message a production deployment must never publish. */
+        private static final String INTERNAL_MESSAGE = "pool exhausted on db-primary.internal:5432";
+
+        /** One renderer per site that substitutes the detail of a server error. */
+        enum Site {
+            UNHANDLED_EXCEPTION {
+                @Override
+                ProblemDetail render(ServerErrorDetail detail, Exception failure) {
+                    return new GlobalExceptionHandler(detail)
+                            .handle(HttpRequest.GET(REQUEST_PATH), failure)
+                            .body();
+                }
+            },
+            UPSTREAM_SERVICE {
+                @Override
+                ProblemDetail render(ServerErrorDetail detail, Exception failure) {
+                    return new ApiExceptionHandler(detail)
+                            .handle(
+                                    HttpRequest.GET(REQUEST_PATH),
+                                    new UpstreamServiceException(failure.getMessage()))
+                            .body();
+                }
+            },
+            FRAMEWORK_ERROR {
+                @Override
+                ProblemDetail render(ServerErrorDetail detail, Exception failure) {
+                    return new ProblemErrorResponseProcessor(detail)
+                            .processResponse(
+                                    ErrorContext.builder(HttpRequest.GET(REQUEST_PATH))
+                                            .cause(failure)
+                                            .build(),
+                                    HttpResponse.serverError())
+                            .body();
+                }
+            };
+
+            abstract ProblemDetail render(ServerErrorDetail detail, Exception failure);
+        }
+
+        static Stream<Arguments> cases() {
+            return Arrays.stream(Site.values())
+                    .flatMap(
+                            site ->
+                                    Stream.of(
+                                            Arguments.of(site, false, SERVER_ERROR_DETAIL),
+                                            Arguments.of(site, true, INTERNAL_MESSAGE)));
+        }
+
+        @ParameterizedTest(name = "{0}, exposed={1}")
+        @MethodSource("cases")
+        void publishesTheMessageOnlyWhenExposed(Site site, boolean exposed, String expected) {
+            ProblemDetail problem =
+                    site.render(
+                            serverErrorDetail(exposed),
+                            new IllegalStateException(INTERNAL_MESSAGE));
+
+            assertThat(problem.getDetail()).isEqualTo(expected);
+        }
+
+        @ParameterizedTest(name = "message {0}")
+        @MethodSource("blankMessages")
+        void fallsBackWhenThereIsNoMessage(String message) {
+            assertThat(serverErrorDetail(true).detailFor(new IllegalStateException(message)))
+                    .isEqualTo(SERVER_ERROR_DETAIL);
+        }
+
+        static Stream<String> blankMessages() {
+            return Stream.of(null, "", "  ");
+        }
+
+        @Test
+        @DisplayName("no failure at all reads as the fixed sentence")
+        void fallsBackWithoutAFailure() {
+            assertThat(serverErrorDetail(true).detailFor(null)).isEqualTo(SERVER_ERROR_DETAIL);
+        }
+    }
+
+    @Test
+    @DisplayName("errors is generated as a typed list, not a degraded List<Object>")
+    void errorsKeepTheirItemType() throws NoSuchFieldException {
+        Type itemType =
+                ((ParameterizedType)
+                                ProblemDetail.class.getDeclaredField("errors").getGenericType())
+                        .getActualTypeArguments()[0];
+
+        assertThat(itemType).isEqualTo(ProblemFieldError.class);
+    }
+
     /**
      * Netty hands the raw request target through, so the path reaching a handler is not guaranteed
      * to be a URI. Rendering must never fail on one.
@@ -173,29 +272,38 @@ class ProblemMappingTest {
                             "one violation",
                             violationException(
                                     violation("register.body.identifier", "must not be blank")),
-                            "identifier: must not be blank"),
+                            "identifier: must not be blank",
+                            List.of(new ProblemFieldError("identifier", "must not be blank"))),
                     Arguments.of(
                             "several violations, listed in a stable order",
                             violationException(
                                     violation("register.body.lastName", "size must be <= 255"),
                                     violation("register.body.identifier", "must not be blank")),
-                            "identifier: must not be blank; lastName: size must be <= 255"),
+                            "identifier: must not be blank; lastName: size must be <= 255",
+                            List.of(
+                                    new ProblemFieldError("identifier", "must not be blank"),
+                                    new ProblemFieldError("lastName", "size must be <= 255"))),
                     Arguments.of(
                             "a duplicate violation, reported once",
                             violationException(
                                     violation("register.body.identifier", "must not be blank"),
                                     violation("bulk.body.identifier", "must not be blank")),
-                            "identifier: must not be blank"),
+                            "identifier: must not be blank",
+                            List.of(new ProblemFieldError("identifier", "must not be blank"))),
                     Arguments.of(
                             "no violation at all",
                             new ConstraintViolationException(Set.of()),
-                            "The request failed validation."));
+                            "The request failed validation.",
+                            null));
         }
 
         @ParameterizedTest(name = "{0}")
         @MethodSource("violations")
         void rendersAsBadRequest(
-                String description, ConstraintViolationException exception, String detail) {
+                String description,
+                ConstraintViolationException exception,
+                String detail,
+                List<ProblemFieldError> errors) {
             HttpResponse<?> response =
                     violationHandler.handle(HttpRequest.POST(REQUEST_PATH, ""), exception);
 
@@ -209,6 +317,7 @@ class ProblemMappingTest {
                                 assertThat(problem.getTitle()).isEqualTo("Bad Request");
                                 assertThat(problem.getStatus()).isEqualTo(400);
                                 assertThat(problem.getDetail()).isEqualTo(detail);
+                                assertThat(problem.getErrors()).isEqualTo(errors);
                                 assertThat(problem.getInstance())
                                         .isEqualTo(URI.create(REQUEST_PATH));
                             });
@@ -229,6 +338,13 @@ class ProblemMappingTest {
                     .doesNotContain("register")
                     .doesNotContain("userRegistration");
         }
+    }
+
+    /** The helper with exception detail exposed or withheld. */
+    private static ServerErrorDetail serverErrorDetail(boolean exposed) {
+        ConsentManagerConfiguration.Errors errors = new ConsentManagerConfiguration.Errors();
+        errors.setExposeExceptionDetail(exposed);
+        return new ServerErrorDetail(errors);
     }
 
     /**

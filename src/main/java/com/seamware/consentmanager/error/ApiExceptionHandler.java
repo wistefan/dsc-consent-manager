@@ -23,9 +23,16 @@ public class ApiExceptionHandler
 
     private static final Logger LOG = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
+    private final ServerErrorDetail serverErrorDetail;
+
+    /** Creates the handler. */
+    public ApiExceptionHandler(ServerErrorDetail serverErrorDetail) {
+        this.serverErrorDetail = serverErrorDetail;
+    }
+
     /**
-     * Maps the exception to its declared status and body, publishing the message only for a client
-     * error.
+     * Maps the exception to its declared status and body, publishing the message of a server error
+     * only as {@link ServerErrorDetail} allows.
      */
     @Override
     public HttpResponse<ProblemDetail> handle(HttpRequest request, ApiException exception) {
@@ -49,7 +56,8 @@ public class ApiExceptionHandler
                     exception.getMessage());
         }
 
-        String detail = serverError ? ProblemType.SERVER_ERROR_DETAIL : exception.getMessage();
+        String detail =
+                serverError ? serverErrorDetail.detailFor(exception) : exception.getMessage();
         ProblemDetail problem = problemType.toProblemDetail(detail, request.getPath());
         return HttpResponse.<ProblemDetail>status(problemType.status())
                 .body(problem)

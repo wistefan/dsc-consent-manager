@@ -1,0 +1,20 @@
+# Schema: ProblemFieldError — referenced from api/openapi.yaml as
+# components.schemas.ProblemFieldError, and from ProblemDetail.yaml as the item of
+# `errors`.
+type: object
+description: >
+  One rejected field of a request that failed validation.
+properties:
+  field:
+    type: string
+    description: >
+      The rejected field, named as the request spelled it. Only the leaf of the
+      property path is given; the path inside this service is not published.
+    example: "identifier"
+  message:
+    type: string
+    description: Why the field was rejected.
+    example: "must not be blank"
+required:
+  - field
+  - message

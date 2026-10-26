@@ -512,6 +512,13 @@ consent-manager:
     # unless it is an absolute http(s) URL with a host.
     client-url: ${NOTIFICATION_CLIENT_URL:}
 
+  errors:
+    # Publish the exception message as the `detail` of a 5xx problem instead of the
+    # fixed "unexpected error" sentence. A debugging aid: the message may name an
+    # internal host or dependency, so it stays off in production and is on only in
+    # the dev environment. A stack trace is never published either way.
+    expose-exception-detail: ${ERRORS_EXPOSE_EXCEPTION_DETAIL:false}
+
   # ---------------------------------------------------------------------------
   # Identity provider trust list
   # ---------------------------------------------------------------------------

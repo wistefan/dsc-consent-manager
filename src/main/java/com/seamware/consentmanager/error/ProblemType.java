@@ -45,7 +45,8 @@ public enum ProblemType {
 
     /**
      * Detail every server-side failure publishes in place of its own message, which is logged
-     * instead so that an internal host, dependency or stack frame never reaches the caller.
+     * instead so that an internal host, dependency or stack frame never reaches the caller. Only
+     * {@link ServerErrorDetail} may substitute the message, and only where configured to.
      */
     public static final String SERVER_ERROR_DETAIL =
             "An unexpected error occurred. Please try again later.";

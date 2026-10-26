@@ -16,7 +16,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Deliberate refusals carry their own status through {@link ApiException}, which {@link
  * ApiExceptionHandler} serves; reaching this handler therefore means a genuine defect, which is why
- * it logs at ERROR and publishes nothing about the cause.
+ * it logs at ERROR and publishes nothing about the cause unless {@link ServerErrorDetail} is
+ * configured to.
  *
  * @see <a href="https://www.rfc-editor.org/rfc/rfc7807">RFC 7807</a>
  */
@@ -27,7 +28,14 @@ public class GlobalExceptionHandler
 
     private static final Logger LOG = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    /** Logs the failure in full and answers with a 500 that reveals none of it. */
+    private final ServerErrorDetail serverErrorDetail;
+
+    /** Creates the handler. */
+    public GlobalExceptionHandler(ServerErrorDetail serverErrorDetail) {
+        this.serverErrorDetail = serverErrorDetail;
+    }
+
+    /** Logs the failure in full and answers with a 500 that reveals at most its message. */
     @Override
     public HttpResponse<ProblemDetail> handle(HttpRequest request, Exception exception) {
         LOG.error(
@@ -39,7 +47,7 @@ public class GlobalExceptionHandler
 
         ProblemDetail problem =
                 ProblemType.INTERNAL_SERVER_ERROR.toProblemDetail(
-                        ProblemType.SERVER_ERROR_DETAIL, request.getPath());
+                        serverErrorDetail.detailFor(exception), request.getPath());
 
         return HttpResponse.<ProblemDetail>status(ProblemType.INTERNAL_SERVER_ERROR.status())
                 .body(problem)

@@ -85,6 +85,9 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
     /** Problem-detail member naming the requested URL; it necessarily differs per request. */
     private static final String PROBLEM_INSTANCE = "instance";
 
+    /** Problem member naming the request it answers, unique to every response. */
+    private static final String PROBLEM_CORRELATION_ID = "correlationId";
+
     private static final String PATH_SEARCH = "/users/search";
 
     private static final String PATH_ME = "/users/me";
@@ -168,11 +171,11 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
         HttpResponse<String> absent = lookup(ABSENT_USER, token(RealmPrincipal.PARTICIPANT));
 
         assertThat(unscoped.code()).isEqualTo(HttpStatus.NOT_FOUND.getCode());
-        assertThat(withoutInstance(unscoped))
+        assertThat(withoutRequestEcho(unscoped))
                 .as("a body that differed would confirm the identifier names a registered user")
-                .isEqualTo(withoutInstance(absent));
+                .isEqualTo(withoutRequestEcho(absent));
         assertThat(body(unscoped))
-                .as("the one differing member only echoes the URL the caller itself requested")
+                .as("the differing URL member only echoes what the caller itself requested")
                 .containsEntry(PROBLEM_INSTANCE, "/users/" + OTHER_USER);
     }
 
@@ -322,10 +325,12 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
         links.save(new UserParticipant(user.getId(), participant.getId(), null));
     }
 
-    /** The problem detail minus the member that merely echoes the requested URL. */
-    private Map<String, Object> withoutInstance(HttpResponse<String> response) throws IOException {
+    /** The problem detail minus the members that echo the requested URL and the request's ID. */
+    private Map<String, Object> withoutRequestEcho(HttpResponse<String> response)
+            throws IOException {
         Map<String, Object> problem = new LinkedHashMap<>(body(response));
         problem.remove(PROBLEM_INSTANCE);
+        problem.remove(PROBLEM_CORRELATION_ID);
         return problem;
     }
 

@@ -54,6 +54,9 @@ tracing:
 # step 3 on, discovery is retried with backoff and readiness reports DOWN until it
 # succeeds, so `./mvnw mn:run` without the compose stack still starts.
 consent-manager:
+  # Local runs show the message of a 5xx; production publishes a fixed sentence.
+  errors:
+    expose-exception-detail: ${ERRORS_EXPOSE_EXCEPTION_DETAIL:true}
   # Local runs need no key material; production configures RECEIPTS_SIGNING_KEY.
   receipts:
     ephemeral-signing-key: ${RECEIPTS_EPHEMERAL_SIGNING_KEY:true}

@@ -2,6 +2,10 @@ package com.seamware.consentmanager.error;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.seamware.consentmanager.observability.CorrelationIdFilter;
 import com.seamware.consentmanager.support.PostgresTestResource;
 import io.micronaut.context.annotation.Property;
 import io.micronaut.context.annotation.Requires;
@@ -9,6 +13,8 @@ import io.micronaut.core.type.Argument;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.MediaType;
+import io.micronaut.http.MutableHttpRequest;
+import io.micronaut.http.MutableHttpResponse;
 import io.micronaut.http.annotation.Body;
 import io.micronaut.http.annotation.Controller;
 import io.micronaut.http.annotation.Get;
@@ -24,6 +30,7 @@ import jakarta.inject.Inject;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -31,6 +38,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.slf4j.LoggerFactory;
 
 /**
  * Drives every client-error status over a real server, so the mapping is asserted where it actually
@@ -68,6 +76,9 @@ class ProblemResponseIT extends PostgresTestResource {
 
     /** Message of the deliberate defect below; asserted absent from the 500 it produces. */
     private static final String DEFECT_MESSAGE = "jdbc:postgresql://db:5432 credentials rejected";
+
+    /** A caller-supplied correlation ID in the accepted shape. */
+    private static final String INBOUND_ID = "client-trace-0001";
 
     @Inject
     @Client("/")
@@ -198,6 +209,98 @@ class ProblemResponseIT extends PostgresTestResource {
                 .doesNotContain("com.seamware.consentmanager.error.ProblemResponseIT");
     }
 
+    /** Every failure route of the probe, one per site that renders a problem detail. */
+    static Stream<Arguments> everyFailure() {
+        return Stream.of(
+                Arguments.of(
+                        "bad request", HttpRequest.GET(PROBE_PATH + "/refuse/bad-request"), 400),
+                Arguments.of("forbidden", HttpRequest.GET(PROBE_PATH + "/refuse/forbidden"), 403),
+                Arguments.of("not found", HttpRequest.GET(PROBE_PATH + "/refuse/not-found"), 404),
+                Arguments.of("conflict", HttpRequest.GET(PROBE_PATH + "/refuse/conflict"), 409),
+                Arguments.of("upstream", HttpRequest.GET(PROBE_PATH + "/refuse/upstream"), 502),
+                Arguments.of(
+                        "bean validation",
+                        HttpRequest.POST(PROBE_PATH + "/validate", Map.of("identifier", " ")),
+                        400),
+                Arguments.of("unroutable", HttpRequest.GET(PROBE_PATH + "/no-such-route"), 404),
+                Arguments.of("defect", HttpRequest.GET(PROBE_PATH + "/defect"), 500));
+    }
+
+    @ParameterizedTest(name = "{0} -> {2}")
+    @MethodSource("everyFailure")
+    @DisplayName("every problem carries the correlation ID of the response header")
+    void stampsTheGeneratedCorrelationId(String name, HttpRequest<?> request, int status)
+            throws IOException {
+        HttpResponse<String> response = exchange(request);
+
+        String header = response.header(CorrelationIdFilter.HEADER);
+        assertThat(response.status().getCode()).isEqualTo(status);
+        assertThat(header).isNotBlank();
+        assertThat(bodyOf(response)).containsEntry("correlationId", header);
+    }
+
+    @ParameterizedTest(name = "{0} -> {2}")
+    @MethodSource("everyFailure")
+    @DisplayName("a well-formed inbound X-Request-ID is echoed in header and body")
+    void echoesTheInboundCorrelationId(String name, MutableHttpRequest<?> request, int status)
+            throws IOException {
+        HttpResponse<String> response =
+                exchange(request.header(CorrelationIdFilter.HEADER, INBOUND_ID));
+
+        assertThat(response.status().getCode()).isEqualTo(status);
+        assertThat(response.header(CorrelationIdFilter.HEADER)).isEqualTo(INBOUND_ID);
+        assertThat(bodyOf(response)).containsEntry("correlationId", INBOUND_ID);
+    }
+
+    @Test
+    @DisplayName("a success carries the correlation ID in its header too")
+    void echoesTheCorrelationIdOnSuccess() {
+        HttpResponse<String> response =
+                exchange(
+                        HttpRequest.POST(PROBE_PATH + "/validate", Map.of("identifier", "x"))
+                                .header(CorrelationIdFilter.HEADER, INBOUND_ID));
+
+        assertThat(response.status().getCode()).isEqualTo(200);
+        assertThat(response.header(CorrelationIdFilter.HEADER)).isEqualTo(INBOUND_ID);
+    }
+
+    @Test
+    @DisplayName("a request failing two constraints lists both fields in errors")
+    void listsEveryRejectedField() throws IOException {
+        HttpResponse<String> response =
+                exchange(
+                        HttpRequest.POST(
+                                PROBE_PATH + "/validate-pair",
+                                Map.of("identifier", " ", "email", " ")));
+
+        assertThat(response.status().getCode()).isEqualTo(400);
+        assertThat(bodyOf(response))
+                .containsEntry(
+                        "errors",
+                        List.of(
+                                Map.of("field", "email", "message", "must not be blank"),
+                                Map.of("field", "identifier", "message", "must not be blank")))
+                .containsEntry("detail", "email: must not be blank; identifier: must not be blank");
+    }
+
+    @Test
+    @DisplayName("the log line of a failure carries the correlation ID of its response")
+    void logsUnderTheResponseCorrelationId() {
+        ListAppender<ILoggingEvent> captured = new ListAppender<>();
+        captured.start();
+        Logger logger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+        logger.addAppender(captured);
+        try {
+            HttpResponse<String> response = get(PROBE_PATH + "/defect");
+
+            assertThat(captured.list)
+                    .extracting(event -> event.getMDCPropertyMap().get(CorrelationIdFilter.MDC_KEY))
+                    .containsExactly(response.header(CorrelationIdFilter.HEADER));
+        } finally {
+            logger.detachAppender(captured);
+        }
+    }
+
     /** Parses the body, which arrives as text because no codec claims {@code problem+json}. */
     private Map<String, Object> bodyOf(HttpResponse<String> response) throws IOException {
         return json.readValue(response.body(), Argument.mapOf(String.class, Object.class));
@@ -209,23 +312,27 @@ class ProblemResponseIT extends PostgresTestResource {
     }
 
     /** Exchanges a request, turning the error response back into an ordinary one. */
-    @SuppressWarnings("unchecked")
     private HttpResponse<String> exchange(HttpRequest<?> request) {
         try {
             return client.toBlocking().exchange(request, String.class);
         } catch (HttpClientResponseException e) {
             HttpResponse<?> response = e.getResponse();
             String body = response.getBody(String.class).orElse("");
-            return (HttpResponse<String>)
-                    HttpResponse.status(response.status())
-                            .body(body)
-                            .contentType(response.getContentType().orElseThrow());
+            MutableHttpResponse<String> copy =
+                    HttpResponse.<String>status(response.status()).body(body);
+            response.getHeaders()
+                    .forEach((name, values) -> values.forEach(value -> copy.header(name, value)));
+            return copy;
         }
     }
 
     /** A body with one constraint, enough to make the validator refuse the request. */
     @Serdeable
     record Payload(@NotBlank String identifier) {}
+
+    /** A body with two constraints, so one request can fail both. */
+    @Serdeable
+    record PairPayload(@NotBlank String identifier, @NotBlank String email) {}
 
     /** One route per failure the error layer has to render, plus one genuine defect. */
     @Requires(property = PROBE_ENABLED, value = "true")
@@ -242,6 +349,7 @@ class ProblemResponseIT extends PostgresTestResource {
                 case "not-found" -> new NotFoundException("No user is registered under it.");
                 case "conflict" -> new ConflictException("Already linked to this participant.");
                 case "silent" -> new NotFoundException(null);
+                case "upstream" -> new UpstreamServiceException(DEFECT_MESSAGE);
                 default -> new IllegalArgumentException(kind);
             };
         }
@@ -249,6 +357,12 @@ class ProblemResponseIT extends PostgresTestResource {
         /** Accepts nothing; the point is the constraint the request fails. */
         @Post("/validate")
         String validate(@Body @Valid Payload payload) {
+            return payload.identifier();
+        }
+
+        /** Accepts nothing; the point is the two constraints the request fails. */
+        @Post("/validate-pair")
+        String validatePair(@Body @Valid PairPayload payload) {
             return payload.identifier();
         }
 
