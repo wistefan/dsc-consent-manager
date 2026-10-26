@@ -1,0 +1,10 @@
+# Response: 409 Conflict — referenced from api/openapi.yaml as
+# components.responses.NoticeGenerationContended, by both privacy-notice generation operations.
+description: >
+  Concurrent generations are contending for this contract and provider's one
+  active notice faster than this request could claim it. Nothing was written;
+  the request is safe to retry.
+content:
+  application/problem+json:
+    schema:
+      $ref: "../schemas/ProblemDetail.yaml"

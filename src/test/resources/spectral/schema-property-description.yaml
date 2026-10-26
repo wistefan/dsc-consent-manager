@@ -1,0 +1,72 @@
+# Breaks schema-property-description: a property without a description.
+openapi: 3.0.3
+info:
+  title: Lint fixture
+  version: 1.0.0
+  description: Fixture for SpecLintIT.
+  contact:
+    name: Fixture
+servers:
+  - url: https://api.example.org
+tags:
+  - name: Things
+    description: Things.
+paths:
+  /thing-status:
+    get:
+      operationId: getThingStatus
+      summary: Read the status.
+      description: Public, so it declares no security and needs no 401 or 403.
+      tags: [Things]
+      security: []
+      responses:
+        "200":
+          description: The status.
+  /things/{thingId}:
+    get:
+      operationId: getThing
+      summary: Read a thing.
+      description: Reads a thing.
+      tags: [Things]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: thingId
+          in: path
+          required: true
+          description: The thing.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The thing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Thing"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Unauthorized:
+      description: Not authenticated.
+    Forbidden:
+      description: Not authorized.
+    NotFound:
+      description: No such thing.
+  schemas:
+    Thing:
+      type: object
+      description: A thing.
+      properties:
+        thingName:
+          type: string

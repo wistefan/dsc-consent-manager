@@ -1,0 +1,106 @@
+# Spectral ruleset for the Consent Manager API. SpecLintIT lints the bundled spec with it and
+# fails the build on any error-severity result.
+extends:
+  - - spectral:oas
+    - recommended
+
+rules:
+  # The bearerAuth requirement lists the roles an operation admits, mirrored by `x-roles`.
+  # OAS 3.0 reserves that array for OAuth2 scopes, so this rule would flag every secured
+  # operation; SpecSecurityConsistencyTest holds the roles to the implementation instead.
+  oas3-operation-security-defined: off
+
+  # A `$ref` property carries its description as a sibling: the generator types an
+  # `allOf: [$ref]` into another component file as `Object`. Swagger UI renders the sibling.
+  no-$ref-siblings: off
+
+  operation-operationId: error
+  operation-tag-defined: error
+
+  operation-summary:
+    description: Every operation has a summary.
+    severity: error
+    given: $.paths[*][get,put,post,delete,options,head,patch,trace]
+    then:
+      field: summary
+      function: truthy
+
+  operation-security-declared:
+    description: "Every operation declares its own `security`; a public one declares `security: []`."
+    severity: error
+    given: $.paths[*][get,put,post,delete,options,head,patch,trace]
+    then:
+      field: security
+      function: defined
+
+  secured-operation-shared-auth-responses:
+    description: Every secured operation references the shared 401 and 403 responses.
+    severity: error
+    resolved: false
+    given: $.paths[*][?(@ && @.security && @.security.length > 0)].responses
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          required: ["401", "403"]
+          properties:
+            "401":
+              type: object
+              required: [$ref]
+              properties:
+                $ref:
+                  const: "#/components/responses/Unauthorized"
+            "403":
+              type: object
+              required: [$ref]
+              properties:
+                $ref:
+                  const: "#/components/responses/Forbidden"
+
+  client-error-responses-shared:
+    description: Every 4xx response is a reference into `components/responses`.
+    severity: error
+    resolved: false
+    given: $.paths[*][get,put,post,delete,options,head,patch,trace].responses[?(@property.match(/^4/))]
+    then:
+      # `schema`, not `pattern` on the `$ref` field: `pattern` passes an absent field.
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          required: [$ref]
+          properties:
+            $ref:
+              type: string
+              pattern: "^#/components/responses/"
+
+  schema-property-description:
+    description: Every schema property has its own description; a referenced type does not supply one.
+    severity: error
+    resolved: false
+    given: $..properties[*]
+    then:
+      field: description
+      function: truthy
+
+  path-segments-kebab-case:
+    description: Path segments are kebab-case; a dot is admitted only as in `/.well-known/jwks.json`.
+    severity: error
+    given: $.paths
+    then:
+      field: "@key"
+      function: pattern
+      functionOptions:
+        match: "^(/(\\.?[a-z0-9]+(-[a-z0-9]+)*(\\.[a-z0-9]+)?|\\{[a-z][a-zA-Z0-9]*\\}))+$"
+
+  property-names-camel-case:
+    description: Schema property names are camelCase.
+    severity: error
+    resolved: false
+    given: $..properties
+    then:
+      field: "@key"
+      function: pattern
+      functionOptions:
+        match: "^[a-z][a-zA-Z0-9]*$"

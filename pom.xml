@@ -508,6 +508,13 @@
                                 -->
                                 <wrapInHttpResponse>true</wrapInHttpResponse>
                             </configOptions>
+                            <!--
+                                RFC 7807 makes `instance` a URI reference, usually relative; the
+                                generator would otherwise type uri-reference as String.
+                            -->
+                            <typeMappings>
+                                <typeMapping>string+uri-reference=URI</typeMapping>
+                            </typeMappings>
                             <!-- Suppress generated Application.java and other scaffolding — we manage them ourselves -->
                             <generateSupportingFiles>false</generateSupportingFiles>
                             <generateApiTests>false</generateApiTests>

@@ -67,14 +67,19 @@ properties:
           properties:
             streetAddress:
               type: string
+              description: Street address; always empty.
             addressLocality:
               type: string
+              description: Locality; always empty.
             addressRegion:
               type: string
+              description: Region; always empty.
             postalCode:
               type: string
+              description: Postal code; always empty.
             addressCountry:
               type: string
+              description: Country; always empty.
         email:
           type: string
           description: Always `""`; a registration carries one `contact` and no email.
@@ -101,11 +106,13 @@ properties:
           description: Title of the notice, or the contract when untitled.
         purposes:
           type: array
+          description: The purposes elected in the decision, one entry each.
           items:
             type: object
             properties:
               purpose:
                 type: string
+                description: The purpose as the notice stated it.
               purposeCategory:
                 type: array
                 description: Always empty; a notice states purposes without a category.
@@ -126,6 +133,7 @@ properties:
                   this service's own revocation route.
               thirdPartyDisclosure:
                 type: boolean
+                description: Whether the notice declared any recipients.
               thirdPartyName:
                 type: string
                 description: >
