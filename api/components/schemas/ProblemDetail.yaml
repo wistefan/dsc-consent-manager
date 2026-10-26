@@ -32,7 +32,7 @@ properties:
     example: "Consent record with ID 'abc-123' was not found."
   instance:
     type: string
-    format: uri
+    format: uri-reference
     description: >
       A URI reference that identifies the specific occurrence of the
       problem. It may or may not yield further information if

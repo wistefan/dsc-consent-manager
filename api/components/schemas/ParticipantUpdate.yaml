@@ -56,8 +56,12 @@ properties:
     description: Contact address for the organization. Optional, and cleared when left out.
     example: "data-protection@clinic.example.org"
   legalPerson:
+    description: >
+      Legal-entity metadata about the organization. Optional, and cleared when left out.
     $ref: "./ParticipantLegalPerson.yaml"
   endpoints:
+    description: >
+      Service endpoints the participant exposes. Optional, and cleared when left out.
     $ref: "./ParticipantEndpoints.yaml"
 required:
   - legalName

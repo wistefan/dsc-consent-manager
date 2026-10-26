@@ -65,6 +65,9 @@ class SpecReferenceResolutionTest {
 
     private static final String YAML_SUFFIX = ".yaml";
 
+    /** Marks tool configuration such as the Spectral ruleset, which is not part of the spec. */
+    private static final String TOOL_CONFIGURATION_PREFIX = ".";
+
     /** Reads one document of a layout, addressed by its path relative to that layout's root. */
     @FunctionalInterface
     interface Layout {
@@ -365,6 +368,11 @@ class SpecReferenceResolutionTest {
             List<String> documents =
                     tree.filter(Files::isRegularFile)
                             .filter(file -> file.getFileName().toString().endsWith(YAML_SUFFIX))
+                            .filter(
+                                    file ->
+                                            !file.getFileName()
+                                                    .toString()
+                                                    .startsWith(TOOL_CONFIGURATION_PREFIX))
                             .map(file -> SOURCE_ROOT.relativize(file).toString())
                             .filter(path -> !ROOT_DOCUMENT.equals(path))
                             .collect(ArrayList::new, List::add, List::addAll);
