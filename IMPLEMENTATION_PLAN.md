@@ -186,8 +186,28 @@ of the security filter so 401/403 responses carry the ID too.
     `ConsentWriter`, so neither reaches the seam today. Their private `close`/`terminateUnanswered`
     run inside the `@Transactional` method (self-invoked), so counting there would count moves
     that are then rolled back.
+    - **Lock the rows first.** Today both read unlocked (`findByUserIdAndStatusIn`,
+      `findByProviderIdAndStatusIn`/`findByConsumerIdAndStatusIn`). Deregistration locks only the
+      participant row, and erasure locks nothing. `ConsentMove.held` is documented as read under
+      the row lock, so add locking reads and use them instead:
+      - `ConsentRepository.findByUserIdAndStatusInForUpdate` for erasure. `erase` takes **one**
+        locked read over GRANTED ∪ `UNANSWERED_STATUSES` and partitions it by held status into
+        revocations and terminations, still written as two batched updates. Two separate reads
+        would let a concurrent `decide` grant a PENDING row between them and leave it standing.
+      - `findNamingParticipantForUpdate` for deregistration: one native query,
+        `(provider_id = :id OR consumer_id = :id) AND status IN (:statuses) ... FOR UPDATE`. A
+        self-dealing consent comes back once, so `naming`'s de-duplication goes away.
+      - Both lock in the order the writer's `findByUserIdAndPrivacyNoticeIdForUpdate` already uses
+        (`ORDER BY created_at DESC, id DESC`), so all consent locks are taken in one order. A
+        deadlock Postgres still detects rolls back one transaction, which then reports nothing.
+      - Under READ COMMITTED, `FOR UPDATE` re-checks the status predicate on a row a concurrent
+        transaction committed meanwhile. A row that a concurrent `decide` moved PENDING → GRANTED
+        is therefore either read as GRANTED (erasure revokes it) or not returned at all
+        (deregistration skips it). It is never overwritten from a stale PENDING. This also closes
+        the lost-update race the unlocked reads have today. Rows *inserted* concurrently are not
+        locked by either read; that race is pre-existing, unchanged, and out of scope.
     - `close` and `terminateUnanswered` return `List<ConsentMove>`, each with the status the row
-      held when it was read, instead of an `int`. `ErasureResult` and `DeregistrationResult` gain
+      held under that lock, instead of an `int`. `ErasureResult` and `DeregistrationResult` gain
       a `List<ConsentMove> moves` component. Their existing counts become derived from it (or are
       checked against it in the compact constructor), so the published summary is unchanged.
     - `UserController.eraseCurrentUser` and `ParticipantController.deregisterCurrentParticipant`
@@ -212,13 +232,16 @@ of the security filter so 401/403 responses carry the ID too.
       or moves a consent to EXPIRED, so edges out of DRAFT are driven on a row seeded through the
       repository, and only where a route accepts DRAFT (the lifecycle routes, erasure and
       deregistration).
-    - **Edges no route makes** are listed in a named `NOT_YET_REACHABLE` constant in the IT. It is
-      expected to hold GRANTED → EXPIRED, GRANTED → TERMINATED and DRAFT → REFUSED; confirm the
-      list against the routes when writing the test. A test in the same class asserts that the
-      driven edges and `NOT_YET_REACHABLE` are disjoint and together equal every edge in the
-      `ConsentStateMachine` table, plus the `none` creations from `CREATABLE`. So an expiry job or
-      a draft route that makes a listed edge reachable fails the build until it moves from the
-      list to a driven row.
+    - **Edges no route makes** are listed in a named `NOT_YET_REACHABLE` constant in the IT. It
+      holds GRANTED → EXPIRED only. DRAFT → REFUSED is reachable through the subject's refuse route
+      on a seeded DRAFT (`ConsentLifecycleService.refuse` accepts PENDING and DRAFT), and
+      GRANTED → TERMINATED through the participant terminate route (`terminate` accepts GRANTED and
+      the unanswered statuses). Both get driven rows.
+    - **Coverage guard.** A test in the same class asserts that the driven edges and
+      `NOT_YET_REACHABLE` are disjoint and together equal every edge in the `ConsentStateMachine`
+      table, plus the `none` creations from `CREATABLE`. This proves the table is covered. It does
+      **not** prove a listed edge is unreachable: an edge wrongly listed is simply never driven.
+      Keep the list to edges with no code path, and justify each entry in a comment.
 
     Explicit rows:
     - a superseding grant (a decision against an open grant): GRANTED→REVOKED once, plus the
@@ -227,6 +250,8 @@ of the security filter so 401/403 responses carry the ID too.
       only from the race `ConsentWriter.request` documents, so the extra PENDING is seeded through
       the repository and the decision is then made over HTTP;
     - a creation through `request`: `none`→PENDING;
+    - a refusal over the refuse route of a seeded DRAFT: DRAFT→REFUSED;
+    - a termination over the participant terminate route of a grant: GRANTED→TERMINATED;
     - an erasure over HTTP for a subject holding a grant, a PENDING request and a seeded DRAFT:
       GRANTED→REVOKED, PENDING→TERMINATED and DRAFT→TERMINATED, once each;
     - a deregistration over HTTP for a participant named by a PENDING request and a seeded DRAFT:
@@ -236,6 +261,10 @@ of the security filter so 401/403 responses carry the ID too.
     still has it.
   - `UserServiceTest`/`ParticipantServiceTest` (or the existing erasure and deregistration ITs):
     the returned `moves` match the published counts, and each carries the status it was read in.
+    A concurrency IT (two racers released by a `CyclicBarrier`, as `PrivacyNoticeConcurrencyIT`
+    does): erasure or deregistration races a `decide` that grants one of its PENDING rows.
+    Whichever commits first, the counter shows exactly one move out of that PENDING row, and the
+    stored status agrees with the last committed move.
   - `MetricsExposureIT`: `/metrics` lists `jvm.memory.used`, `http.server.requests`, a
     `hikaricp.connections*` meter, `consentmanager.consent.transitions` and the existing
     token-rejection meter. `/prometheus` returns the scrape format.
