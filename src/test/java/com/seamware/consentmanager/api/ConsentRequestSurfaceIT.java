@@ -37,6 +37,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -115,6 +116,9 @@ class ConsentRequestSurfaceIT extends KeycloakAndPostgresTestResource {
 
     /** Stands in for the subject identifier when two refusals are compared for sameness. */
     private static final String SUBJECT_PLACEHOLDER = "<subject>";
+
+    /** Problem member naming the request it answers, unique to every response. */
+    private static final String PROBLEM_CORRELATION_ID = "correlationId";
 
     @Inject
     @Client("/")
@@ -399,9 +403,22 @@ class ConsentRequestSurfaceIT extends KeycloakAndPostgresTestResource {
                 Map.of(PROPERTY_NOTICE, privacyNoticeId, PROPERTY_SUBJECT, subject));
     }
 
-    /** The refusal with the subject it names masked, so two of them compare on their shape. */
-    private String anonymised(HttpResponse<String> response, String subject) {
-        return response.body().replace(subject, SUBJECT_PLACEHOLDER);
+    /**
+     * The refusal with the subject it names masked and its per-request correlation ID dropped, so
+     * two of them compare on their shape.
+     */
+    private Map<String, Object> anonymised(HttpResponse<String> response, String subject) {
+        try {
+            Map<String, Object> problem =
+                    new HashMap<>(
+                            json.readValue(
+                                    response.body().replace(subject, SUBJECT_PLACEHOLDER),
+                                    Argument.mapOf(String.class, Object.class)));
+            problem.remove(PROBLEM_CORRELATION_ID);
+            return problem;
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not read the response body", e);
+        }
     }
 
     private Map<String, Object> body(HttpResponse<String> response) {

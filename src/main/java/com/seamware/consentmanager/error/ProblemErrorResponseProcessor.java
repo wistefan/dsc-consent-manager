@@ -33,6 +33,13 @@ public class ProblemErrorResponseProcessor implements ErrorResponseProcessor<Pro
     /** Separator between the individual messages listed in one detail string. */
     private static final String MESSAGE_SEPARATOR = "; ";
 
+    private final ServerErrorDetail serverErrorDetail;
+
+    /** Creates the processor. */
+    public ProblemErrorResponseProcessor(ServerErrorDetail serverErrorDetail) {
+        this.serverErrorDetail = serverErrorDetail;
+    }
+
     /**
      * Renders the error as a problem, withholding the cause of anything that is this side's fault.
      */
@@ -54,7 +61,9 @@ public class ProblemErrorResponseProcessor implements ErrorResponseProcessor<Pro
         }
 
         String detail =
-                serverError ? ProblemType.SERVER_ERROR_DETAIL : describe(errorContext, reason);
+                serverError
+                        ? serverErrorDetail.detailFor(errorContext.getRootCause().orElse(null))
+                        : describe(errorContext, reason);
         return baseResponse
                 .body(ProblemType.problemFor(status, reason, detail, request.getPath()))
                 .contentType(MediaType.of(ProblemType.MEDIA_TYPE));

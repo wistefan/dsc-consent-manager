@@ -43,6 +43,8 @@ import lombok.Setter;
  *   <li>{@code RECEIPTS_RETIRED_VERIFICATION_KEYS} &rarr; {@code
  *       consent-manager.receipts.retired-verification-keys}
  *   <li>{@code NOTIFICATION_CLIENT_URL} &rarr; {@code consent-manager.notifications.client-url}
+ *   <li>{@code ERRORS_EXPOSE_EXCEPTION_DETAIL} &rarr; {@code
+ *       consent-manager.errors.expose-exception-detail}
  * </ul>
  *
  * @see <a href="https://docs.micronaut.io/latest/guide/#configurationProperties">Micronaut
@@ -451,5 +453,18 @@ public class ConsentManagerConfiguration {
          * verify.
          */
         @Nullable private String retiredVerificationKeys;
+    }
+
+    /** How error responses are rendered, bound under {@code consent-manager.errors}. */
+    @Getter
+    @Setter
+    @ConfigurationProperties("errors")
+    public static class Errors {
+
+        /**
+         * Whether a 5xx publishes its exception message instead of a fixed sentence, bound to
+         * {@code ERRORS_EXPOSE_EXCEPTION_DETAIL}; a debugging aid that must stay off in production.
+         */
+        private boolean exposeExceptionDetail;
     }
 }

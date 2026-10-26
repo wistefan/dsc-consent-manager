@@ -1,6 +1,9 @@
 package com.seamware.consentmanager.error;
 
+import com.seamware.consentmanager.api.generated.model.ProblemDetail;
+import com.seamware.consentmanager.api.generated.model.ProblemFieldError;
 import io.micronaut.context.annotation.Replaces;
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.MediaType;
@@ -12,6 +15,7 @@ import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Path;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -41,29 +45,52 @@ public class ConstraintViolationProblemHandler
     /** Detail used when the exception carries no violation to describe. */
     private static final String UNSPECIFIED_DETAIL = "The request failed validation.";
 
-    /** Maps every violation to a single 400 whose detail names the rejected fields. */
+    /** Orders the published rejections so the same request always reads the same. */
+    private static final Comparator<ProblemFieldError> BY_FIELD_THEN_MESSAGE =
+            Comparator.comparing(ProblemFieldError::getField)
+                    .thenComparing(ProblemFieldError::getMessage);
+
+    /**
+     * Maps every violation to a single 400 listing each rejected field in {@code errors} and,
+     * joined, in {@code detail}.
+     */
     @Override
     public HttpResponse<?> handle(HttpRequest request, ConstraintViolationException exception) {
+        List<ProblemFieldError> errors = fieldErrorsOf(exception.getConstraintViolations());
+        ProblemDetail problem =
+                ProblemType.BAD_REQUEST.toProblemDetail(describe(errors), request.getPath());
+        if (!errors.isEmpty()) {
+            problem.setErrors(errors);
+        }
         return HttpResponse.status(ProblemType.BAD_REQUEST.status())
-                .body(
-                        ProblemType.BAD_REQUEST.toProblemDetail(
-                                describe(exception.getConstraintViolations()), request.getPath()))
+                .body(problem)
                 .contentType(MediaType.of(ProblemType.MEDIA_TYPE));
     }
 
-    /** Lists the violations in a stable order so the same request always reads the same. */
-    private static String describe(Set<? extends ConstraintViolation<?>> violations) {
-        if (violations == null || violations.isEmpty()) {
-            return UNSPECIFIED_DETAIL;
+    /** One entry per distinct rejection, sorted by field and then message. */
+    private static List<ProblemFieldError> fieldErrorsOf(
+            @Nullable Set<? extends ConstraintViolation<?>> violations) {
+        if (violations == null) {
+            return List.of();
         }
         return violations.stream()
                 .map(
                         violation ->
-                                leafOf(violation.getPropertyPath())
-                                        + FIELD_SEPARATOR
-                                        + violation.getMessage())
+                                new ProblemFieldError(
+                                        leafOf(violation.getPropertyPath()),
+                                        violation.getMessage()))
                 .distinct()
-                .sorted(Comparator.naturalOrder())
+                .sorted(BY_FIELD_THEN_MESSAGE)
+                .toList();
+    }
+
+    /** Joins the rejections into one sentence, or says that none was named. */
+    private static String describe(List<ProblemFieldError> errors) {
+        if (errors.isEmpty()) {
+            return UNSPECIFIED_DETAIL;
+        }
+        return errors.stream()
+                .map(error -> error.getField() + FIELD_SEPARATOR + error.getMessage())
                 .collect(Collectors.joining(VIOLATION_SEPARATOR));
     }
 
