@@ -41,14 +41,14 @@ import org.yaml.snakeyaml.Yaml;
  *       folded block scalar collapsed every table into a single run-on line.
  * </ul>
  *
- * <p>The {@code test} environment clears {@code micronaut.server.context-path}, so endpoints are
+ * <p>The {@code test} environment clears {@code consent-manager.api-prefix}, so endpoints are
  * addressed without the {@code /v1} prefix that the {@code servers} block declares.
  */
 @MicronautTest
 @DisplayName("API status endpoint and published OpenAPI specification")
 class ApiStatusControllerIT extends PostgresTestResource {
 
-    /** Path of the status endpoint, without the context path the test environment clears. */
+    /** Path of the status endpoint, without the API prefix the test environment clears. */
     private static final String API_STATUS_PATH = "/api-status";
 
     /** Root of the published specification tree. */

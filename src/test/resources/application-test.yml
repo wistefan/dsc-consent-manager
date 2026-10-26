@@ -9,10 +9,6 @@ micronaut:
     enabled: false
 
   server:
-    # Remove the API context path in tests so management and API endpoints
-    # share the same root, simplifying test HTTP client usage.
-    context-path: /
-
     # Bind a random free port instead of application.yml's fixed 8080. Test classes run
     # sequentially, but a fixed port makes every @MicronautTest fail with "Address already
     # in use" whenever anything else on the machine holds 8080 - an orphaned JVM from an
@@ -75,6 +71,10 @@ logger:
 # every test context must fill those blanks in place. A differently-named entry here
 # would leave `primary` blank and fail validation for every full-context test.
 consent-manager:
+  # Serve the API unprefixed in tests so management and API endpoints share the same
+  # root, simplifying test HTTP client usage.
+  api-prefix: ""
+
   # WireMock is the only stub mechanism this repo has and it binds on loopback, so
   # every resolution test would otherwise be asserting the SSRF guard rather than the
   # feature. Naming the loopback hosts here waives the private-address refusal for them

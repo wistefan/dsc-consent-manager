@@ -250,9 +250,9 @@ live status, so it is signed on every read instead.
 
 The public keys are published anonymously under their `kid`s at
 `https://<host>/.well-known/jwks.json`: the origin root RFC 8615 defines, **not** under
-`API_PREFIX`. `@OriginRoot` exempts `ReceiptSigningController` from the context path; the security
-filter and `PrincipalResolutionFilter` are context-path-relative and do not see that route, which is
-why only a public route may carry the marker. The response is sent `Cache-Control: public,
+`API_PREFIX`. `@OriginRoot` exempts `ReceiptSigningController` from the API prefix; the security
+filter and `PrincipalResolutionFilter` still see the route, and its `security: []` declaration keeps
+it anonymous. The response is sent `Cache-Control: public,
 max-age=3600`, so a verifier may hold a key set up to one hour old. Two things follow: a key that
 stopped signing must stay published for as long as receipts it signed are in circulation, and a new
 key must be published one cache lifetime *before* it signs.
