@@ -47,7 +47,7 @@ public final class FailureSummary {
             log.debug(
                     SERVER_FAILURE,
                     request.getMethod(),
-                    request.getUri(),
+                    request.getPath(),
                     outcome,
                     failure == null ? null : failure.getMessage(),
                     failure);

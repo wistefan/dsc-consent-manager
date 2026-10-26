@@ -46,7 +46,7 @@ public class ApiExceptionHandler
             LOG.debug(
                     "{} {} refused with {}: {}",
                     request.getMethod(),
-                    request.getUri(),
+                    request.getPath(),
                     problemType,
                     exception.getMessage());
         }

@@ -438,9 +438,10 @@ The consent flow follows the rule: `/consents` and `/consents/requests` are inli
   receipts signed by the active and by a retired key verify against it with plain Nimbus.
 - `KeyMaterialLeakIT` — no log event, MDC value, throwable chain or response body carries any
   private member of the signing key, across signing, the ephemeral-key warning and signing failures.
-- `LogLeakIT` — across registration, grant, revoke, erasure, a malformed token, a token in a query
-  string and two forced server failures, no event at INFO or above quotes a token, a private key
-  member, the pseudonym key or the sentinel identifier, email or name.
+- `LogLeakIT` — across a participant registering a sentinel person, a token user's JIT
+  provisioning, grant, revoke and erasure, a malformed token, a token in a query string and two
+  forced server failures, no event at INFO or above quotes a token, a private key member, the
+  pseudonym key, or the identifier, email or name of either person.
 - `ConsentReceiptIssuanceIT`, `SigningFailureIT` — every grant path stores exactly one receipt that
   reads never re-sign; a signing failure rolls the grant back and answers `500`.
 

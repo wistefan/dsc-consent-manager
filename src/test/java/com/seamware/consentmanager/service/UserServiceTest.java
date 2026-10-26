@@ -4,6 +4,7 @@ import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import ch.qos.logback.classic.Level;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
@@ -28,6 +29,7 @@ import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.Role;
 import com.seamware.consentmanager.security.UserPrincipal;
+import com.seamware.consentmanager.support.LogCapture;
 import com.seamware.consentmanager.support.TestPseudonymizer;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
@@ -434,6 +436,32 @@ class UserServiceTest {
                                 service.registerForParticipant(
                                         participant, registration(STORED_LOCAL_IDENTIFIER)))
                 .isSameAs(failure);
+    }
+
+    /**
+     * A failed bulk entry is correlated by pseudonym above DEBUG, never by identifier or message.
+     */
+    @Test
+    @DisplayName("a failed bulk entry logs the pseudonym, not the identifier or the message")
+    void bulkEntryFailureLogsOnlyThePseudonym() {
+        Participant participant = participants.put(participant());
+        users.put(stored());
+        String message = "Key (identifier)=(%s) already exists".formatted(IDENTIFIER);
+        links.commitDuringSave(null, new DataAccessException(message));
+
+        List<String> logged;
+        try (LogCapture captured = LogCapture.attach()) {
+            service.registerBulkForParticipant(
+                    participant, List.of(registration(STORED_LOCAL_IDENTIFIER)));
+            logged =
+                    captured.events().stream()
+                            .filter(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
+                            .map(LogCapture::render)
+                            .toList();
+        }
+
+        assertThat(logged).anyMatch(line -> line.contains(PSEUDONYMIZER.pseudonym(IDENTIFIER)));
+        assertThat(logged).noneMatch(line -> line.contains(IDENTIFIER) || line.contains(message));
     }
 
     /** The links of a user resolve to participant identifiers, sorted so responses are stable. */

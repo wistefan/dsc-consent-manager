@@ -156,7 +156,10 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    /** What no event at INFO or above may contain. */
+    /**
+     * What no event at INFO or above may contain. The subject values cover both the sentinel the
+     * participant registers and the token user who is provisioned, grants, revokes and is erased.
+     */
     enum Forbidden {
         BEARER_TOKEN,
         MALFORMED_TOKEN,
@@ -193,6 +196,9 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
 
     private UUID subjectId;
 
+    /** The token user's row as provisioned, read before erasure clears it. */
+    private User subject;
+
     private PrivacyNotice notice;
 
     /** Everything at INFO or above, rendered; null until the run has happened. */
@@ -224,10 +230,8 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
 
         assertThat(exchange(HttpRequest.POST(PATH_REGISTER, ""), userToken).code())
                 .isIn(HttpStatus.OK.getCode(), HttpStatus.CREATED.getCode());
-        subjectId =
-                users.findByIdentifier(KeycloakTestResource.subject(userToken))
-                        .orElseThrow()
-                        .getId();
+        subject = users.findByIdentifier(KeycloakTestResource.subject(userToken)).orElseThrow();
+        subjectId = subject.getId();
         registerSentinel();
         UUID consent = grant();
         assertThat(exchange(HttpRequest.POST(revokePath(consent), ""), userToken).code())
@@ -331,9 +335,14 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
             case MALFORMED_TOKEN -> Set.of(MALFORMED_TOKEN);
             case PRIVATE_KEY_MEMBER -> KeyMaterialForms.of(SIGNING_KEY);
             case PSEUDONYM_KEY -> Set.of(pseudonymKey);
-            case SUBJECT_IDENTIFIER -> Set.of(SENTINEL_IDENTIFIER);
-            case SUBJECT_EMAIL -> Set.of(SENTINEL_EMAIL);
-            case SUBJECT_NAME -> Set.of(SENTINEL_FIRST_NAME, SENTINEL_LAST_NAME);
+            case SUBJECT_IDENTIFIER -> Set.of(SENTINEL_IDENTIFIER, subject.getIdentifier());
+            case SUBJECT_EMAIL -> Set.of(SENTINEL_EMAIL, subject.getEmail());
+            case SUBJECT_NAME ->
+                    Set.of(
+                            SENTINEL_FIRST_NAME,
+                            SENTINEL_LAST_NAME,
+                            subject.getFirstName(),
+                            subject.getLastName());
         };
     }
 

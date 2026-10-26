@@ -2,6 +2,9 @@ package com.seamware.consentmanager.observability;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import com.seamware.consentmanager.support.LogCapture;
 import io.micronaut.http.HttpRequest;
 import java.sql.SQLException;
 import java.util.stream.Stream;
@@ -10,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.slf4j.LoggerFactory;
 
 @DisplayName("Failure summary")
 class FailureSummaryTest {
@@ -17,6 +21,8 @@ class FailureSummaryTest {
     private static final String SENTINEL = "alice@example.com";
 
     private static final String CHAIN_SEPARATOR = " <- ";
+
+    private static final String QUERY_TOKEN = "eyJhbGciOiJSUzI1NiJ9.query-token-sentinel";
 
     static Stream<Arguments> failures() {
         Throwable bare = new IllegalStateException(SENTINEL);
@@ -54,6 +60,26 @@ class FailureSummaryTest {
     void unmatchedRoute() {
         assertThat(FailureSummary.routeOf(HttpRequest.GET("/users/" + SENTINEL)))
                 .isEqualTo(FailureSummary.UNMATCHED_ROUTE);
+    }
+
+    @Test
+    @DisplayName("keeps the query string out even at DEBUG, since it may carry a token")
+    void omitsTheQueryStringAtDebug() {
+        Logger log = (Logger) LoggerFactory.getLogger(FailureSummaryTest.class);
+        log.setLevel(Level.DEBUG);
+        HttpRequest<?> request = HttpRequest.GET("/consents?access_token=" + QUERY_TOKEN);
+
+        try (LogCapture captured = LogCapture.attach()) {
+            FailureSummary.logRequestFailure(
+                    log, request, "SERVER_ERROR", new IllegalStateException(SENTINEL));
+
+            assertThat(captured.events())
+                    .anyMatch(event -> event.getLevel() == Level.DEBUG)
+                    .extracting(LogCapture::render)
+                    .noneMatch(line -> line.contains(QUERY_TOKEN));
+        } finally {
+            log.setLevel(null);
+        }
     }
 
     /** Two exceptions each naming the other as cause, which {@code initCause} cannot build. */
