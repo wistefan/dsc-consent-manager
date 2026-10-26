@@ -510,7 +510,8 @@
                             </configOptions>
                             <!--
                                 RFC 7807 makes `instance` a URI reference, usually relative; the
-                                generator would otherwise type uri-reference as String.
+                                generator would otherwise type uri-reference as String. The mapping
+                                is global: every uri-reference property becomes java.net.URI.
                             -->
                             <typeMappings>
                                 <typeMapping>string+uri-reference=URI</typeMapping>

@@ -6,6 +6,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.dockerjava.api.DockerClient;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -13,20 +15,23 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.output.OutputFrame.OutputType;
 import org.testcontainers.containers.startupcheck.StartupCheckStrategy;
+import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.MountableFile;
+import org.yaml.snakeyaml.Yaml;
 
 /**
  * Lints the bundled specification with {@code api/.spectral.yaml} and fails on any error, and
- * proves every custom rule fails a fixture under {@code spectral/} that breaks it.
+ * proves every custom rule fails the valid fixture under {@code spectral/} once one edit breaks it.
  */
 @DisplayName("Linting the OpenAPI specification with Spectral")
 class SpecLintIT {
@@ -46,8 +51,15 @@ class SpecLintIT {
     private static final String FIXTURE_DIRECTORY = "spectral/";
     private static final String FIXTURE_EXTENSION = ".yaml";
 
-    /** The fixture every rule-breaking fixture is a one-change variant of. */
+    /** The fixture each {@link Violation} breaks with one edit. */
     private static final String VALID_FIXTURE = "valid";
+
+    // The valid fixture's nodes a Violation edits.
+    private static final String SECURED_PATH = "/things/{thingId}";
+    private static final String PUBLIC_PATH = "/thing-status";
+    private static final String THING_PROPERTY = "thingName";
+    private static final String FORBIDDEN_STATUS = "403";
+    private static final String NOT_FOUND_STATUS = "404";
 
     /** Spectral's numeric severity for an error. */
     private static final int ERROR_SEVERITY = 0;
@@ -73,30 +85,19 @@ class SpecLintIT {
     }
 
     @Test
-    @DisplayName("the fixture the rule-breaking fixtures vary passes")
+    @DisplayName("the fixture each violation edits passes")
     void validFixturePasses() {
         assertClean(lint(fixture(VALID_FIXTURE)));
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(
-            strings = {
-                "operation-operationId",
-                "operation-summary",
-                "operation-security-declared",
-                "operation-tag-defined",
-                "secured-operation-shared-auth-responses",
-                "client-error-responses-shared",
-                "schema-property-description",
-                "path-segments-kebab-case",
-                "property-names-camel-case"
-            })
-    @DisplayName("a fixture breaking a rule fails on that rule alone")
-    void fixtureBreakingRuleFails(String rule) {
-        Lint lint = lint(fixture(rule));
+    @EnumSource(Violation.class)
+    @DisplayName("the valid fixture with one rule broken fails on that rule alone")
+    void fixtureBreakingRuleFails(Violation violation) {
+        Lint lint = lint(Transferable.of(violation.applyTo(validFixture())));
 
         assertThat(lint.exitCode()).as(lint.report()).isEqualTo(EXIT_ERRORS_FOUND);
-        assertThat(lint.errorCodes()).as(lint.report()).containsExactly(rule);
+        assertThat(lint.errorCodes()).as(lint.report()).containsExactly(violation.rule);
     }
 
     private static void assertClean(Lint lint) {
@@ -108,12 +109,24 @@ class SpecLintIT {
         return MountableFile.forClasspathResource(FIXTURE_DIRECTORY + name + FIXTURE_EXTENSION);
     }
 
-    private static Lint lint(MountableFile spec) {
+    private static Map<String, Object> validFixture() {
+        try (InputStream in =
+                SpecLintIT.class
+                        .getClassLoader()
+                        .getResourceAsStream(
+                                FIXTURE_DIRECTORY + VALID_FIXTURE + FIXTURE_EXTENSION)) {
+            return new Yaml().load(Objects.requireNonNull(in, "valid fixture missing"));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private static Lint lint(Transferable spec) {
         try (GenericContainer<?> spectral =
                 new GenericContainer<>(DockerImageName.parse(SPECTRAL_IMAGE))
                         .withCopyFileToContainer(
                                 MountableFile.forHostPath(RULESET), RULESET_IN_CONTAINER)
-                        .withCopyFileToContainer(spec, SPEC_IN_CONTAINER)
+                        .withCopyToContainer(spec, SPEC_IN_CONTAINER)
                         .withCommand(
                                 "lint",
                                 "--ruleset",
@@ -134,6 +147,69 @@ class SpecLintIT {
                     exitCode,
                     spectral.getLogs(OutputType.STDOUT),
                     spectral.getLogs(OutputType.STDERR));
+        }
+    }
+
+    /** One custom rule and the single edit to the valid fixture that breaks it. */
+    enum Violation {
+        OPERATION_ID("operation-operationId", spec -> securedGet(spec).remove("operationId")),
+        SUMMARY("operation-summary", spec -> securedGet(spec).remove("summary")),
+        SECURITY_DECLARED(
+                "operation-security-declared", spec -> securedGet(spec).remove("security")),
+        TAG_DEFINED(
+                "operation-tag-defined",
+                spec -> securedGet(spec).put("tags", List.of("Undeclared"))),
+        SHARED_AUTH_RESPONSES(
+                "secured-operation-shared-auth-responses",
+                spec -> child(securedGet(spec), "responses").remove(FORBIDDEN_STATUS)),
+        CLIENT_ERRORS_SHARED(
+                "client-error-responses-shared",
+                spec ->
+                        child(securedGet(spec), "responses")
+                                .put(NOT_FOUND_STATUS, Map.of("description", "Inline 404."))),
+        PROPERTY_DESCRIPTION(
+                "schema-property-description",
+                spec -> child(thingProperties(spec), THING_PROPERTY).remove("description")),
+        PATH_KEBAB_CASE(
+                "path-segments-kebab-case",
+                spec -> rename(child(spec, "paths"), PUBLIC_PATH, "/thingStatus")),
+        PROPERTY_CAMEL_CASE(
+                "property-names-camel-case",
+                spec -> rename(thingProperties(spec), THING_PROPERTY, "thing_name"));
+
+        private final String rule;
+        private final Consumer<Map<String, Object>> mutation;
+
+        Violation(String rule, Consumer<Map<String, Object>> mutation) {
+            this.rule = rule;
+            this.mutation = mutation;
+        }
+
+        String applyTo(Map<String, Object> spec) {
+            mutation.accept(spec);
+            return new Yaml().dump(spec);
+        }
+
+        @Override
+        public String toString() {
+            return rule;
+        }
+
+        private static Map<String, Object> securedGet(Map<String, Object> spec) {
+            return child(child(child(spec, "paths"), SECURED_PATH), "get");
+        }
+
+        private static Map<String, Object> thingProperties(Map<String, Object> spec) {
+            return child(child(child(child(spec, "components"), "schemas"), "Thing"), "properties");
+        }
+
+        @SuppressWarnings("unchecked")
+        private static Map<String, Object> child(Map<String, Object> node, String key) {
+            return (Map<String, Object>) Objects.requireNonNull(node.get(key), key);
+        }
+
+        private static void rename(Map<String, Object> node, String from, String to) {
+            node.put(to, node.remove(from));
         }
     }
 

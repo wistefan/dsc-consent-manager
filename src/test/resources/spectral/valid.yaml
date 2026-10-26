@@ -1,4 +1,4 @@
-# Smallest spec the ruleset passes; every other fixture here breaks exactly one rule of it.
+# Smallest spec the ruleset passes; SpecLintIT breaks each custom rule with one edit to it.
 openapi: 3.0.3
 info:
   title: Lint fixture

@@ -11,7 +11,9 @@ rules:
   oas3-operation-security-defined: off
 
   # A `$ref` property carries its description as a sibling: the generator types an
-  # `allOf: [$ref]` into another component file as `Object`. Swagger UI renders the sibling.
+  # `allOf: [$ref]` into another component file as `Object`. Swagger UI renders the sibling,
+  # but OAS 3.0 says siblings of `$ref` SHALL be ignored, so other conformant tools (the
+  # generator's Javadoc, oasdiff) drop it: such a description is informative only until 3.1.
   no-$ref-siblings: off
 
   operation-operationId: error
