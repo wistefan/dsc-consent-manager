@@ -53,14 +53,17 @@ import org.yaml.snakeyaml.Yaml;
  *
  * <p>Cases are generated from the specification, so a later endpoint is covered the moment it is
  * specified; an operation with no implementing controller method fails rather than being skipped.
- * The specification is read from the classpath copy under {@code static/} - the same bytes Swagger
- * UI is served.
+ * The specification is read from the authored {@code api/} tree, which is what the generator
+ * compiles against; the served bundle is derived from it at build time.
  */
 @DisplayName("Specification security requirements versus @Secured")
 class SpecSecurityConsistencyTest {
 
-    /** The specification as the application serves it, relative to the classpath root. */
-    private static final String SPEC_RESOURCE = "static/openapi.yaml";
+    /** Root of the authored specification, relative to the module directory. */
+    private static final Path SPEC_ROOT = Path.of("api");
+
+    /** The root document, relative to {@link #SPEC_ROOT}. */
+    private static final String SPEC_RESOURCE = "openapi.yaml";
 
     /** Package holding every hand-written concrete controller, and their generated supertypes. */
     private static final String CONTROLLER_PACKAGE = "com.seamware.consentmanager.api";
@@ -751,10 +754,9 @@ class SpecSecurityConsistencyTest {
         return resolve(current, target);
     }
 
-    /** Parses a YAML document from the classpath. */
+    /** Parses a document of the authored specification. */
     private static Map<String, Object> loadYaml(String resource) {
-        try (InputStream stream = classLoader().getResourceAsStream(resource)) {
-            assertThat(stream).as("`%s` is on the classpath", resource).isNotNull();
+        try (InputStream stream = Files.newInputStream(SPEC_ROOT.resolve(resource))) {
             return new Yaml().load(stream);
         } catch (IOException e) {
             throw new IllegalStateException("Unable to read " + resource, e);

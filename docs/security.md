@@ -408,8 +408,11 @@ identifier, email or name, a request path or a query string.
 
 `api/openapi.yaml` is the root document and `$ref`s into `api/components/`:
 `components/security.yaml` (the bearer token contract), `components/schemas/`, `components/responses/`.
-The `copy-openapi-spec` execution copies the whole `api/` tree into `target/classes/static/` so the
-relative `$ref`s resolve for Swagger UI.
+The `bundle-openapi-spec` execution (`src/build/java/OpenApiBundler.java`) inlines every file the
+root's `components` section names and rewrites each external `$ref` to an internal pointer. The
+single document it writes is copied to `target/classes/static/openapi.yaml` and served unchanged and
+anonymously at `GET /openapi.yaml`, which is also what Swagger UI loads. A `$ref` to a file that no
+root component names fails the build.
 
 Path items are written **inline** in the root document; only schemas, responses and the security
 scheme are externalised. `SpecReferenceResolutionTest` fails the build on an externalised path item,

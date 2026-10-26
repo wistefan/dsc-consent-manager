@@ -21,20 +21,17 @@ import org.junit.jupiter.api.Test;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * Asserts the specification's {@code $ref} tree resolves in both layouts it is read in: the
- * hand-authored {@code api/} tree and the copy under {@code target/classes/static/} that Swagger UI
- * loads.
+ * Asserts the authored {@code $ref} tree resolves and the bundle served at {@code /openapi.yaml} is
+ * self-contained.
  *
- * <p>Every reference here is relative, so the tree is only as sound as the directory shape around
- * it. The generator reads the authored layout and the browser reads the copy, which means a
- * reference can resolve for the build and still leave Swagger UI with an unrenderable document -
- * the failure this suite exists to catch, since no other test loads the specification the way a
- * browser does.
+ * <p>The authored tree is a web of relative references, which the generator reads. The browser
+ * reads the build's bundle, so a reference the bundler left external would leave Swagger UI with an
+ * unrenderable document.
  */
 @DisplayName("Specification reference resolution")
 class SpecReferenceResolutionTest {
 
-    /** Root of the copy on the classpath, which is what Swagger UI is served. */
+    /** Directory of the classpath holding the bundle, which is what the service serves. */
     private static final String BUNDLE_ROOT = "static";
 
     /** Root of the hand-authored tree, relative to the module directory. */
@@ -67,7 +64,7 @@ class SpecReferenceResolutionTest {
         InputStream open(String relativePath) throws IOException;
     }
 
-    /** The classpath copy, read exactly as the static resource handler serves it. */
+    /** The classpath bundle, read exactly as the static resource handler serves it. */
     private static Layout bundle() {
         return path -> {
             String resource = BUNDLE_ROOT + POINTER_SEPARATOR + path;
@@ -87,37 +84,33 @@ class SpecReferenceResolutionTest {
     }
 
     @Test
-    @DisplayName("every reference in the copy Swagger UI loads resolves to a node that is there")
-    void theBundledSpecificationResolvesEveryReference() {
-        assertThat(resolvedReferences(bundle()))
-                .as("the specification is a tree of relative references, not a flat document")
+    @DisplayName("every reference in the authored tree resolves to a node that is there")
+    void theAuthoredSpecificationResolvesEveryReference() {
+        assertThat(resolvedReferences(source()))
+                .as("the authored specification is a tree of relative references")
                 .isNotEmpty();
     }
 
     @Test
-    @DisplayName("the authored tree and the copy resolve to the same set of references")
-    void bothLayoutsResolveTheSameReferences() {
-        assertThat(resolvedReferences(source()))
+    @DisplayName("the served bundle resolves every reference within itself")
+    void theServedBundleContainsNoExternalReference() {
+        assertThat(resolvedReferences(bundle()))
                 .as(
-                        "a reference missing from either layout has already failed above, so what is"
-                                + " left for this comparison is content drift: a copy that still"
-                                + " resolves while pointing somewhere the authored tree does not,"
-                                + " which publishes to the browser a contract the generator never"
-                                + " compiled against")
-                .isEqualTo(resolvedReferences(bundle()));
+                        "a reference into another file has nothing to resolve against once the"
+                                + " bundle is served on its own")
+                .isNotEmpty()
+                .allSatisfy(reference -> assertThat(fileOf(reference)).isEqualTo(ROOT_DOCUMENT));
     }
 
     @Test
-    @DisplayName("the copy holds exactly the documents the authored tree holds")
-    void theCopyHoldsExactlyTheAuthoredDocuments() {
-        assertThat(bundledDocuments())
+    @DisplayName("the bundle is the only YAML document the static mapping can serve")
+    void theBundleIsTheOnlyServedDocument() {
+        assertThat(servedDocuments())
                 .as(
-                        "the copy is refreshed by overwriting and never by deleting, so a document"
-                                + " dropped from `%s` lingers in it and goes on being served as part"
-                                + " of the published contract; no other assertion here sees that,"
-                                + " because a leftover is referenced from neither root",
-                        SOURCE_ROOT)
-                .containsExactlyInAnyOrderElementsOf(authoredDocuments());
+                        "the `/*.yaml` mapping serves every top-level YAML file of `%s/`, and the"
+                                + " build refreshes it by overwriting, never by deleting",
+                        BUNDLE_ROOT)
+                .containsExactly(ROOT_DOCUMENT);
     }
 
     @Test
@@ -130,9 +123,9 @@ class SpecReferenceResolutionTest {
 
         assertThat(authoredDocuments())
                 .as(
-                        "an unreferenced file is still copied to `static/` and still served, so it"
-                                + " reads as part of the published contract while being part of"
-                                + " nothing")
+                        "the bundler inlines only what the root references, so an unreferenced file"
+                                + " reads as part of the contract while being dropped from what is"
+                                + " served")
                 .allSatisfy(document -> assertThat(reachable).contains(document));
     }
 
@@ -266,23 +259,20 @@ class SpecReferenceResolutionTest {
         }
     }
 
-    /** Every document of the copy except the root, as paths relative to the copy's root. */
-    private static List<String> bundledDocuments() {
+    /** Every top-level YAML document beside the bundle on the classpath. */
+    private static List<String> servedDocuments() {
         Path root = bundleRoot();
-        try (Stream<Path> tree = Files.walk(root)) {
-            return tree.filter(Files::isRegularFile)
-                    .filter(file -> file.getFileName().toString().endsWith(YAML_SUFFIX))
-                    .map(file -> root.relativize(file).toString())
-                    .filter(path -> !ROOT_DOCUMENT.equals(path))
+        try (Stream<Path> files = Files.list(root)) {
+            return files.filter(Files::isRegularFile)
+                    .map(file -> file.getFileName().toString())
+                    .filter(name -> name.endsWith(YAML_SUFFIX))
                     .toList();
         } catch (IOException e) {
-            throw new UncheckedIOException("Unable to walk " + root, e);
+            throw new UncheckedIOException("Unable to list " + root, e);
         }
     }
 
-    /**
-     * The directory the copy is served from, located through the root document on the classpath.
-     */
+    /** The directory the bundle is served from, located through it on the classpath. */
     private static Path bundleRoot() {
         String resource = BUNDLE_ROOT + POINTER_SEPARATOR + ROOT_DOCUMENT;
         URL root = Thread.currentThread().getContextClassLoader().getResource(resource);

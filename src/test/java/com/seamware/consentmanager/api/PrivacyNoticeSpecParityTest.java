@@ -14,6 +14,8 @@ import java.io.InputStream;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,11 +49,14 @@ import org.yaml.snakeyaml.Yaml;
 @DisplayName("Privacy notice schema parity")
 class PrivacyNoticeSpecParityTest {
 
+    /** Root of the authored specification, relative to the module directory. */
+    private static final Path SPEC_ROOT = Path.of("api");
+
     /**
-     * Where the served schemas are copied on the classpath, and the directory every authored {@code
-     * $ref} in them is relative to.
+     * Directory of the authored schemas under {@link #SPEC_ROOT}, and the one every {@code $ref} in
+     * them is relative to.
      */
-    private static final String SCHEMA_DIRECTORY = "static/components/schemas/";
+    private static final String SCHEMA_DIRECTORY = "components/schemas/";
 
     private static final String NOTICE_RESOURCE = SCHEMA_DIRECTORY + "PrivacyNotice.yaml";
 
@@ -284,7 +289,7 @@ class PrivacyNoticeSpecParityTest {
     }
 
     /**
-     * A relative {@code $ref} as the classpath resource it names; all of them are same-directory.
+     * A relative {@code $ref} as the authored document it names; all of them are same-directory.
      */
     private static String referenced(String reference) {
         return SCHEMA_DIRECTORY + reference.substring(reference.lastIndexOf('/') + 1);
@@ -336,9 +341,7 @@ class PrivacyNoticeSpecParityTest {
     }
 
     private static Map<String, Object> load(String resource) {
-        ClassLoader loader = Thread.currentThread().getContextClassLoader();
-        try (InputStream stream = loader.getResourceAsStream(resource)) {
-            assertThat(stream).as("`%s` is on the classpath", resource).isNotNull();
+        try (InputStream stream = Files.newInputStream(SPEC_ROOT.resolve(resource))) {
             return new Yaml().load(stream);
         } catch (IOException e) {
             throw new IllegalStateException("Unable to read " + resource, e);

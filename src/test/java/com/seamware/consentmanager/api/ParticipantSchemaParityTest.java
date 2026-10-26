@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -27,11 +29,13 @@ import org.yaml.snakeyaml.Yaml;
 @DisplayName("Participant registration and update schemas")
 class ParticipantSchemaParityTest {
 
-    private static final String REGISTRATION_RESOURCE =
-            "static/components/schemas/ParticipantRegistration.yaml";
+    /** Root of the authored specification, relative to the module directory. */
+    private static final Path SPEC_ROOT = Path.of("api");
 
-    private static final String UPDATE_RESOURCE =
-            "static/components/schemas/ParticipantUpdate.yaml";
+    private static final String REGISTRATION_RESOURCE =
+            "components/schemas/ParticipantRegistration.yaml";
+
+    private static final String UPDATE_RESOURCE = "components/schemas/ParticipantUpdate.yaml";
 
     /** Properties a participant may set at registration but never change afterwards. */
     private static final Set<String> REGISTRATION_ONLY_PROPERTIES = Set.of();
@@ -96,9 +100,7 @@ class ParticipantSchemaParityTest {
     }
 
     private static Map<String, Object> load(String resource) {
-        ClassLoader loader = Thread.currentThread().getContextClassLoader();
-        try (InputStream stream = loader.getResourceAsStream(resource)) {
-            assertThat(stream).as("`%s` is on the classpath", resource).isNotNull();
+        try (InputStream stream = Files.newInputStream(SPEC_ROOT.resolve(resource))) {
             return new Yaml().load(stream);
         } catch (IOException e) {
             throw new IllegalStateException("Unable to read " + resource, e);
