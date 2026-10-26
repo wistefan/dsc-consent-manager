@@ -3,6 +3,7 @@ package com.seamware.consentmanager.security;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.seamware.consentmanager.support.TestPseudonymizer;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.env.Environment;
 import io.micronaut.context.env.PropertySource;
@@ -47,9 +48,16 @@ import org.junit.jupiter.params.provider.ValueSource;
 @DisplayName("Identity provider trust list configuration")
 class IdentityProviderConfigurationTest {
 
-    /** No property file is read, so the receipt signer, which fails startup keyless, needs this. */
-    private static final Map<String, Object> EPHEMERAL_RECEIPT_KEY =
-            Map.of("consent-manager.receipts.ephemeral-signing-key", true);
+    /**
+     * No property file is read, so the receipt signer and the log pseudonymizer, which both fail
+     * startup keyless, need these.
+     */
+    private static final Map<String, Object> STARTUP_KEYS =
+            Map.of(
+                    "consent-manager.receipts.ephemeral-signing-key",
+                    true,
+                    "consent-manager.logging.pseudonym-key",
+                    TestPseudonymizer.KEY);
 
     /**
      * Host and port that refuse connections instantly, keeping any discovery attempt cheap.
@@ -161,7 +169,7 @@ class IdentityProviderConfigurationTest {
     private static ApplicationContext startContext(Map<String, Object> properties) {
         return ApplicationContext.builder()
                 .enableDefaultPropertySources(false)
-                .properties(EPHEMERAL_RECEIPT_KEY)
+                .properties(STARTUP_KEYS)
                 .properties(properties)
                 .build()
                 .start();
@@ -179,7 +187,7 @@ class IdentityProviderConfigurationTest {
             Map<String, Object> properties, Map<String, Object> environmentVariables) {
         return ApplicationContext.builder()
                 .enableDefaultPropertySources(false)
-                .properties(EPHEMERAL_RECEIPT_KEY)
+                .properties(STARTUP_KEYS)
                 .properties(properties)
                 .propertySources(
                         PropertySource.of(
@@ -205,7 +213,7 @@ class IdentityProviderConfigurationTest {
             Map<String, Object> properties, String... environments) {
         return ApplicationContext.builder()
                 .enableDefaultPropertySources(false)
-                .properties(EPHEMERAL_RECEIPT_KEY)
+                .properties(STARTUP_KEYS)
                 .deduceEnvironment(false)
                 .environments(environments)
                 .properties(properties)

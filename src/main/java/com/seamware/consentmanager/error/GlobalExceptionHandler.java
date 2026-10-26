@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.error;
 
 import com.seamware.consentmanager.api.generated.model.ProblemDetail;
+import com.seamware.consentmanager.observability.FailureSummary;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.MediaType;
@@ -35,15 +36,11 @@ public class GlobalExceptionHandler
         this.serverErrorDetail = serverErrorDetail;
     }
 
-    /** Logs the failure in full and answers with a 500 that reveals at most its message. */
+    /** Logs a {@link FailureSummary} and answers with a 500 that reveals at most its message. */
     @Override
     public HttpResponse<ProblemDetail> handle(HttpRequest request, Exception exception) {
-        LOG.error(
-                "Unhandled exception for {} {}: {}",
-                request.getMethod(),
-                request.getUri(),
-                exception.getMessage(),
-                exception);
+        FailureSummary.logRequestFailure(
+                LOG, request, ProblemType.INTERNAL_SERVER_ERROR, exception);
 
         ProblemDetail problem =
                 ProblemType.INTERNAL_SERVER_ERROR.toProblemDetail(

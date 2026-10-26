@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.error;
 
 import com.seamware.consentmanager.api.generated.model.ProblemDetail;
+import com.seamware.consentmanager.observability.FailureSummary;
 import io.micronaut.context.annotation.Replaces;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.MediaType;
@@ -52,12 +53,8 @@ public class ProblemErrorResponseProcessor implements ErrorResponseProcessor<Pro
         boolean serverError = status >= ProblemType.LOWEST_SERVER_ERROR_STATUS;
 
         if (serverError) {
-            LOG.error(
-                    "{} {} failed with {}",
-                    request.getMethod(),
-                    request.getUri(),
-                    status,
-                    errorContext.getRootCause().orElse(null));
+            FailureSummary.logRequestFailure(
+                    LOG, request, status, errorContext.getRootCause().orElse(null));
         }
 
         String detail =

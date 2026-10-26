@@ -10,6 +10,7 @@ import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.notification.UserNotificationService;
+import com.seamware.consentmanager.observability.FailureSummary;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import io.micronaut.core.annotation.NonNull;
@@ -35,7 +36,7 @@ public class ConsentService {
     private static final Logger LOG = LoggerFactory.getLogger(ConsentService.class);
 
     private static final String NOTIFICATION_FAILED =
-            "Consent {} was requested, but notifying its subject failed";
+            "Consent {} was requested, but notifying its subject failed: {}";
 
     private static final String NOTHING_TO_NARROW =
             "Privacy notice '%s' declares no %s, so none can be elected.";
@@ -139,7 +140,8 @@ public class ConsentService {
         try {
             notifications.consentRequested(subject, recorded.consent(), caller);
         } catch (RuntimeException e) {
-            LOG.error(NOTIFICATION_FAILED, recorded.consent().getId(), e);
+            LOG.error(NOTIFICATION_FAILED, recorded.consent().getId(), FailureSummary.of(e));
+            LOG.debug(NOTIFICATION_FAILED, recorded.consent().getId(), e.getMessage(), e);
         }
         return parties.details(recorded);
     }

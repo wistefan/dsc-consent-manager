@@ -2,9 +2,12 @@ package com.seamware.consentmanager.error;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
 import com.seamware.consentmanager.api.generated.model.ProblemDetail;
 import com.seamware.consentmanager.api.generated.model.ProblemFieldError;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
+import com.seamware.consentmanager.support.LogCapture;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.MediaType;
@@ -17,6 +20,7 @@ import jakarta.validation.metadata.ConstraintDescriptor;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.net.URI;
+import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
@@ -28,6 +32,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
@@ -131,6 +136,12 @@ class ProblemMappingTest {
     @DisplayName("consent-manager.errors.expose-exception-detail")
     class ExposedServerErrorDetail {
 
+        /** A personal identifier that must reach no log line above DEBUG. */
+        private static final String PERSONAL_IDENTIFIER = "did:web:example.com:alice";
+
+        /** A personal email that must reach no log line above DEBUG. */
+        private static final String PERSONAL_EMAIL = "alice@example.com";
+
         /** A message a production deployment must never publish. */
         private static final String INTERNAL_MESSAGE = "pool exhausted on db-primary.internal:5432";
 
@@ -138,36 +149,37 @@ class ProblemMappingTest {
         enum Site {
             UNHANDLED_EXCEPTION {
                 @Override
-                ProblemDetail render(ServerErrorDetail detail, Exception failure) {
-                    return new GlobalExceptionHandler(detail)
-                            .handle(HttpRequest.GET(REQUEST_PATH), failure)
-                            .body();
+                ProblemDetail render(
+                        ServerErrorDetail detail, HttpRequest<?> request, Exception failure) {
+                    return new GlobalExceptionHandler(detail).handle(request, failure).body();
                 }
             },
             UPSTREAM_SERVICE {
                 @Override
-                ProblemDetail render(ServerErrorDetail detail, Exception failure) {
+                ProblemDetail render(
+                        ServerErrorDetail detail, HttpRequest<?> request, Exception failure) {
                     return new ApiExceptionHandler(detail)
                             .handle(
-                                    HttpRequest.GET(REQUEST_PATH),
-                                    new UpstreamServiceException(failure.getMessage()))
+                                    request,
+                                    new UpstreamServiceException(
+                                            failure.getMessage(), failure.getCause()))
                             .body();
                 }
             },
             FRAMEWORK_ERROR {
                 @Override
-                ProblemDetail render(ServerErrorDetail detail, Exception failure) {
+                ProblemDetail render(
+                        ServerErrorDetail detail, HttpRequest<?> request, Exception failure) {
                     return new ProblemErrorResponseProcessor(detail)
                             .processResponse(
-                                    ErrorContext.builder(HttpRequest.GET(REQUEST_PATH))
-                                            .cause(failure)
-                                            .build(),
+                                    ErrorContext.builder(request).cause(failure).build(),
                                     HttpResponse.serverError())
                             .body();
                 }
             };
 
-            abstract ProblemDetail render(ServerErrorDetail detail, Exception failure);
+            abstract ProblemDetail render(
+                    ServerErrorDetail detail, HttpRequest<?> request, Exception failure);
         }
 
         static Stream<Arguments> cases() {
@@ -185,9 +197,47 @@ class ProblemMappingTest {
             ProblemDetail problem =
                     site.render(
                             serverErrorDetail(exposed),
+                            HttpRequest.GET(REQUEST_PATH),
                             new IllegalStateException(INTERNAL_MESSAGE));
 
             assertThat(problem.getDetail()).isEqualTo(expected);
+        }
+
+        /**
+         * Above DEBUG a site logs the failure's class chain, never its message, its cause's message
+         * or the concrete path and query, all of which can carry a personal identifier.
+         */
+        @ParameterizedTest(name = "{0}")
+        @EnumSource(Site.class)
+        void logsNoMessageOrPathAtError(Site site) {
+            HttpRequest<?> request =
+                    HttpRequest.GET(
+                            "/v1/users/" + PERSONAL_IDENTIFIER + "?email=" + PERSONAL_EMAIL);
+            Exception failure =
+                    new IllegalStateException(
+                            PERSONAL_IDENTIFIER,
+                            new SQLException(
+                                    "Key (email)=(" + PERSONAL_EMAIL + ") already exists"));
+
+            List<ILoggingEvent> logged;
+            try (LogCapture capture = LogCapture.attach()) {
+                site.render(serverErrorDetail(false), request, failure);
+                logged = capture.events();
+            }
+
+            List<String> errors =
+                    logged.stream()
+                            .filter(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
+                            .map(LogCapture::render)
+                            .toList();
+            assertThat(errors)
+                    .isNotEmpty()
+                    .allSatisfy(
+                            line ->
+                                    assertThat(line)
+                                            .contains(SQLException.class.getName())
+                                            .doesNotContain(PERSONAL_IDENTIFIER)
+                                            .doesNotContain(PERSONAL_EMAIL));
         }
 
         @ParameterizedTest(name = "message {0}")

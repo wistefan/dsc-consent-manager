@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.error;
 
 import com.seamware.consentmanager.api.generated.model.ProblemDetail;
+import com.seamware.consentmanager.observability.FailureSummary;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.MediaType;
@@ -40,18 +41,12 @@ public class ApiExceptionHandler
         boolean serverError =
                 problemType.status().getCode() >= ProblemType.LOWEST_SERVER_ERROR_STATUS;
         if (serverError) {
-            LOG.error(
-                    "{} {} failed with {}: {}",
-                    request.getMethod(),
-                    request.getUri(),
-                    problemType,
-                    exception.getMessage(),
-                    exception);
+            FailureSummary.logRequestFailure(LOG, request, problemType, exception);
         } else if (LOG.isDebugEnabled()) {
             LOG.debug(
                     "{} {} refused with {}: {}",
                     request.getMethod(),
-                    request.getUri(),
+                    request.getPath(),
                     problemType,
                     exception.getMessage());
         }

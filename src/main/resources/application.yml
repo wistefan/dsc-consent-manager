@@ -519,6 +519,15 @@ consent-manager:
     # the dev environment. A stack trace is never published either way.
     expose-exception-detail: ${ERRORS_EXPOSE_EXCEPTION_DETAIL:false}
 
+  logging:
+    # HMAC-SHA-256 key that turns a personal identifier (a user's identifier or email)
+    # into the pseudonym a log line at INFO or above carries instead, so lines about one
+    # person still correlate. Required: startup fails when it is unset or shorter than
+    # 32 bytes. Keep it secret and stable; rotating it unlinks the pseudonyms already
+    # logged. No log message ever quotes it. The dev and test environments set fixed,
+    # non-secret keys.
+    pseudonym-key: ${LOG_PSEUDONYM_KEY:}
+
   # ---------------------------------------------------------------------------
   # Identity provider trust list
   # ---------------------------------------------------------------------------

@@ -14,6 +14,8 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.error.ProblemType;
+import com.seamware.consentmanager.observability.FailureSummary;
+import com.seamware.consentmanager.observability.LogPseudonymizer;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.IssuedReceiptRepository;
@@ -66,6 +68,12 @@ import org.slf4j.LoggerFactory;
 public class UserService {
 
     private static final Logger LOG = LoggerFactory.getLogger(UserService.class);
+
+    private static final String BULK_ENTRY_FAILED =
+            "Entry {} of a bulk registration for participant {} failed: {}";
+
+    private static final String BULK_ENTRY_SERVER_ERROR =
+            "A bulk registration entry failed with server-error problem type {}: {}";
 
     /**
      * Why a search naming no criterion is refused; published to the caller as the problem detail.
@@ -165,6 +173,8 @@ public class UserService {
 
     private final ErasureVerifier erasureVerifier;
 
+    private final LogPseudonymizer pseudonymizer;
+
     private final ConsentManagerConfiguration.Users configuration;
 
     public UserService(
@@ -176,6 +186,7 @@ public class UserService {
             IssuedReceiptRepository issuedReceipts,
             ConsentFactory consentFactory,
             ErasureVerifier erasureVerifier,
+            LogPseudonymizer pseudonymizer,
             ConsentManagerConfiguration.Users configuration) {
         this.users = users;
         this.links = links;
@@ -185,6 +196,7 @@ public class UserService {
         this.issuedReceipts = issuedReceipts;
         this.consentFactory = consentFactory;
         this.erasureVerifier = erasureVerifier;
+        this.pseudonymizer = pseudonymizer;
         this.configuration = configuration;
     }
 
@@ -663,11 +675,15 @@ public class UserService {
         } catch (ApiException e) {
             return BulkEntryResult.rejected(identifier, publishable(e));
         } catch (RuntimeException e) {
+            // The identifier is personal and the throwable may quote it, so only the pseudonym
+            // and the class chain are logged above DEBUG.
             LOG.warn(
-                    "Entry {} of a bulk registration for participant {} failed",
-                    identifier,
+                    BULK_ENTRY_FAILED,
+                    pseudonymizer.pseudonym(identifier),
                     participant.getIdentifier(),
-                    e);
+                    FailureSummary.of(e));
+            LOG.debug(
+                    BULK_ENTRY_FAILED, identifier, participant.getIdentifier(), e.getMessage(), e);
             return BulkEntryResult.rejected(identifier, UNREGISTERABLE_ENTRY_DETAIL);
         }
     }
@@ -678,7 +694,8 @@ public class UserService {
      */
     private static String publishable(ApiException e) {
         if (e.problemType().status().getCode() >= ProblemType.LOWEST_SERVER_ERROR_STATUS) {
-            LOG.warn("A bulk registration entry failed with a server-error problem type", e);
+            LOG.warn(BULK_ENTRY_SERVER_ERROR, e.problemType(), FailureSummary.of(e));
+            LOG.debug(BULK_ENTRY_SERVER_ERROR, e.problemType(), e.getMessage(), e);
             return UNREGISTERABLE_ENTRY_DETAIL;
         }
         return e.getMessage();
