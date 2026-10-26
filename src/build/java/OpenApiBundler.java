@@ -22,7 +22,8 @@ import org.yaml.snakeyaml.resolver.Resolver;
  * Bundles the authored specification into one document without external {@code $ref}. Every file
  * the root's {@code components} section points at is inlined there, and every other reference to
  * it becomes an internal pointer, so key order and component names stay as authored. Fails on a
- * reference to a file no component names. Run by the build in single-file source mode.
+ * reference to a file no component names, and on two components naming one file. Run by the build
+ * in single-file source mode.
  */
 public final class OpenApiBundler {
 
@@ -65,7 +66,11 @@ public final class OpenApiBundler {
                     String pointer = String.join(
                             POINTER_SEPARATOR, INTERNAL_PREFIX, COMPONENTS, section.getKey(), entry.getKey());
                     String key = canonical(rootDirectory, ref);
-                    internalPointers.put(key, pointer);
+                    String claimed = internalPointers.putIfAbsent(key, pointer);
+                    if (claimed != null) {
+                        throw new IllegalStateException(
+                                pointer + " and " + claimed + " both name " + ref + ", so refs to it are ambiguous");
+                    }
                     externalTargets.put(pointer, key);
                 }
             }

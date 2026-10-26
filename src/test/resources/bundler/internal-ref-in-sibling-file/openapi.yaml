@@ -1,0 +1,9 @@
+openapi: 3.0.3
+info: {title: Internal ref in a file beside the root, version: '1'}
+paths: {}
+components:
+  schemas:
+    Pet:
+      $ref: ./schemas/Pet.yaml
+    Litter:
+      $ref: ./Litter.yaml
