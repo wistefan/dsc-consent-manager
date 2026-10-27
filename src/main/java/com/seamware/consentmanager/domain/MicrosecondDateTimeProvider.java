@@ -9,15 +9,8 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 
 /**
- * Stamps {@code @DateCreated} and {@code @DateUpdated} at the resolution PostgreSQL keeps.
- *
- * <p>The default provider reads the clock at nanosecond precision, which {@code timestamptz}
- * silently drops to microseconds on write. The entity left in memory after an insert then carries
- * digits the stored row does not, so a response rendered from it differs from every later response
- * rendered after a read. Aligning the stamp to microseconds up front makes the two identical.
- *
- * <p>Stamped at UTC rather than the host's zone, so a column mapped as an offset type would carry
- * the same offset everywhere the service runs.
+ * Stamps {@code @DateCreated}/{@code @DateUpdated} in UTC at microsecond precision, the resolution
+ * {@code timestamptz} keeps, so an entity just written renders the same as one read back.
  */
 @Singleton
 @Replaces(CurrentDateTimeProvider.class)

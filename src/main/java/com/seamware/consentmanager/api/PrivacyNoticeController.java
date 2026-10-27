@@ -13,17 +13,8 @@ import io.micronaut.http.annotation.Controller;
 import java.util.UUID;
 
 /**
- * Serves the {@code /privacy-notices} operations.
- *
- * <p>The two generating operations are one generation differing only in where the two parties come
- * from, so they render through the same path. The status code is the whole report of what happened:
- * {@code 201} when this request stored a notice, archiving whatever it superseded, and {@code 200}
- * when an identical active notice was already there and nothing was written. Neither dereferences
- * the catalog, so their resolution block is {@link PrivacyNoticeMapper#unresolved()} throughout;
- * retrieval is the one operation that reports anything else.
- *
- * <p>{@code PrivacyNotice} here is the generated API model; the stored row is named in full to keep
- * the two apart.
+ * Serves {@code /privacy-notices}. Generation answers {@code 201} when it stored a notice and
+ * {@code 200} when an identical active one existed; only retrieval resolves the catalog.
  */
 @Controller
 public class PrivacyNoticeController extends AbstractPrivacyNoticesController {
@@ -56,16 +47,13 @@ public class PrivacyNoticeController extends AbstractPrivacyNoticesController {
     }
 
     /**
-     * Serves a stored notice, resolved unless the caller asked otherwise.
-     *
-     * <p>The principal is authorization and nothing more: retrieval is deliberately not scoped to
-     * the notice's parties, because a user has to be able to read the notice they are being asked
-     * to consent to before any link to it exists.
+     * Serves a stored notice, resolved by default. Deliberately not scoped to the notice's parties:
+     * a user must read a notice before any link to it exists.
      */
     @Override
     public HttpResponse<PrivacyNotice> getPrivacyNotice(
             ConsentManagerPrincipal principal, UUID id, Boolean resolve) {
-        // The specification defaults this to true, and a caller omitting it means the same.
+        // The spec defaults resolve to true.
         return HttpResponse.ok(mapper.toApi(notices.get(id, resolve == null || resolve)));
     }
 

@@ -5,14 +5,8 @@ import io.micronaut.serde.annotation.Serdeable;
 import java.util.List;
 
 /**
- * The contract-derived content of a privacy notice, stored as JSONB in the {@code payload} column
- * of {@code privacy_notices}.
- *
- * <p>Named after the headings a privacy notice is published under, so the stored form and the
- * served form of a legal document do not disagree on what a section is called. Every component is
- * nullable because a contract need not carry a source for every heading, and an absent component is
- * the honest encoding of that: a section with no source is left out rather than written as an empty
- * string or an empty list.
+ * Contract-derived notice content, stored as JSONB in {@code privacy_notices.payload} under the
+ * published section headings; a section with no source is null, never empty.
  */
 @Serdeable
 public record PrivacyNoticePayload(
@@ -26,12 +20,7 @@ public record PrivacyNoticePayload(
         @Nullable List<String> internationalTransfers,
         @Nullable String withdrawalOfConsent) {
 
-    /**
-     * The data controller, named and reachable.
-     *
-     * <p>Taken from the provider participant's own registration rather than from the contract, so
-     * the notice names the controller as this service knows it.
-     */
+    /** The data controller, taken from the provider's registration rather than the contract. */
     @Serdeable
     public record ControllerDetails(
             @Nullable String name,
@@ -40,11 +29,8 @@ public record PrivacyNoticePayload(
             @Nullable String selfDescriptionUri) {}
 
     /**
-     * One party the data reaches, named as the contract names it.
-     *
-     * <p>Generation stores the identifier alone, because that is all a contract carries; the name
-     * and contact are filled in by a resolved retrieval reading this service's own participant
-     * registry, and a recipient with no row here keeps its bare identifier.
+     * One party the data reaches; generation stores the identifier only, and a resolved retrieval
+     * fills name and contact from the participant registry when a row exists.
      */
     @Serdeable
     public record Recipient(
@@ -54,16 +40,8 @@ public record PrivacyNoticePayload(
             @Nullable String selfDescriptionUri) {}
 
     /**
-     * One catalog document the notice covers, by URI.
-     *
-     * <p>Generation stores the URI alone, because that is all a contract names; the title and
-     * description are filled in by a resolved retrieval, which is the only place the catalog
-     * document is actually read.
-     *
-     * <p>{@code partOf} is what keeps the two kinds of entry apart. It is absent on a service
-     * offering, which the contract itself names, and carries the offering's URI on a data resource,
-     * which only that offering's document names - so a caller can say which resources belong to
-     * which offering instead of reading one undifferentiated list.
+     * One catalog document the notice covers, by URI; title and description are filled only by a
+     * resolved retrieval. {@code partOf} is absent on an offering and names it on a data resource.
      */
     @Serdeable
     public record DataReference(

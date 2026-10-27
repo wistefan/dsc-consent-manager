@@ -11,14 +11,8 @@ import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
 
 /**
- * Serves {@code POST /consents/requests}.
- *
- * <p>The asking participant is {@link ParticipantPrincipal#requireActive()} and nothing else: the
- * body names a notice and a subject, so no caller can put the question in another's name, and a
- * participant that has left the dataspace cannot open requests while still reading its own record.
- *
- * <p>Always {@code 201} - a request creates the record it returns, and answering it is the
- * subject's call on {@code POST /consents}.
+ * Serves {@code POST /consents/requests}, always {@code 201}. The asker is the caller's own {@link
+ * ParticipantPrincipal#requireActive()}, so none can ask in another's name.
  */
 @Controller
 public class ConsentRequestController extends AbstractConsentRequestsController {

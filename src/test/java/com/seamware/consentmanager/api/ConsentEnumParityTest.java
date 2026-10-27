@@ -21,12 +21,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Keeps every published consent enum and {@link ConsentStatus} naming the same states.
- *
- * <p>{@code ConsentMapper} bridges the two by string in both directions, which the compiler cannot
- * check: a status added to the domain but not to {@code Consent.yaml} would throw out of {@code
- * StatusEnum.fromValue} while rendering a stored consent — a 500 on the read path, long after the
- * commit that caused it. The drift costs a build here instead.
+ * Keeps every published consent enum and {@link ConsentStatus} naming the same states; a drift
+ * would otherwise surface as a 500 when {@code ConsentMapper} renders a stored consent.
  */
 @DisplayName("Consent enum parity")
 class ConsentEnumParityTest {

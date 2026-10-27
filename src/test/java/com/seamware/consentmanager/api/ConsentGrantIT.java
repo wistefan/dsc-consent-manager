@@ -46,14 +46,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code POST /consents} end to end against a real Keycloak and a real PostgreSQL.
- *
- * <p>What is under test is as much who the recorded decision belongs to as the status it carries:
- * the subject is read off the token, so a body naming someone else has to change nothing, and no
- * role but {@code USER} may reach the route at all.
- *
- * <p>The notice is written straight to the table rather than generated through the API, because
- * generation would need a stubbed Contract Service for terms this suite only ever reads back.
+ * {@code POST /consents} end to end: guards the recorded status, a body redirecting the decision to
+ * someone other than the token's subject, and any role but {@code USER} reaching the route.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent grant endpoint")
@@ -61,7 +55,7 @@ class ConsentGrantIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_CONSENTS = "/consents";
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     private static final String PROVIDER = "urn:test:participant:consent-provider";
@@ -117,7 +111,7 @@ class ConsentGrantIT extends KeycloakAndPostgresTestResource {
 
     @Inject ConsentRepository consents;
 
-    /** The caller's global identifier, resolved once because reading it costs a token request. */
+    /** The caller's identifier, resolved once because reading it costs a token request. */
     private String identifier;
 
     /** The notice every case decides against, re-seeded per case so none inherits a decision. */
@@ -134,12 +128,7 @@ class ConsentGrantIT extends KeycloakAndPostgresTestResource {
         notice = seedNotice(null);
     }
 
-    /**
-     * Rows committed by these cases outlive the transaction, so they are removed by hand.
-     *
-     * <p>Consents hold their user and both participants against {@code ON DELETE RESTRICT}, so they
-     * go first; their events cascade with them.
-     */
+    /** Removes committed rows; consents go first because they restrict their user and parties. */
     @AfterEach
     void removeCommittedRows() {
         consents.deleteAll();
@@ -358,12 +347,8 @@ class ConsentGrantIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
-     * A {@code PENDING} request for the caller and the seeded notice, as a participant's ask would
-     * have left it.
-     *
-     * <p>The subject's row is provisioned by an authenticated call first - the token is what
-     * creates it, and no case has made one yet at this point. The request is written straight to
-     * the table because {@code POST /consents/requests} is not part of this step.
+     * A {@code PENDING} request for the caller and the seeded notice, written to the table after an
+     * authenticated call provisions the subject's row.
      */
     private UUID seedOpenRequest() {
         decide(Map.of(PROPERTY_NOTICE, UUID.randomUUID().toString(), PROPERTY_DECISION, GRANTED));

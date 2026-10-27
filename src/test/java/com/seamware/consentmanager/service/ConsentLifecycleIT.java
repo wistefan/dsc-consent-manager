@@ -41,19 +41,8 @@ import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Proves each lifecycle move's own rules: who may ask for it, what it supersedes, and which {@code
- * 404} or {@code 403} a caller with no standing gets.
- *
- * <p>Which starting statuses each move is permitted from is <em>not</em> asserted here. {@code
- * ConsentLifecycleMatrixIT} owns that cross product in one table, so the transition rules are
- * restated in one suite rather than two that could drift apart.
- *
- * <p>Resume carries more than the others, because it is the second route into {@code GRANTED}: it
- * is reachable by a catalog relaying the subject's decision, it answers the notice guard {@code
- * POST /consents} answers, and it supersedes the grant in force for the pair.
- *
- * <p>Every assertion reads the database back rather than the returned projection where the two
- * could disagree, because what matters is what was committed.
+ * Each lifecycle move's own rules: who may ask, what it supersedes, and the 404/403 for a caller
+ * with no standing. Permitted starting statuses belong to {@code ConsentLifecycleMatrixIT}.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent lifecycle moves")
@@ -71,7 +60,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
     /** A notice archived since the request was opened, which no grant may be recorded against. */
     private static final String ARCHIVED_CONTRACT_URI = "urn:test:contract:consent-lifecycle-gone";
 
-    /** A notice predating the invariant that a notice names a consumer. */
+    /** A notice that names no consumer. */
     private static final String UNNAMED_CONSUMER_CONTRACT_URI =
             "urn:test:contract:consent-lifecycle-unnamed";
 
@@ -83,10 +72,10 @@ class ConsentLifecycleIT extends PostgresTestResource {
     /** What {@code consent_events.event_type} reads for a move an identified caller asked for. */
     private static final String EXPLICIT_EVENT_TYPE = "explicit";
 
-    /** What it reads for a move no one asked for, such as closing a question gone redundant. */
+    /** What it reads for a move no one asked for, such as closing a redundant request. */
     private static final String CLEANUP_EVENT_TYPE = "system";
 
-    /** The provider of a token this suite never validates; only its shape matters here. */
+    /** Issuer of a token this suite never validates; only its shape matters. */
     private static final String ISSUER = "https://issuer.test/realms/consent-lifecycle";
 
     private static final String CATALOG_SUBJECT = "catalog-service";
@@ -559,11 +548,8 @@ class ConsentLifecycleIT extends PostgresTestResource {
     }
 
     /**
-     * The same, where the case turns on what the record carries beyond its status.
-     *
-     * <p>The row names a consumer even where its notice has stopped naming one: {@code
-     * consents.consumer_id} is {@code NOT NULL}, and the guard under test reads the notice rather
-     * than the row.
+     * The same, with a parent and terms. The row always names a consumer, as {@code
+     * consents.consumer_id} is {@code NOT NULL}; the guard reads the notice, not the row.
      */
     private UUID seedConsent(
             User subject,
@@ -613,14 +599,7 @@ class ConsentLifecycleIT extends PostgresTestResource {
         return notice;
     }
 
-    /**
-     * The moves a subject asks for, as the cases sweeping the caller's standing invoke them.
-     *
-     * <p>It carries no transition data: what each move is permitted from is {@code
-     * ConsentLifecycleMatrixIT}'s table, and a second copy here would be one more thing to keep in
-     * step with it. {@code RESUME} is the subject's own, which is one of the two ways it is
-     * reached; the relayed way has its own cases, because only the actor and who may call differ.
-     */
+    /** The moves a subject asks for; transition rules stay in {@code ConsentLifecycleMatrixIT}. */
     private enum Move {
         REVOKE,
         REFUSE,

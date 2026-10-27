@@ -43,10 +43,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Covers the rules {@link PrivacyNoticeService} enforces before it writes, over both contract
- * shapes, plus the two branches {@link PrivacyNoticeGenerationIT} cannot force deterministically:
- * the write that loses the active slot to a concurrent generation, and the write that fails for any
- * other reason and must not be reported as "nothing changed".
+ * The rules {@link PrivacyNoticeService} enforces before writing, over both contract shapes, plus
+ * the lost-slot race and the non-race write failure an IT cannot force deterministically.
  */
 @DisplayName("Privacy notice service")
 class PrivacyNoticeServiceTest {
@@ -93,8 +91,7 @@ class PrivacyNoticeServiceTest {
                     extractor,
                     writer,
                     new ContractPartyResolver(),
-                    // Retrieval is covered by the ITs; no case here calls get(), so the
-                    // resolver is held and never consulted.
+                    // No case here calls get(), so the resolver is never consulted.
                     new PrivacyNoticeResolver(
                             contracts,
                             extractor,
@@ -108,10 +105,7 @@ class PrivacyNoticeServiceTest {
 
     private final Participant outsider = register(OUTSIDER);
 
-    /**
-     * Who each contract shape binds, which is the check {@code PrivacyNoticeGenerationIT} can only
-     * reach through the ecosystem endpoint.
-     */
+    /** Who each contract shape binds: (case, fixture, declared provider, consumer, bound). */
     static List<Arguments> bindingMatrix() {
         return List.of(
                 Arguments.of(
@@ -444,12 +438,7 @@ class PrivacyNoticeServiceTest {
         }
     }
 
-    /**
-     * A cache manager handing out no cache at all.
-     *
-     * <p>{@link StubContractGateway} overrides the only method that reads one, so the field it
-     * leaves null is never touched.
-     */
+    /** A cache manager handing out no cache; the stub gateway never reads one. */
     private static final class NoCacheManager implements CacheManager<Object> {
 
         @Override
@@ -472,10 +461,7 @@ class PrivacyNoticeServiceTest {
             super(null);
         }
 
-        /**
-         * Arms the next write to lose the active slot to {@code winner}, which is committed first -
-         * the state a concurrent generation leaves behind when the index rejects this one.
-         */
+        /** Arms the next write to lose the active slot to {@code winner}, committed first. */
         void losesTheSlotTo(PrivacyNotice winner) {
             failures.add(
                     () -> {
@@ -612,11 +598,7 @@ class PrivacyNoticeServiceTest {
         }
     }
 
-    /**
-     * The rows a stub holds, plus the {@code PageableRepository} methods generation never reaches.
-     *
-     * @param <E> the entity held, keyed on its own primary key
-     */
+    /** Rows keyed by primary key, plus the {@code PageableRepository} methods never reached. */
     private abstract static class StubRepository<E> {
 
         private final Map<UUID, E> rows = new LinkedHashMap<>();

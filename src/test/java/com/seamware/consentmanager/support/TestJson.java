@@ -6,12 +6,8 @@ import io.micronaut.serde.ObjectMapper;
 import java.util.Map;
 
 /**
- * The application's own JSON mapper, for suites that encode or decode without starting a server.
- *
- * <p>Configured as the application configures it rather than through {@code ObjectMapper.create()},
- * because the serialization inclusion {@code application.yml} sets is exactly what a payload
- * round-trip asserts. The context carries no datasource, so a suite using this stays a unit test,
- * and it is started once per JVM and closed on exit rather than per suite.
+ * The application's own JSON mapper, configured by {@code application.yml}, without a server. One
+ * datasource-less context per JVM, so a suite using it stays a unit test.
  */
 public final class TestJson {
 

@@ -39,11 +39,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Proves what a participant's ask is checked against and what it confers, which is nothing: a
- * request is recorded unanswered, over the notice's own terms, in the asking participant's name.
- *
- * <p>Every refusal asserts the database is untouched as well as the status, because a request that
- * fails halfway would leave the pair holding an open row no later request could get past.
+ * Tests what a participant's consent request is checked against and that it confers nothing: it is
+ * recorded unanswered, over the notice's terms, in the asker's name. Refusals must write nothing.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent requests")
@@ -259,11 +256,7 @@ class ConsentRequestIT extends PostgresTestResource {
         return consents.findByUserIdAndStatusIn(subject.getId(), ALL_STATUSES);
     }
 
-    /**
-     * Everything held by every user this test seeded, which is what a refusal must leave empty: a
-     * refused ask names a user of its own, so asserting over one chosen user would pass even where
-     * the row was written against the user the command actually targeted.
-     */
+    /** Consents of every seeded user, so a refusal is checked whichever user it targeted. */
     private List<Consent> heldByAnyone() {
         return seededUsers.stream().flatMap(user -> heldBy(user).stream()).toList();
     }

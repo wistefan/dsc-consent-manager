@@ -16,8 +16,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Covers the column and timestamp cases the endpoint tests cannot produce through a real request —
- * a column key this revision does not name, a value that is not a string, and a deregistered row.
+ * Participant mapping cases a real request cannot produce: an unknown column key, a non-string
+ * value, and a deregistered row.
  */
 @DisplayName("Mapping a stored participant to its representation")
 class ParticipantMapperTest {

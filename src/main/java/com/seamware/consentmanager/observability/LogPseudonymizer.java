@@ -9,12 +9,8 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * Stands in for a personal identifier in a log line at INFO or above, so lines about one person
- * correlate without naming them.
- *
- * <p>A keyed HMAC rather than a plain hash: without the key, a list of candidate emails or DIDs
- * cannot be hashed and matched against the logs, and an ADR-0007 erasure is not undone by them.
- * Eager, so a missing or short key fails startup; no message quotes the key.
+ * Keyed-HMAC pseudonym for a personal identifier in an INFO+ log line, so candidate identifiers
+ * cannot be matched against logs. Eager: a missing or short key fails startup. See ADR-0007.
  */
 @Context
 public class LogPseudonymizer {
@@ -50,9 +46,7 @@ public class LogPseudonymizer {
         this.key = new SecretKeySpec(bytes, MAC_ALGORITHM);
     }
 
-    /**
-     * The identifier's stable pseudonym under this key, as {@link #PSEUDONYM_LENGTH} hex digits.
-     */
+    /** The identifier's stable pseudonym, as {@link #PSEUDONYM_LENGTH} hex digits. */
     public String pseudonym(String identifier) {
         try {
             Mac mac = Mac.getInstance(MAC_ALGORITHM);

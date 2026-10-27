@@ -42,15 +42,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code POST /participants/me/users/bulk} end to end against a real Keycloak and a real
- * PostgreSQL.
- *
- * <p>What is under test is partial success: that a batch is answered {@code 207} whatever mixture
- * of outcomes it reaches, that results come back one per entry in request order, that the summary
- * agrees with them, and above all that a rejected entry in the middle of the batch stops neither
- * the entries after it nor the writes of the entries before it. The two request-level refusals - a
- * batch above the configured maximum and a batch violating the published property bounds - are
- * asserted to write nothing at all.
+ * Bulk registration's partial success end to end: guards against a rejected entry stopping or
+ * undoing its neighbours, out-of-order results, and request-level refusals that write anything.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant bulk user registration")
@@ -83,10 +76,7 @@ class ParticipantUserBulkRegistrationIT extends KeycloakAndPostgresTestResource 
     private static final List<String> SEEDED_USERS =
             List.of(NEW_USER, ADOPTED_USER, REPEATED_USER, MALFORMED_EMAIL_USER, DUPLICATED_USER);
 
-    /**
-     * The batch maximum this test's context runs with, small enough that an over-long batch is a
-     * handful of entries rather than the deployment default.
-     */
+    /** A small batch maximum, so an over-long batch is only a handful of entries. */
     private static final int BULK_MAX_SIZE = 4;
 
     private static final String BULK_MAX_SIZE_PROPERTY = "consent-manager.users.bulk-max-size";
@@ -94,7 +84,7 @@ class ParticipantUserBulkRegistrationIT extends KeycloakAndPostgresTestResource 
     /** The {@code maxLength} the entry schema puts on {@code identifier}. */
     private static final int MAX_FIELD_LENGTH = 255;
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject
@@ -118,12 +108,7 @@ class ParticipantUserBulkRegistrationIT extends KeycloakAndPostgresTestResource 
         return properties;
     }
 
-    /**
-     * One entry of the mixed batch: where it sits, what it asks for, and what it must come back
-     * with. The rejected entry sits in the middle on purpose - an entry that writes is sent after
-     * it, so an entry wrapped in a transaction that the rejection aborts fails here rather than
-     * passing by accident.
-     */
+    /** One entry of the mixed batch; the rejection sits mid-batch so a shared transaction fails. */
     private enum Entry {
 
         /** The user exists and belongs to a foreign participant: this entry adopts it. */
@@ -135,7 +120,7 @@ class ParticipantUserBulkRegistrationIT extends KeycloakAndPostgresTestResource 
         /** Nobody carries the identifier, and it is sent after the rejection on purpose. */
         UNKNOWN_USER(2, NEW_USER, "CREATED"),
 
-        /** The caller registered it already, so the batch changes nothing published about it. */
+        /** The caller registered it already, so the batch changes nothing published. */
         ALREADY_LINKED(3, REPEATED_USER, "ALREADY_LINKED");
 
         private final int position;

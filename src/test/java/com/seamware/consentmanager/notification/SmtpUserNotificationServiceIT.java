@@ -56,7 +56,7 @@ class SmtpUserNotificationServiceIT {
     private static final String TEXT_HTML = "text/html";
     private static final String TEXT_PLAIN = "text/plain";
 
-    /** Markers of a state-changing or credential-bearing link (AC 4). */
+    /** Markers of a state-changing or credential-bearing link. */
     private static final List<String> FORBIDDEN_MARKERS =
             List.of("token", "access_token", "/consents/");
 
@@ -238,8 +238,7 @@ class SmtpUserNotificationServiceIT {
     @EnumSource(NotificationKind.class)
     @DisplayName("a server that accepts and never answers does not delay the caller")
     void unresponsiveServerDoesNotBlock(NotificationKind kind) throws IOException {
-        // Never accepting still completes the TCP handshake through the backlog, so the client
-        // connects and then waits for a greeting that never comes.
+        // The backlog completes the handshake, so the client waits for a greeting that never comes.
         try (ServerSocket silent = new ServerSocket(0);
                 ApplicationContext stalled = smtpContext(silent.getLocalPort())) {
             UserNotificationService service = stalled.getBean(UserNotificationService.class);

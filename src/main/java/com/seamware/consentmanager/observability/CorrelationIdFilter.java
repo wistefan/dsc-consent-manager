@@ -17,12 +17,8 @@ import java.util.regex.Pattern;
 import org.slf4j.MDC;
 
 /**
- * Gives every request a correlation ID: logged under {@link #MDC_KEY}, echoed in {@link #HEADER}
- * and stamped on every problem detail. Runs first, so a 401/403 from the security filter carries it
- * too.
- *
- * <p>An inbound {@link #HEADER} is adopted only when it matches {@link #ACCEPTED_ID}; anything else
- * is replaced, so a caller cannot inject a forged line or an unbounded value into the logs.
+ * Gives every request a correlation ID, logged, echoed in {@link #HEADER} and stamped on problem
+ * details. Runs first; an inbound ID not matching {@link #ACCEPTED_ID} is replaced.
  */
 @ServerFilter(ServerFilter.MATCH_ALL_PATTERN)
 public class CorrelationIdFilter implements Ordered {
@@ -43,10 +39,8 @@ public class CorrelationIdFilter implements Ordered {
     static final Pattern ACCEPTED_ID = Pattern.compile("[A-Za-z0-9._~-]{1," + MAX_LENGTH + "}");
 
     /**
-     * Assigns the ID and propagates it in the MDC to every thread the request runs on.
-     *
-     * <p>The MDC entry is set only long enough to be captured: the propagated context restores it
-     * on each hop and removes it when the request leaves that thread.
+     * Assigns the ID and propagates it in the MDC to every thread the request runs on; the entry is
+     * set only long enough for the propagated context to capture it.
      */
     @RequestFilter
     public void assign(HttpRequest<?> request, MutablePropagatedContext propagatedContext) {

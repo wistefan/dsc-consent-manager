@@ -11,22 +11,16 @@ public final class PrivacyNoticeFixtures {
     private PrivacyNoticeFixtures() {}
 
     /**
-     * A payload with every section absent, for a suite seeding a notice it never reads.
-     *
-     * <p>One call site rather than a row of positional nulls in each suite: the record's components
-     * are all nullable, so a reordering or an added component would otherwise shift what a seeded
-     * notice means with nothing to flag it.
+     * A payload with every section absent, for a suite seeding a notice it never reads. Shared so a
+     * reordered or added nullable component cannot silently shift seeded notices.
      */
     public static PrivacyNoticePayload emptyPayload() {
         return new PrivacyNoticePayload(null, null, null, null, null, null, null, null, null);
     }
 
     /**
-     * A payload carrying only what a resolved retrieval dereferences, everything else absent.
-     *
-     * <p>The three sections a resolution case needs to control, named rather than positional for
-     * {@link #emptyPayload()}'s reason. The headings resolution fills in from the contract are left
-     * absent here so that a value in the response can only have come from the contract.
+     * A payload carrying only what a resolved retrieval dereferences. Contract-filled headings stay
+     * absent, so a response value can only come from the contract.
      */
     public static PrivacyNoticePayload payloadToResolve(
             List<String> purposes, List<DataReference> data, List<Recipient> recipients) {

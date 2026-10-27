@@ -15,9 +15,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.yaml.snakeyaml.Yaml;
 
-/**
- * Runs the build's bundler, in the single-file mode the build uses, against fixture specifications.
- */
+/** Runs the build's bundler, in the build's single-file mode, against fixture specifications. */
 @DisplayName("OpenAPI bundler")
 class OpenApiBundlerTest {
 

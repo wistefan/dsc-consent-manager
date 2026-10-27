@@ -47,12 +47,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Exercises {@code includeLineage} on {@code GET /consents/me}, {@code /consents/me/{id}} and
- * {@code /consents/{id}} against real Keycloak and PostgreSQL.
- *
- * <p>The depth is configured to {@link #MAX_DEPTH} so a chain one record longer proves the cut, and
- * the chains are seeded straight into the repository so a cycle - which no API path produces - can
- * be built to prove the walk ends.
+ * {@code includeLineage} on the consent reads: guards the depth cut at {@link #MAX_DEPTH}, hops
+ * leaving the caller's scope, and a seeded cycle that must not hang the walk.
  */
 @MicronautTest(transactional = false)
 @Property(name = "consent-manager.consents.lineage-max-depth", value = ConsentLineageIT.MAX_DEPTH)
@@ -74,7 +70,7 @@ class ConsentLineageIT extends KeycloakAndPostgresTestResource {
 
     private static final String CONTENT = "content";
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     /** The participant the {@code PARTICIPANT} token carries; registered as the provider. */

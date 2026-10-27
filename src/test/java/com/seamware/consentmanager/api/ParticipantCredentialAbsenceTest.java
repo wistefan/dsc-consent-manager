@@ -21,21 +21,13 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Holds the participant API to storing and returning no credential of any kind.
- *
- * <p>The service is a resource server: it accepts tokens an identity provider issued and never
- * issues, stores or echoes one. That is a property of the published models rather than of any
- * handler, so it is asserted against the models the generator actually emitted - a property added
- * to a schema reaches a wire format here whether or not a handler ever reads it.
- *
- * <p>The models are reached by walking the signatures of every controller serving a participant
- * path rather than by matching class names, so a model introduced later is covered by having been
- * wired into the API at all, and a nested one is covered through the property that holds it.
+ * No generated participant API model, reached by walking controller signatures, carries a
+ * credential-shaped property; guards the resource-server rule of never storing or echoing one.
  */
 @DisplayName("Participant API models")
 class ParticipantCredentialAbsenceTest {
 
-    /** Controllers serving a participant path; AC 14 covers every model any of them publishes. */
+    /** Controllers serving a participant path; every model they publish is covered. */
     private static final List<Class<?>> PARTICIPANT_CONTROLLERS =
             List.of(ParticipantController.class, ParticipantUserController.class);
 
@@ -45,19 +37,11 @@ class ParticipantCredentialAbsenceTest {
     /** Prefix of the generated constant that holds a property's name as it appears on the wire. */
     private static final String WIRE_NAME_PREFIX = "JSON_PROPERTY_";
 
-    /**
-     * Fragments a property name may not contain, matched case-insensitively and without a word
-     * boundary so that one entry catches every compound built on it - {@code secret} catches {@code
-     * clientSecret}, {@code key} catches {@code apiKey}, {@code token} catches {@code
-     * refreshToken}.
-     */
+    /** Forbidden name fragments, matched case-insensitively anywhere, so compounds are caught. */
     private static final List<String> CREDENTIAL_VOCABULARY =
             List.of("clientid", "secret", "password", "token", "key", "credential");
 
-    /**
-     * Models the walk has to reach, so that a walk broken by a refactoring fails here rather than
-     * passing with nothing to assert.
-     */
+    /** Models the walk must reach, so a broken walk fails rather than asserting nothing. */
     private static final Set<String> REACHED_MODELS =
             Set.of(
                     "Participant",
@@ -104,12 +88,7 @@ class ParticipantCredentialAbsenceTest {
         assertThat(participantModels().map(model -> model.get()[0])).containsAll(REACHED_MODELS);
     }
 
-    /**
-     * Every generated model the participant API accepts, returns, or nests inside one of those.
-     *
-     * <p>Generated enums are skipped: they publish values rather than properties, so one would
-     * contribute a case with nothing left to assert.
-     */
+    /** Every generated model the participant API accepts, returns or nests; enums are skipped. */
     static Stream<Arguments> participantModels() {
         Deque<Type> pending =
                 PARTICIPANT_CONTROLLERS.stream()

@@ -13,9 +13,7 @@ final class NotificationContexts {
 
     private NotificationContexts() {}
 
-    /**
-     * Ignores exported variables, so an {@code SMTP_HOST} in the developer's shell changes nothing.
-     */
+    /** Ignores exported variables, so a shell's {@code SMTP_HOST} changes nothing. */
     static ApplicationContext start(Map<String, Object> overrides) {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("datasources.default.enabled", false);

@@ -14,11 +14,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins which contracts name their own two parties and which only look as if they do.
- *
- * <p>The refusals matter as much as the derivations: an ecosystem contract names N members, so
- * every case that resolves has to show what evidence narrowed each side to one party, and every
- * case that does not has to show the caller how many were found.
+ * Tests which contracts name their own two parties and which only look as if they do; a refusal
+ * must report how many candidates a side had.
  */
 @DisplayName("Contract party resolution")
 class ContractPartyResolverTest {

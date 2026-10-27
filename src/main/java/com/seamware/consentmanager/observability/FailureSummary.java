@@ -13,12 +13,8 @@ import java.util.stream.Stream;
 import org.slf4j.Logger;
 
 /**
- * The part of a failure safe to log above DEBUG: route template, exception class chain and the top
- * frame of the root cause, never a message, a path value or a query string.
- *
- * <p>Exception messages are free text from this code, drivers and libraries; a unique violation
- * reads {@code Key (identifier)=(alice@example.com)}. So the message and throwable go to DEBUG
- * only, under the same {@code correlationId} the MDC carries for both lines.
+ * The part of a failure safe to log above DEBUG: route template, exception class chain and root
+ * frame. Messages may carry personal data, so they go to DEBUG only.
  */
 public final class FailureSummary {
 

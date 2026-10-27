@@ -51,16 +51,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code POST /consents/requests} end to end against a real Keycloak and a real
- * PostgreSQL.
- *
- * <p>What is under test is that an ask confers nothing and reaches nobody it should not: the record
- * it opens is {@code PENDING} with {@code consented} false, the caller must be a party to the
- * notice and already linked to the subject, and the two ways of naming a subject the caller may not
- * ask are answered alike so the route cannot enumerate users.
- *
- * <p>The notice is written straight to the table rather than generated through the API, because
- * generation would need a stubbed Contract Service for terms this suite only ever reads back.
+ * {@code POST /consents/requests} end to end: guards an ask conferring consent, a caller asking
+ * outside its notices or links, and refusals that would let the route enumerate users.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent request endpoint")
@@ -68,7 +60,7 @@ class ConsentRequestSurfaceIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_CONSENT_REQUESTS = "/consents/requests";
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     /** The caller: the identifier the {@code PARTICIPANT} token carries, registered per case. */
@@ -156,12 +148,7 @@ class ConsentRequestSurfaceIT extends KeycloakAndPostgresTestResource {
         link(users.save(new User(FOREIGN_USER, null, null, null)), register(COUNTERPARTY));
     }
 
-    /**
-     * Rows committed by these cases outlive the transaction, so they are removed by hand.
-     *
-     * <p>Consents hold their user and both participants against {@code ON DELETE RESTRICT}, so they
-     * go first; their events cascade with them, and the affiliations go before the users they name.
-     */
+    /** Removes committed rows: consents first, then affiliations, then the users they name. */
     @AfterEach
     void removeCommittedRows() {
         consents.deleteAll();
@@ -403,10 +390,7 @@ class ConsentRequestSurfaceIT extends KeycloakAndPostgresTestResource {
                 Map.of(PROPERTY_NOTICE, privacyNoticeId, PROPERTY_SUBJECT, subject));
     }
 
-    /**
-     * The refusal with the subject it names masked and its per-request correlation ID dropped, so
-     * two of them compare on their shape.
-     */
+    /** The refusal with its subject masked and correlation ID dropped, to compare shapes. */
     private Map<String, Object> anonymised(HttpResponse<String> response, String subject) {
         try {
             Map<String, Object> problem =

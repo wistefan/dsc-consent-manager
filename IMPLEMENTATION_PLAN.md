@@ -504,7 +504,8 @@ blocks, including code added by Steps 1-9. About 18,000 Javadoc lines in `src/ma
 - **Order of work.** Work package by package, heaviest first: `security/`, `config/`,
   `service/`, `domain/`, `repository/`, then the rest.
 - **Guard.** Add `SourceHygieneTest`, which fails when a Java source or `application*.yml` under
-  `src/` references a ticket (`TICKET-\d+`, `ticket #\d+`, `step \d+ of this ticket`).
+  `src/` references a ticket (`TICKET-\d+`, `ticket #\d+`, a user-story id `US-X-\d+`, `AC \d+`,
+  `step \d+`).
   Parameterize it over the matched files.
 - **AGENTS.md.** Replace the "Actual density" note under "Doc comments are terse" with the new
   rule, and drop the statement that service classes carry multi-paragraph Javadoc.
@@ -516,3 +517,14 @@ blocks, including code added by Steps 1-9. About 18,000 Javadoc lines in `src/ma
     src/test/java 'src/**/application*.yml' | grep '^[+-]'`, filtered to non-comment lines. The
     result must be empty apart from Spotless reflow. Commit 2 is reviewed as ordinary code.
   - `./mvnw verify` is green.
+- *Done differently:* step agents may not edit AGENTS.md, so commit 2 carries
+  `SourceHygieneTest` and the plan note below, and the AGENTS.md edit is left to a plan-mode agent
+  (requested with `[plan-update]`). Apply it on the plan branch, together with Step 8's items:
+  - Under "Doc comments are terse", replace the "Actual density" sentences with: "Every type and
+    public method gets one line saying what it is and why. Add a second line only for a contract
+    the signature cannot show (ownership, absent/error semantics, units, concurrency, side
+    effects, invariants). Three lines is the limit, unless a security or concurrency invariant
+    needs one short paragraph. No ticket or step references and no history; a rationale is a
+    `See ADR-00xx.` pointer. `SourceHygieneTest` fails the build on a ticket reference in a Java
+    source or `application*.yml` under `src/`."
+  - Add `SourceHygieneTest` to the test list in Project Structure.

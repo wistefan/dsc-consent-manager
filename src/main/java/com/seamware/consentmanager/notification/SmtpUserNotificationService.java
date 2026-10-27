@@ -23,9 +23,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Sends the notifications as multipart HTML + text mail. The caller's thread only builds the model
- * and queues it; rendering and the SMTP exchange run on the notification executor, and every
- * failure, including a full queue, is logged rather than thrown.
+ * Sends notifications as multipart HTML + text mail on the notification executor. Every failure, a
+ * full queue included, is logged rather than thrown.
  */
 @Singleton
 @Requires(condition = SmtpConfiguredCondition.class)

@@ -2,13 +2,7 @@ package com.seamware.consentmanager.domain;
 
 import io.micronaut.serde.annotation.Serdeable;
 
-/**
- * Represents the type of state transition recorded in a consent event.
- *
- * <p>Each value corresponds to a significant change in the consent lifecycle. These states are
- * stored in the {@code event_state} column of the {@code consent_events} table and provide an audit
- * trail of all consent lifecycle transitions.
- */
+/** Transition a consent event records, stored in {@code consent_events.event_state}. */
 @Serdeable
 public enum ConsentEventState {
 

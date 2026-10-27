@@ -66,12 +66,9 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.LoggerFactory;
 
 /**
- * Pins who the subject is notified by: a participant's request and a participant's termination,
- * once each and only after the write committed, and none of the terminations other paths perform.
- *
- * <p>The notifier is replaced with a capturing double, so what is under test is that the call is
- * made with the right arguments, not what the email says. Security is on because the failure case
- * asserts the HTTP status a committed write still answers with when notifying it throws.
+ * Tests that a participant's request and termination each notify the subject once, after commit,
+ * and other terminations do not; a capturing double checks the call arguments, not the email.
+ * Security is on so a throwing notifier can be shown not to change the committed write's status.
  */
 @MicronautTest(transactional = false)
 @Property(name = "spec.name", value = "ConsentNotificationIT")

@@ -12,15 +12,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins what the contract cache stores and, more importantly, what it refuses to store.
- *
- * <p>The two negative cases are asserted apart because "a failed fetch is not cached" does not
- * distinguish them: an unknown contract and an unreachable upstream both yield no cache entry, but
- * only the first is an answer. Caching either would freeze it for a whole lifetime, and nothing in
- * the service could then tell "unknown" from "unknown an hour ago".
- *
- * <p>Starts a real context against a stubbed upstream rather than mocking the cache, because the
- * claim under test is about the configured {@code contracts} cache and not about a call sequence.
+ * Pins what the configured {@code contracts} cache stores and what it refuses to store: neither an
+ * unknown contract nor an upstream failure, since caching either would freeze it.
  */
 @DisplayName("Contract caching")
 class ContractCacheIT {
@@ -118,10 +111,7 @@ class ContractCacheIT {
         }
     }
 
-    /**
-     * Starts a context against the stub, reusing the gateway suite's property set so the retry
-     * budget both suites run under is declared once.
-     */
+    /** Starts a context against the stub with the gateway suite's properties and retry budget. */
     private static ApplicationContext startContext(ContractServiceStub stub) {
         return ContractGatewayTest.startContext(stub, Map.of());
     }

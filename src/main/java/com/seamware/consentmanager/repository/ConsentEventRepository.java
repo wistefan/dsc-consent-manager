@@ -9,37 +9,13 @@ import io.micronaut.data.repository.CrudRepository;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * Repository for {@link ConsentEvent} entities, backed by the {@code consent_events} database
- * table.
- *
- * <p>Provides standard CRUD operations plus methods for querying the consent audit trail. Events
- * are immutable once created; they record state transitions and actions taken on a consent record.
- */
+/** Repository over {@code consent_events}, the immutable consent audit trail. */
 @JdbcRepository(dialect = Dialect.POSTGRES)
 public interface ConsentEventRepository extends CrudRepository<ConsentEvent, UUID> {
 
-    /**
-     * Finds all events for the given consent, ordered by occurrence time ascending.
-     *
-     * <p>Returns the full audit trail for a consent in chronological order, which is useful for
-     * reconstructing the consent's lifecycle history. Ordering is enforced by Micronaut Data's
-     * derived query mechanism: the {@code OrderByOccurredAtAsc} suffix in the method name causes
-     * the framework to generate an {@code ORDER BY occurred_at ASC} clause at compile time.
-     *
-     * @param consentId the UUID of the consent record
-     * @return a list of events in ascending chronological order, or an empty list if none exist
-     */
+    /** Every event of the consent, oldest first. */
     List<ConsentEvent> findByConsentIdOrderByOccurredAtAsc(UUID consentId);
 
-    /**
-     * Finds all events for the given consent, paginated.
-     *
-     * <p>The total count in the returned page reflects only events for this consent.
-     *
-     * @param consentId the UUID of the consent record
-     * @param pageable the pagination parameters (page number, size, sort)
-     * @return a page of events for the specified consent
-     */
+    /** One page of the consent's events. */
     Page<ConsentEvent> findByConsentId(UUID consentId, Pageable pageable);
 }

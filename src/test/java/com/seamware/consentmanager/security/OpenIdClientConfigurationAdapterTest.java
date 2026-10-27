@@ -10,14 +10,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Unit tests for {@link OpenIdClientConfigurationAdapter}.
- *
- * <p>The adapter exists so {@code micronaut-security-oauth2}'s metadata fetcher can issue this
- * service's discovery request. The fetcher composes the document URL as {@code issuer +
- * configuration-path}, while this service configures one absolute {@code discovery-url}, so the
- * single property the adapter has to guarantee is that splitting and recomposing is lossless: the
- * operator's URL is what gets fetched, verbatim, and no {@code .well-known} path is ever invented
- * here. That is a pure function of the configured string, so it is asserted without a network.
+ * Tests {@link OpenIdClientConfigurationAdapter}: splitting the absolute {@code discovery-url} into
+ * issuer plus configuration path must recompose it verbatim, never inventing a {@code .well-known}.
  */
 class OpenIdClientConfigurationAdapterTest {
 
@@ -73,12 +67,7 @@ class OpenIdClientConfigurationAdapterTest {
         assertThat(adapted.getEndSession().getUrl()).isEmpty();
     }
 
-    /**
-     * Builds the adapter for a trust-list entry carrying the given discovery URL.
-     *
-     * @param discoveryUrl the configured {@code discovery-url}
-     * @return the adapted view the metadata fetcher would be constructed against
-     */
+    /** Builds the adapter for a trust-list entry carrying the given discovery URL. */
     private static OpenIdClientConfiguration adapt(String discoveryUrl) {
         IdentityProviderConfiguration configuration =
                 new IdentityProviderConfiguration(PROVIDER_NAME);

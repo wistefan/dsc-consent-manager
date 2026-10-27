@@ -10,13 +10,8 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
 /**
- * Holds the one transaction privacy-notice generation needs: supersede the active notice and store
- * its replacement, or neither.
- *
- * <p>A bean of its own rather than a method on {@link PrivacyNoticeService}, because Micronaut's
- * transactional advice is a proxy and does not apply to self-invocation - called from a sibling
- * method it would run with no transaction at all, and a crash between the two writes would leave
- * the contract with no active notice.
+ * The one transaction notice generation needs: supersede the active notice and store its
+ * replacement, or neither. A separate bean because Micronaut AOP skips self-invocation.
  */
 @Singleton
 public class PrivacyNoticeWriter {
@@ -28,11 +23,11 @@ public class PrivacyNoticeWriter {
     }
 
     /**
-     * Archives the superseded notice, when there is one, and stores the replacement atomically.
+     * Archives the superseded notice, if any, and stores the replacement atomically.
      *
-     * <p>Throws {@link io.micronaut.data.exceptions.DataAccessException} when a concurrent
-     * generation already holds the active slot: {@code uq_privacy_notices_active_contract} rejects
-     * the insert, this transaction rolls back whole, and the caller re-reads the winner outside it.
+     * @throws io.micronaut.data.exceptions.DataAccessException when a concurrent generation holds
+     *     {@code uq_privacy_notices_active_contract}; the caller re-reads the winner outside the
+     *     transaction
      */
     @NonNull
     @Transactional

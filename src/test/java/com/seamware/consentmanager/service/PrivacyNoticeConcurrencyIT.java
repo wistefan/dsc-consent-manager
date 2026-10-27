@@ -32,13 +32,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Proves that concurrent generation for one contract and provider settles on a single active
- * notice, and that the callers that lost the race are served the winner rather than an error.
- *
- * <p>The guarantee is {@code uq_privacy_notices_active_contract}'s, not the service's; what is
- * under test is that the service loses the race gracefully - it re-reads the winner outside the
- * transaction that the constraint rolled back. The surviving row count is asserted at the database,
- * because an API-level count would pass even if two rows existed and one were merely never served.
+ * Tests that concurrent generation for one contract and provider settles on one active notice and
+ * serves the losers the winner rather than an error. The row count is asserted at the database.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Concurrent privacy notice generation")
@@ -82,10 +77,7 @@ class PrivacyNoticeConcurrencyIT extends PostgresTestResource {
         CONTRACTS.close();
     }
 
-    /**
-     * Rows this case commits outlive the transaction, and a notice holds its parties against {@code
-     * ON DELETE RESTRICT}, so a leftover would make every later suite's participant cleanup fail.
-     */
+    /** A leftover notice would block later suites' participant cleanup via the RESTRICT key. */
     @AfterEach
     void removeCommittedRows() {
         notices.deleteAll();

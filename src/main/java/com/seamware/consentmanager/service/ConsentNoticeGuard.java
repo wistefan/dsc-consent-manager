@@ -8,14 +8,7 @@ import io.micronaut.core.annotation.NonNull;
 import jakarta.inject.Singleton;
 import java.util.UUID;
 
-/**
- * One definition of a notice that may be consented to, shared by both routes into {@code GRANTED}.
- *
- * <p>Its own bean rather than a private method on {@link ConsentService} because {@code POST
- * /consents} is no longer the only way a grant is recorded: {@code POST /consents/{id}/resume}
- * grants a request that may have sat unanswered while its notice was regenerated, and a rule
- * written twice is a rule that drifts.
- */
+/** One definition of a notice that may be consented to, shared by both routes into GRANTED. */
 @Singleton
 public class ConsentNoticeGuard {
 
@@ -33,13 +26,8 @@ public class ConsentNoticeGuard {
     }
 
     /**
-     * The notice a grant may be recorded against, or the reason it may not.
-     *
-     * <p>Read straight from the repository rather than through {@link PrivacyNoticeService}, whose
-     * read resolves self-descriptions this flow has no use for. A notice naming no consumer is
-     * refused rather than written through: {@code consents.consumer_id} is {@code NOT NULL}, so the
-     * alternative is a constraint violation surfacing as a {@code 500}. Both generation paths
-     * require a consumer, so only rows predating that invariant can reach it.
+     * The notice a grant may be recorded against; {@code 404} if unknown, {@code 400} if archived
+     * or naming no consumer (which would otherwise violate {@code consents.consumer_id NOT NULL}).
      */
     @NonNull
     public PrivacyNotice consentable(@NonNull UUID privacyNoticeId) {

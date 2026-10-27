@@ -12,11 +12,8 @@ import com.github.tomakehurst.wiremock.http.Fault;
 import java.time.Duration;
 
 /**
- * A stubbed Contract Service, serving or refusing a contract on either of its two endpoints.
- *
- * <p>Owned per test rather than shared, so one test's retry attempts cannot be counted by another.
- * Each method re-stubs the endpoint it names, which is what lets a test change the upstream answer
- * between two gateway calls and observe whether the cache noticed.
+ * Stubbed Contract Service, serving or refusing a contract on either endpoint. Owned per test; each
+ * method re-stubs its endpoint, so a test can change the answer mid-test.
  */
 public final class ContractServiceStub implements AutoCloseable {
 
@@ -26,16 +23,13 @@ public final class ContractServiceStub implements AutoCloseable {
     /** Endpoint a bilateral contract is served from, tried when the ecosystem one is a miss. */
     private static final String BILATERAL_PATH = "/bilaterals/";
 
-    /** Content type of a contract document. */
     private static final String JSON = "application/json";
 
-    /** Status of a served contract. */
     private static final int OK = 200;
 
-    /** Status both endpoints answer with when no contract carries the requested id. */
+    /** Status both endpoints answer when no contract carries the requested id. */
     private static final int NOT_FOUND = 404;
 
-    /** Header naming a response's media type. */
     private static final String CONTENT_TYPE = "Content-Type";
 
     /** Scenario state a recovering stub serves the contract from. */
@@ -91,10 +85,8 @@ public final class ContractServiceStub implements AutoCloseable {
     }
 
     /**
-     * Answers the ecosystem endpoint with a failure once and with the contract from then on.
-     *
-     * <p>How a retry budget is shown to be spent rather than exhausted: the first attempt fails and
-     * the second succeeds, so the call as a whole returns a contract.
+     * Answers the ecosystem endpoint with a failure once, then with the contract. Shows a retry
+     * budget spent rather than exhausted.
      */
     public void serveFailureThenContract(String contractId, int failureStatus, String body) {
         String path = ECOSYSTEM_PATH + contractId;
@@ -116,11 +108,8 @@ public final class ContractServiceStub implements AutoCloseable {
     }
 
     /**
-     * Serves a body on the ecosystem endpoint that is not a contract document at all.
-     *
-     * <p>Decoding it raises a {@code CodecException}, which the gateway reports as an unreachable
-     * upstream like any other - the distinction a caller can act on is that the contract could not
-     * be read, not why.
+     * Serves a body on the ecosystem endpoint that is not a contract document. The gateway reports
+     * the decoding failure as an unreachable upstream.
      */
     public void serveMalformedContract(String contractId) {
         serveBody(ECOSYSTEM_PATH + contractId, MALFORMED_BODY);

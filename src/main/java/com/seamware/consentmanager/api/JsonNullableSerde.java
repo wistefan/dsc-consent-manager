@@ -10,13 +10,8 @@ import java.io.IOException;
 import org.openapitools.jackson.nullable.JsonNullable;
 
 /**
- * Teaches micronaut-serde the {@link JsonNullable} wrapper the generator emits for a property
- * declared {@code nullable} in the specification.
- *
- * <p>It exists so a {@code PATCH} body can tell an omitted property from one explicitly set to
- * {@code null}: an absent property decodes to {@link JsonNullable#undefined()} and an explicit
- * {@code null} to a defined wrapper holding {@code null}. Serialisation unwraps again, so a
- * response never shows the wrapper itself.
+ * Serde for the generated {@link JsonNullable}, so a {@code PATCH} body tells an omitted property
+ * ({@link JsonNullable#undefined()}) from an explicit {@code null}. Serialisation unwraps.
  */
 @Singleton
 public class JsonNullableSerde implements Serde<JsonNullable<Object>> {
@@ -32,7 +27,7 @@ public class JsonNullableSerde implements Serde<JsonNullable<Object>> {
                         .deserialize(decoder, context, valueType));
     }
 
-    /** An explicit {@code null} is a value here, not an absence — that is the whole point. */
+    /** An explicit {@code null} is a value here, not an absence. */
     @Override
     public JsonNullable<Object> deserializeNullable(
             Decoder decoder, DecoderContext context, Argument<? super JsonNullable<Object>> type)
@@ -43,7 +38,7 @@ public class JsonNullableSerde implements Serde<JsonNullable<Object>> {
         return deserialize(decoder, context, type);
     }
 
-    /** What an omitted property leaves behind: undefined, which is neither a value nor a null. */
+    /** An omitted property is undefined: neither a value nor a null. */
     @Override
     public JsonNullable<Object> getDefaultValue(
             DecoderContext context, Argument<? super JsonNullable<Object>> type) {

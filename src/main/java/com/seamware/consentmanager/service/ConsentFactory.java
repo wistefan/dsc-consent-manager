@@ -21,16 +21,10 @@ import java.util.UUID;
 /**
  * The only place a consent is created or re-statused, and the only place its audit event is built.
  *
- * <p>Funnelling both through here is what makes the records agree by construction: {@code
- * consented} is derived from the target status by {@link Consent#withStatus}, the event state is
- * derived from the same status by {@link #EVENT_STATES}, and the acting identity and the {@link
- * ConsentEventTrigger} are required arguments, so no path records a refusal as a grant, leaves a
- * binding decision anonymous, or files an automated change as a deliberate one.
- *
- * <p>The exclusivity is enforced rather than asserted: {@code ConsentStatusInvariantTest} fails the
- * build when any other source under {@code src/main/java} calls {@code withStatus} or {@code
- * updateStatus}, so a transition cannot reach the entity without passing {@link
- * ConsentStateMachine} first.
+ * <p>{@code consented} and the event state both derive from the target status, and actor and
+ * trigger are required, so the two records agree by construction. {@code
+ * ConsentStatusInvariantTest} fails the build if any other source calls {@code withStatus} or
+ * {@code updateStatus}, so no transition bypasses {@link ConsentStateMachine}.
  */
 @Singleton
 public class ConsentFactory {
@@ -38,19 +32,12 @@ public class ConsentFactory {
     /** The event each target status is recorded as. {@link ConsentStatus#DRAFT} records nothing. */
     static final Map<ConsentStatus, ConsentEventState> EVENT_STATES = eventStates();
 
-    /**
-     * The event that affirms a grant already in force; admissible in GRANTED, but dates nothing.
-     */
+    /** The event affirming a grant in force; admissible in GRANTED, but dates nothing. */
     static final ConsentEventState AFFIRMATION = ConsentEventState.CONSENT_RE_CONFIRMED;
 
     /**
-     * Every event a consent holding a given status may record, total over {@link ConsentStatus}.
-     *
-     * <p>{@link #EVENT_STATES} answers the narrower question of which event a <em>move</em>
-     * defaults to; this one answers which events the status admits at all, which is what an event
-     * recorded without a move — an affirmation — must be checked against. {@code DRAFT} is written
-     * out as the empty set because {@code EVENT_STATES} omits the key deliberately, and a missing
-     * key here would be a null lookup rather than the refusal that omission means.
+     * Every event a status admits at all, total over {@link ConsentStatus}; {@code DRAFT} maps to
+     * the empty set. {@link #EVENT_STATES} only names the default event of a move.
      */
     static final Map<ConsentStatus, Set<ConsentEventState>> ADMISSIBLE_EVENTS = admissibleEvents();
 
@@ -66,12 +53,8 @@ public class ConsentFactory {
     }
 
     /**
-     * Creates a consent in {@code target} together with the event recording it.
-     *
-     * <p>Refuses with {@link com.seamware.consentmanager.error.BadRequestException} a status this
-     * service does not create. Takes no trigger because every creatable status is by definition a
-     * deliberate act of {@code actor}; only {@link #transition} is reachable from a job. Neither
-     * record is persisted here.
+     * Creates, unpersisted, a consent in {@code target} with its event; {@code 400} for a status
+     * this service does not create. Always an explicit act of {@code actor}.
      */
     @NonNull
     public RecordedConsent create(
@@ -100,12 +83,8 @@ public class ConsentFactory {
     }
 
     /**
-     * Moves an existing consent to {@code target} and returns it with the event recording the move.
-     *
-     * <p>Refuses with {@link com.seamware.consentmanager.error.BadRequestException} a move the
-     * lifecycle does not permit; the consent is left untouched in that case. {@code trigger}
-     * separates a person's revocation from a job's expiry, which share both the state table and
-     * this method.
+     * Moves a consent to {@code target} and returns it with the event recording the move. A move
+     * the lifecycle refuses raises {@code 400} and leaves the consent untouched.
      */
     @NonNull
     public RecordedConsent transition(
@@ -116,12 +95,7 @@ public class ConsentFactory {
         return transition(consent, target, actor, trigger, null);
     }
 
-    /**
-     * The same move, with {@code details} recorded on the event.
-     *
-     * <p>Used where the move needs a reason the state alone does not carry, such as the erasure or
-     * deregistration that closes a consent nobody acted on.
-     */
+    /** The same move, with {@code details} recorded on the event as a reason the state lacks. */
     @NonNull
     public RecordedConsent transition(
             @NonNull Consent consent,
@@ -135,13 +109,8 @@ public class ConsentFactory {
     }
 
     /**
-     * The same move, filed as {@code recordedAs} rather than as the event the target status
-     * defaults to.
-     *
-     * <p>For a move whose own meaning the status does not carry: a resumed request and a fresh
-     * decision both land in {@code GRANTED}, and {@link #EVENT_STATES} can only name one of them.
-     * The event is still checked against {@link #ADMISSIBLE_EVENTS}, so a status cannot be made to
-     * record an event it does not admit.
+     * The same move, filed as {@code recordedAs} rather than the target status's default event. The
+     * event must still be in {@link #ADMISSIBLE_EVENTS} for that status.
      */
     @NonNull
     public RecordedConsent transitionRecordedAs(
@@ -157,11 +126,8 @@ public class ConsentFactory {
     }
 
     /**
-     * Records that {@code actor} affirms a consent in force, without moving it.
-     *
-     * <p>Refuses with {@link com.seamware.consentmanager.error.BadRequestException} a consent in
-     * any other status. The consent is returned untouched — a re-confirmation is dated by its own
-     * event, so nothing about the record changes.
+     * Records that {@code actor} affirms a consent in force, returning it untouched. A consent in
+     * any other status is refused with {@code 400}.
      */
     @NonNull
     public RecordedConsent affirm(@NonNull Consent consent, @NonNull String actor) {

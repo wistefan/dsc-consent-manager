@@ -20,38 +20,21 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Turns a fetched contract into the content of a privacy notice.
+ * Turns a fetched contract plus the provider's registration into privacy-notice content.
  *
- * <p>Pure: no I/O, no repository, no clock. Every section is derived from the contract document
- * itself plus the provider's own registration, which is what lets a notice be generated while the
- * catalog behind the contract is unreachable - the catalog documents are dereferenced later, when a
- * notice is served resolved.
- *
- * <p>A section the contract carries no source for is left absent rather than empty, and every list
- * is de-duplicated preserving first-seen order. The ordering is not cosmetic: repeated generation
- * compares the payload it would store against the stored one, so a payload that reshuffled would
- * report a contract change that did not happen.
+ * <p>Pure (no I/O, no clock), so generation works while the catalog is unreachable. Unsourced
+ * sections are absent, not empty; lists keep first-seen order so regeneration compares stably.
  */
 @Singleton
 public class ContractContentExtractor {
 
     /**
-     * Stands in for a third party a purpose discloses to without naming it.
-     *
-     * <p>Dropping such a purpose would publish a notice saying the data goes to no third party
-     * while the contract says it does, which is the under-disclosure direction and the one that
-     * harms the data subject. The disclosure is reported; only the name is missing.
-     *
-     * <p>A reserved URN rather than prose, because the entries around it are party names a client
-     * displays verbatim: a client matches this one and renders it in its own words, and a third
-     * party actually called "Unnamed third party" stays distinguishable from a missing name.
+     * Reserved URN for a disclosed but unnamed third party; reported rather than dropped, so the
+     * notice never under-discloses. Clients match it and render it in their own words.
      */
     private static final String UNNAMED_THIRD_PARTY = "urn:consent-manager:third-party:unnamed";
 
-    /**
-     * The contract's content as a notice states it, with the controller taken from the provider's
-     * registration rather than from the contract.
-     */
+    /** The notice content; the controller comes from the provider's registration. */
     @NonNull
     public NoticeContent extract(
             @NonNull ContractResponse contract, @NonNull Participant provider) {
@@ -65,25 +48,14 @@ public class ContractContentExtractor {
                         retentionPeriod(contract),
                         piiPrincipalRights(contract),
                         internationalTransfers(contract),
-                        // Withdrawing consent is a procedure of this service, not a term of a
-                        // contract between two participants, so neither shape carries a source for
-                        // it. Filled once consent withdrawal exists.
+                        // Withdrawal is this service's procedure; no contract shape sources it.
                         null);
         return new NoticeContent(title(contract), payload);
     }
 
     /**
-     * The notice's title: the contract's subject, falling back to its identifier.
-     *
-     * <p>Derived rather than read, because neither contract shape carries a title. The subject is
-     * the ecosystem a contract governs or the offering a bilateral contract is about; a contract
-     * naming neither that nor an identifier yields no title at all.
-     *
-     * <p>Both subjects are catalog URIs in practice, so the stored title usually is one. That is
-     * deliberate: a human-readable name lives in the catalog document rather than in the contract,
-     * and reading it at generation would make a notice ungeneratable while the catalog is down.
-     * Serving a resolved name instead is retrieval's to decide, against the self-description it
-     * already fetches; the stored column stays as derived either way.
+     * The title: the ecosystem or bilateral offering, else the contract id, else none. Usually a
+     * catalog URI, since reading a name from the catalog would block generation while it is down.
      */
     @Nullable
     private String title(ContractResponse contract) {
@@ -95,17 +67,8 @@ public class ContractContentExtractor {
     }
 
     /**
-     * What the contract says the data is processed for.
-     *
-     * <p>The dedicated purpose list first, since its entries are GDPR purposes and the policies are
-     * ODRL rules; the policy descriptions only when the contract declares no purposes, so a notice
-     * says something about processing rather than nothing. A purpose stating no text is named by
-     * its identifier rather than dropped.
-     *
-     * <p>The fallback is total on purpose: where purposes exist the policy descriptions are dropped
-     * rather than appended, because a usage rule listed as a processing purpose would misstate what
-     * the data is processed for. Carrying them under a heading of their own is a change to the
-     * notice's published vocabulary, which the spec owns and this mapping does not.
+     * The declared purposes (unnamed ones by id); policy descriptions only when none are declared,
+     * never appended, as a usage rule is not a processing purpose.
      */
     @Nullable
     private List<String> purposes(ContractResponse contract) {
@@ -146,15 +109,8 @@ public class ContractContentExtractor {
     }
 
     /**
-     * The catalog documents the notice covers, by URI and nothing else.
-     *
-     * <p>Service offerings, because a contract names offerings and never the data resources behind
-     * them; resolving those is a retrieval-time walk of the catalog.
-     *
-     * <p>Only the offerings this notice's own provider makes. An ecosystem contract may name
-     * several participants as offering a service, and listing another participant's offering under
-     * a notice that names this provider as controller would say it controls data it does not
-     * provide.
+     * The service-offering URIs the notice covers, limited to this provider's own offerings so the
+     * controller is never credited with another participant's data.
      */
     @Nullable
     private List<DataReference> data(ContractResponse contract, Participant provider) {
@@ -173,18 +129,8 @@ public class ContractContentExtractor {
     }
 
     /**
-     * The participants the data reaches under this contract.
-     *
-     * <p>Each party is reported as the contract names it, with no normalisation: a contract names
-     * its parties by the dataspace's global participant identifier, which is the value {@code
-     * participants.identifier} holds, so a recipient resolves through {@code findByIdentifier} and
-     * never through a self-description URL. A deployment whose contracts name parties some other
-     * way registers its participants under that same value; this service adds no second lookup.
-     *
-     * <p>A revoked member is excluded wherever it appears: it is no longer party to the contract,
-     * and naming it as a recipient would overstate who receives the data. A member that has not
-     * signed yet is kept, because it is still named as a recipient-to-be and omitting it would
-     * understate who receives the data - the direction a notice must not err in.
+     * The recipients, by the contract's participant identifiers verbatim ({@code
+     * participants.identifier}). Revoked members are excluded; unsigned members are kept.
      */
     @Nullable
     private List<Recipient> recipients(ContractResponse contract) {
@@ -207,12 +153,7 @@ public class ContractContentExtractor {
                         .toList());
     }
 
-    /**
-     * Each identifier as a recipient carrying nothing else.
-     *
-     * <p>A contract names its parties and describes none of them; the remaining components are what
-     * a resolved retrieval fills in from this service's participant registry.
-     */
+    /** Identifier-only recipients; resolved retrieval fills in the rest from the registry. */
     @Nullable
     private static List<Recipient> named(@Nullable List<String> identifiers) {
         return identifiers == null
@@ -237,16 +178,8 @@ public class ContractContentExtractor {
     }
 
     /**
-     * How long the data is kept.
-     *
-     * <p>A bilateral contract states it once, in its termination terms. An ecosystem contract
-     * states it per purpose, so it is reported only when every purpose agrees on it: a purpose
-     * naming none, or two naming different periods, leaves the section absent rather than letting
-     * one purpose's period stand for the whole notice.
-     *
-     * <p>Reported in the contract's own wording, which is not one format: a bilateral termination
-     * period is an ISO-8601 duration, an ecosystem purpose's termination is free prose. A reader
-     * displays it and does not parse it.
+     * Retention in the contract's own wording (ISO-8601 or prose; display only). An ecosystem
+     * contract reports it only when every purpose states the same value.
      */
     @Nullable
     private String retentionPeriod(ContractResponse contract) {
@@ -255,8 +188,7 @@ public class ContractContentExtractor {
                     ? null
                     : text(contract.terminationAndValidity().terminationPeriod());
         }
-        // Nulls survive distinct(), so a purpose stating no termination is one more disagreeing
-        // value rather than an invisible one.
+        // Nulls survive distinct(), so a purpose stating no termination counts as disagreeing.
         List<String> stated =
                 orEmpty(contract.purpose()).stream()
                         .map(purpose -> text(purpose.termination()))
@@ -265,27 +197,15 @@ public class ContractContentExtractor {
         return stated.size() == 1 ? stated.getFirst() : null;
     }
 
-    /**
-     * What the PII principal may do about the data, in the contract's own words.
-     *
-     * <p>The contract's terms and conditions, read wherever a document states them rather than only
-     * on the shape that usually does: an ecosystem contract carrying terms would otherwise have
-     * them dropped, and the two shapes share the member. That one block of text fills this heading
-     * alone - printing it again under withdrawal of consent would dress one paragraph up as two
-     * sections.
-     */
+    /** The principal's rights: the contract's terms and conditions, from either shape. */
     @Nullable
     private String piiPrincipalRights(ContractResponse contract) {
         return text(contract.termsAndConditions());
     }
 
     /**
-     * The third parties a purpose discloses to, named only where disclosure is declared.
-     *
-     * <p>This section reports third-party disclosure as the contract declares it, which is not the
-     * same heading as transfer to a third country: neither contract shape carries a jurisdiction
-     * for a third party, so a named recipient here may well be domestic. A disclosure the contract
-     * declares without naming the party is still reported, under {@link #UNNAMED_THIRD_PARTY}.
+     * Third parties the purposes declare disclosure to, unnamed ones as {@link
+     * #UNNAMED_THIRD_PARTY}. No jurisdiction is known, so an entry may be domestic.
      */
     @Nullable
     private List<String> internationalTransfers(ContractResponse contract) {

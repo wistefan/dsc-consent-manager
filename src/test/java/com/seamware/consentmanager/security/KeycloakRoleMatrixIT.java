@@ -36,19 +36,9 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * The authorization matrix, exercised with real tokens from a Testcontainers Keycloak: for every
- * role this service knows, and for the two callers it does not serve, the status each kind of route
- * answers with.
- *
- * <p>The tokens here are issued by a conforming identity provider rather than minted by the test,
- * so this is also the end-to-end proof that discovery, JWK Set retrieval, signature verification,
- * claim mapping and principal resolution agree with how a real Keycloak actually shapes a token.
- * Hand-minted tokens stay in {@link PrincipalResolutionIT} and {@code
- * ConsentManagerTokenValidatorTest}, for the cryptographic negatives no conforming provider can be
- * made to issue.
- *
- * <p>Not transactional: the participant row has to be committed before the server, which answers on
- * its own connection, can see it.
+ * Tests the authorization matrix end to end with real Keycloak tokens: the status each caller,
+ * outsider and anonymous included, gets from each kind of route. Not transactional, because the
+ * server reads the seeded participant on its own connection.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Role matrix against a real identity provider")
@@ -98,10 +88,8 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
     @Inject UserRepository users;
 
     /**
-     * The callers in the matrix: one per role the realm grants, plus the two the service refuses.
-     *
-     * <p>{@link #OUTSIDER} holds a realm role the trust list maps to nothing, which is the
-     * authenticated-but-unauthorized case; {@link #ANONYMOUS} sends no token at all.
+     * Callers in the matrix: one per realm role, plus {@link #OUTSIDER} (authenticated, no mapped
+     * role) and {@link #ANONYMOUS} (no token).
      */
     enum Caller {
         /** Holds the realm role mapped to {@link Role#USER}. */
@@ -131,11 +119,7 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    /**
-     * Enables the probe controller on top of the Testcontainers datasource and trust list.
-     *
-     * @return the property overrides for this test's context
-     */
+    /** Enables the probe controller on top of the Testcontainers datasource and trust list. */
     @Override
     public Map<String, String> getProperties() {
         Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
@@ -172,13 +156,6 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 .ifPresent(users::delete);
     }
 
-    /**
-     * Every documented combination of caller and route answers with its documented status.
-     *
-     * @param caller who sends the request
-     * @param route the route requested
-     * @param expected the status the combination must produce
-     */
     @ParameterizedTest(name = "{0} on {1} is {2}")
     @MethodSource("roleMatrix")
     @DisplayName("each role reaches exactly the routes it is entitled to")
@@ -192,15 +169,8 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
-     * The matrix itself: one row per caller, one column per route.
-     *
-     * <p>A caller with no role of this service is {@code 403} rather than {@code 401} on every
-     * secured route: its signature was good and its issuer is trusted, so asking it to authenticate
-     * again would be a lie. The anonymous probe stays {@code 200} throughout, including for a
-     * caller whose token names nobody, because a reachability check must not depend on a
-     * credential.
-     *
-     * @return one case per cell
+     * One row per caller, one column per route. A caller with no role here gets 403, not 401, as
+     * its token was valid; the anonymous probe answers 200 to every caller.
      */
     static Stream<Arguments> roleMatrix() {
         HttpStatus ok = HttpStatus.OK;
@@ -215,17 +185,7 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 .flatMap(row -> row);
     }
 
-    /**
-     * Expands one caller's row into one case per route.
-     *
-     * @param caller the row's caller
-     * @param authenticated status on the any-principal route
-     * @param user status on the user-only route
-     * @param participant status on the participant-only route
-     * @param catalog status on the catalog-only route
-     * @param anonymous status on the public reachability probe
-     * @return the row's five cases
-     */
+    /** Expands one caller's row of statuses into one case per route. */
     private static Stream<Arguments> row(
             Caller caller,
             HttpStatus authenticated,
@@ -241,10 +201,7 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 Arguments.of(caller, ANONYMOUS_ROUTE, anonymous));
     }
 
-    /**
-     * A real participant token reaches its handler as the organisation its {@code participant_id}
-     * claim names, loaded from the database rather than taken from the token.
-     */
+    /** The participant is loaded from the database, not taken from the token. */
     @Test
     @DisplayName("a participant token resolves to the registered participant it names")
     void participantTokenResolvesToTheRegisteredParticipant() {
@@ -256,12 +213,7 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
                         KeycloakTestResource.PARTICIPANT_IDENTIFIER + " " + PARTICIPANT_LEGAL_NAME);
     }
 
-    /**
-     * Asserts a refusal carries a problem body and, for a 401 only, a challenge.
-     *
-     * @param response the refusal
-     * @param expected the status it must carry
-     */
+    /** Asserts a refusal carries a problem body and, for a 401 only, a challenge. */
     private static void assertThatIsRefusal(HttpResponse<String> response, HttpStatus expected) {
         assertThat(response.getContentType())
                 .hasValueSatisfying(type -> assertThat(type.toString()).startsWith(PROBLEM_JSON));
@@ -276,13 +228,7 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    /**
-     * Performs a GET, returning the response even when it is a refusal.
-     *
-     * @param path the path to request
-     * @param token the bearer token, or {@code null} to send none
-     * @return the response
-     */
+    /** Performs a GET with an optional bearer token, returning refusals as well. */
     @SuppressWarnings("unchecked")
     private HttpResponse<String> get(String path, String token) {
         MutableHttpRequest<Object> request = HttpRequest.GET(path);
@@ -297,34 +243,21 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
-     * One route per role, in the shape every real endpoint is expected to have: the access rule
-     * names the role, and the handler takes its caller from the principal it declares.
-     *
-     * <p>They exist only for this test; the matrix they make testable is the template the endpoint
-     * tickets extend with their own rows.
+     * Test-only routes, one per role, shaped like a real endpoint: the access rule names the role
+     * and the handler takes its caller from the declared principal.
      */
     @Requires(property = PROBE_ENABLED, value = "true")
     @Controller(PROBE_PATH)
     static class RoleMatrixProbeController {
 
-        /**
-         * Serves every caller that resolves to a principal of this service.
-         *
-         * @param principal the resolved caller
-         * @return the caller's role
-         */
+        /** Serves every caller that resolves to a principal of this service. */
         @Get("/authenticated")
         @Secured(SecurityRule.IS_AUTHENTICATED)
         String authenticated(ConsentManagerPrincipal principal) {
             return principal.role().name();
         }
 
-        /**
-         * Serves users only.
-         *
-         * @param user the resolved caller
-         * @return the user's identifier
-         */
+        /** Serves users only. */
         @Get("/user")
         @Secured("USER")
         String user(UserPrincipal user) {
@@ -332,14 +265,8 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
         }
 
         /**
-         * Serves participants only.
-         *
-         * <p>Reads the row through {@code requireRegistered()}: this matrix only ever mints tokens
-         * for the seeded participant, so an absent row is a failure of that seeding and should
-         * surface as a clean {@code 403} rather than a {@code NullPointerException}.
-         *
-         * @param participant the resolved caller
-         * @return the participant's identifier and legal name
+         * Serves participants only; {@code requireRegistered()} turns a missing seeded row into a
+         * clean {@code 403} rather than a {@code NullPointerException}.
          */
         @Get("/participant")
         @Secured("PARTICIPANT")
@@ -347,12 +274,7 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
             return participant.identifier() + " " + participant.requireRegistered().getLegalName();
         }
 
-        /**
-         * Serves the catalog service only.
-         *
-         * @param catalog the resolved caller
-         * @return the catalog service's subject
-         */
+        /** Serves the catalog service only. */
         @Get("/catalog")
         @Secured("CATALOG")
         String catalog(CatalogPrincipal catalog) {

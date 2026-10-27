@@ -67,9 +67,7 @@ public final class LogCapture implements AutoCloseable {
         return (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
     }
 
-    /**
-     * Logback drops every appender when the context reconfigures it at startup; this restores ours.
-     */
+    /** Restores our appender, which Logback drops when the context reconfigures at startup. */
     private record ReattachOnReset(ListAppender<ILoggingEvent> appender)
             implements LoggerContextListener {
 

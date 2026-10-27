@@ -6,12 +6,8 @@ import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
 
 /**
- * A stored notice as a retrieval serves it: the row, its parties by identifier, and the title and
- * payload resolution arrived at.
- *
- * <p>The title and payload travel beside the row rather than in it, because resolution is
- * read-only: a GET that wrote the dereferenced catalog back would make the stored payload depend on
- * who happened to read it. They are the row's own values whenever nothing was resolved.
+ * A stored notice as a retrieval serves it: the row, its parties, and the resolved title/payload.
+ * Resolution is read-only, so title and payload travel beside the row and never write back.
  */
 public record ResolvedNotice(
         @NonNull PrivacyNotice notice,

@@ -25,9 +25,7 @@ public final class ReceiptSignatures {
 
     private ReceiptSignatures() {}
 
-    /**
-     * Whether the {@code jws} of a served {@code {receipt, jws}} body verifies over its receipt.
-     */
+    /** Whether a served {@code {receipt, jws}} body's {@code jws} verifies over its receipt. */
     public static boolean verifies(String signedReceiptJson, JWKSet published)
             throws IOException, ParseException, JOSEException {
         Map<String, Object> body =
@@ -36,10 +34,7 @@ public final class ReceiptSignatures {
         return verifies(body.get(RECEIPT), (String) body.get(JWS), published);
     }
 
-    /**
-     * Whether {@code signature} verifies over {@code receipt} against the key its {@code kid}
-     * names.
-     */
+    /** Whether {@code signature} verifies over {@code receipt} with the key its kid names. */
     public static boolean verifies(Object receipt, String signature, JWKSet published)
             throws IOException, ParseException, JOSEException {
         byte[] payload =

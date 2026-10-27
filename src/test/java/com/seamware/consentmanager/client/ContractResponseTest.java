@@ -13,11 +13,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins what the one contract model makes of the two documents the Contract Service serves.
- *
- * <p>Identity and shape are asserted on every document because everything downstream branches on
- * them: the shape decides which extraction rules apply, and the identifier is what a notice is
- * traced back to.
+ * Pins what the one contract model makes of the two documents the Contract Service serves; identity
+ * and shape are asserted on each because everything downstream branches on them.
  */
 @DisplayName("Contract deserialization")
 class ContractResponseTest {

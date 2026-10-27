@@ -48,13 +48,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * Asserts that every operation in the OpenAPI specification is served by a route whose
- * {@code @Secured} rule says the same thing the specification's {@code security} requirement says.
- *
- * <p>Cases are generated from the specification, so a later endpoint is covered the moment it is
- * specified; an operation with no implementing controller method fails rather than being skipped.
- * The specification is read from the authored {@code api/} tree, which is what the generator
- * compiles against; the served bundle is derived from it at build time.
+ * Spec {@code security} versus {@code @Secured}, principal type and 401/403 refs per operation;
+ * cases come from the spec, so an unimplemented or drifted operation fails rather than skips.
  */
 @DisplayName("Specification security requirements versus @Secured")
 class SpecSecurityConsistencyTest {
@@ -65,10 +60,10 @@ class SpecSecurityConsistencyTest {
     /** The root document, relative to {@link #SPEC_ROOT}. */
     private static final String SPEC_RESOURCE = "openapi.yaml";
 
-    /** Package holding every hand-written concrete controller, and their generated supertypes. */
+    /** Package holding the concrete controllers and their generated supertypes. */
     private static final String CONTROLLER_PACKAGE = "com.seamware.consentmanager.api";
 
-    /** Routing annotation per specification HTTP method, in the spelling the specification uses. */
+    /** Routing annotation per specification HTTP method. */
     private static final Map<String, Class<? extends Annotation>> ROUTING_ANNOTATIONS =
             Map.of(
                     "get", Get.class,
@@ -83,10 +78,7 @@ class SpecSecurityConsistencyTest {
     /** Keys of a path item that are operations rather than metadata such as {@code parameters}. */
     private static final Set<String> OPERATION_KEYS = ROUTING_ANNOTATIONS.keySet();
 
-    /**
-     * Operations {@code api/openapi.yaml} declares, which is how many cases every generated test
-     * below must run.
-     */
+    /** Operations {@code api/openapi.yaml} declares; raise it with every added operation. */
     private static final int SPECIFIED_OPERATION_COUNT = 34;
 
     /** Path item key that would hide every operation beneath it from this test. */
@@ -101,10 +93,8 @@ class SpecSecurityConsistencyTest {
     /** Annotation members that may carry a route URI, most specific first. */
     private static final List<String> URI_MEMBERS = List.of("uri", "value");
 
-    /** Separator between path segments. */
     private static final String PATH_SEPARATOR = "/";
 
-    /** Suffix of a compiled class file. */
     private static final String CLASS_SUFFIX = ".class";
 
     /** Marker distinguishing a nested or synthetic class from a top-level one. */
@@ -116,10 +106,8 @@ class SpecSecurityConsistencyTest {
     /** The only authentication scheme name this service implements. */
     private static final String EXPECTED_SCHEME_NAME = "bearer";
 
-    /** Status code every secured operation must document as a failed authentication. */
     private static final String UNAUTHORIZED_STATUS = "401";
 
-    /** Status code every secured operation must document as a refused authorization. */
     private static final String FORBIDDEN_STATUS = "403";
 
     /** Shared response component a secured operation's {@code 401} must reference. */
@@ -128,19 +116,10 @@ class SpecSecurityConsistencyTest {
     /** Shared response component a secured operation's {@code 403} must reference. */
     private static final String FORBIDDEN_REF = "#/components/responses/Forbidden";
 
-    /**
-     * Suffix the generator appends to the routed wrapper's name; the delegate keeps the bare {@code
-     * operationId}.
-     */
+    /** Suffix of the routed wrapper's name; the delegate keeps the bare {@code operationId}. */
     private static final String ROUTED_METHOD_SUFFIX = "Api";
 
-    /**
-     * Roles a parameter of each principal type can actually hold.
-     *
-     * <p>{@code PrincipalArgumentBinder} refuses with a {@code 403} when the resolved principal is
-     * not an instance of the declared type, so an operation whose {@code x-principal} cannot hold
-     * one of its {@code x-roles} is unservable for every caller holding that role.
-     */
+    /** Roles each principal type can hold; the binder refuses any other with {@code 403}. */
     private static final Map<Class<?>, Set<Role>> ROLES_PER_PRINCIPAL_TYPE =
             Map.of(
                     UserPrincipal.class, Set.of(Role.USER),
@@ -149,14 +128,8 @@ class SpecSecurityConsistencyTest {
                     ConsentManagerPrincipal.class, EnumSet.allOf(Role.class));
 
     /**
-     * One operation of the specification together with the access it declares.
-     *
-     * @param roles the scopes the operation's security requirements name, which are the role names
-     *     its route must enforce; empty when it is anonymous or names none
-     * @param parameterNames every parameter the operation accepts, the path item's shared ones
-     *     merged in, since those apply to each operation beneath it
-     * @param responseRefs {@code $ref} target per documented status code, for codes that are a bare
-     *     reference; a response written out inline contributes no entry
+     * One specified operation and its declared access. {@code parameterNames} merges path-item
+     * parameters; {@code responseRefs} omits inline responses.
      */
     record SpecOperation(
             String operationId,
@@ -206,15 +179,7 @@ class SpecSecurityConsistencyTest {
         return operations.stream();
     }
 
-    /**
-     * Asserts that no path item hides its operations behind an external {@code $ref}.
-     *
-     * <p>The specification is read with plain SnakeYAML and nothing here resolves a reference, so a
-     * path item written as {@code /users: {$ref: "./paths/users.yaml#/~1users"}} has exactly one
-     * key and contributes zero cases: every operation beneath it would go unchecked while this
-     * suite stayed green. The guard is therefore a refusal rather than a resolution - operations
-     * stay inline in {@code api/openapi.yaml}, and only schemas and responses are externalised.
-     */
+    /** Nothing here resolves a {@code $ref}, so an externalised path item would go unchecked. */
     @Test
     @DisplayName("every path item declares its operations inline, where this test can see them")
     void everyPathItemDeclaresItsOperationsInline() {
@@ -236,15 +201,11 @@ class SpecSecurityConsistencyTest {
                                 .containsAnyElementsOf(OPERATION_KEYS));
     }
 
-    /**
-     * Exercises the guard above against hand-built path items, so that it is known to reject what
-     * it claims to rather than merely being present and never triggered.
-     */
+    /** Proves the inline-operations guard rejects what it claims to. */
     @Nested
     @DisplayName("the inline-operations guard itself")
     class InlineOperationsGuard {
 
-        /** A path item per shape the guard has to judge, with the verdict expected of it. */
         static Stream<Arguments> pathItems() {
             return Stream.of(
                     Arguments.of("an inline operation", Map.of("get", Map.of()), true),
@@ -284,9 +245,6 @@ class SpecSecurityConsistencyTest {
         }
     }
 
-    /**
-     * Asserts that the route implementing an operation enforces what the specification promises.
-     */
     @ParameterizedTest(name = "{0}")
     @MethodSource("specOperations")
     @DisplayName("every specified operation is implemented with a matching @Secured rule")
@@ -332,15 +290,7 @@ class SpecSecurityConsistencyTest {
                                         .isPresent());
     }
 
-    /**
-     * Asserts that a secured operation takes its caller as a typed principal.
-     *
-     * <p>{@link com.seamware.consentmanager.security.PrincipalResolutionFilter} resolves - and so
-     * runs its "identifier claim present" and "participant is registered" refusals - only for a
-     * route that declares such a parameter. Without this assertion a secured route that injects
-     * {@code Authentication}, or only path variables, would skip both checks silently and be served
-     * on the strength of its {@code @Secured} authority alone.
-     */
+    /** Without a principal parameter the resolution filter's refusals are silently skipped. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("specOperations")
     @DisplayName("every secured operation takes its caller as a typed principal")
@@ -357,15 +307,7 @@ class SpecSecurityConsistencyTest {
                 .anyMatch(ConsentManagerPrincipal.class::isAssignableFrom);
     }
 
-    /**
-     * Asserts that the concrete controller declares the handler rather than inheriting the
-     * generator's stub.
-     *
-     * <p>{@code generateOperationsToReturnNotImplemented} leaves the delegate with a {@code 501}
-     * body instead of declaring it abstract, so an operation specified without a handler compiles,
-     * routes, and answers {@code 501} in production. The routed wrapper is always inherited, which
-     * is why it cannot be the thing checked.
-     */
+    /** The inherited generated delegate compiles, routes and answers {@code 501}. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("specOperations")
     @DisplayName("every specified operation is handled by its controller, not the generated stub")
@@ -379,14 +321,7 @@ class SpecSecurityConsistencyTest {
                 .isEqualTo(routed.controller());
     }
 
-    /**
-     * Asserts that an operation's principal type can hold every role it admits.
-     *
-     * <p>Nothing in the specification ties {@code x-principal} to {@code x-roles}, and a mismatched
-     * pair only shows at runtime: {@code PrincipalArgumentBinder} refuses with a {@code 403} when
-     * the resolved principal is of another shape, so the operation looks correctly specified and
-     * serves nobody holding the unholdable role.
-     */
+    /** A mismatched {@code x-principal}/{@code x-roles} pair only shows as a runtime 403. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("specOperations")
     @DisplayName("every secured operation's principal type can hold the roles it admits")
@@ -412,10 +347,7 @@ class SpecSecurityConsistencyTest {
                                                 held -> assertThat(holdable).contains(held)));
     }
 
-    /**
-     * Asserts the principal-to-roles table covers the sealed hierarchy, so a newly permitted
-     * principal type cannot silently skip the check above.
-     */
+    /** A newly permitted principal type must not silently skip the check above. */
     @Test
     @DisplayName("every permitted principal type declares the roles it can hold")
     void principalTypeTableCoversTheSealedHierarchy() {
@@ -425,10 +357,6 @@ class SpecSecurityConsistencyTest {
                 .containsKeys(ConsentManagerPrincipal.class.getPermittedSubclasses());
     }
 
-    /**
-     * Asserts that an operation documents exactly the failure responses its access implies: the
-     * shared {@code 401} and {@code 403} when it is secured, and neither when it is anonymous.
-     */
     @ParameterizedTest(name = "{0}")
     @MethodSource("specOperations")
     @DisplayName("every secured operation references the shared 401 and 403 responses")
@@ -448,14 +376,7 @@ class SpecSecurityConsistencyTest {
                 .containsEntry(FORBIDDEN_STATUS, FORBIDDEN_REF);
     }
 
-    /**
-     * Asserts that every scheme the specification can require resolves - across {@code $ref}ed
-     * component files - to the bearer-token scheme this service actually implements.
-     *
-     * <p>The document-level requirement counts even while no operation inherits it: it is what a
-     * newly specified operation gets by default, so a scheme that does not resolve has to fail now
-     * rather than on the day the first secured endpoint is added.
-     */
+    /** Includes the document-level requirement, which a new operation inherits by default. */
     @Test
     @DisplayName("every required security scheme resolves to a bearer token scheme")
     void requiredSchemesAreBearerTokenSchemes() {
@@ -522,15 +443,7 @@ class SpecSecurityConsistencyTest {
                 responseRefsOf(operation));
     }
 
-    /**
-     * The names of the path and query parameters an operation accepts, in declaration order.
-     *
-     * <p>OpenAPI lets a path item declare parameters shared by every operation beneath it, which an
-     * operation then overrides by redeclaring the same name. Reading the operation alone would miss
-     * a query parameter declared one level up and silently empty every assertion built on this
-     * list, so both levels are merged; a name declared twice collapses to one entry, which is what
-     * the override rule means for a list of names.
-     */
+    /** Parameter names an operation accepts, merged with its path item's; duplicates collapse. */
     private static List<String> parameterNamesOf(
             String path,
             String httpMethod,
@@ -575,10 +488,8 @@ class SpecSecurityConsistencyTest {
     }
 
     /**
-     * The concrete controller serving an operation and the generated wrapper routed to it.
-     *
-     * <p>Both halves matter: the wrapper carries {@code @Secured} and the typed principal
-     * parameter, while the controller is where the handler must actually be declared.
+     * A concrete controller and the generated wrapper routed to it; the wrapper carries
+     * {@code @Secured}, the controller must declare the handler.
      */
     record RoutedMethod(Class<?> controller, Method method) {}
 
@@ -690,12 +601,7 @@ class SpecSecurityConsistencyTest {
                 : joined.replace(PATH_SEPARATOR + PATH_SEPARATOR, PATH_SEPARATOR);
     }
 
-    /**
-     * Loads every top-level class in the controller package from the compiled output.
-     *
-     * <p>Scanning the classpath rather than starting an application context keeps this a fast unit
-     * test, and keeps it honest: it sees the annotations as they were compiled.
-     */
+    /** Scans compiled controllers, seeing annotations as compiled without starting a context. */
     private static List<Class<?>> controllerClasses() {
         List<Class<?>> controllers =
                 packageRoots().stream().flatMap(root -> controllersUnder(root).stream()).toList();
@@ -734,14 +640,12 @@ class SpecSecurityConsistencyTest {
         return roots;
     }
 
-    /** Derives a binary class name from a compiled class file. */
     private static String className(Path root, Path file) {
         String relative = root.relativize(file).toString();
         String withoutSuffix = relative.substring(0, relative.length() - CLASS_SUFFIX.length());
         return CONTROLLER_PACKAGE + "." + withoutSuffix.replace(java.io.File.separatorChar, '.');
     }
 
-    /** Loads a class by name. */
     private static Class<?> load(String name) {
         try {
             return Class.forName(name, false, classLoader());

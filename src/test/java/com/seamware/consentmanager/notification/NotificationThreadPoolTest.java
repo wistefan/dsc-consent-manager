@@ -79,9 +79,7 @@ class NotificationThreadPoolTest {
                 .contains(QUEUED_TASKS + " queued notifications dropped");
     }
 
-    /**
-     * Ignores the interrupt shutdownNow sends, so the task outlives the grace like a stuck socket.
-     */
+    /** Ignores shutdownNow's interrupt, so the task outlives the grace like a stuck socket. */
     private static void awaitUninterruptibly(CountDownLatch latch) {
         boolean done = false;
         while (!done) {

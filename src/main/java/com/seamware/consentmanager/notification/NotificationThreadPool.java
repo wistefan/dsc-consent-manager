@@ -10,11 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Bounded pool the notification sends run on. {@link #drain()} drops what is still queued at
- * shutdown instead of working through it against a possibly unreachable server.
- *
- * <p>Deliberately not an {@code ExecutorService}: Micrometer wraps every such bean in a proxy, and
- * the wrapped bean can no longer be cast back for its {@code drain} preDestroy.
+ * Bounded pool notification sends run on; {@link #drain()} drops what is queued at shutdown. Not an
+ * {@code ExecutorService}, since Micrometer's proxy of one breaks the {@code drain} preDestroy.
  */
 class NotificationThreadPool implements Executor {
 

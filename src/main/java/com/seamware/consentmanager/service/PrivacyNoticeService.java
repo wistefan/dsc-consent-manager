@@ -20,13 +20,12 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Generates the privacy notice a contract yields, and decides whether it supersedes the one already
- * held for that contract and provider.
+ * Generates the privacy notice a contract yields, superseding the one held for that contract and
+ * provider when its content changed.
  *
- * <p>Deliberately not transactional at the entry point. The only write is {@link
- * PrivacyNoticeWriter#archiveAndCreate}, and the race it can lose is settled by re-reading the
- * winner - which Postgres forbids inside the transaction that just failed, the same reason {@code
- * UserService}'s create-or-link path stays outside one.
+ * <p>Not transactional: the only write is {@link PrivacyNoticeWriter#archiveAndCreate}, and a race
+ * lost on {@code uq_privacy_notices_active_contract} is settled by re-reading the winner, which
+ * Postgres forbids inside the failed transaction.
  */
 @Singleton
 public class PrivacyNoticeService {
@@ -57,13 +56,8 @@ public class PrivacyNoticeService {
     }
 
     /**
-     * The notice held under an id, with the documents it only names filled in when asked for.
-     *
-     * <p>An archived notice is returned like an active one and reports {@code archivedAt}: a
-     * consent given against a notice is read against the notice that was published, not against
-     * whatever superseded it - which is also why the resolver leaves its contract unread. Not
-     * scoped to the two parties either - a user has to be able to read the notice they are being
-     * asked to consent to before any link to it exists.
+     * The notice held under an id, its named documents resolved when asked for. Archived notices
+     * are returned too, and the read is not scoped to the parties.
      */
     @NonNull
     public ResolvedNotice get(@NonNull UUID id, boolean resolve) {
@@ -84,11 +78,8 @@ public class PrivacyNoticeService {
     }
 
     /**
-     * The participant row a stored notice points at.
-     *
-     * <p>Both foreign keys are {@code ON DELETE RESTRICT}, so a notice can only ever point at a row
-     * that exists; a missing one is a broken database rather than a request the caller got wrong,
-     * and saying so beats reporting it as a notice that is not there.
+     * The participant row a stored notice points at; a missing one is a broken database ({@code ON
+     * DELETE RESTRICT}), so {@link IllegalStateException} rather than a 404.
      */
     @NonNull
     private Participant party(UUID participantId) {
@@ -103,16 +94,12 @@ public class PrivacyNoticeService {
     }
 
     /**
-     * Generates the notice for a contract and the two participants it binds, reporting whether this
-     * call stored it.
+     * Generates the notice for a contract and two declared parties, reporting whether this call
+     * stored it.
      *
-     * <p>The caller must be one of the two parties and must be active, because generating a notice
-     * acts in the dataspace in the participant's name. Its own standing is checked before anything
-     * the body names, so a token carrying no active registration is refused whatever it asks for.
-     * The two parties must differ, and both must be registered here, still active, and bound by the
-     * fetched contract. An unreachable Contract Service surfaces as {@link
-     * com.seamware.consentmanager.error.UpstreamServiceException} from the gateway - the one place
-     * in this API where that outage is fatal rather than degraded.
+     * <p>The caller must be active (checked first) and one of the parties; the parties must differ,
+     * be active here and be bound by the contract. An unreachable Contract Service is fatal here:
+     * {@link com.seamware.consentmanager.error.UpstreamServiceException}.
      */
     @NonNull
     public GeneratedNotice generate(
@@ -130,21 +117,11 @@ public class PrivacyNoticeService {
     }
 
     /**
-     * Generates the notice for a contract that names its own two parties, reporting whether this
-     * call stored it.
+     * Generates the notice for a contract that names its own two parties, otherwise as {@link
+     * #generate(ParticipantPrincipal, String, String, String)}.
      *
-     * <p>Only the parties are arrived at differently; everything from there on is {@link
-     * #generate(ParticipantPrincipal, String, String, String)}, so the two operations cannot drift
-     * over duplicates, archival, the caller's standing or a lost race. A contract that does not
-     * narrow each side to one party is {@code 400} from {@link ContractPartyResolver}, which is why
-     * the fetch comes first here: there is nothing to look up until the document has been read.
-     *
-     * <p>The caller is checked against the derived pair <em>before</em> anything else names a
-     * party, which the declared form has no reason to do. Here the identifiers come off the
-     * contract rather than off the request, so every refusal that quotes one - the {@code 404} for
-     * a party this deployment has no registration for, the {@code 400} for a contract naming one
-     * participant on both sides - would otherwise report it to a stranger. The resolver's own
-     * ambiguity refusal precedes this check and therefore names no participant at all.
+     * <p>The caller is checked against the derived pair before any refusal quotes a party, so a
+     * stranger learns no identifier off the contract.
      */
     @NonNull
     public GeneratedNotice generateByContract(
@@ -162,13 +139,8 @@ public class PrivacyNoticeService {
     }
 
     /**
-     * The half both operations share: the contract must support the pair, and then the notice is
-     * stored or found already stored.
-     *
-     * <p>The binding check runs on derived parties too. They pass it by construction - the resolver
-     * reads the sides off the evidence the check tests against - and running it anyway is what
-     * keeps that true: were the two readings ever to diverge, this refuses rather than publishing a
-     * notice whose parties the contract does not support.
+     * Shared tail: requires the contract to bind the pair (derived parties too, as a guard against
+     * drift), then stores the notice or finds it stored.
      */
     @NonNull
     private GeneratedNotice generate(
@@ -191,12 +163,7 @@ public class PrivacyNoticeService {
                                         "No contract is held under '" + contractUri + "'."));
     }
 
-    /**
-     * Refuses a request naming one participant on both sides.
-     *
-     * <p>An ecosystem contract binds its provider as a member too, so without this the two sides
-     * would both pass and the published notice would say a participant consumes its own data.
-     */
+    /** Refuses one participant on both sides, which an ecosystem contract would otherwise pass. */
     private static void requireDistinctParties(String provider, String consumer) {
         if (provider.equals(consumer)) {
             throw new BadRequestException(
@@ -208,13 +175,8 @@ public class PrivacyNoticeService {
     }
 
     /**
-     * The active participant an identifier names; {@code 404} when it names none.
-     *
-     * <p>A departed participant is refused like an unknown one. Its record is retained only so the
-     * notices already naming it stay legible, and minting a new one would republish the legal name
-     * and contact deregistration archived - the very re-creation {@link
-     * ParticipantPrincipal#requireActive()} refuses the caller, reached through the body instead of
-     * the token.
+     * The active participant an identifier names; {@code 404} when none, a departed one included.
+     * See ADR-0008.
      */
     @NonNull
     private Participant require(String identifier) {
@@ -241,11 +203,8 @@ public class PrivacyNoticeService {
     }
 
     /**
-     * Returns the active notice unchanged, or supersedes it with what the contract yields now.
-     *
-     * <p>The comparison is against the extracted content rather than against the contract document,
-     * so an upstream edit that leaves the notice identical - a signature added, a timestamp bumped
-     * - does not archive a notice that consents already point at.
+     * Returns the active notice unchanged, or supersedes it; compares extracted content, not the
+     * contract document, so a cosmetic upstream edit archives nothing.
      */
     @NonNull
     private GeneratedNotice store(
@@ -265,14 +224,8 @@ public class PrivacyNoticeService {
     }
 
     /**
-     * Settles a race this call lost on {@code uq_privacy_notices_active_contract}.
-     *
-     * <p>The winner decides the outcome: a notice saying exactly what this call computed is served
-     * as it stands, and one saying anything else is superseded - which is what the two generations
-     * run in sequence would have done, so a concurrent pair cannot answer differently from a
-     * sequential one. The retry is single: a second rejection means the slot is being contended
-     * faster than this call can claim it, and {@code 409} says so rather than reporting a dropped
-     * change as success.
+     * Settles a race lost on {@code uq_privacy_notices_active_contract} as a sequential run would:
+     * serve an identical winner, else supersede it once; a second loss is {@code 409}.
      */
     @NonNull
     private GeneratedNotice settleRace(
@@ -323,13 +276,7 @@ public class PrivacyNoticeService {
         return render(writer.archiveAndCreate(superseded, replacement), provider, consumer, true);
     }
 
-    /**
-     * Whether a write failed because the active-notice index already holds a row.
-     *
-     * <p>Told apart on the constraint rather than on what the surviving row says: a race whose
-     * winner computed different content is still a race, and a deadlock or a severed connection is
-     * not one however closely the row left behind resembles this call's.
-     */
+    /** Whether a write failed on the active-notice unique constraint, not on any other error. */
     private static boolean lostTheActiveSlot(DataAccessException e) {
         return UniqueViolation.rejected(e);
     }
@@ -342,13 +289,7 @@ public class PrivacyNoticeService {
                 && Objects.equals(stored.getPayload(), content.payload());
     }
 
-    /**
-     * Names the notice's parties by identifier.
-     *
-     * <p>Every path hands in the consumer the row names: the two that report a notice already held
-     * are behind {@link #unchanged}, which compares it, and the two that report one written pass
-     * the row they just built from it.
-     */
+    /** Names the notice's parties by identifier; every caller passes the consumer the row names. */
     @NonNull
     private GeneratedNotice render(
             PrivacyNotice notice, Participant provider, Participant consumer, boolean created) {

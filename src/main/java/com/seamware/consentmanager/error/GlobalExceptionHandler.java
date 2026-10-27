@@ -12,15 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Last-resort handler: renders anything no narrower handler claimed as a generic 500 problem
- * detail.
- *
- * <p>Deliberate refusals carry their own status through {@link ApiException}, which {@link
- * ApiExceptionHandler} serves; reaching this handler therefore means a genuine defect, which is why
- * it logs at ERROR and publishes nothing about the cause unless {@link ServerErrorDetail} is
- * configured to.
- *
- * @see <a href="https://www.rfc-editor.org/rfc/rfc7807">RFC 7807</a>
+ * Last-resort handler rendering anything unclaimed as a 500 problem detail. Reaching it means a
+ * defect, so it logs at ERROR and publishes the cause only as {@link ServerErrorDetail} allows.
  */
 @Singleton
 @Produces(ProblemType.MEDIA_TYPE)

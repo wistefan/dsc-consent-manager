@@ -22,12 +22,8 @@ import org.junit.jupiter.api.Test;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * Asserts the authored {@code $ref} tree resolves, and the bundle served at {@code /openapi.yaml}
- * is self-contained and dereferences to the same content.
- *
- * <p>The authored tree is a web of relative references, which the generator reads. The browser
- * reads the build's bundle, so a reference the bundler left external would leave Swagger UI with an
- * unrenderable document.
+ * The authored {@code $ref} tree resolves, and the served bundle is self-contained and dereferences
+ * to the same content; guards against Swagger UI receiving an unrenderable document.
  */
 @DisplayName("Specification reference resolution")
 class SpecReferenceResolutionTest {
@@ -41,18 +37,12 @@ class SpecReferenceResolutionTest {
     /** The entry document of either layout. */
     private static final String ROOT_DOCUMENT = "openapi.yaml";
 
-    /**
-     * Directory a path item must never be externalised into; see {@code
-     * SpecSecurityConsistencyTest}.
-     */
+    /** Directory a path item must never be externalised into. */
     private static final String FORBIDDEN_PATHS_DIRECTORY = "paths";
 
     private static final String REF_KEY = "$ref";
 
-    /**
-     * Stands in for a reference back into its own ancestry. Carries no depth: the authored tree
-     * reaches a component through one more {@code $ref} hop than the bundle does.
-     */
+    /** Stands in for a reference back into its own ancestry; depth-free, as layouts differ. */
     private static final Map<String, Object> CYCLE = Map.of("$cycle", true);
 
     /** Separates a reference's file part from its JSON pointer. */
@@ -185,9 +175,7 @@ class SpecReferenceResolutionTest {
                 new ArrayList<>());
     }
 
-    /**
-     * Every reference reachable from the root document, each one resolved, as {@code file#pointer}.
-     */
+    /** Every reference reachable from the root, resolved, as {@code file#pointer}. */
     private static Set<String> resolvedReferences(Layout layout) {
         Map<String, Object> documents = new LinkedHashMap<>();
         Set<String> resolved = new TreeSet<>();
@@ -212,12 +200,7 @@ class SpecReferenceResolutionTest {
         }
     }
 
-    /**
-     * Resolves one reference against the document holding it and descends into what it points at.
-     *
-     * <p>A reference already resolved is not followed twice, which also ends a cycle between two
-     * schemas that name each other.
-     */
+    /** Resolves one reference and descends into it; one already resolved is not followed again. */
     private static void resolve(
             Layout layout,
             String document,

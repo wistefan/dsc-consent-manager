@@ -22,11 +22,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@link ParticipantService#update} against a real PostgreSQL.
- *
- * <p>The point of the real database here is that the two things the update contract turns on - that
- * the identifier survives a replacement and that what is returned is the stored row rather than the
- * object that was written - are both invisible against a mock.
+ * Tests {@link ParticipantService#update} against a real PostgreSQL, since identifier survival and
+ * returning the stored row rather than the written object are invisible against a mock.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant update")
@@ -93,12 +90,7 @@ class ParticipantServiceIT extends PostgresTestResource {
         assertThat(updated.getLegalPerson()).isEqualTo(REPLACED_LEGAL_PERSON);
     }
 
-    /**
-     * Field equality cannot tell the two apart: {@code updatedAt} is stamped in this JVM by {@code
-     * MicrosecondDateTimeProvider}, which exists precisely so the written object and the stored row
-     * carry the same value, and every other field was just written from the body. Object identity
-     * is what "re-read" means here, so that is what this pins.
-     */
+    /** Pins object identity, since field equality cannot tell the written and stored rows apart. */
     @Test
     @DisplayName("returns the stored row rather than the object that was written")
     void returnsTheStoredRow() {
@@ -186,12 +178,7 @@ class ParticipantServiceIT extends PostgresTestResource {
                                 stored -> assertThat(stored.getEndpoints()).isEmpty()));
     }
 
-    /**
-     * The row travels in from the principal, which read it when the request was authenticated, so
-     * persisting it whole would write {@code deregistered_at} back from that stale snapshot and
-     * lift a deregistered participant into the directory again. The refusal is what keeps the
-     * deregistration standing.
-     */
+    /** Persisting the principal's stale row would restore {@code deregistered_at} to null. */
     @Test
     @DisplayName("refuses an update to a deregistered participant and leaves it deregistered")
     void refusesAnUpdateToADeregisteredParticipant() {
@@ -209,9 +196,7 @@ class ParticipantServiceIT extends PostgresTestResource {
         assertThat(stored.getLegalName()).isEqualTo(ORIGINAL_LEGAL_NAME);
     }
 
-    /**
-     * A row that vanished under the update is a conflict, not the {@code 500} a raw empty read is.
-     */
+    /** A conflict, not the {@code 500} a raw empty read would give. */
     @Test
     @DisplayName("refuses an update whose row vanished under it")
     void refusesAnUpdateWhoseRowVanished() {
@@ -233,7 +218,7 @@ class ParticipantServiceIT extends PostgresTestResource {
                 .hasSize(1);
     }
 
-    /** Marks the stored row deregistered behind the caller's snapshot, as Step 5's cascade will. */
+    /** Marks the stored row deregistered behind the caller's snapshot. */
     private Instant deregister(UUID id) {
         Participant stored = repository.findById(id).orElseThrow();
         stored.setDeregisteredAt(Instant.now());

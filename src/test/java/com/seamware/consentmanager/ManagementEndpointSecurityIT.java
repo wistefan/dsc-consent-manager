@@ -28,25 +28,13 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins where management endpoints, the Swagger UI and the API resolve, and who may read them, once
- * security is enabled.
- *
- * <p>No server context path is set: generated controllers sit under {@code
- * consent-manager.api-prefix}, everything else at the origin root, and management endpoints only on
- * their own port. {@code intercept-url-map} patterns therefore match the full request path, which
- * {@link #swaggerUiIsReachableOnlyBecauseItsInterceptEntryAllowsIt()} asserts rather than assumes.
- * Metrics access follows Micronaut's {@code endpoints.<id>.sensitive}, so two deployments run side
- * by side: one with {@code application.yml}'s sensitive default, one with it switched off.
- *
- * <p>Every other integration test runs with security disabled and an empty API prefix, so none of
- * this is covered anywhere else.
+ * Pins where management endpoints, the Swagger UI and the API resolve, and who may read them, with
+ * security enabled; the only such coverage, as every other IT runs with security off.
  */
 @DisplayName("Management endpoint access under enabled security")
 class ManagementEndpointSecurityIT {
 
-    /**
-     * API prefix applied to the generated controllers, mirroring the {@code API_PREFIX} default.
-     */
+    /** Prefix of the generated controllers, mirroring the {@code API_PREFIX} default. */
     private static final String API_PREFIX = "/v1";
 
     /** Aggregate health route, at the management port's origin root. */
@@ -89,7 +77,7 @@ class ManagementEndpointSecurityIT {
     /** Production configuration, read directly so the test environment cannot mask it. */
     private static final String BASE_CONFIGURATION = "application.yml";
 
-    /** Health detail visibility production must ship (AC 16). */
+    /** Health detail visibility production must ship. */
     private static final String SHIPPED_DETAILS_VISIBLE = "AUTHENTICATED";
 
     /** Member of a health body that carries per-indicator detail. */
@@ -112,16 +100,10 @@ class ManagementEndpointSecurityIT {
     /** Access expression the control case substitutes for {@code isAnonymous()}. */
     private static final String AUTHENTICATED_ACCESS = "isAuthenticated()";
 
-    /**
-     * Property prefix of the one trust-list entry every test context configures. {@code
-     * application.yml} leaves it blank so a misconfigured deployment aborts at startup.
-     */
+    /** Prefix of the one trust-list entry; {@code application.yml} leaves it blank. */
     private static final String PROVIDER_PREFIX = "consent-manager.identity-providers.primary.";
 
-    /**
-     * Discovery address the only provider points at. Port 1 never listens, so readiness is {@code
-     * DOWN} for the whole class and the 503 row shows the readiness route resolved anonymously.
-     */
+    /** Port 1 never listens, so readiness stays {@code DOWN} and answers 503 anonymously. */
     private static final String UNREACHABLE_PROVIDER_BASE_URL = "http://localhost:1/realms/dead";
 
     /** Audience the unreachable provider's entry declares; never used, but must not be blank. */
@@ -237,6 +219,7 @@ class ManagementEndpointSecurityIT {
         }
     }
 
+    /** Each path the Compose stack probes, its port, the anonymous status expected and why. */
     private static Stream<Arguments> routingMatrix() {
         return Stream.of(
                 Arguments.of(
@@ -318,11 +301,7 @@ class ManagementEndpointSecurityIT {
                 Arguments.of(sensitive, Port.API, path, HttpStatus.UNAUTHORIZED));
     }
 
-    /**
-     * Sensitivity decides anonymous access on the management port. On the API port the endpoints
-     * are unrouted, so the request is refused like any unrouted one whatever it says. A token's
-     * read of a sensitive endpoint is covered by {@code MetricsSensitiveEndpointRuleIT}.
-     */
+    /** API-port metrics are unrouted; token reads are covered by MetricsSensitiveEndpointRuleIT. */
     @ParameterizedTest(name = "sensitive={0}: anonymous GET {2} on the {1} port answers {3}")
     @MethodSource("metricsMatrix")
     @DisplayName("anonymous metrics access follows endpoint sensitivity on the management port")

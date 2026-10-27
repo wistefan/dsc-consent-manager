@@ -21,7 +21,7 @@ import java.util.Properties;
 @Requires(condition = SmtpConfiguredCondition.class)
 public class SmtpSessionFactory {
 
-    /** Bounds how long a sender thread waits for the server; JavaMail's own default is infinite. */
+    /** Bounds a sender thread's wait for the server; JavaMail's default is infinite. */
     static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(5);
 
     static final Duration READ_TIMEOUT = Duration.ofSeconds(10);

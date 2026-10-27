@@ -41,17 +41,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 /**
- * Pins the notification seam: every successful lifecycle move reports exactly once to {@link
- * ConsentStateChangeLog}, a refused one reports nothing, and a resume reports the moves it makes
- * collaterally as well as the one it was addressed to.
- *
- * <p>The class doc of {@code ConsentStateChangeLog} claims a notification grown off this call site
- * cannot miss a move. That is a property of the wiring, not of the spec, so it is asserted here
- * rather than argued — a sixth operation that wrote a status without reporting it, or a collateral
- * close that never reached the seam, would fail this suite rather than ship a silent gap.
- *
- * <p>The seam is replaced with a capturing stub so the reports can be counted; the real encoder is
- * exercised by nothing here, because what is under test is that the call is made, not what it logs.
+ * Tests that every successful lifecycle move reports exactly once to {@link ConsentStateChangeLog},
+ * a refused one reports nothing, and a resume also reports its collateral moves. A capturing stub
+ * counts the calls; what the real seam logs is not under test.
  */
 @MicronautTest(transactional = false)
 @Property(name = "spec.name", value = "ConsentLifecycleSeamIT")
@@ -263,9 +255,8 @@ class ConsentLifecycleSeamIT extends PostgresTestResource {
     }
 
     /**
-     * Stands in for {@link ConsentStateChangeLog} and records every move reported to it, so the
-     * suite can count the calls the real seam would only log. Active for this suite alone, keyed on
-     * {@code spec.name}, so other suites keep the real logging bean.
+     * Stands in for {@link ConsentStateChangeLog} and records every reported move. Active for this
+     * suite alone, keyed on {@code spec.name}.
      */
     @Singleton
     @Replaces(ConsentStateChangeLog.class)

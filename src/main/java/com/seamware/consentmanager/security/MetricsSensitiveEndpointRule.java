@@ -16,10 +16,8 @@ import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 
 /**
- * Micronaut's documented replacement of {@link SensitiveEndpointRule}: any bearer token opens a
- * sensitive metrics or Prometheus endpoint; every other sensitive endpoint stays refused.
- * Sensitivity itself is {@code endpoints.<id>.sensitive}, driven by {@code
- * METRICS_AUTHENTICATION_ENABLED}.
+ * Replaces {@link SensitiveEndpointRule}: any bearer token opens sensitive metrics or Prometheus;
+ * every other sensitive endpoint stays refused. Sensitivity is {@code endpoints.<id>.sensitive}.
  */
 @Singleton
 @Replaces(SensitiveEndpointRule.class)

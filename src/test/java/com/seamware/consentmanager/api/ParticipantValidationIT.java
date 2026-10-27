@@ -34,15 +34,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * The validation matrix over the two routes that accept a participant self-description, run end to
- * end against a real Keycloak and a real PostgreSQL.
- *
- * <p>{@code ParticipantRegistration} and {@code ParticipantUpdate} are separate schema files that
- * {@link ParticipantSchemaParityTest} keeps constrained identically, so every payload here is sent
- * to both routes: a bound tightened on one and forgotten on the other fails on whichever route
- * still admits the value. What is asserted is the whole published contract of a refusal — the
- * status, the problem media type, and that the detail names the field the caller has to fix — plus
- * that the refusal left the database as it found it.
+ * Validation matrix over participant registration and update, each payload sent to both routes:
+ * guards a bound drifting on one schema, and a refusal that misnames its field or writes anything.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant self-description validation")
@@ -96,13 +89,12 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
 
     private static final String DOMAIN_LABEL_SEPARATOR = ".";
 
-    /** Media type every refusal carries, per RFC 7807. */
     private static final String PROBLEM_JSON = "application/problem+json";
 
     /** The problem member that names what was rejected. */
     private static final String DETAIL_MEMBER = "detail";
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject
@@ -116,12 +108,8 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
     @Inject ParticipantRepository participants;
 
     /**
-     * The two routes a self-description is submitted to, each with the status it answers when the
-     * payload is valid.
-     *
-     * <p>They differ in the state they need — registration refuses a caller that already has a row,
-     * the update refuses one that has none — so each case prepares the fixture its route wants
-     * rather than relying on a shared {@code @BeforeEach}.
+     * The two self-description routes with their success status; each needs a different caller
+     * state, so cases prepare it per route.
      */
     enum Route {
         REGISTER(HttpStatus.CREATED),
@@ -133,7 +121,6 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
             this.accepted = accepted;
         }
 
-        /** The status the route answers with when it applies the payload. */
         HttpStatus accepted() {
             return accepted;
         }
@@ -202,13 +189,7 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
         return crossProduct(acceptedBodies());
     }
 
-    /**
-     * Every payload the schemas must refuse.
-     *
-     * <p>Both URL properties are checked against the same four failures — plaintext, relative,
-     * malformed and over-long — because they carry the same pattern and the same bound, and a
-     * property that silently lost one of them would otherwise still pass the others.
-     */
+    /** Every payload the schemas must refuse; both URL properties get the same four failures. */
     static Stream<Rejected> rejectedBodies() {
         return Stream.of(
                 new Rejected("no legal name at all", "legalName", Map.of("email", EMAIL)),
@@ -340,11 +321,8 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
-     * A syntactically valid address of exactly {@code length} characters.
-     *
-     * <p>The padding goes into the domain, in labels of the longest a hostname admits, because RFC
-     * 5321 caps the local part at 64 octets - far below the bound this exercises - so padding there
-     * would make the address invalid for a reason the case is not about.
+     * A valid address of exactly {@code length} characters, padded in the domain because RFC 5321
+     * caps the local part at 64 octets.
      */
     private static String emailOfLength(int length) {
         StringBuilder address = new StringBuilder(EMAIL_PREFIX);
@@ -358,9 +336,7 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
         return address.toString();
     }
 
-    /**
-     * Puts the caller in the state the route needs: unregistered to register, registered to update.
-     */
+    /** Puts the caller in the state the route needs: unregistered or registered. */
     private void prepare(Route route) {
         removeCommittedRows();
         if (route == Route.UPDATE) {

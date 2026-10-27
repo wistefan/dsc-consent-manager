@@ -9,12 +9,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The one path every committed consent write takes to {@link ConsentStateChangeLog}, and so to the
- * transition counter.
- *
- * <p>Callers invoke it only after the transactional write has returned, so a rolled-back write is
- * never reported. Subject notification deliberately does not live here, because it must skip the
- * collateral moves (ADR-0015). The held status reported is the one read under the row lock.
+ * The one path every committed consent write takes to {@link ConsentStateChangeLog}. Called only
+ * after the write commits, so a rolled-back write is never reported. See ADR-0015.
  */
 @Singleton
 public class ConsentReporter {
@@ -40,9 +36,7 @@ public class ConsentReporter {
         return details;
     }
 
-    /**
-     * Reports the collateral moves of a decision or request, then its primary, and renders that.
-     */
+    /** Reports a decision's or request's collateral moves, then its primary, and renders that. */
     @NonNull
     public ConsentDetails report(@NonNull ConsentWrite write) {
         write.collateral().forEach(this::report);
@@ -56,9 +50,8 @@ public class ConsentReporter {
     }
 
     /**
-     * Reports the moves of an erasure or a deregistration, resolving each distinct participant once
-     * rather than twice per consent. Never throws: the caller's summary, which may carry the
-     * once-only pseudonym, must reach the caller even when reporting fails.
+     * Reports the moves of an erasure or a deregistration. Never throws: the caller's summary,
+     * which may carry the once-only pseudonym, must reach the caller even when reporting fails.
      */
     public void report(@NonNull List<ConsentMove> moves) {
         try {

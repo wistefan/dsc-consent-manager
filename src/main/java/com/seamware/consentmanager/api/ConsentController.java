@@ -11,15 +11,8 @@ import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
 
 /**
- * Serves the {@code /consents} operations.
- *
- * <p>The subject is taken from {@link UserPrincipal#user()} and from nowhere else: the body names a
- * notice and a decision, so a user identifier sent alongside is deserialized into nothing and
- * cannot redirect the decision at another person.
- *
- * <p>The status code reports which record the body is: {@code 201} for a consent this decision
- * brought into being, {@code 200} where it answered a request a participant had already opened,
- * whose identifier and parent link were there before this call.
+ * Serves {@code POST /consents}; the subject comes only from {@link UserPrincipal#user()}. Answers
+ * {@code 201} for a new consent, {@code 200} when answering a request a participant had opened.
  */
 @Controller
 public class ConsentController extends AbstractConsentsController {

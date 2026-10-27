@@ -27,18 +27,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import reactor.core.publisher.Mono;
 
 /**
- * Pins the discovery half of the trust list: what the registry learns from an OpenID provider, what
- * it refuses to learn, and what an unresolved provider does to this instance's readiness.
- *
- * <p>Every test drives a real {@link IdentityProviderRegistry} inside a started application context
- * against a WireMock provider, because the behaviour under test is almost entirely about timing and
- * failure: that startup does not wait for discovery, that an outage is retried while a
- * misconfiguration is not, and that an instance which cannot yet validate tokens takes itself out
- * of a load balancer's rotation instead of answering 401s. None of that is observable from a unit
- * test of the parsing.
- *
- * <p>Each test owns its context and its stub so that one test's backoff schedule cannot leak into
- * another's request counts.
+ * Tests trust-list discovery against WireMock providers: what the registry learns or refuses,
+ * retrying an outage but not a misconfiguration, and how an unresolved provider affects readiness.
  */
 @DisplayName("OpenID Connect discovery and readiness")
 class IdentityProviderDiscoveryTest {
@@ -47,10 +37,8 @@ class IdentityProviderDiscoveryTest {
     private static final Duration RESOLUTION_TIMEOUT = Duration.ofSeconds(30);
 
     /**
-     * Window a permanently failed provider is watched over to show it is not polled again.
-     *
-     * <p>Comfortably longer than {@link IdentityProviderRegistry#MIN_DISCOVERY_RETRY_DELAY}, which
-     * is when a retryable failure would have produced its second request.
+     * Window a permanently failed provider is watched over to show it is not polled again; well
+     * beyond {@link IdentityProviderRegistry#MIN_DISCOVERY_RETRY_DELAY}.
      */
     private static final Duration NO_RETRY_WINDOW =
             IdentityProviderRegistry.MIN_DISCOVERY_RETRY_DELAY.plusSeconds(2);
@@ -81,9 +69,7 @@ class IdentityProviderDiscoveryTest {
     private static final String REGISTRY_LOG_LEVEL_PROPERTY =
             "logger.levels.com.seamware.consentmanager.security.IdentityProviderRegistry";
 
-    /**
-     * Level this suite restores the registry's logger to, overriding the suite-wide {@code OFF}.
-     */
+    /** Registry log level for this suite, overriding the suite-wide {@code OFF}. */
     private static final String REGISTRY_LOG_LEVEL = "DEBUG";
 
     /** Audience every stub provider's entry declares; discovery never looks at it. */
@@ -310,14 +296,8 @@ class IdentityProviderDiscoveryTest {
     }
 
     /**
-     * Starts a context whose single configured provider is the given stub.
-     *
-     * <p>The datasource, Flyway and the HTTP server are left out unless a test asks for them: this
-     * suite is about discovery, and a PostgreSQL container would only slow it down.
-     *
-     * @param stub the provider the trust list points at
-     * @param overrides extra properties layered on top
-     * @return the started context
+     * Starts a context whose single configured provider is the given stub. The datasource, Flyway
+     * and HTTP server are left out unless a test asks for them.
      */
     private static ApplicationContext startContext(
             OidcDiscoveryStub stub, Map<String, Object> overrides) {
@@ -327,39 +307,22 @@ class IdentityProviderDiscoveryTest {
         return startContext(properties);
     }
 
-    /**
-     * Starts a context whose trust list is exactly the given properties' providers.
-     *
-     * @param properties the provider entries, plus any override a test needs
-     * @return the started context
-     */
+    /** Starts a context whose trust list is exactly the given properties' providers. */
     private static ApplicationContext startContext(Map<String, Object> properties) {
         Map<String, Object> all = new LinkedHashMap<>();
         all.put("datasources.default.enabled", false);
         all.put("flyway.enabled", false);
         all.put("micronaut.server.port", -1);
-        // application-test.yml silences the registry for the rest of the suite, where the shared
-        // dummy entry points at a dead port and every retry would log a connection refusal. This
-        // suite is the one whose subject *is* discovery failure and retry timing, and it talks to
-        // reachable stubs, so it turns the logger back on: a flaky run here has to be diagnosable
-        // from the build output.
+        // application-test.yml silences the registry suite-wide; this suite is about discovery
+        // failure and retry timing, so it re-enables the logger to keep flaky runs diagnosable.
         all.put(REGISTRY_LOG_LEVEL_PROPERTY, REGISTRY_LOG_LEVEL);
         all.putAll(properties);
         return ApplicationContext.builder().environments("test").properties(all).start();
     }
 
     /**
-     * Renders one trust-list entry pointing at a stub.
-     *
-     * <p>The {@code primary} entry could get away with overriding only the issuer and the discovery
-     * URL, because {@code application.yml} and {@code application-test.yml} already supply the rest
-     * of its leaves. A second entry inherits nothing, so every property the configuration requires
-     * is written out here and both entries are built the same way - a test that configures two
-     * providers must not be subtly differently configured from one that configures one.
-     *
-     * @param name the entry name, which is also the name the health detail is keyed by
-     * @param stub the provider the entry points at
-     * @return the entry's properties
+     * Renders one fully specified trust-list entry pointing at a stub. Every required property is
+     * written out, since a second entry inherits nothing from {@code application.yml}.
      */
     private static Map<String, Object> providerProperties(String name, OidcDiscoveryStub stub) {
         String prefix = PROVIDER_PREFIX + name + ".";
@@ -375,23 +338,13 @@ class IdentityProviderDiscoveryTest {
         return properties;
     }
 
-    /**
-     * Returns the one entry every context in this suite configures.
-     *
-     * @param registry the registry to read
-     * @return the single trust-list entry, resolved or not
-     */
+    /** Returns the one entry every context in this suite configures, resolved or not. */
     private static ResolvedIdentityProvider onlyEntry(IdentityProviderRegistry registry) {
         assertThat(registry.snapshot()).as("these tests configure exactly one provider").hasSize(1);
         return registry.snapshot().getFirst();
     }
 
-    /**
-     * Waits for the single configured provider to reach a resolution state.
-     *
-     * @param registry the registry to poll
-     * @param expected the state discovery is expected to reach
-     */
+    /** Waits for the single configured provider to reach a resolution state. */
     private static void awaitState(IdentityProviderRegistry registry, ResolutionState expected) {
         Await.until(
                 "the configured provider to reach " + expected,
@@ -400,42 +353,22 @@ class IdentityProviderDiscoveryTest {
     }
 
     /**
-     * Issues a GET and reports its status, treating an error response as a result rather than a
-     * failure.
-     *
-     * <p>Reports the numeric code rather than {@link HttpStatus}: Micronaut's enum implements
-     * {@link CharSequence}, which makes {@code assertThat(HttpStatus)} ambiguous between AssertJ's
-     * generic and {@code CharSequence} overloads.
-     *
-     * @param client the client to issue the request with
-     * @param path the path to probe
-     * @return the response status code
+     * Issues a GET and returns the numeric status, error responses included. Numeric because {@link
+     * HttpStatus} is a {@link CharSequence}, which makes {@code assertThat} ambiguous.
      */
     private static int statusOf(HttpClient client, String path) {
         return response(client, path).code();
     }
 
-    /**
-     * Issues a GET and reports the aggregate status its health body declares.
-     *
-     * @param client the client to issue the request with
-     * @param path the health route to probe
-     * @return the value of the body's {@code status} member
-     */
+    /** Issues a GET and returns the {@code status} member its health body declares. */
     private static String healthStatusOf(HttpClient client, String path) {
         Map<String, Object> body = response(client, path).getBody(HEALTH_BODY).orElseThrow();
         return String.valueOf(body.get(STATUS_KEY));
     }
 
     /**
-     * Performs a blocking GET, unwrapping the exception Micronaut raises for a non-2xx response.
-     *
-     * <p>A {@code DOWN} health endpoint answers 503 by design, so an error status is the expected
-     * outcome of half the probes here and must not abort the test.
-     *
-     * @param client the client to issue the request with
-     * @param path the path to probe
-     * @return the response, whatever its status
+     * Performs a blocking GET, returning the response whatever its status; a {@code DOWN} health
+     * endpoint answers 503 by design.
      */
     private static HttpResponse<?> response(HttpClient client, String path) {
         try {
@@ -446,14 +379,8 @@ class IdentityProviderDiscoveryTest {
     }
 
     /**
-     * Reads the readiness indicator and reports each provider's state, keyed by provider name.
-     *
-     * <p>Goes to the bean rather than over HTTP because the per-provider detail is published only
-     * to authenticated callers, and this suite has no token to present.
-     *
-     * @param context the started context to read the indicator from
-     * @return the detail's provider names, in the order the indicator emitted them, each mapped to
-     *     its reported {@link ResolutionState} name
+     * Reads each provider's state name from the readiness indicator bean, in emission order. Read
+     * from the bean because the per-provider detail is shown only to authenticated callers.
      */
     @SuppressWarnings("unchecked")
     private static List<Map.Entry<String, String>> stateByProviderName(ApplicationContext context) {
@@ -473,13 +400,8 @@ class IdentityProviderDiscoveryTest {
     }
 
     /**
-     * Discovery responses that are degenerate rather than wrong: they come back without telling the
-     * registry whether the provider is the configured one.
-     *
-     * <p>Each is something a healthy deployment produces transiently - a reverse proxy mid-reload,
-     * a load balancer with no backend up yet, a provider whose metadata is still being written - so
-     * none of them may move the entry to {@link ResolutionState#FAILED}, which only a restart
-     * clears.
+     * Degenerate discovery responses a healthy deployment produces transiently; none may move the
+     * entry to {@link ResolutionState#FAILED}, which only a restart clears.
      */
     private enum DegenerateDocument {
         /** A 200 carrying no body at all, which never reaches the issuer check. */
@@ -495,22 +417,13 @@ class IdentityProviderDiscoveryTest {
             this.stubbing = stubbing;
         }
 
-        /**
-         * Configures the stub to serve this response.
-         *
-         * @param stub the provider stub to configure
-         */
+        /** Configures the stub to serve this response. */
         void serveFrom(OidcDiscoveryStub stub) {
             stubbing.accept(stub);
         }
     }
 
-    /**
-     * The aggregate health status names this test asserts on.
-     *
-     * <p>Micronaut renders {@link io.micronaut.health.HealthStatus} as its name in the response
-     * body; naming the two values here keeps them out of the assertions as bare strings.
-     */
+    /** Aggregate health status names asserted on, kept out of the assertions as bare strings. */
     private enum HealthStatusName {
         /** Every indicator reported healthy. */
         UP,

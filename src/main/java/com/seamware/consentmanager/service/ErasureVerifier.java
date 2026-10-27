@@ -14,34 +14,23 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Computes and checks the keyed verifier an erased record carries in place of the identifier it
- * lost.
+ * Computes and checks the keyed verifier an erased record carries instead of its identifier.
  *
- * <p>The stored value is {@code <salt>.<mac>}, both base64url without padding, where {@code salt}
- * is 16 fresh random bytes per record and {@code mac} is {@code HMAC-SHA256(secret, salt ||
- * identifier)} over the salt's own base64url text followed by the identifier. The salt is what
- * keeps the value from being a stable correlator: two erasures of the same person produce different
- * verifiers, so nobody can link the retained rows by reading the column. An operator holding the
- * secret reproduces the value outside this service - {@code printf '%s'
- * "${VERIFIER%%.*}$IDENTIFIER" | openssl dgst -sha256 -hmac "$SECRET" -binary | basenc --base64url
- * | tr -d '='} - and compares it with {@code ${VERIFIER#*.}}. That answers "did this named person
- * consent?" for an identifier the asker already holds; it yields no identifier on its own, and
- * without the secret it is not computable at all. The secret therefore lives with the operator and
- * never in the database.
- *
- * <p>Yields nothing when no secret is configured, which is the default: erasure then stores no
- * verifier and nothing can ever be confirmed against that record.
+ * <p>Stored as {@code <salt>.<mac>} (base64url, unpadded), {@code mac = HMAC-SHA256(secret,
+ * saltText || identifier)}. The per-record salt keeps it from being a correlator; the secret lives
+ * with the operator, never in the database. With no secret (the default) no verifier is stored. See
+ * ADR-0007 and docs/security.md.
  */
 @Singleton
 public class ErasureVerifier {
 
-    /** MAC the verifier is computed with; part of the published contract, so not a free choice. */
+    /** MAC algorithm; part of the published verifier format. */
     private static final String MAC_ALGORITHM = "HmacSHA256";
 
-    /** Separates salt from MAC; outside the base64url alphabet, so the split is unambiguous. */
+    /** Salt/MAC separator; outside the base64url alphabet, so the split is unambiguous. */
     private static final String FIELD_SEPARATOR = ".";
 
-    /** Salt width, well past the point where two records could collide. */
+    /** Salt width in bytes. */
     private static final int SALT_BYTES = 16;
 
     private static final String NO_SECRET_MESSAGE =
@@ -70,9 +59,8 @@ public class ErasureVerifier {
     }
 
     /**
-     * A fresh verifier for an identifier, or {@code null} when this deployment configured no
-     * secret. Salted, so two calls for the same identifier never agree - compare with {@link
-     * #matches}.
+     * A fresh salted verifier for the identifier, or {@code null} when no secret is configured. Two
+     * calls never agree; compare with {@link #matches}.
      */
     @Nullable
     public String verifierFor(String identifier) {
@@ -86,8 +74,8 @@ public class ErasureVerifier {
     }
 
     /**
-     * Whether a stored verifier was computed from this identifier - the operator-facing check.
-     * False for an unset secret, an absent verifier and a malformed one alike.
+     * Whether a stored verifier was computed from this identifier. False for an unset secret and an
+     * absent or malformed verifier.
      */
     public boolean matches(@Nullable String verifier, String identifier) {
         if (key == null || verifier == null) {
@@ -103,7 +91,7 @@ public class ErasureVerifier {
                 mac(encodedSalt, identifier).getBytes(StandardCharsets.UTF_8));
     }
 
-    /** The MAC half of the stored value, over the salt text followed by the identifier. */
+    /** The MAC half of the stored value. */
     private String mac(String encodedSalt, String identifier) {
         try {
             Mac mac = Mac.getInstance(MAC_ALGORITHM);

@@ -12,10 +12,7 @@ public interface ConsentSigningService {
     @NonNull
     <R> SignedReceipt<R> sign(@NonNull R receipt);
 
-    /**
-     * Whether {@code detachedJws} verifies over the canonical form of {@code receipt}; never
-     * throws.
-     */
+    /** Whether {@code detachedJws} verifies over the canonical {@code receipt}; never throws. */
     boolean verify(@NonNull Object receipt, @NonNull String detachedJws);
 
     /** Whether {@code detachedJws} verifies over exactly {@code canonicalJson}; never throws. */

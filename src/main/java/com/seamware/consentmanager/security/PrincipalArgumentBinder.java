@@ -10,13 +10,8 @@ import io.micronaut.security.filters.SecurityFilter;
 import java.util.Optional;
 
 /**
- * Binds a controller parameter declared as a {@link ConsentManagerPrincipal}, or as one of its
- * three concrete shapes, to the principal {@link PrincipalResolutionFilter} resolved.
- *
- * <p>A principal of another shape is a {@code 403}, not a binding failure: the route's
- * {@code @Secured} rule and its signature disagree, and refusal is the safe reading of that.
- *
- * @param <T> the principal type the bound parameter declares
+ * Binds a principal-typed controller parameter to what {@link PrincipalResolutionFilter} resolved.
+ * A principal of another shape is a {@code 403}: {@code @Secured} and signature disagree.
  */
 public final class PrincipalArgumentBinder<T extends ConsentManagerPrincipal>
         implements TypedRequestArgumentBinder<T> {
@@ -37,8 +32,7 @@ public final class PrincipalArgumentBinder<T extends ConsentManagerPrincipal>
     /**
      * Supplies the resolved principal.
      *
-     * @throws AuthorizationException {@code 401} if no principal was resolved, {@code 403} if the
-     *     resolved one is not of the declared type
+     * @throws AuthorizationException {@code 401} if none resolved, {@code 403} if the wrong type
      */
     @Override
     public BindingResult<T> bind(ArgumentConversionContext<T> context, HttpRequest<?> source) {

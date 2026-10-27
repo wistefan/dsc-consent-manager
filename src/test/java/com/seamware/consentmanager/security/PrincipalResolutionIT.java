@@ -40,20 +40,9 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * End-to-end check of the authorization model: which requests are refused, with which status, and
- * what identity the ones that are not refused reach a handler with.
- *
- * <p>Runs against a full context - real PostgreSQL for the participant lookup and a WireMock
- * identity provider whose keys actually sign the tokens - because the distinctions under test are
- * produced by the security filter, the principal filter and the argument binder acting together,
- * and are not observable from any one of them alone.
- *
- * <p>The routes exercised here are probes declared below rather than real endpoints: no secured
- * endpoint exists yet, and a probe is what lets the rules be tested before the endpoints that will
- * rely on them are written.
- *
- * <p>Not transactional: the participant row has to be committed before the server, which answers on
- * its own connection, can see it.
+ * Tests the authorization model end to end: which requests are refused with which status, and the
+ * principal the rest reach a handler with. Not transactional, because the server reads the seeded
+ * participant on its own connection.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Principal resolution and the 401/403 boundary")
@@ -177,12 +166,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
 
     @Inject UserRepository users;
 
-    /**
-     * Points the trust list at the stub provider and switches security on, which {@code
-     * application-test.yml} leaves off for every other test.
-     *
-     * @return the property overrides, on top of the Testcontainers datasource
-     */
+    /** Points the trust list at the stub provider and switches security on. */
     @Override
     public Map<String, String> getProperties() {
         Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
@@ -203,9 +187,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
         IDENTITY_PROVIDER.close();
     }
 
-    /**
-     * Removes the rows that outlive the test: the registered participant and the provisioned user.
-     */
+    /** Removes the registered participant and the provisioned user, which outlive the test. */
     @AfterAll
     void removeCommittedRows() {
         participants.findByIdentifier(REGISTERED_PARTICIPANT).ifPresent(participants::delete);
@@ -231,12 +213,6 @@ class PrincipalResolutionIT extends PostgresTestResource {
         }
     }
 
-    /**
-     * Each mapped role reaches a handler as its own principal type, carrying what the token said.
-     *
-     * @param rawRole the role string the provider emits
-     * @param expectedDescription what the probe renders for the principal it was handed
-     */
     @ParameterizedTest(name = "{0} resolves to {1}")
     @MethodSource("mappedRoles")
     @DisplayName("each mapped role resolves to its own typed principal")
@@ -248,11 +224,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
         assertThat(response.getBody(String.class)).hasValue(expectedDescription);
     }
 
-    /**
-     * The mapped roles and the principal each must produce.
-     *
-     * @return one case per role
-     */
+    /** The mapped roles and the principal each must produce. */
     static Stream<Arguments> mappedRoles() {
         return Stream.of(
                 Arguments.of(USER_ROLE, "UserPrincipal USER " + SUBJECT),
@@ -265,18 +237,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 Arguments.of(CATALOG_ROLE, "CatalogPrincipal CATALOG " + SUBJECT));
     }
 
-    /**
-     * A token granting several roles acts as exactly one of them, by the published precedence.
-     *
-     * <p>Authorization still reads the whole set - every mapped role is granted as an authority -
-     * so this only pins which identity the caller then acts as. The catalog case is the one the
-     * dataspace actually issues: a catalog token is a participant token that additionally bears the
-     * catalog role, so a precedence that let {@code PARTICIPANT} win would mean no token could ever
-     * act as the catalog.
-     *
-     * @param rawRoles the role strings the provider emits together
-     * @param expectedDescription what the probe renders for the principal it was handed
-     */
+    /** Authorization still reads every granted role; this pins only the identity acted as. */
     @ParameterizedTest(name = "{0} resolves to {2}")
     @MethodSource("multiRoleTokens")
     @DisplayName("a token granting several roles acts as the highest-precedence one")
@@ -290,13 +251,8 @@ class PrincipalResolutionIT extends PostgresTestResource {
     }
 
     /**
-     * The role combinations a provider can grant, and the identity each settles on.
-     *
-     * <p>The last case is the catalog service account the token contract describes: participant
-     * plus catalog, with no participant identifier at all. It must authenticate, because the
-     * identifier of one granted role - here the catalog's issuer and subject - suffices.
-     *
-     * @return one case per combination
+     * Role combinations and the identity each settles on; the last is the catalog service account,
+     * participant plus catalog with no participant identifier, which must authenticate.
      */
     static Stream<Arguments> multiRoleTokens() {
         String catalog = "CatalogPrincipal CATALOG " + SUBJECT;
@@ -327,17 +283,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 Arguments.of(new String[] {PARTICIPANT_ROLE, CATALOG_ROLE}, null, catalog));
     }
 
-    /**
-     * An operation scoped to one role hands a multi-role caller that role, not whichever role a
-     * route-blind precedence would pick.
-     *
-     * <p>Otherwise identity and authorization diverge: a person who is also a registered
-     * participant satisfies a user-scoped {@code @Secured} and would then act as their organisation
-     * on it.
-     *
-     * @param route the role-scoped probe
-     * @param expectedDescription what the probe renders for the principal it was handed
-     */
+    /** A user-scoped route must not let a USER+PARTICIPANT caller act as its organisation. */
     @ParameterizedTest(name = "{0} hands a USER+PARTICIPANT token {1}")
     @MethodSource("roleScopedRoutes")
     @DisplayName("a role-scoped operation hands the caller the role it accepts")
@@ -354,11 +300,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
         assertThat(response.getBody(String.class)).hasValue(expectedDescription);
     }
 
-    /**
-     * The role-scoped probes and the identity each gives the same multi-role token.
-     *
-     * @return one case per scope
-     */
+    /** The role-scoped probes and the identity each gives the same multi-role token. */
     static Stream<Arguments> roleScopedRoutes() {
         return Stream.of(
                 Arguments.of(USER_SCOPED_ROUTE, "UserPrincipal USER " + SUBJECT),
@@ -370,7 +312,6 @@ class PrincipalResolutionIT extends PostgresTestResource {
                                 + REGISTERED_LEGAL_NAME));
     }
 
-    /** Every optional profile claim the token carries reaches the handler on its principal. */
     @Test
     @DisplayName("a user token's profile claims land on its principal")
     void profileClaimsLandOnThePrincipal() {
@@ -388,9 +329,6 @@ class PrincipalResolutionIT extends PostgresTestResource {
                                 PROFILE_FAMILY_NAME));
     }
 
-    /**
-     * A user token carrying none of the optional profile claims still resolves, with nothing set.
-     */
     @Test
     @DisplayName("a user token without profile claims resolves with none of them set")
     void absentProfileClaimsLeaveThePrincipalEmpty() {
@@ -400,16 +338,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
         assertThat(response.getBody(String.class)).hasValue("null|false|null|null|null");
     }
 
-    /**
-     * A token that authenticates but names no caller this service will act for is a 403.
-     *
-     * <p>This is the heart of the authorization model: the signature was good and the issuer is
-     * trusted, so the caller <em>is</em> authenticated and sending it back to authenticate again
-     * would be a lie.
-     *
-     * @param description what is wrong with the token, used as the case name
-     * @param claims the claim set to mint
-     */
+    /** 403, not 401: the signature and issuer were good, so the caller is authenticated. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("authenticatedButUnauthorized")
     @DisplayName("a valid token that names no usable caller is refused with 403")
@@ -419,11 +348,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
         assertThatIsProblem(response, HttpStatus.FORBIDDEN);
     }
 
-    /**
-     * The ways a correctly signed token can still fail to name a caller.
-     *
-     * @return one case per way
-     */
+    /** The ways a correctly signed token can still fail to name a caller. */
     static Stream<Arguments> authenticatedButUnauthorized() {
         return Stream.of(
                 Arguments.of("the roles claim is absent", base().build()),
@@ -434,10 +359,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
                         claims(new String[] {UNMAPPED_ROLE, "uma_authorization"}, null)));
     }
 
-    /**
-     * Self-registration has to be reachable, so an identifier the {@code participants} table does
-     * not know resolves a principal carrying it with the row absent, rather than a 403.
-     */
+    /** Self-registration needs an unknown participant identifier to resolve rather than 403. */
     @Test
     @DisplayName("an unregistered participant identifier resolves a principal without its row")
     void unregisteredParticipantResolvesWithoutItsRow() {
@@ -453,11 +375,6 @@ class PrincipalResolutionIT extends PostgresTestResource {
                                 + UNREGISTERED_MARKER);
     }
 
-    /**
-     * A caller whose role does not match the principal type a handler declares is a 403.
-     *
-     * @param rawRole a role that is not {@link Role#USER}
-     */
     @ParameterizedTest(name = "a {0} token on a UserPrincipal route")
     @ValueSource(strings = {PARTICIPANT_ROLE, CATALOG_ROLE})
     @DisplayName("a declared principal type the caller does not match is refused with 403")
@@ -468,12 +385,6 @@ class PrincipalResolutionIT extends PostgresTestResource {
         assertThatIsProblem(response, HttpStatus.FORBIDDEN);
     }
 
-    /**
-     * A request that never authenticated is a 401, whatever is wrong with its token.
-     *
-     * @param description the case name
-     * @param token the bearer token to send, or {@code null} to send none
-     */
     @ParameterizedTest(name = "{0}")
     @MethodSource("unauthenticated")
     @DisplayName("a missing or unusable token is refused with 401 and a Bearer challenge")
@@ -487,13 +398,8 @@ class PrincipalResolutionIT extends PostgresTestResource {
     }
 
     /**
-     * The ways a request can fail to authenticate.
-     *
-     * <p>The last case looks like an authorization failure and is not: the token contract requires
-     * a {@code PARTICIPANT} token to name its participant, so a token that does not is rejected
-     * while it is still being validated and never authenticates at all.
-     *
-     * @return one case per way
+     * The ways a request can fail to authenticate; the last, a {@code PARTICIPANT} token naming no
+     * participant, is rejected during validation rather than as an authorization failure.
      */
     static Stream<Arguments> unauthenticated() {
         return Stream.of(
@@ -513,12 +419,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
                         token(claims(PARTICIPANT_ROLE, null))));
     }
 
-    /**
-     * A route nobody secured is refused rather than served: access is explicit or it is not access.
-     *
-     * <p>Anonymously it is a 401 and with a valid token a 403, which is the same boundary every
-     * other route observes - the point is that neither is a 200.
-     */
+    /** 401 anonymously and 403 with a token, never 200: access is explicit or it is not access. */
     @Test
     @DisplayName("a route with no @Secured annotation is not reachable")
     void routeWithoutSecuredAnnotationIsRefused() {
@@ -527,24 +428,14 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 get(UNSECURED_ROUTE, token(claims(USER_ROLE, null))), HttpStatus.FORBIDDEN);
     }
 
-    /** The public probe stays anonymous: denying by default must not deny what was allowed. */
+    /** Denying by default must not deny what was allowed. */
     @Test
     @DisplayName("an explicitly anonymous route is still reachable without a token")
     void anonymousRouteRemainsReachable() {
         assertThat(get(ANONYMOUS_ROUTE, null).code()).isEqualTo(HttpStatus.OK.getCode());
     }
 
-    /**
-     * A reachability probe stays reachable whatever token the caller happens to be holding.
-     *
-     * <p>A browser or a monitoring agent sends whatever token it is holding on every request, and a
-     * route the specification declares {@code security: []} must not start answering {@code 403}
-     * because of one. Principal resolution therefore runs only for a route that declares a
-     * principal parameter, which this one does not.
-     *
-     * @param description the case name
-     * @param claims a claim set an anonymous route must answer without inspecting
-     */
+    /** Principal resolution runs only where a route declares a principal parameter. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("tokensNamingNoCaller")
     @DisplayName("an anonymous route is reachable whatever a token carries")
@@ -554,15 +445,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 .isEqualTo(HttpStatus.OK.getCode());
     }
 
-    /**
-     * Tokens that authenticate and then carry nothing an anonymous route needs to look at.
-     *
-     * <p>Neither is necessarily refused elsewhere - an unregistered participant identifier now
-     * resolves a principal, and {@link #unregisteredParticipantResolvesWithoutItsRow()} covers
-     * that. What these pin is narrower and survives it: the route never looks.
-     *
-     * @return one case per way
-     */
+    /** Tokens naming no usable caller, which the anonymous route must never inspect. */
     static Stream<Arguments> tokensNamingNoCaller() {
         return Stream.of(
                 Arguments.of("no mapped role", claims(UNMAPPED_ROLE, null)),
@@ -571,22 +454,14 @@ class PrincipalResolutionIT extends PostgresTestResource {
                         claims(PARTICIPANT_ROLE, UNREGISTERED_PARTICIPANT)));
     }
 
-    /**
-     * An unmapped path is refused rather than answered 404, so an anonymous caller cannot map the
-     * URL space by watching which paths come back as missing.
-     */
+    /** Refused rather than 404, so an anonymous caller cannot map the URL space. */
     @Test
     @DisplayName("an unmapped path is refused without disclosing that it is unmapped")
     void unmappedPathIsNotDisclosed() {
         assertThatIsProblem(get(UNMAPPED_ROUTE, null), HttpStatus.UNAUTHORIZED);
     }
 
-    /**
-     * Asserts a refusal: the expected status, an RFC 7807 body, and nothing said about the issuer.
-     *
-     * @param response the refusal
-     * @param expected the status it must carry
-     */
+    /** Asserts a refusal: expected status, RFC 7807 body, and nothing said about the issuer. */
     private static void assertThatIsProblem(HttpResponse<String> response, HttpStatus expected) {
         assertThat(response.code()).isEqualTo(expected.getCode());
         assertThat(response.getContentType())
@@ -607,13 +482,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
         }
     }
 
-    /**
-     * Performs a GET, returning the response even when it is an error.
-     *
-     * @param path the path to request
-     * @param token the bearer token, or {@code null} to send none
-     * @return the response
-     */
+    /** Performs a GET with an optional bearer token, returning error responses too. */
     @SuppressWarnings("unchecked")
     private HttpResponse<String> get(String path, String token) {
         MutableHttpRequest<Object> request = HttpRequest.GET(path);
@@ -627,34 +496,17 @@ class PrincipalResolutionIT extends PostgresTestResource {
         }
     }
 
-    /**
-     * Signs a claim set with the stub provider's current key.
-     *
-     * @param claims the claims to sign
-     * @return the serialized bearer token
-     */
+    /** Signs a claim set with the stub provider's current key. */
     private static String token(JWTClaimsSet claims) {
         return IDENTITY_PROVIDER.signToken(IDENTITY_PROVIDER.initialKeyId(), claims).serialize();
     }
 
-    /**
-     * A claim set granting one role.
-     *
-     * @param rawRole the role string the provider emits
-     * @param participantIdentifier the participant identifier, or {@code null} to omit the claim
-     * @return the claims
-     */
+    /** A claim set granting one role; a {@code null} participant identifier omits the claim. */
     private static JWTClaimsSet claims(String rawRole, String participantIdentifier) {
         return claims(new String[] {rawRole}, participantIdentifier);
     }
 
-    /**
-     * A claim set granting the given roles.
-     *
-     * @param rawRoles the role strings the provider emits, possibly none
-     * @param participantIdentifier the participant identifier, or {@code null} to omit the claim
-     * @return the claims
-     */
+    /** A claim set granting the given roles, possibly none; a {@code null} identifier omits it. */
     private static JWTClaimsSet claims(String[] rawRoles, String participantIdentifier) {
         JWTClaimsSet.Builder builder =
                 base().claim(REALM_ACCESS_CLAIM, Map.of(ROLES_SEGMENT, List.of(rawRoles)));
@@ -664,11 +516,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
         return builder.build();
     }
 
-    /**
-     * A user claim set carrying every optional profile claim.
-     *
-     * @return the claims
-     */
+    /** A user claim set carrying every optional profile claim. */
     private static JWTClaimsSet profileClaims() {
         return new JWTClaimsSet.Builder(claims(USER_ROLE, null))
                 .claim(PROFILE_CLAIMS.get(0), PROFILE_EMAIL)
@@ -679,11 +527,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 .build();
     }
 
-    /**
-     * Builds a claim set valid in every respect except that it expired an hour ago.
-     *
-     * @return the claims
-     */
+    /** A claim set valid in every respect except that it expired an hour ago. */
     private static JWTClaimsSet expired() {
         Instant past = Instant.now().minus(Duration.ofHours(1));
         return base().claim(REALM_ACCESS_CLAIM, Map.of(ROLES_SEGMENT, List.of(USER_ROLE)))
@@ -692,11 +536,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 .build();
     }
 
-    /**
-     * Builds the claims every token carries, before roles and identifiers are added.
-     *
-     * @return the builder
-     */
+    /** The claims every token carries, before roles and identifiers are added. */
     private static JWTClaimsSet.Builder base() {
         Instant now = Instant.now();
         return new JWTClaimsSet.Builder()
@@ -707,56 +547,33 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 .expirationTime(Date.from(now.plus(TOKEN_LIFETIME)));
     }
 
-    /**
-     * Routes that exist only for this test, each one taking its caller from the token and nothing
-     * else - which is the shape every real endpoint is expected to have.
-     */
+    /** Test-only routes taking their caller from the token alone, the shape of a real endpoint. */
     @Requires(property = PROBE_ENABLED, value = "true")
     @Controller(PROBE_PATH)
     static class PrincipalProbeController {
 
-        /**
-         * Describes whichever principal the caller resolved to.
-         *
-         * @param principal the resolved caller
-         * @return a rendering of the principal's type, role and identity
-         */
+        /** Describes whichever principal the caller resolved to. */
         @Get("/any")
         @Secured(SecurityRule.IS_AUTHENTICATED)
         String any(ConsentManagerPrincipal principal) {
             return describe(principal);
         }
 
-        /**
-         * Serves users only, naming the role rather than the principal type.
-         *
-         * @param principal the resolved caller
-         * @return a rendering of the principal the route was handed
-         */
+        /** Serves users only, naming the role rather than the principal type. */
         @Get("/user-scoped")
         @Secured("USER")
         String userScoped(ConsentManagerPrincipal principal) {
             return describe(principal);
         }
 
-        /**
-         * Serves participants only, naming the role rather than the principal type.
-         *
-         * @param principal the resolved caller
-         * @return a rendering of the principal the route was handed
-         */
+        /** Serves participants only, naming the role rather than the principal type. */
         @Get("/participant-scoped")
         @Secured("PARTICIPANT")
         String participantScoped(ConsentManagerPrincipal principal) {
             return describe(principal);
         }
 
-        /**
-         * Renders a principal's type, role and identity.
-         *
-         * @param principal the resolved caller
-         * @return the rendering the assertions match on
-         */
+        /** Renders a principal's type, role and identity for the assertions to match. */
         private static String describe(ConsentManagerPrincipal principal) {
             return switch (principal) {
                 case UserPrincipal user -> "UserPrincipal " + user.role() + " " + user.identifier();
@@ -774,24 +591,14 @@ class PrincipalResolutionIT extends PostgresTestResource {
             };
         }
 
-        /**
-         * Serves users only, by declaring the principal type it is willing to act for.
-         *
-         * @param user the resolved caller
-         * @return the user's identifier
-         */
+        /** Serves users only, by declaring the principal type it will act for. */
         @Get("/user")
         @Secured(SecurityRule.IS_AUTHENTICATED)
         String user(UserPrincipal user) {
             return user.identifier();
         }
 
-        /**
-         * Renders the optional profile claims the principal carried out of the token.
-         *
-         * @param user the resolved caller
-         * @return the profile fields, separated by {@link #PROFILE_SEPARATOR}
-         */
+        /** Renders the optional profile claims, joined by {@link #PROFILE_SEPARATOR}. */
         @Get("/profile")
         @Secured(SecurityRule.IS_AUTHENTICATED)
         String profile(UserPrincipal user) {
@@ -804,12 +611,7 @@ class PrincipalResolutionIT extends PostgresTestResource {
                     String.valueOf(user.familyName()));
         }
 
-        /**
-         * Carries no access rule on purpose, so that forgetting one can be asserted to be a refusal
-         * rather than a public endpoint.
-         *
-         * @return a body no caller should ever see
-         */
+        /** Carries no access rule on purpose, to assert that forgetting one is a refusal. */
         @Get("/unsecured")
         String unsecured() {
             return "reachable";
