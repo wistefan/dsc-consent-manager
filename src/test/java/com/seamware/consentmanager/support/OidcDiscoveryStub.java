@@ -323,6 +323,16 @@ public final class OidcDiscoveryStub implements AutoCloseable {
                 .formatted(declaredIssuer, jwksUri(), issuer(), issuer());
     }
 
+    /**
+     * Forgets recorded requests and failure modes, serving matching metadata again. Keeps the
+     * current key set, since a running context may have cached it.
+     */
+    public void reset() {
+        server.resetAll();
+        jwksFailureStatus = JWKS_SERVED_NORMALLY;
+        serveMatchingMetadata();
+    }
+
     /** Stops the stub server. */
     @Override
     public void close() {

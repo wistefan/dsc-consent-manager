@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -176,6 +177,11 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 IdentityProviderConfiguration.PREFIX + ".primary.discovery-url",
                 IDENTITY_PROVIDER.discoveryUrl());
         return properties;
+    }
+
+    @AfterEach
+    void resetIdentityProvider() {
+        IDENTITY_PROVIDER.reset();
     }
 
     /** Stops the stub provider once every test has run. */

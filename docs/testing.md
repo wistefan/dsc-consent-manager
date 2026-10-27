@@ -47,7 +47,8 @@ survives edits to the cited files. Grep a name before citing it.
   that identifier first, or every participant-scoped route answers `403`. `OUTSIDER` maps to no
   role.
 - **Stubs and fixtures.** `ContractServiceStub`, `CatalogStub` and `OidcDiscoveryStub` wrap
-  WireMock on a dynamic port, reached through `localhost`. Contract bodies live in
+  WireMock on a dynamic port, reached through `localhost`. Each holder calls `reset()` in
+  `@AfterEach` and re-registers any baseline stub in `@BeforeEach`. Contract bodies live in
   `src/test/resources/contracts/`. `ConsentFixtures` and `PrivacyNoticeFixtures` build domain rows. `Await` replaces sleeps.
 - **ITs outside the shared base classes.** These ITs extend neither `PostgresTestResource` nor
   `KeycloakAndPostgresTestResource`: `ContractCacheIT`, `SelfDescriptionCacheIT`,
@@ -79,7 +80,7 @@ of it, so check the evidence against the ticket text, not against the short form
 | 3 | "Integration tests authenticate with real tokens from Testcontainers Keycloak" | met | `KeycloakAndPostgresTestResource` re-enables security and is the base of every authenticated IT, `PrivacyNoticeApiTestSupport` included. `KeycloakTestResource.accessToken(RealmPrincipal…)` obtains each token through a password grant against the imported realm. Per-test evidence: `KeycloakRoleMatrixIT.roleMatrixHolds`, `KeycloakKeyRotationIT`. |
 | 4 | Containers shared across test classes | met | `PostgresTestResource` and `KeycloakTestResource` are static JVM-wide singletons. `FlywayConcurrentMigrationIT` and `DatasourceOutageReadinessIT` are the deliberate per-class exceptions listed under Decisions. |
 | 5 | Database reset between test methods | met | `PostgresTestResource.resetSharedSchema` (`@AfterEach`, `final`) truncates every application table through `DatabaseReset`. `SchemaIsolationIT.nextMethodStartsEmpty` asserts that rows committed by one method are gone in the next. No IT on the shared bases runs `transactional = true`, and none seeds in `@BeforeAll`. |
-| 6 | "No test makes a real outbound network call" | partial — Step 4 | The criterion is about runtime traffic. Today it is met by inspection only: every configured outbound target is a WireMock stub on `localhost` or a Testcontainers container. Step 4's `NoExternalHostIT` asserts that over every property source of the test context. That is still a configuration check, standing in for runtime traffic. |
+| 6 | "No test makes a real outbound network call" | met (configuration) | `NoExternalHostIT.everyDialledUrlStaysLocal` walks every property source of a context built on `KeycloakAndPostgresTestResource` and asserts each absolute `http(s)`/`jdbc` URL names a loopback host or the Testcontainers Docker host. The criterion is about runtime traffic; this is a configuration check standing in for it. |
 | 7 | Consent state-machine matrix | met | `ConsentStateMachineTest.everyPairIsPermittedOrRefusedAsTheTableSays`. |
 | 8 | Endpoint × role (× ownership) authorization matrix | partial | Endpoint × role: `EndpointRoleMatrixIT.roleMatrixHolds`, total through `everySpecifiedOperationIsCovered`; `KeycloakRoleMatrixIT.roleMatrixHolds`. The ownership dimension is planned — Step 7 (`OwnershipMatrixIT`). |
 | 9 | Token failure matrix covered by parameterized tests | met | `ConsentManagerTokenValidatorTest` has `@ParameterizedTest`s fed by the `refusedTokens` and `refusedHeaders` method sources, one case per failure; `TokenSignatureEnforcementTest` covers signature enforcement as well. These run against stubs. Step 8 adds missing cases to both sources, plus the parameterized live-Keycloak `KeycloakTokenTamperIT`. |
@@ -112,7 +113,7 @@ of it, so check the evidence against the ticket text, not against the short form
 
 | Matrix | Status | Evidence / plan |
 |---|---|---|
-| External service stubbing | partial | `ContractServiceStub`, `CatalogStub`, `OidcDiscoveryStub`. Stub reset after each test and the six-case `ContractFixtureMatrixIT` are planned — Step 4. |
+| External service stubbing | met | `ContractServiceStub`, `CatalogStub`, `OidcDiscoveryStub`, each reset by its holder's `@AfterEach`. `ContractFixtureMatrixIT.yieldsTheExpectedOutcome` covers the six fixture cases (well-formed bilateral, well-formed ecosystem, missing optional sections, unresolvable offering, 500, timeout — the last split into ecosystem and bilateral) by status and resolution state. |
 | Request validation | partial | `ParticipantValidationIT`, `ParticipantUserRegistrationIT`. The remaining request bodies are planned — Step 9. |
 | Error mapping | partial | `ProblemMappingTest`, `ProblemResponseIT`. Per-handler rows, the totality check, and the 401/502 shapes are planned — Step 9. |
 | Receipts | partial | `JwsConsentSigningServiceTest` covers algorithm × tamper, and `ConsentReceiptIT` covers route × format. The full format × algorithm × tamper cross is planned — Step 10. |

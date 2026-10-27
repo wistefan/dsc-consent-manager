@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.support;
 
 import com.seamware.consentmanager.client.ContractGateway;
+import com.seamware.consentmanager.client.SelfDescriptionClient;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
@@ -24,6 +25,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
 /**
@@ -89,6 +91,14 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
     @AfterAll
     void stopContractService() {
         contracts.close();
+    }
+
+    /** Forgets this test's stubs and whatever they fed the caches, so no answer outlives it. */
+    @AfterEach
+    void resetContractService() {
+        contracts.reset();
+        caches.getCache(ContractGateway.CACHE_NAME).invalidateAll();
+        caches.getCache(SelfDescriptionClient.CACHE_NAME).invalidateAll();
     }
 
     @BeforeEach
