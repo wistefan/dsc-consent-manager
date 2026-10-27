@@ -23,6 +23,15 @@ Where the ticket text conflicts with the codebase, these decisions apply (from t
   are secrets too, alongside the DB and SMTP credentials.
 - **No GraalVM native-image profile.** The ticket marks it optional and outside MVP, so this
   plan does not add it.
+- **AC 6 ("`helm install` succeeds with default values") means: renders and installs once the
+  documented required inputs are supplied.** The defaults cannot produce Ready pods. The
+  service refuses to start without a non-blank IdP, and it needs a database, a signing-key
+  Secret and two stable secrets that a chart must not invent (Step 4). With an input missing,
+  the chart fails at render time through `required` and names that input. The required set is
+  checked in as `charts/consent-manager/ci/minimal-values.yaml` (`identityProviders.primary`,
+  `config.database.url`, `secrets.*` or `secrets.existingSecret`), and lint and template run
+  against it. "Pods Ready" additionally needs a reachable database and IdP and the out-of-band
+  signing-key Secret. Step 7 shows that.
 
 ## Steps
 
@@ -148,8 +157,9 @@ labels, selectorLabels, secret names), `deployment.yaml`, `service.yaml`, `confi
 - `service.{type: ClusterIP, port: 8080, managementPort: 9090}`.
 - `config` for non-sensitive env: `consentManagerUrl`, `contractServiceUrl`, `apiPrefix`,
   `database.url`, smtp host/port/from, cache and page settings, `metricsAuthenticationEnabled`.
-- `identityProviders` (a map keyed by provider name, mirroring
-  `consent-manager.identity-providers` in `application.yml`).
+- `identityProviders.primary.{issuer,discoveryUrl,audience,allowInsecureTransport,clockSkew,
+  claims}`, which is required, and `identityProviders.additional` (a map keyed by provider
+  name, empty by default). See the ConfigMap section for why `primary` is special.
 - `secrets.{dbUser,dbPassword,smtpUser,smtpPassword,logPseudonymKey,erasureVerificationSecret}`
   and `secrets.existingSecret`.
 - `signingKeys.{secretName (default "<release>-signing-keys"), signingKeyFile: signing-key.jwk,
@@ -172,6 +182,12 @@ labels, selectorLabels, secret names), `deployment.yaml`, `service.yaml`, `confi
 - An `emptyDir` mounted at `/tmp`.
 - The `signing-keys` secret volume with `defaultMode: 0400`, mounted read-only at
   `/etc/consent-manager/keys`.
+  - **Decision on AC 10:** the template states `0400` literally. Because `fsGroup: 10001` is
+    set, the kubelet chowns the projected files to `root:10001` and ORs in group read, so the
+    pod sees **0440 `root:10001`**. That is intended: the files are readable only by the app's
+    group, and other users get no access. Without `fsGroup`, UID 10001 could not read a
+    root-owned 0400 file at all. Note this in a comment beside `defaultMode` and in the chart
+    README. Step 7 asserts the effective mode.
 - Env:
   - `RECEIPTS_SIGNING_KEY_FILE` always.
   - `RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE` only when enabled.
@@ -181,27 +197,51 @@ labels, selectorLabels, secret names), `deployment.yaml`, `service.yaml`, `confi
   rolls the pods. Changing the trust list is a deliberate redeploy.
 
 **`configmap.yaml`:** plain env keys (`PORT`, `MANAGEMENT_PORT`, `API_PREFIX`,
-`CONSENT_MANAGER_URL`, `CONTRACT_SERVICE_URL`, `DB_URL`, `SMTP_HOST`, ...). Also an
-`identity-providers.yml` data key rendered with `toYaml` from `.Values.identityProviders` under
-`consent-manager.identity-providers`. Mount it read-only and load it through
-`MICRONAUT_CONFIG_FILES`. Verify how an empty default `primary` entry in `application.yml`
-interacts with a rendered file (merge and precedence), and make sure the rendered registry is
-what the app actually uses. A unit check with `helm template` plus a manual run is enough. If
-merging is problematic, render the `IDP_*` env vars for a single provider instead and note the
-limitation.
+`CONSENT_MANAGER_URL`, `CONTRACT_SERVICE_URL`, `DB_URL`, `SMTP_HOST`, ...).
+
+**Identity providers, decided:** Micronaut merges maps across property sources, so no layered
+file can remove the `consent-manager.identity-providers.primary` entry from `application.yml`.
+Its issuer, discovery-url and audience default to empty and carry `@NotBlank`. So:
+- `primary` is always configured through the existing `IDP_*` env vars, rendered into the
+  ConfigMap from `identityProviders.primary`. Wrap `issuer`, `discoveryUrl` and `audience` in
+  `required`, so a missing value fails rendering instead of failing startup. This is the same
+  path Compose already uses.
+- Each entry under `identityProviders.additional` is rendered with `toYaml` into an
+  `identity-providers.yml` data key under `consent-manager.identity-providers.<name>`. It is
+  mounted read-only and loaded through `MICRONAUT_CONFIG_FILES`. Both the key and the mount are
+  emitted only when `additional` is non-empty. A key named `primary` is refused with `fail`,
+  because it would silently merge into the env-configured entry.
+- State this in a `values.yaml` comment.
+- Check: `helm template` with `ci/minimal-values.yaml` (primary only) and with
+  `ci/all-enabled-values.yaml` (primary plus one additional). Add
+  `IdentityProviderConfigFileTest`, which starts an `ApplicationContext` with `IDP_*`-style
+  properties for `primary` plus a `micronaut.config.files` YAML naming a second provider.
+  Assert that both `IdentityProviderConfiguration` beans bind with the expected issuers and
+  that validation passes. Discovery is not needed for this, so stub or skip the registry.
 
 **`secret.yaml`:** rendered only when `secrets.existingSecret` is empty. It holds `DB_USER`,
 `DB_PASSWORD`, `SMTP_USER`, `SMTP_PASSWORD`, `LOG_PSEUDONYM_KEY` and
-`ERASURE_VERIFICATION_SECRET`. When the last two are empty in values, reuse the value already in
-the cluster (`lookup`), else generate one (`randAlphaNum`). Rotating either one silently breaks
-pseudonym linkage or erasure verification. No credential may appear in the ConfigMap. The chart
-never creates the signing-key Secret: keys are created out of band
-(`kubectl create secret generic`) and never live in values.
+`ERASURE_VERIFICATION_SECRET`. Rotating either of the last two silently breaks pseudonym
+linkage or erasure verification, so the chart never generates them. There is no `lookup` and no
+`randAlphaNum`: `lookup` returns nothing under `helm template`, `--dry-run` and GitOps
+renderers (Argo CD), so a generated fallback would rotate both on every sync and change
+`checksum/secret`, rolling the pods each time. Instead, when `existingSecret` is unset,
+`logPseudonymKey` and `erasureVerificationSecret` go through `required`. Their error message
+gives the generation command (`openssl rand -base64 32`) and recommends `existingSecret` for
+production. No credential may appear in the ConfigMap. The chart never creates the signing-key
+Secret: keys are created out of band (`kubectl create secret generic`) and never live in values.
 
 Acceptance:
-- `helm lint --strict charts/consent-manager` is clean.
-- `helm template t charts/consent-manager` renders.
+- `helm lint --strict -f charts/consent-manager/ci/minimal-values.yaml charts/consent-manager`
+  is clean.
+- `helm template t charts/consent-manager -f charts/consent-manager/ci/minimal-values.yaml`
+  renders.
+- `helm template` with default values fails, and the error names the first missing required
+  input.
+- Rendering twice with the same values gives byte-identical output, so the checksums are
+  stable.
 - grep the rendered ConfigMap and confirm it holds no password or key.
+- `./mvnw verify` is green, including `IdentityProviderConfigFileTest`.
 
 Covers AC 6, 7, 8, 10, 11 and 12.
 
@@ -222,16 +262,22 @@ Add `templates/ingress.yaml`, `templates/hpa.yaml`, `templates/servicemonitor.ya
 
 Add `charts/consent-manager/ci/all-enabled-values.yaml`, which turns everything on.
 
-Acceptance: `helm lint --strict` and `helm template` are clean for both the default values and
-`ci/all-enabled-values.yaml`.
+It includes the `ci/minimal-values.yaml` inputs and one `identityProviders.additional` entry.
+
+Acceptance: `helm lint --strict` and `helm template` are clean for both
+`ci/minimal-values.yaml` and `ci/all-enabled-values.yaml`.
 
 ### Step 6: Chart README and deployment documentation
 Create `charts/consent-manager/README.md` and add a short `docs/deployment.md` that links the
 chart README, `docker/README.md` and `.env.sample`. Content:
 
 - **Install:** prerequisites (PostgreSQL 16, a trusted IDP), creating the signing-key Secret
-  (`kubectl create secret generic <release>-signing-keys --from-file=signing-key.jwk=...`), and
-  a values table.
+  (`kubectl create secret generic <release>-signing-keys --from-file=signing-key.jwk=...`), the
+  required inputs from `ci/minimal-values.yaml` (the AC 6 interpretation), `existingSecret` as
+  the production form for the two stable secrets, `primary` (env) versus `additional` (file)
+  identity providers, and a values table.
+- **Signing-key file mode:** `defaultMode: 0400` appears in the pod as 0440 `root:<fsGroup>`.
+  Explain why.
 - **Configuration and secret matrix:** what is in the ConfigMap, what is in the Secret, and the
   signing keys as mounted files. Note that the IDP registry is security-relevant and immutable at
   runtime, so changing it is a deliberate redeploy.
@@ -267,12 +313,31 @@ Covers AC 16 and the documentation half of AC 13.
 - Chart install check, recorded in the PR rather than wired into Maven:
   1. Create a `kind` cluster and load `consent-manager:local`.
   2. Install PostgreSQL (for example the `postgres:16-alpine` image as a throwaway Deployment).
-  3. Create the signing-key Secret.
-  4. Run `helm install --wait` with `replicaCount=2`.
-  5. Confirm both pods become Ready, migrations applied once, the key file is readable at mode
-     0400 (check that `fsGroup` grants the group read, otherwise adjust), and
-     `kubectl exec ... -- touch /x` fails because the filesystem is read-only.
-  6. Scale PostgreSQL to 0 and confirm pods go NotReady without restarts.
+  3. Install an identity provider, because `IdentityProviderHealthIndicator` is `@Readiness`
+     and stays DOWN until every configured provider resolves. Use a throwaway Keycloak
+     Deployment and Service (`quay.io/keycloak/keycloak:26.0`, the same image Compose uses).
+     Import `docker/keycloak/consent-manager-realm.json` from a ConfigMap. Pin
+     `KC_HOSTNAME=http://keycloak.<ns>.svc:8080` so the discovery document's `issuer` matches
+     what the app expects, byte for byte. Pass
+     `identityProviders.primary.issuer=http://keycloak.<ns>.svc:8080/realms/consent-manager`,
+     the matching `discoveryUrl`, the realm's audience and `allowInsecureTransport=true`. Plain
+     http is for this throwaway check only, and the transcript should say so.
+  4. Create the signing-key Secret. Supply `secrets.logPseudonymKey` and
+     `secrets.erasureVerificationSecret` with `--set`, generated once by `openssl rand`.
+  5. Run `helm install --wait` with `replicaCount=2`.
+  6. Confirm:
+     - both pods become Ready, and `/health/readiness` reports `UP` with the identity-provider
+       and datasource components each `UP`;
+     - migrations were applied once;
+     - `stat -c '%a %U:%G'` on the key file prints `440 root:10001` (the AC 10 decision in
+       Step 4), and the app read the key (startup log; `GET /.well-known/jwks.json` shows the
+       configured `kid`);
+     - `kubectl exec ... -- touch /x` fails because the filesystem is read-only.
+  7. Only after readiness has been shown `UP`, scale PostgreSQL to 0. Confirm the pods go
+     NotReady with readiness `DOWN` on the datasource component and no restarts. Scale it back
+     and confirm they return to Ready.
+  8. Optionally, port-forward and run `docker/smoke-test.sh` against the cluster. Tokens are
+     issued with the pinned issuer.
 - Fix any chart or app issue this exposes, within this step.
 - Acceptance: `./mvnw verify` is green, `helm lint --strict` is clean, and the kind transcript
   is in the PR. Tick the remaining ACs: 1, 6, 9, 10 and 13.
