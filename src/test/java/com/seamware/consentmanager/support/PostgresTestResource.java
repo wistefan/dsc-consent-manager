@@ -12,7 +12,8 @@ import org.testcontainers.containers.PostgreSQLContainer;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public abstract class PostgresTestResource implements TestPropertyProvider {
 
-    private static final String POSTGRES_IMAGE = "postgres:16";
+    /** The PostgreSQL image every IT runs against, shared so a version bump moves them together. */
+    public static final String POSTGRES_IMAGE = "postgres:16";
 
     private static final String DATABASE_NAME = "consent_manager_test";
 

@@ -307,8 +307,15 @@ public class ConsentManagerConfiguration {
         @Nullable private String signingKey;
 
         /**
-         * Whether startup may generate a throwaway key when {@link #signingKey} is unset, bound to
-         * {@code RECEIPTS_EPHEMERAL_SIGNING_KEY}; receipts it signed stop verifying on restart.
+         * Path of a mounted file holding the {@link #signingKey} JWK, bound to {@code
+         * RECEIPTS_SIGNING_KEY_FILE}; the production form. Setting both fails startup.
+         */
+        @Nullable private String signingKeyFile;
+
+        /**
+         * Whether startup may generate a throwaway key when neither {@link #signingKey} nor {@link
+         * #signingKeyFile} is set, bound to {@code RECEIPTS_EPHEMERAL_SIGNING_KEY}; receipts it
+         * signed stop verifying on restart.
          */
         private boolean ephemeralSigningKey;
 
@@ -317,6 +324,13 @@ public class ConsentManagerConfiguration {
          * {@code RECEIPTS_RETIRED_VERIFICATION_KEYS}; published so those receipts still verify.
          */
         @Nullable private String retiredVerificationKeys;
+
+        /**
+         * Path of a mounted file holding the {@link #retiredVerificationKeys} JWKS, bound to {@code
+         * RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE}; the production form. Setting both fails
+         * startup.
+         */
+        @Nullable private String retiredVerificationKeysFile;
     }
 
     /** How error responses are rendered, bound under {@code consent-manager.errors}. */

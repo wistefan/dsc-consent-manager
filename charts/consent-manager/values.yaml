@@ -1,0 +1,226 @@
+# Default values for consent-manager.
+#
+# These defaults do not install on their own. Rendering fails, naming the missing input,
+# until you supply identityProviders.primary.{issuer,discoveryUrl,audience},
+# config.database.url, and either secrets.existingSecret or secrets.{dbUser,dbPassword,
+# logPseudonymKey,erasureVerificationSecret}. ci/minimal-values.yaml holds that set.
+# You must also create the signing-key Secret out of band (see signingKeys).
+
+# Ignored when autoscaling.enabled is true; the HPA owns the replica count then.
+replicaCount: 2
+
+image:
+  repository: consent-manager
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+podAnnotations: {}
+podLabels: {}
+
+# The JVM sizes its heap at 75% of the container memory limit (-XX:MaxRAMPercentage in the
+# image), so raising limits.memory raises the heap.
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# Ports the application listens on. They are rendered into PORT and MANAGEMENT_PORT.
+containerPorts:
+  http: 8080
+  management: 9090
+
+# API Service. Ingress targets this one.
+service:
+  type: ClusterIP
+  port: 8080
+
+# Health, metrics and Prometheus. This Service is always ClusterIP, whatever service.type is.
+# Metrics need no token here (METRICS_AUTHENTICATION_ENABLED is fixed to "false"), so this
+# Service must never be routed by an ingress or exposed outside the cluster.
+managementService:
+  port: 9090
+
+# Routes external traffic to the API Service's http port. Every path's backend is fixed to that
+# port; the management port is never a backend. Each host defaults to path / (Prefix), which also
+# covers the origin-root routes (/.well-known/jwks.json, Swagger UI, /openapi.yaml).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: consent-manager.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: consent-manager-tls
+  #    hosts:
+  #      - consent-manager.local
+
+# HorizontalPodAutoscaler (autoscaling/v2). A target left empty is omitted. Both targets are
+# percentages of resources.requests. The JVM keeps its heap, so memory use rarely falls after a
+# load peak. A memory target can therefore hold the replica count at its peak, and none is set
+# by default.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: ""
+
+# Prometheus Operator ServiceMonitor. It scrapes /prometheus on the management Service, without
+# credentials, because metrics authentication is off and the scrape stays inside the cluster.
+# Requires the monitoring.coreos.com/v1 CRD; without it, the install fails with "no matches for
+# kind ServiceMonitor".
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  # Empty means Prometheus's default; must not exceed interval.
+  scrapeTimeout: ""
+  # Extra labels, e.g. the release label your Prometheus selects ServiceMonitors by.
+  labels: {}
+
+# Non-sensitive settings, rendered into the ConfigMap. An empty value is omitted, so the
+# application default from application.yml applies. Never put a credential here.
+config:
+  # Public base URL of this service.
+  consentManagerUrl: ""
+  contractServiceUrl: ""
+  apiPrefix: /v1
+  database:
+    # JDBC URL, e.g. jdbc:postgresql://postgres:5432/consent_manager. Required.
+    url: ""
+  smtp:
+    # Leave empty to disable notifications. With a host set, fromAddress is required by the app.
+    host: ""
+    port: 587
+    startTls: true
+    fromAddress: ""
+    fromName: ""
+  notificationClientUrl: ""
+  receiptsJurisdiction: EU
+  cache:
+    idpJwksTtl: 60s
+    contractServiceTtl: 60s
+    contractServiceMaxSize: 1000
+    selfDescriptionTtl: 10m
+    selfDescriptionMaxSize: 1000
+  pagination:
+    participantsDefaultSize: 20
+    participantsMaxSize: 100
+    consentsDefaultSize: 20
+    consentsMaxSize: 100
+  # Any other non-sensitive variable from .env.sample, e.g. SELF_DESCRIPTION_ALLOWED_HOSTS.
+  # Credentials and the variables the deployment sets are refused.
+  extraEnv: {}
+
+# The trust list.
+#
+# `primary` is always present: application.yml declares it, and Micronaut merges maps across
+# property sources, so no file can remove it. Its settings are rendered into the IDP_* env vars
+# of the ConfigMap, the same path Compose uses. issuer, discoveryUrl and audience are required.
+# Each claim is a list of segments ([realm_access, roles] is nested).
+#
+# `additional` maps further provider names to entries of the same shape. They are rendered into
+# identity-providers.yml in a separate ConfigMap, mounted read-only and loaded through
+# MICRONAUT_CONFIG_FILES. An entry may not be named `primary`. claims fall back per key to the
+# defaults below; roleMapping, when given, replaces the default mapping whole, so an additional
+# provider can leave a role unmapped. primary cannot: each of its three roles must be non-empty,
+# and rendering fails on a null or empty one rather than fall back to the application default.
+# Changing either rolls the pods.
+identityProviders:
+  primary:
+    issuer: ""
+    discoveryUrl: ""
+    audience: ""
+    # Permits an http issuer or discovery URL; local development only.
+    allowInsecureTransport: false
+    clockSkew: 30s
+    claims:
+      userIdentifier: [sub]
+      participantIdentifier: [participant_id]
+      roles: [realm_access, roles]
+    roleMapping:
+      user: consent-user
+      participant: consent-participant
+      catalog: consent-catalog
+  additional: {}
+
+# Rendered into a chart-owned Secret unless existingSecret is set. With existingSecret, that
+# Secret must hold DB_USER, DB_PASSWORD, LOG_PSEUDONYM_KEY and ERASURE_VERIFICATION_SECRET, and
+# may hold SMTP_USER and SMTP_PASSWORD.
+#
+# logPseudonymKey and erasureVerificationSecret are never generated: rotating either silently
+# breaks pseudonym linkage or erasure verification. Generate each once with
+# `openssl rand -base64 32` and keep it. Prefer existingSecret in production.
+secrets:
+  existingSecret: ""
+  dbUser: ""
+  dbPassword: ""
+  smtpUser: ""
+  smtpPassword: ""
+  logPseudonymKey: ""
+  erasureVerificationSecret: ""
+
+# Receipt signing keys, mounted read-only at /etc/consent-manager/keys. The chart never creates
+# this Secret; create it out of band, e.g.
+#   kubectl create secret generic <release>-signing-keys \
+#     --from-file=signing-key.jwk=./signing-key.jwk
+signingKeys:
+  # Defaults to "<release>-signing-keys".
+  secretName: ""
+  signingKeyFile: signing-key.jwk
+  retiredVerificationKeys:
+    enabled: false
+  retiredVerificationKeysFile: retired-verification-keys.jwks
+
+# Every probe targets the management port. timeoutSeconds is explicit, because the Kubernetes
+# default of 1s lets a GC pause under a tight CPU limit restart a healthy pod.
+probes:
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    failureThreshold: 3
+    timeoutSeconds: 5
+  readiness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3
+    timeoutSeconds: 5
+  startup:
+    periodSeconds: 5
+    failureThreshold: 30
+    timeoutSeconds: 5
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  # Also makes the 0400 signing-key files readable by the app's group; see deployment.yaml.
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# The writable /tmp on the otherwise read-only root filesystem.
+tmp:
+  sizeLimit: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

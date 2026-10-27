@@ -1,0 +1,39 @@
+{{- if .Values.autoscaling.enabled }}
+{{- $scaling := .Values.autoscaling }}
+{{- if gt (int $scaling.minReplicas) (int $scaling.maxReplicas) }}
+{{- fail (printf "autoscaling.minReplicas (%d) exceeds autoscaling.maxReplicas (%d)" (int $scaling.minReplicas) (int $scaling.maxReplicas)) }}
+{{- end }}
+{{- if not (or $scaling.targetCPUUtilizationPercentage $scaling.targetMemoryUtilizationPercentage) }}
+{{- fail "autoscaling.enabled needs targetCPUUtilizationPercentage or targetMemoryUtilizationPercentage" }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "consent-manager.fullname" . }}
+  labels:
+    {{- include "consent-manager.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "consent-manager.fullname" . }}
+  minReplicas: {{ $scaling.minReplicas }}
+  maxReplicas: {{ $scaling.maxReplicas }}
+  metrics:
+    {{- with $scaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+    {{- with $scaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+{{- end }}

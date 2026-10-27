@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "consent-manager.fullname" . }}
+  labels:
+    {{- include "consent-manager.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "consent-manager.selectorLabels" . | nindent 4 }}
+---
+# Always ClusterIP: metrics on this port need no token, so it must stay inside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "consent-manager.managementServiceName" . }}
+  labels:
+    {{- include "consent-manager.labels" . | nindent 4 }}
+    app.kubernetes.io/component: management
+spec:
+  type: ClusterIP
+  ports:
+    - name: management
+      port: {{ .Values.managementService.port }}
+      targetPort: management
+      protocol: TCP
+  selector:
+    {{- include "consent-manager.selectorLabels" . | nindent 4 }}

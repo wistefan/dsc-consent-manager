@@ -56,7 +56,7 @@ resolved; discovery retries with bounded backoff rather than aborting the proces
 
 | Class | Role |
 | --- | --- |
-| `SigningKeyStore` | Loads `RECEIPTS_SIGNING_KEY` and `RECEIPTS_RETIRED_VERIFICATION_KEYS` eagerly at startup; holds the one private key and the published key list (active first). |
+| `SigningKeyStore` | Loads the signing key and retired-keys JWKS eagerly at startup, each from a mounted file (`RECEIPTS_SIGNING_KEY_FILE`, `RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE`) or inline (`RECEIPTS_SIGNING_KEY`, `RECEIPTS_RETIRED_VERIFICATION_KEYS`); holds the one private key and the published key list (active first). |
 | `CanonicalJsonSerializer` | RFC 8785 canonical form of a receipt: the bytes a JWS covers. |
 | `ConsentSigningService` / `JwsConsentSigningService` | Signs a receipt as a detached JWS (`alg`, `kid`, `typ: JOSE`, no `jku`); `verify` / `verifyCanonical` answer `false`, never throw, on any mismatch. |
 | `SignedReceipt` | A receipt, its JWS, the signing `kid` and the canonical text that was signed. |
@@ -236,7 +236,7 @@ role, see [ADR 0006](adr/0006-identifier-claim-is-required-of-the-acting-role.md
 receipt it renders is answered as `{receipt, jws}`: a detached JWS (RFC 7515 Appendix F) *beside*
 the receipt, over the RFC 8785 canonical form of the whole receipt. The receipt carries no
 `signature` member. `JwsConsentSigningService` (package `signing`, behind `ConsentSigningService`)
-signs with the private JWK in `RECEIPTS_SIGNING_KEY`, which `SigningKeyStore` loads at startup. The
+signs with the private JWK that `SigningKeyStore` loads at startup. The
 JWS header names only `alg`, `kid` and `typ: JOSE` — no `jku` — so a verifier fetches the JWKS from
 the deployment it obtained the receipt from, or one it otherwise trusts, rather than from a URL the
 signed object chose.
@@ -257,10 +257,18 @@ max-age=3600`, so a verifier may hold a key set up to one hour old. Two things f
 stopped signing must stay published for as long as receipts it signed are in circulation, and a new
 key must be published one cache lifetime *before* it signs.
 
+Each key is read from one of two forms. In production it is a mounted file: `RECEIPTS_SIGNING_KEY_FILE`
+and `RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE` hold paths, and the file is read as UTF-8 and trimmed.
+For local and test use the same JSON may be set inline in `RECEIPTS_SIGNING_KEY` and
+`RECEIPTS_RETIRED_VERIFICATION_KEYS`. Setting both forms of one key fails startup. So does a missing,
+unreadable or empty file, which never falls back to an ephemeral key. The steps below name the
+inline variables; with mounted files, edit the file content instead.
+
 Startup fails without a usable private key unless `RECEIPTS_EPHEMERAL_SIGNING_KEY=true` permits a
 throwaway one (dev and test only), and receipts signed by such a key stop verifying on restart. A
-private member, an unsupported key type or a repeated `kid` in `RECEIPTS_RETIRED_VERIFICATION_KEYS`
-also fails startup; no startup message quotes key material.
+private member, an unsupported key type or a repeated `kid` in the retired-keys JWKS also fails
+startup. Every such message names the variable, or the file variable and path, that supplied the
+value, and no startup message quotes key material.
 
 Generate a key with OpenSSL — ES256 (EC P-256) is preferred, RS256 (RSA, at least 2048 bits, 3072
 recommended) is for verifiers that cannot handle EC — and convert it to the private JWK the variable
@@ -294,7 +302,7 @@ Switching in a single deploy makes receipts signed by the new key fail verificat
 hour at any verifier holding a cached JWKS. `RECEIPTS_RETIRED_VERIFICATION_KEYS` is therefore every
 published key that does not sign — upcoming as well as retired — despite its name. Why the JWS
 travels beside the receipt, why the Kantara receipt is stored and the ISO record is not, and why the
-configuration stays an inline JWK are recorded in
+configuration stays a private JWK plus a public JWKS are recorded in
 [ADR 0014](adr/0014-a-grant-receipt-is-signed-once-and-travels-beside-its-signature.md); why the
 header carries no `jku` in
 [ADR 0013](adr/0013-the-query-side-scopes-by-predicate-and-signs-what-it-attests.md).

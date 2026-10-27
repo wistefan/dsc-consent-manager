@@ -36,6 +36,11 @@ public JWKS in `RECEIPTS_RETIRED_VERIFICATION_KEYS`. The ticket proposed PEM fil
 `keys[]` with an `active-key-id`. The human reviewer confirmed keeping the existing contract on
 PR #25 ("I confirm the decision", review comment 5792).
 
+*Amended by ticket #82:* the same two values may also be read from mounted files,
+`RECEIPTS_SIGNING_KEY_FILE` and `RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE`, which is the production
+form; the inline variables remain for local and test use. The content and model are unchanged, and
+setting both forms of one value fails startup.
+
 ## Decision
 
 **The JWS travels beside the receipt, not inside it.** `format=receipt` and

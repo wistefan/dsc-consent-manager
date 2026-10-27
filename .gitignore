@@ -40,3 +40,6 @@ Desktop.ini
 # ===== Maven Wrapper JAR =====
 # The wrapper JAR is downloaded on first use; no need to commit it.
 .mvn/wrapper/maven-wrapper.jar
+
+# ===== Local receipt signing keys (compose bind mount, never committed) =====
+docker/keys/
