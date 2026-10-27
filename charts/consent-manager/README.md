@@ -38,8 +38,10 @@ kubectl create secret generic <release>-signing-keys \
 ```
 
 The name defaults to `<release>-signing-keys` (`signingKeys.secretName` overrides it). The data keys
-are `signingKeys.signingKeyFile` and `signingKeys.retiredVerificationKeysFile`. A missing, empty or
-malformed key file fails startup. The service never falls back to an ephemeral key.
+are `signingKeys.signingKeyFile` and `signingKeys.retiredVerificationKeysFile`. A missing Secret
+leaves the pod in `ContainerCreating` (`FailedMount`) before the service runs. A Secret without the
+expected key, or with an empty or malformed one, fails startup. The service never falls back to an
+ephemeral key.
 
 ### 2. Supply the required inputs
 
@@ -86,6 +88,14 @@ A missing mandatory key leaves the pod in `CreateContainerConfigError`.
 no verifier when a user is erased (ADR-0007). A deployment without one cannot later confirm that an
 erased person consented, and adding the secret afterwards does not cover records already erased.
 The chart therefore requires it from the first install.
+
+This removes a lever ADR-0007 gives the operator. A verifier lets whoever holds the secret test
+candidate identifiers against erased records, and ADR-0007 presents leaving the secret unset as the
+privacy-minimising default that bounds that capability. The chart trades that default for evidence.
+A deployment that deliberately wants no verifier sets `existingSecret` and stores
+`ERASURE_VERIFICATION_SECRET` as an **empty** value. The key must be present, but the application
+treats a blank secret as unset and logs that no verifier will be written. Choose this before the
+first erasure; adding a secret later does not reach records already erased.
 
 ### 4. Identity providers: `primary` and `additional`
 
@@ -239,8 +249,11 @@ JWKS entry with the commands in `.env.sample` (`jq -c '{keys:[.]}' pub.json`).
 
 1. **Pre-publish.** Add the new key's public JWK to the retired JWKS in the Secret. If
    `retiredVerificationKeys` was off, add the `retired-verification-keys.jwks` key to the Secret,
-   then `helm upgrade --set signingKeys.retiredVerificationKeys.enabled=true` (this rolls the pods);
-   otherwise roll. The new key is now published and signs nothing.
+   then set `signingKeys.retiredVerificationKeys.enabled: true` in the values file the release was
+   installed with and run `helm upgrade <release> charts/consent-manager -f my-values.yaml` (this
+   rolls the pods); otherwise roll. The new key is now published and signs nothing. Never run
+   `helm upgrade` with only `--set`: it renders from chart defaults plus that one override, drops
+   every required input, and aborts on the first `required` guard.
 2. **Switch,** at least **one hour** later (the JWKS `max-age`), so every verifier has re-fetched.
    In **one** edit of the Secret: the new private JWK becomes `signing-key.jwk`, the new key's
    public entry is **removed** from the retired JWKS, and the old key's public entry is added to it.
