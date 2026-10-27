@@ -95,7 +95,8 @@ src/main/resources/
   application.yml, application-dev.yml, logback.xml
   static/swagger-ui/index.html     # makes the bundled Swagger UI work
   db/migration/V0__baseline.sql, V1__initial_schema.sql, V2__user_erasure_verifier.sql,
-               V3__participant_deregistration.sql, V4__privacy_notice_participant_contracts.sql
+               V3__participant_deregistration.sql, V4__privacy_notice_participant_contracts.sql,
+               V5__consent_receipts.sql
 src/test/java/com/seamware/consentmanager/
   support/                         # PostgresTestResource, KeycloakTestResource,
                                    # KeycloakAndPostgresTestResource, OidcDiscoveryStub, Await,
@@ -105,8 +106,12 @@ src/test/java/com/seamware/consentmanager/
                                    # ParticipantSchemaParityTest, PrivacyNoticeSpecParityTest,
                                    # ConsentEnumParityTest,
                                    # ParticipantCredentialAbsenceTest — all build-failing
-docs/security.md, docs/user-identifiers.md, docs/adr/   # ADRs 0001-0014
-compose.yaml, docker/Dockerfile, .env.sample
+docs/security.md, docs/user-identifiers.md, docs/adr/   # ADRs 0001-0015
+docker/Dockerfile                  # multi-stage image (temurin 25), non-root
+docker/keycloak/consent-manager-realm.json   # realm import: 3 roles, test users, 3 clients
+docker/wiremock/                   # Contract Service stubs (mappings/, __files/, README.md)
+charts/consent-manager/            # Helm chart (ticket #82, being added)
+compose.yaml, .env.sample, .dockerignore
 ```
 
 ## Build & Test
@@ -196,10 +201,18 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   `consent-manager.participants.page-max-size` and answers `200` rather than refusing, and the
   response reports the size it actually applied. The spec carries no `maximum` because the
   ceiling is configured per deployment and a YAML literal would drift from it.
-- **Management routes.** Health/metrics/prometheus run on `MANAGEMENT_PORT` (9090) but still
-  under `micronaut.server.context-path` (`/v1/health/readiness`); the spec is served at
-  `/v1/static/openapi.yaml`. `ManagementEndpointSecurityIT.routingMatrix` pins every such path —
-  update it with any routing change. Tests run with `context-path: /` and management on the main port.
+- **Management routes.** Health/metrics/prometheus run on `MANAGEMENT_PORT` (9090) at the
+  **origin root** (`/health/liveness`, `/health/readiness`, `/prometheus`); there is no server
+  `context-path`, only API controllers sit under `API_PREFIX` (`/v1`). Swagger UI, `/openapi.yaml`
+  and `/.well-known/jwks.json` are at the origin root of the API port. Liveness has no external
+  dependency; readiness covers the datasource and the identity-provider registry. Never point a
+  restart signal at readiness. `ManagementEndpointSecurityIT.routingMatrix` pins every such path —
+  update it with any routing change.
+- **Deployment.** Runtime image runs as a numeric non-root UID with a read-only root filesystem
+  and a writable `/tmp`. Secrets (DB/SMTP credentials, `LOG_PSEUDONYM_KEY`,
+  `ERASURE_VERIFICATION_SECRET`) come from a Secret, never a ConfigMap; receipt signing keys are
+  mounted as files, never env vars or image layers. Validate the chart with
+  `helm lint --strict charts/consent-manager` and `helm template`.
 - **Identifiers in paths.** A path variable never spans a `/`, so a URI-shaped identifier
   reaches `GET /users/{identifier}` or `GET /participants/{identifier}` only percent-encoded,
   and whether an encoded slash survives is a property of the deployment rather than of this
