@@ -1,0 +1,17 @@
+# The smallest input set that renders: every value the chart refuses to default.
+# Used by `helm lint --strict` and `helm template`; the values are placeholders.
+identityProviders:
+  primary:
+    issuer: https://idp.example.org/realms/consent-manager
+    discoveryUrl: https://idp.example.org/realms/consent-manager/.well-known/openid-configuration
+    audience: consent-manager
+
+config:
+  database:
+    url: jdbc:postgresql://postgres:5432/consent_manager
+
+secrets:
+  dbUser: consent_manager
+  dbPassword: change-me
+  logPseudonymKey: ci-placeholder-log-pseudonym-key
+  erasureVerificationSecret: ci-placeholder-erasure-verification-secret

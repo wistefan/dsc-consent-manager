@@ -1,0 +1,13 @@
+apiVersion: v2
+name: consent-manager
+description: Consent Manager — consent lifecycle management as a stateless OAuth2 resource server
+type: application
+version: 0.1.0
+# Tracks <version> in pom.xml; also the default image tag.
+appVersion: "0.1.0-SNAPSHOT"
+home: https://git.seamware.com/seamware/dsc-consent-manager
+sources:
+  - https://git.seamware.com/seamware/dsc-consent-manager
+maintainers:
+  - name: Seamware
+    email: dev@seamware.com
