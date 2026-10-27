@@ -8,7 +8,12 @@ survives edits to the cited files. Grep a name before citing it.
 
 - **`*Test` vs `*IT`.** A `*Test` starts no container and runs under Surefire (`./mvnw test`).
   In-process WireMock is allowed. A `*IT` runs under Failsafe in `./mvnw verify`. Run a single IT
-  with `./mvnw verify -Dit.test=FooIT -Dtest=NoSuchTest -Dsurefire.failIfNoSpecifiedTests=false`.
+  with `./mvnw verify -Dit.test=FooIT -Dtest=NoSuchTest -Dsurefire.failIfNoSpecifiedTests=false
+  -Djacoco.skip=true`. Without `-Djacoco.skip=true` the coverage gate measures that one IT and
+  fails the build after the test has passed.
+- **Coverage data accumulates.** The JaCoCo agent appends to `target/jacoco.exec` and
+  `target/jacoco-it.exec`, so a `verify` without `clean` can pass the gate on data from tests that
+  no longer exist. Run `./mvnw clean verify` before trusting a local coverage figure.
 - **Singleton containers.** `support/PostgresTestResource` (image `POSTGRES_IMAGE`, `postgres:16`)
   and `support/KeycloakTestResource` (pinned `quay.io/keycloak/keycloak` image, realm imported from
   `src/test/resources/keycloak/`) each start one container per JVM in a static initialiser. Ryuk
@@ -75,7 +80,7 @@ of it, so check the evidence against the ticket text, not against the short form
 | 19 | Served spec equals the authored spec | met | `OpenApiServingIT.servesTheBundleUnchanged` compares the served document with `target/openapi-bundle/openapi.yaml`, the bundle of the authored spec. |
 | 20 | Spec lint and breaking-change check as build steps | partial | `SpecLintIT` and `SpecCompatibilityIT` run inside `./mvnw verify`. There is no CI workflow yet; planned — Step 12. |
 | 21 | Spec and code agree on security | met | `SpecSecurityConsistencyTest`. |
-| 22 | Deterministic suite | planned — Step 12 | Repeated `./mvnw verify` runs, with the run count and outcome recorded here. |
+| 22 | Deterministic suite | planned — Step 12 | Repeated `./mvnw clean verify` runs, with the run count and outcome recorded here. Compare the merged BRANCH ratio across runs as well as the test summaries: the gate's margin is 0.004 (0.454 against 0.45), so a run-to-run branch swing would make the gate itself flaky. |
 
 ### Security tests
 
