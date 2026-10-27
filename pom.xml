@@ -50,15 +50,11 @@
         <jackson-databind-nullable.version>0.2.6</jackson-databind-nullable.version>
 
         <!-- Code coverage -->
-        <jacoco.version>0.8.15</jacoco.version>
-        <!--
-            Minimum line coverage ratio.
-            Set to 0.0 because JaCoCo 0.8.15 cannot instrument Java 25 bytecode
-            (class file version 69). The agent runs but silently produces empty
-            coverage data. When a JaCoCo release adds Java 25 support, bump
-            jacoco.version and raise this to 0.50 or higher.
-        -->
-        <jacoco.minimum.coverage>0.00</jacoco.minimum.coverage>
+        <jacoco.version>0.8.16</jacoco.version>
+        <!-- Merged (unit + integration) BUNDLE ratios, each the measured value rounded down to 0.05
+             (measured 2026-10-27: LINE 0.627, BRANCH 0.454) -->
+        <jacoco.minimum.line-coverage>0.60</jacoco.minimum.line-coverage>
+        <jacoco.minimum.branch-coverage>0.45</jacoco.minimum.branch-coverage>
 
         <!-- Code formatting -->
         <spotless.version>3.10.3</spotless.version>
@@ -665,6 +661,17 @@
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>${jacoco.version}</version>
+                <!-- Plugin-level so report and check measure the same classes; the agent
+                     executions override it so no `$`/`*` pattern reaches the forked argLine -->
+                <configuration>
+                    <excludes>
+                        <exclude>com/seamware/consentmanager/api/generated/**</exclude>
+                        <!-- Micronaut's compile-time bean definitions, introspections and AOP proxies -->
+                        <exclude>**/$*Definition*</exclude>
+                        <exclude>**/$*Introspection*</exclude>
+                        <exclude>**/$*Intercepted*</exclude>
+                    </excludes>
+                </configuration>
                 <executions>
                     <!-- Prepare the JaCoCo agent for unit tests (Surefire) -->
                     <execution>
@@ -672,6 +679,9 @@
                         <goals>
                             <goal>prepare-agent</goal>
                         </goals>
+                        <configuration>
+                            <excludes combine.self="override"/>
+                        </configuration>
                     </execution>
                     <!-- Prepare the JaCoCo agent for integration tests (Failsafe) -->
                     <execution>
@@ -679,6 +689,9 @@
                         <goals>
                             <goal>prepare-agent-integration</goal>
                         </goals>
+                        <configuration>
+                            <excludes combine.self="override"/>
+                        </configuration>
                     </execution>
                     <!-- Merge unit and integration test execution data -->
                     <execution>
@@ -727,15 +740,16 @@
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>${jacoco.minimum.coverage}</minimum>
+                                            <minimum>${jacoco.minimum.line-coverage}</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${jacoco.minimum.branch-coverage}</minimum>
                                         </limit>
                                     </limits>
                                 </rule>
                             </rules>
-                            <!-- Exclude generated code from coverage checks -->
-                            <excludes>
-                                <exclude>com/seamware/consentmanager/api/generated/**</exclude>
-                            </excludes>
                         </configuration>
                     </execution>
                 </executions>

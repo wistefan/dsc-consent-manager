@@ -8,7 +8,12 @@ survives edits to the cited files. Grep a name before citing it.
 
 - **`*Test` vs `*IT`.** A `*Test` starts no container and runs under Surefire (`./mvnw test`).
   In-process WireMock is allowed. A `*IT` runs under Failsafe in `./mvnw verify`. Run a single IT
-  with `./mvnw verify -Dit.test=FooIT -Dtest=NoSuchTest -Dsurefire.failIfNoSpecifiedTests=false`.
+  with `./mvnw verify -Dit.test=FooIT -Dtest=NoSuchTest -Dsurefire.failIfNoSpecifiedTests=false
+  -Djacoco.skip=true`. Without `-Djacoco.skip=true` the coverage gate measures that one IT and
+  fails the build after the test has passed.
+- **Coverage data accumulates.** The JaCoCo agent appends to `target/jacoco.exec` and
+  `target/jacoco-it.exec`, so a `verify` without `clean` can pass the gate on data from tests that
+  no longer exist. Run `./mvnw clean verify` before trusting a local coverage figure.
 - **Singleton containers.** `support/PostgresTestResource` (image `POSTGRES_IMAGE`, `postgres:16`)
   and `support/KeycloakTestResource` (pinned `quay.io/keycloak/keycloak` image, realm imported from
   `src/test/resources/keycloak/`) each start one container per JVM in a static initialiser. Ryuk
@@ -56,7 +61,7 @@ of it, so check the evidence against the ticket text, not against the short form
 
 | AC | Criterion | Status | Evidence / plan |
 |---|---|---|---|
-| 1 | Merged JaCoCo coverage report | planned — Step 2 | `pom.xml` pins JaCoCo 0.8.15 with a `0.00` minimum, because 0.8.15 cannot instrument Java 25 class files. |
+| 1 | Merged JaCoCo coverage report | met | `./mvnw verify` merges `target/jacoco.exec` (Surefire) and `target/jacoco-it.exec` (Failsafe) into `target/jacoco-merged.exec`, reports it to `target/site/jacoco/`, and `jacoco:check` fails the build below the BUNDLE minimums `jacoco.minimum.line-coverage` and `jacoco.minimum.branch-coverage`. Each is the measured ratio rounded down to 0.05 (2026-10-27: LINE 0.627 → 0.60, BRANCH 0.454 → 0.45); raise them when coverage grows. Generated API models and Micronaut's `$*Definition*`, `$*Introspection*` and `$*Intercepted*` classes are excluded from report and check, not from the agent. |
 | 2 | Real PostgreSQL 16 in containers | met | `PostgresTestResource.POSTGRES_IMAGE` is `postgres:16`. Every database IT runs on it, apart from the two exceptions under Decisions, which use the same constant. |
 | 3 | "Integration tests authenticate with real tokens from Testcontainers Keycloak" | met | `KeycloakAndPostgresTestResource` re-enables security and is the base of every authenticated IT, `PrivacyNoticeApiTestSupport` included. `KeycloakTestResource.accessToken(RealmPrincipal…)` obtains each token through a password grant against the imported realm. Per-test evidence: `KeycloakRoleMatrixIT.roleMatrixHolds`, `KeycloakKeyRotationIT`. |
 | 4 | Containers shared across test classes | met | `PostgresTestResource` and `KeycloakTestResource` are static JVM-wide singletons. `FlywayConcurrentMigrationIT` and `DatasourceOutageReadinessIT` are the deliberate per-class exceptions listed under Decisions. |
@@ -75,7 +80,7 @@ of it, so check the evidence against the ticket text, not against the short form
 | 19 | Served spec equals the authored spec | met | `OpenApiServingIT.servesTheBundleUnchanged` compares the served document with `target/openapi-bundle/openapi.yaml`, the bundle of the authored spec. |
 | 20 | Spec lint and breaking-change check as build steps | partial | `SpecLintIT` and `SpecCompatibilityIT` run inside `./mvnw verify`. There is no CI workflow yet; planned — Step 12. |
 | 21 | Spec and code agree on security | met | `SpecSecurityConsistencyTest`. |
-| 22 | Deterministic suite | planned — Step 12 | Repeated `./mvnw verify` runs, with the run count and outcome recorded here. |
+| 22 | Deterministic suite | planned — Step 12 | Repeated `./mvnw clean verify` runs, with the run count and outcome recorded here. Compare the merged BRANCH ratio across runs as well as the test summaries: the gate's margin is 0.004 (0.454 against 0.45), so a run-to-run branch swing would make the gate itself flaky. |
 
 ### Security tests
 
