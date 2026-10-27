@@ -289,7 +289,8 @@ All three probes target the `management` port.
 
 Flyway runs at startup in every pod, by default. With several replicas starting together, Flyway's
 PostgreSQL lock serialises them: one pod applies the pending migrations, and the others wait, find
-nothing pending, and continue. No extra coordination is needed.
+nothing pending, and continue. No extra coordination is needed. `FlywayConcurrentMigrationIT`
+pins this: two and four concurrent runs against one fresh database record each version exactly once.
 
 Alternatives, documented as options rather than templated:
 
