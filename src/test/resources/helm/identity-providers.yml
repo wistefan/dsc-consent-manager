@@ -1,0 +1,21 @@
+# Fixture for IdentityProviderConfigFileTest: the identity-providers.yml the Helm chart renders
+# from ci/all-enabled-values.yaml. Do not edit by hand; regenerate from the repository root with
+#   { head -n 4 src/test/resources/helm/identity-providers.yml; helm template t charts/consent-manager -f charts/consent-manager/ci/all-enabled-values.yaml --show-only templates/configmap-identity-providers.yaml | sed -e '1,/identity-providers.yml: |/d' -e 's/^    //'; } > /tmp/idp.yml && mv /tmp/idp.yml src/test/resources/helm/identity-providers.yml
+# and diff a fresh render against it the same way to check the chart and fixture agree.
+# Rendered by the consent-manager Helm chart from identityProviders.additional.
+# The `primary` provider is configured through the IDP_* env vars instead.
+consent-manager:
+  identity-providers:
+    partner:
+      issuer: "https://partner-idp.example.org/realms/dataspace"
+      discovery-url: "https://partner-idp.example.org/realms/dataspace/.well-known/openid-configuration"
+      audience: "consent-manager"
+      allow-insecure-transport: false
+      clock-skew: "10s"
+      claims:
+        user-identifier: ["sub"]
+        participant-identifier: ["participant"]
+        roles: ["groups"]
+      role-mapping:
+        user: "partner-user"
+        participant: "partner-participant"

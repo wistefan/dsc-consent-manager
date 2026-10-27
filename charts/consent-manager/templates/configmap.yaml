@@ -1,0 +1,67 @@
+{{- $idp := .Values.identityProviders.primary }}
+{{- include "consent-manager.validateProvider" (dict "name" "primary" "entry" $idp) }}
+{{- $cfg := .Values.config }}
+{{- $optional := dict
+  "CONSENT_MANAGER_URL" $cfg.consentManagerUrl
+  "CONTRACT_SERVICE_URL" $cfg.contractServiceUrl
+  "API_PREFIX" $cfg.apiPrefix
+  "NOTIFICATION_CLIENT_URL" $cfg.notificationClientUrl
+  "RECEIPTS_JURISDICTION" $cfg.receiptsJurisdiction
+  "IDP_JWKS_CACHE_TTL" $cfg.cache.idpJwksTtl
+  "CONTRACT_SERVICE_CACHE_TTL" $cfg.cache.contractServiceTtl
+  "CONTRACT_SERVICE_CACHE_MAX_SIZE" $cfg.cache.contractServiceMaxSize
+  "SELF_DESCRIPTION_CACHE_TTL" $cfg.cache.selfDescriptionTtl
+  "SELF_DESCRIPTION_CACHE_MAX_SIZE" $cfg.cache.selfDescriptionMaxSize
+  "PARTICIPANTS_PAGE_DEFAULT_SIZE" $cfg.pagination.participantsDefaultSize
+  "PARTICIPANTS_PAGE_MAX_SIZE" $cfg.pagination.participantsMaxSize
+  "CONSENTS_PAGE_DEFAULT_SIZE" $cfg.pagination.consentsDefaultSize
+  "CONSENTS_PAGE_MAX_SIZE" $cfg.pagination.consentsMaxSize
+  "IDP_CLOCK_SKEW" $idp.clockSkew
+  "IDP_ROLE_USER" ($idp.roleMapping | default dict).user
+  "IDP_ROLE_PARTICIPANT" ($idp.roleMapping | default dict).participant
+  "IDP_ROLE_CATALOG" ($idp.roleMapping | default dict).catalog
+}}
+{{- with $idp.claims }}
+{{- $_ := set $optional "IDP_CLAIM_USER_IDENTIFIER" (join "," (.userIdentifier | default list)) }}
+{{- $_ := set $optional "IDP_CLAIM_PARTICIPANT_IDENTIFIER" (join "," (.participantIdentifier | default list)) }}
+{{- $_ := set $optional "IDP_CLAIM_ROLES" (join "," (.roles | default list)) }}
+{{- end }}
+{{- if $cfg.smtp.host }}
+{{- $_ := set $optional "SMTP_HOST" $cfg.smtp.host }}
+{{- $_ := set $optional "SMTP_PORT" $cfg.smtp.port }}
+{{- $_ := set $optional "SMTP_FROM_ADDRESS" (required "config.smtp.fromAddress is required when config.smtp.host is set" $cfg.smtp.fromAddress) }}
+{{- $_ := set $optional "SMTP_FROM_NAME" $cfg.smtp.fromName }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "consent-manager.fullname" . }}
+  labels:
+    {{- include "consent-manager.labels" . | nindent 4 }}
+data:
+  PORT: {{ .Values.containerPorts.http | quote }}
+  MANAGEMENT_PORT: {{ .Values.containerPorts.management | quote }}
+  DB_URL: {{ required "config.database.url is required (a JDBC URL, e.g. jdbc:postgresql://postgres:5432/consent_manager)" $cfg.database.url | quote }}
+  # Fixed: metrics are reachable only through the in-cluster management Service, so the chart
+  # holds no metrics credential. Health detail is a separate setting and stays authenticated.
+  METRICS_AUTHENTICATION_ENABLED: "false"
+  IDP_ISSUER: {{ required "identityProviders.primary.issuer is required" $idp.issuer | quote }}
+  IDP_DISCOVERY_URL: {{ required "identityProviders.primary.discoveryUrl is required" $idp.discoveryUrl | quote }}
+  IDP_AUDIENCE: {{ required "identityProviders.primary.audience is required" $idp.audience | quote }}
+  IDP_ALLOW_INSECURE_TRANSPORT: {{ $idp.allowInsecureTransport | default false | quote }}
+  {{- if $cfg.smtp.host }}
+  SMTP_STARTTLS: {{ $cfg.smtp.startTls | quote }}
+  {{- end }}
+  {{- /* An empty env var would override the application.yml default, so empty values are omitted. */}}
+  {{- range $key, $value := $optional }}
+  {{- if not (empty $value) }}
+  {{ $key }}: {{ include "consent-manager.envValue" $value }}
+  {{- end }}
+  {{- end }}
+  {{- $rendered := concat (keys $optional) (list "PORT" "MANAGEMENT_PORT" "DB_URL" "METRICS_AUTHENTICATION_ENABLED" "IDP_ISSUER" "IDP_DISCOVERY_URL" "IDP_AUDIENCE" "IDP_ALLOW_INSECURE_TRANSPORT" "SMTP_STARTTLS") }}
+  {{- range $key, $value := $cfg.extraEnv }}
+  {{- if has $key $rendered }}
+  {{- fail (printf "config.extraEnv.%s is set by a dedicated chart value; set that value instead" $key) }}
+  {{- end }}
+  {{ $key }}: {{ include "consent-manager.envValue" $value }}
+  {{- end }}
