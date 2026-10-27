@@ -64,7 +64,9 @@ data:
   {{ $key }}: {{ include "consent-manager.envValue" $value }}
   {{- end }}
   {{- end }}
-  {{- $rendered := concat (keys $optional) (list "PORT" "MANAGEMENT_PORT" "DB_URL" "METRICS_AUTHENTICATION_ENABLED" "IDP_ISSUER" "IDP_DISCOVERY_URL" "IDP_AUDIENCE" "IDP_ALLOW_INSECURE_TRANSPORT" "SMTP_STARTTLS") }}
+  {{- /* Keys set only under a condition (claims, SMTP) are listed explicitly, so extraEnv cannot
+    bypass their guards when the condition is off. */}}
+  {{- $rendered := concat (keys $optional) (list "PORT" "MANAGEMENT_PORT" "DB_URL" "METRICS_AUTHENTICATION_ENABLED" "IDP_ISSUER" "IDP_DISCOVERY_URL" "IDP_AUDIENCE" "IDP_ALLOW_INSECURE_TRANSPORT" "IDP_CLAIM_USER_IDENTIFIER" "IDP_CLAIM_PARTICIPANT_IDENTIFIER" "IDP_CLAIM_ROLES" "SMTP_HOST" "SMTP_PORT" "SMTP_FROM_ADDRESS" "SMTP_FROM_NAME" "SMTP_STARTTLS") }}
   {{- $credentials := concat (splitList " " (include "consent-manager.mandatorySecretKeys" .)) (splitList " " (include "consent-manager.optionalSecretKeys" .)) (list "RECEIPTS_SIGNING_KEY" "RECEIPTS_RETIRED_VERIFICATION_KEYS") }}
   {{- $deploymentOwned := list "RECEIPTS_SIGNING_KEY_FILE" "RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE" "MICRONAUT_CONFIG_FILES" }}
   {{- range $key, $value := $cfg.extraEnv }}
