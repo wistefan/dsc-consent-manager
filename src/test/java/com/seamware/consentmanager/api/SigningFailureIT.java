@@ -44,7 +44,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -133,21 +132,6 @@ class SigningFailureIT extends KeycloakAndPostgresTestResource {
                                         null,
                                         null,
                                         null)));
-    }
-
-    /** Deleting a consent cascades its events and receipt; consents restrict everything else. */
-    @AfterEach
-    void removeCommittedRows() {
-        consents.findByUserIdAndStatusIn(subject.getId(), List.of(ConsentStatus.values()))
-                .forEach(consents::delete);
-        notices.deleteById(notice.getId());
-        users.delete(subject);
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @Test

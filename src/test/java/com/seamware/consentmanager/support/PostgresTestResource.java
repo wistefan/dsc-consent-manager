@@ -1,13 +1,18 @@
 package com.seamware.consentmanager.support;
 
 import io.micronaut.test.support.TestPropertyProvider;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.Map;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.TestInstance;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 /**
  * Shared Testcontainers PostgreSQL 16 fixture supplying the datasource to {@code @MicronautTest}
  * subclasses, which inherit the {@code PER_CLASS} lifecycle {@link TestPropertyProvider} needs.
+ * Every subclass test method ends with {@link DatabaseReset}, so no row outlives the method.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public abstract class PostgresTestResource implements TestPropertyProvider {
@@ -41,5 +46,17 @@ public abstract class PostgresTestResource implements TestPropertyProvider {
                 "datasources.default.username", POSTGRES.getUsername(),
                 "datasources.default.password", POSTGRES.getPassword(),
                 "datasources.default.driver-class-name", "org.postgresql.Driver");
+    }
+
+    /** Empties the schema after every test method; final so no subclass can switch it off. */
+    @AfterEach
+    protected final void resetSharedSchema() {
+        DatabaseReset.reset();
+    }
+
+    /** Opens a connection to the shared container outside any Micronaut context. */
+    static Connection openConnection() throws SQLException {
+        return DriverManager.getConnection(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
     }
 }

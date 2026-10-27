@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.repository.ParticipantRepository;
-import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.OidcDiscoveryStub;
 import com.seamware.consentmanager.support.PostgresTestResource;
@@ -164,8 +163,6 @@ class PrincipalResolutionIT extends PostgresTestResource {
 
     @Inject ParticipantRepository participants;
 
-    @Inject UserRepository users;
-
     /** Points the trust list at the stub provider and switches security on. */
     @Override
     public Map<String, String> getProperties() {
@@ -185,13 +182,6 @@ class PrincipalResolutionIT extends PostgresTestResource {
     @AfterAll
     static void stopIdentityProvider() {
         IDENTITY_PROVIDER.close();
-    }
-
-    /** Removes the registered participant and the provisioned user, which outlive the test. */
-    @AfterAll
-    void removeCommittedRows() {
-        participants.findByIdentifier(REGISTERED_PARTICIPANT).ifPresent(participants::delete);
-        users.findByIdentifier(SUBJECT).ifPresent(users::delete);
     }
 
     /** Waits for discovery to resolve and makes sure the registered participant exists. */

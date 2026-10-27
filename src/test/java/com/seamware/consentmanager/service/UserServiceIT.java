@@ -133,12 +133,6 @@ class UserServiceIT extends PostgresTestResource {
 
     private static final OidcDiscoveryStub IDENTITY_PROVIDER = new OidcDiscoveryStub();
 
-    /** Identifiers provisioned during the run, removed once it ends. */
-    private final List<String> provisioned = new ArrayList<>();
-
-    /** Participants registered during the run, removed once it ends. */
-    private final List<Participant> createdParticipants = new ArrayList<>();
-
     @Inject
     @Client("/")
     HttpClient client;
@@ -175,15 +169,6 @@ class UserServiceIT extends PostgresTestResource {
     @AfterAll
     static void stopIdentityProvider() {
         IDENTITY_PROVIDER.close();
-    }
-
-    /** Removes the rows this test committed, which outlive it without this. */
-    @AfterAll
-    void removeProvisionedUsers() {
-        // Links go with their user, which user_participants cascades on.
-        provisioned.forEach(
-                identifier -> users.findByIdentifier(identifier).ifPresent(users::delete));
-        createdParticipants.forEach(participantRows::delete);
     }
 
     /** Waits for discovery, without which no token would get as far as provisioning. */
@@ -456,10 +441,9 @@ class UserServiceIT extends PostgresTestResource {
         assertThat(reread.getUpdatedAt()).isEqualTo(saved.getUpdatedAt());
     }
 
-    /** An identifier no row exists for, remembered so the row it provisions is cleaned up. */
+    /** An identifier no row exists for. */
     private String unknownIdentifier() {
         String identifier = "urn:test:user:" + UUID.randomUUID();
-        provisioned.add(identifier);
         return identifier;
     }
 
@@ -473,7 +457,7 @@ class UserServiceIT extends PostgresTestResource {
                 INITIAL_FAMILY_NAME);
     }
 
-    /** A committed participant to register users for, removed once the run ends. */
+    /** A committed participant to register users for. */
     private Participant participant() {
         Participant participant =
                 participantRows.save(
@@ -484,7 +468,6 @@ class UserServiceIT extends PostgresTestResource {
                                 null,
                                 Map.of(),
                                 null));
-        createdParticipants.add(participant);
         return participant;
     }
 

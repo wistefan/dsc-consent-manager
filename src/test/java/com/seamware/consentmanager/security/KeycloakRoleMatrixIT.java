@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.repository.ParticipantRepository;
-import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
@@ -27,7 +26,6 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -84,8 +82,6 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
     @Inject IdentityProviderRegistry registry;
 
     @Inject ParticipantRepository participants;
-
-    @Inject UserRepository users;
 
     /**
      * Callers in the matrix: one per realm role, plus {@link #OUTSIDER} (authenticated, no mapped
@@ -144,16 +140,6 @@ class KeycloakRoleMatrixIT extends KeycloakAndPostgresTestResource {
                             Map.of(),
                             null));
         }
-    }
-
-    /** Removes the rows that outlive the test: the participant and the provisioned user. */
-    @AfterAll
-    void removeCommittedRows() {
-        participants
-                .findByIdentifier(KeycloakTestResource.PARTICIPANT_IDENTIFIER)
-                .ifPresent(participants::delete);
-        users.findByIdentifier(KeycloakTestResource.subject(Caller.USER.token()))
-                .ifPresent(users::delete);
     }
 
     @ParameterizedTest(name = "{0} on {1} is {2}")

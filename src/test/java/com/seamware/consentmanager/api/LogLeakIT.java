@@ -15,7 +15,6 @@ import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.UpstreamServiceException;
-import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
@@ -183,8 +182,6 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
 
     @Inject PrivacyNoticeRepository notices;
 
-    @Inject ConsentRepository consents;
-
     @Inject FailingDiscoveryService discovery;
 
     @Property(name = PSEUDONYM_KEY_PROPERTY)
@@ -194,8 +191,6 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
 
     /** Every bearer token the run sends, so each is searched for, not only {@link #userToken}. */
     private final Set<String> sentTokens = new LinkedHashSet<>();
-
-    private UUID subjectId;
 
     /** The token user's row as provisioned, read before erasure clears it. */
     private User subject;
@@ -232,7 +227,6 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
         assertThat(exchange(HttpRequest.POST(PATH_REGISTER, ""), userToken).code())
                 .isIn(HttpStatus.OK.getCode(), HttpStatus.CREATED.getCode());
         subject = users.findByIdentifier(KeycloakTestResource.subject(userToken)).orElseThrow();
-        subjectId = subject.getId();
         registerSentinel();
         UUID consent = grant();
         assertThat(exchange(HttpRequest.POST(revokePath(consent), ""), userToken).code())
@@ -272,30 +266,9 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
                         .toList();
     }
 
-    /** Deleting a consent cascades its events and receipts; consents restrict everything else. */
     @AfterAll
-    void removeCommittedRowsAndDetach() {
+    void detach() {
         captured.close();
-        if (subjectId != null) {
-            consents.findByUserIdAndStatusIn(subjectId, List.of(ConsentStatus.values()))
-                    .forEach(consents::delete);
-            users.findById(subjectId).ifPresent(users::delete);
-        }
-        // Erasure unlinks the subject, so the discovery requests provisioned a fresh row.
-        if (userToken != null) {
-            users.findByIdentifier(KeycloakTestResource.subject(userToken))
-                    .ifPresent(users::delete);
-        }
-        users.findByIdentifier(SENTINEL_IDENTIFIER).ifPresent(users::delete);
-        if (notice != null) {
-            notices.deleteById(notice.getId());
-        }
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest

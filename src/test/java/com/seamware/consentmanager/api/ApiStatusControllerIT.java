@@ -24,7 +24,7 @@ import org.yaml.snakeyaml.Yaml;
  * {@link ApiStatusController} is actually routed, and the served {@code bearerAuth} token contract
  * renders line by line rather than collapsing into one folded line.
  */
-@MicronautTest
+@MicronautTest(transactional = false)
 @DisplayName("API status endpoint and published OpenAPI specification")
 class ApiStatusControllerIT extends PostgresTestResource {
 

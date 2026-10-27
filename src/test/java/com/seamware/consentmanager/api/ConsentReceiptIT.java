@@ -49,7 +49,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -174,7 +173,6 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
         notice =
                 notices.save(
                         new PrivacyNotice(
@@ -187,20 +185,6 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
         subject =
                 users.findByIdentifier(identifier)
                         .orElseGet(() -> users.save(new User(identifier, null, null, null)));
-    }
-
-    /** Consents restrict deletion of their user and participants, so they go first. */
-    @AfterEach
-    void removeCommittedRows() {
-        consents.deleteAll();
-        notices.deleteAll();
-        users.findByIdentifier(subjectIdentifier()).ifPresent(users::delete);
-        List.of(CALLER, COUNTERPARTY)
-                .forEach(
-                        party ->
-                                participants
-                                        .findByIdentifier(party)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest

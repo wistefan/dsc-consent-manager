@@ -184,20 +184,10 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
                                         null)));
     }
 
-    /** Deleting a consent cascades its events and receipt; consents restrict everything else. */
+    /** Mends a store a failure case broke, so the next method signs normally. */
     @AfterEach
-    void removeCommittedRows() {
+    void restoreKeyStore() {
         store.broken = false;
-        consents.findByUserIdAndStatusIn(subject.getId(), List.of(ConsentStatus.values()))
-                .forEach(consents::delete);
-        notices.deleteById(notice.getId());
-        users.delete(subject);
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @AfterAll

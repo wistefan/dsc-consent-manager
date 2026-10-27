@@ -19,13 +19,10 @@ import com.seamware.consentmanager.support.PostgresTestResource;
 import io.micronaut.data.model.Page;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -48,8 +45,6 @@ class ConsentQueryServiceIT extends PostgresTestResource {
 
     private static final String NOTICE_TITLE = "Consent query notice";
 
-    private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
-
     /** Wide enough to hold every seeded consent, so the page size is never the limiter. */
     private static final int WIDE_PAGE = 100;
 
@@ -64,33 +59,6 @@ class ConsentQueryServiceIT extends PostgresTestResource {
     @Inject UserRepository users;
 
     @Inject ConsentManagerConfiguration.Consents paging;
-
-    private final List<User> seededUsers = new ArrayList<>();
-
-    private final List<UUID> seededNotices = new ArrayList<>();
-
-    @AfterEach
-    void removeCommittedRows() {
-        seededUsers.forEach(
-                user -> {
-                    consents.findByUserIdAndStatusIn(user.getId(), ALL_STATUSES)
-                            .forEach(consents::delete);
-                    users.delete(user);
-                });
-        seededUsers.clear();
-        seededNotices.forEach(notices::deleteById);
-        seededNotices.clear();
-    }
-
-    @AfterAll
-    void removeParticipants() {
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
-    }
 
     /** Each filter paired with how many of the seeded subject's four consents it must count. */
     static List<Arguments> filters() {
@@ -238,7 +206,6 @@ class ConsentQueryServiceIT extends PostgresTestResource {
                                 participant(PROVIDER).getId(),
                                 participant(CONSUMER).getId(),
                                 emptyPayload()));
-        seededNotices.add(notice.getId());
         return notice;
     }
 
@@ -269,7 +236,6 @@ class ConsentQueryServiceIT extends PostgresTestResource {
                                 null,
                                 null,
                                 null));
-        seededUsers.add(subject);
         return subject;
     }
 }

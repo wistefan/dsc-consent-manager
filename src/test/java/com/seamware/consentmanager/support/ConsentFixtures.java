@@ -38,10 +38,7 @@ public final class ConsentFixtures {
                 false);
     }
 
-    /**
-     * The participant with this identifier, registered on first use. Find-or-save, since a suite's
-     * shared rows outlive each transaction.
-     */
+    /** The participant with this identifier, registered on its first use within a test method. */
     public static Participant participant(ParticipantRepository participants, String identifier) {
         return participants
                 .findByIdentifier(identifier)

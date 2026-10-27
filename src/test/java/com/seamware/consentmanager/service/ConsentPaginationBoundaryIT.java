@@ -18,14 +18,11 @@ import io.micronaut.context.annotation.Property;
 import io.micronaut.data.model.Page;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -67,36 +64,12 @@ class ConsentPaginationBoundaryIT extends PostgresTestResource {
 
     @Inject UserRepository users;
 
-    private final List<UUID> seededNotices = new ArrayList<>();
-
     private User subject;
 
     /** The two paged listings, each read for the seeded subject's consents. */
     enum Listing {
         SUBJECT,
         PARTICIPANT
-    }
-
-    @AfterEach
-    void removeCommittedRows() {
-        if (subject != null) {
-            consents.findByUserIdAndStatusIn(subject.getId(), List.of(ConsentStatus.values()))
-                    .forEach(consents::delete);
-            users.delete(subject);
-            subject = null;
-        }
-        seededNotices.forEach(notices::deleteById);
-        seededNotices.clear();
-    }
-
-    @AfterAll
-    void removeParticipants() {
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     /** One paging edge: what is seeded and asked for, and the page that must come back. */
@@ -173,7 +146,6 @@ class ConsentPaginationBoundaryIT extends PostgresTestResource {
                                 consumer.getId(),
                                 new PrivacyNoticePayload(
                                         null, null, null, null, null, null, null, null, null)));
-        seededNotices.add(notice.getId());
         consents.save(
                 Consent.withStatus(
                         ConsentStatus.GRANTED,

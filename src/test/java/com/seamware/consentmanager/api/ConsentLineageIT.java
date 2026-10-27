@@ -38,7 +38,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -128,27 +127,11 @@ class ConsentLineageIT extends KeycloakAndPostgresTestResource {
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
         notice = notice(register(CALLER), register(COUNTERPARTY));
         String identifier = subjectIdentifier();
         subject =
                 users.findByIdentifier(identifier)
                         .orElseGet(() -> users.save(new User(identifier, null, null, null)));
-    }
-
-    /** Consents restrict deletion of their user and participants, so they go first. */
-    @AfterEach
-    void removeCommittedRows() {
-        consents.deleteAll();
-        notices.deleteAll();
-        List.of(subjectIdentifier(), OTHER_SUBJECT)
-                .forEach(identifier -> users.findByIdentifier(identifier).ifPresent(users::delete));
-        List.of(CALLER, COUNTERPARTY, STRANGER)
-                .forEach(
-                        party ->
-                                participants
-                                        .findByIdentifier(party)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest(name = "{0}")

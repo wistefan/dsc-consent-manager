@@ -34,11 +34,9 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -159,24 +157,8 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
         identifier = KeycloakTestResource.subject(userToken());
-        removeCommittedRows();
         notice = seedNotice();
         provisionTheCaller();
-    }
-
-    /** Removes committed rows; consents go first because they restrict their user and parties. */
-    @AfterEach
-    void removeCommittedRows() {
-        consents.deleteAll();
-        notices.deleteAll();
-        users.findByIdentifier(identifier).ifPresent(users::delete);
-        users.findByIdentifier(OTHER_USER).ifPresent(users::delete);
-        List.of(PROVIDER, CONSUMER, CALLER_PARTICIPANT)
-                .forEach(
-                        party ->
-                                participants
-                                        .findByIdentifier(party)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest(name = "{0} moves a {1} consent to {2}")

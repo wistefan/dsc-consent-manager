@@ -32,7 +32,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -71,15 +70,6 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     private static final String SMUGGLED_USER = "urn:test:user:registration-smuggled";
 
     private static final String MAPPED_USER = "urn:test:user:registration-mapped";
-
-    private static final List<String> SEEDED_USERS =
-            List.of(
-                    NEW_USER,
-                    EXISTING_USER,
-                    ADOPTED_USER,
-                    REPEATED_USER,
-                    SMUGGLED_USER,
-                    MAPPED_USER);
 
     /** Attributes an earlier registrant recorded, which a later one must not be able to rewrite. */
     private static final Map<String, Object> ORIGINAL_ATTRIBUTES =
@@ -167,30 +157,13 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     }
 
     @BeforeEach
-    void awaitTheRealmAndEmptyTheDirectory() {
+    void awaitTheRealmAndSeedTheDirectory() {
         Await.until(
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
         participant(CALLER_PARTICIPANT, "Registration Caller Ltd");
         participant(FOREIGN_PARTICIPANT, "Registration Foreign Ltd");
-    }
-
-    /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        SEEDED_USERS.forEach(
-                identifier ->
-                        users.findByIdentifier(identifier)
-                                .ifPresent(
-                                        user -> {
-                                            links.findByIdUserId(user.getId())
-                                                    .forEach(links::delete);
-                                            users.delete(user);
-                                        }));
-        participants.findByIdentifier(FOREIGN_PARTICIPANT).ifPresent(participants::delete);
-        participants.findByIdentifier(CALLER_PARTICIPANT).ifPresent(participants::delete);
     }
 
     @ParameterizedTest(name = "{0}")

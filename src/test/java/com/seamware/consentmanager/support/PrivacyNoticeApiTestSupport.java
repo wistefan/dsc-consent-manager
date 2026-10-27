@@ -24,7 +24,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
 /**
@@ -59,10 +58,7 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
 
     private static final String RETRY_DELAY = "10ms";
 
-    /**
-     * Participants registered before each case and removed after it. Notices restrict their
-     * parties' deletion, so a leftover row breaks later suites' cleanup.
-     */
+    /** Participants registered before each case; {@link DatabaseReset} removes them after it. */
     private static final List<String> PARTIES =
             List.of(CALLER, FIXTURE_PROVIDER, CONSUMER, OTHER_CONSUMER);
 
@@ -98,14 +94,6 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
     @BeforeEach
     void registerParties() {
         PARTIES.forEach(this::register);
-    }
-
-    @AfterEach
-    void removeCommittedRows() {
-        notices.deleteAll();
-        PARTIES.forEach(
-                identifier ->
-                        participants.findByIdentifier(identifier).ifPresent(participants::delete));
     }
 
     /** Issues a request with the realm's participant token, returning a refusal as a response. */

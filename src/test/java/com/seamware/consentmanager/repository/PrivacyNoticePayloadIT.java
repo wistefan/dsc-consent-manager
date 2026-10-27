@@ -12,13 +12,11 @@ import com.seamware.consentmanager.domain.PrivacyNoticePayload.Recipient;
 import com.seamware.consentmanager.support.PostgresTestResource;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -39,9 +37,6 @@ class PrivacyNoticePayloadIT extends PostgresTestResource {
     @Inject ParticipantRepository participants;
 
     @Inject PrivacyNoticeRepository notices;
-
-    /** The notices this suite committed, removed by hand because nothing rolls them back. */
-    private final List<UUID> written = new ArrayList<>();
 
     /** The payloads a stored notice must come back as, byte for byte in meaning. */
     static Stream<Arguments> payloads() {
@@ -65,17 +60,9 @@ class PrivacyNoticePayloadIT extends PostgresTestResource {
                                 provider.getId(),
                                 consumer.getId(),
                                 payload));
-        written.add(saved.getId());
 
         PrivacyNotice reread = notices.findById(saved.getId()).orElseThrow();
         assertThat(reread.getPayload()).isEqualTo(payload);
-    }
-
-    @AfterAll
-    void removeCommittedRows() {
-        written.forEach(id -> notices.findById(id).ifPresent(notices::delete));
-        participant(PROVIDER_PARTICIPANT).ifPresent(participants::delete);
-        participant(CONSUMER_PARTICIPANT).ifPresent(participants::delete);
     }
 
     /** A payload with every heading filled, including both nested record types. */

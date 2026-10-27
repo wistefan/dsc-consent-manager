@@ -21,7 +21,6 @@ import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Property;
 import io.micronaut.context.annotation.Replaces;
 import io.micronaut.context.annotation.Requires;
-import io.micronaut.data.model.Pageable;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
@@ -29,7 +28,6 @@ import java.lang.reflect.Proxy;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -69,32 +67,6 @@ class UserErasureAtomicityIT extends PostgresTestResource {
     @Inject ConsentEventRepository events;
 
     @Inject PrivacyNoticeRepository notices;
-
-    /** Rows committed by this test outlive its transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        users.findByIdentifier(USER_IDENTIFIER)
-                .ifPresent(
-                        user -> {
-                            consents.findByUserId(user.getId(), Pageable.UNPAGED)
-                                    .forEach(
-                                            consent -> {
-                                                events.findByConsentIdOrderByOccurredAtAsc(
-                                                                consent.getId())
-                                                        .forEach(events::delete);
-                                                consents.delete(consent);
-                                            });
-                            users.delete(user);
-                        });
-        participants
-                .findByIdentifier(PROVIDER_PARTICIPANT)
-                .ifPresent(
-                        provider ->
-                                notices.findByProviderIdAndArchivedAtIsNull(provider.getId())
-                                        .forEach(notices::delete));
-        participant(PROVIDER_PARTICIPANT).ifPresent(participants::delete);
-        participant(CONSUMER_PARTICIPANT).ifPresent(participants::delete);
-    }
 
     @Test
     @DisplayName("a failure after the consents are closed rolls the closures back")

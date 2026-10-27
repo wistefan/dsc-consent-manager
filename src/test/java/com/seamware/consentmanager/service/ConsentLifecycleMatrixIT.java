@@ -24,16 +24,12 @@ import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
-import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -63,8 +59,6 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
     /** Issuer of a token this suite never validates; only its shape matters. */
     private static final String ISSUER = "https://issuer.test/realms/consent-matrix";
 
-    private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
-
     @Inject ConsentLifecycleService lifecycle;
 
     @Inject ConsentRepository consents;
@@ -76,10 +70,6 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
     @Inject ParticipantRepository participants;
 
     @Inject UserRepository users;
-
-    private final List<User> seededUsers = new ArrayList<>();
-
-    private PrivacyNotice notice;
 
     /** Every (move, starting status) pair the table permits. */
     static Stream<Arguments> permittedCells() {
@@ -97,37 +87,6 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
                         operation ->
                                 starts.apply(operation).stream()
                                         .map(from -> Arguments.of(operation, from)));
-    }
-
-    /** Rows these cases commit outlive their transaction, and a notice holds its parties. */
-    @AfterEach
-    void removeCommittedRows() {
-        seededUsers.forEach(
-                user -> {
-                    consents.findByUserIdAndStatusIn(user.getId(), ALL_STATUSES)
-                            .forEach(
-                                    consent -> {
-                                        events.findByConsentIdOrderByOccurredAtAsc(consent.getId())
-                                                .forEach(events::delete);
-                                        consents.delete(consent);
-                                    });
-                    users.delete(user);
-                });
-        seededUsers.clear();
-    }
-
-    @AfterAll
-    void removeFixtures() {
-        if (notice != null) {
-            notices.deleteById(notice.getId());
-            notice = null;
-        }
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @Test
@@ -210,33 +169,19 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
     }
 
     private User user() {
-        User subject =
-                users.save(
-                        new User(
-                                "urn:test:user:consent-matrix:" + UUID.randomUUID(),
-                                null,
-                                null,
-                                null));
-        seededUsers.add(subject);
-        return subject;
+        return users.save(
+                new User("urn:test:user:consent-matrix:" + UUID.randomUUID(), null, null, null));
     }
 
-    /**
-     * The one notice every cell acts against, shared because {@code
-     * uq_privacy_notices_active_contract} admits one active notice per (contract, provider).
-     */
+    /** The cell's notice; one per method, since the schema is emptied after each. */
     private PrivacyNotice notice() {
-        if (notice == null) {
-            notice =
-                    notices.save(
-                            new PrivacyNotice(
-                                    CONTRACT_URI,
-                                    NOTICE_TITLE,
-                                    participant(participants, PROVIDER).getId(),
-                                    participant(participants, CONSUMER).getId(),
-                                    PrivacyNoticeFixtures.emptyPayload()));
-        }
-        return notice;
+        return notices.save(
+                new PrivacyNotice(
+                        CONTRACT_URI,
+                        NOTICE_TITLE,
+                        participant(participants, PROVIDER).getId(),
+                        participant(participants, CONSUMER).getId(),
+                        PrivacyNoticeFixtures.emptyPayload()));
     }
 
     /**

@@ -33,7 +33,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -71,10 +70,6 @@ class ParticipantUserBulkRegistrationIT extends KeycloakAndPostgresTestResource 
 
     /** Identifiers an over-long or malformed batch names, none of which may survive it. */
     private static final String REFUSED_USER_PREFIX = "urn:test:user:bulk-refused-";
-
-    /** Every identifier these tests may commit a row under, removed again when they are done. */
-    private static final List<String> SEEDED_USERS =
-            List.of(NEW_USER, ADOPTED_USER, REPEATED_USER, MALFORMED_EMAIL_USER, DUPLICATED_USER);
 
     /** A small batch maximum, so an over-long batch is only a handful of entries. */
     private static final int BULK_MAX_SIZE = 4;
@@ -141,33 +136,13 @@ class ParticipantUserBulkRegistrationIT extends KeycloakAndPostgresTestResource 
     }
 
     @BeforeEach
-    void awaitTheRealmAndEmptyTheDirectory() {
+    void awaitTheRealmAndSeedTheDirectory() {
         Await.until(
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
         participant(CALLER_PARTICIPANT, "Bulk Caller Ltd");
         participant(FOREIGN_PARTICIPANT, "Bulk Foreign Ltd");
-    }
-
-    /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        Stream.concat(
-                        SEEDED_USERS.stream(),
-                        IntStream.rangeClosed(0, BULK_MAX_SIZE).mapToObj(this::refusedUser))
-                .forEach(
-                        identifier ->
-                                users.findByIdentifier(identifier)
-                                        .ifPresent(
-                                                user -> {
-                                                    links.findByIdUserId(user.getId())
-                                                            .forEach(links::delete);
-                                                    users.delete(user);
-                                                }));
-        participants.findByIdentifier(FOREIGN_PARTICIPANT).ifPresent(participants::delete);
-        participants.findByIdentifier(CALLER_PARTICIPANT).ifPresent(participants::delete);
     }
 
     @ParameterizedTest(name = "{0} is answered {2}")
