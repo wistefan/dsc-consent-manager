@@ -3,12 +3,13 @@
 # =============================================================================
 # Usage:
 #   1. (Optional) Copy .env.sample to .env and adjust values if needed
-#   2. docker compose up -d
-#   3. Health check: curl http://localhost:${MANAGEMENT_PORT:-9090}/health
+#   2. docker compose up -d --build
+#   3. Health check: curl http://localhost:${MANAGEMENT_PORT:-9090}/health/readiness
 #      (management port, at the origin root - see endpoints.all in application.yml)
 #   4. API base:     http://localhost:8080/v1
 #   5. Contract Service stub (WireMock): http://localhost:${WIREMOCK_PORT:-8081}
 #      (contracts in docker/wiremock, see its README.md)
+#   6. End-to-end check: docker/smoke-test.sh (see docker/README.md)
 # =============================================================================
 
 services:
@@ -16,7 +17,7 @@ services:
   # ---------------------------------------------------------------------------
   # Application
   # ---------------------------------------------------------------------------
-  app:
+  consent-manager:
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -24,15 +25,15 @@ services:
       - "${PORT:-8080}:${PORT:-8080}"
       - "${MANAGEMENT_PORT:-9090}:${MANAGEMENT_PORT:-9090}"
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
       wiremock:
         # Contracts are fetched on demand and retried, so started is enough.
         condition: service_started
       keycloak:
         # service_healthy, NOT service_started. Keycloak needs ~30-60s with --import-realm
-        # before /realms/consent-manager/.well-known/... answers, while the app container
-        # is up in a fraction of that. From step 3 on, losing that race is recoverable -
+        # before /realms/consent-manager/.well-known/... answers, while this container is
+        # up in a fraction of that. From step 3 on, losing that race is recoverable -
         # discovery is retried with bounded backoff and readiness stays DOWN meanwhile -
         # but waiting here means `docker compose up` reaches a usable stack directly
         # instead of spending the first backoff windows rejecting every token.
@@ -41,8 +42,8 @@ services:
       - path: .env
         required: false
     environment:
-      # Override DB_URL to point to the 'db' service within the Docker network
-      DB_URL: jdbc:postgresql://db:5432/consent_manager
+      # Override DB_URL to point to the 'postgres' service within the Docker network
+      DB_URL: jdbc:postgresql://postgres:5432/consent_manager
       # Use dev environment for local development. Security is ENABLED here: dev points
       # the trust list at the local Keycloak below and rejects every token it cannot
       # verify. Only the `test` environment disables security.
@@ -58,6 +59,22 @@ services:
       IDP_DISCOVERY_URL: http://keycloak:${KEYCLOAK_PORT:-8180}/realms/consent-manager/.well-known/openid-configuration
       # The stubbed Contract Service below, never a real one.
       CONTRACT_SERVICE_URL: http://wiremock:8080
+      # Receipts are signed with an ephemeral key (the dev profile's default). To exercise
+      # the production file form instead, put a private JWK at docker/keys/signing-key.jwk
+      # (git-ignored, see .env.sample for how to generate one) and uncomment this line
+      # together with the volume below.
+      # RECEIPTS_SIGNING_KEY_FILE: /etc/consent-manager/keys/signing-key.jwk
+    # volumes:
+    #   - ./docker/keys:/etc/consent-manager/keys:ro
+    # Same posture as the Helm chart: nothing writable but /tmp, no capabilities, no
+    # privilege escalation. The image runs as a numeric non-root user (docker/Dockerfile).
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       # Management endpoints sit at the origin root of their own port, outside
       # ${API_PREFIX}. Pinned by ManagementEndpointSecurityIT.
@@ -81,8 +98,8 @@ services:
   # ---------------------------------------------------------------------------
   # PostgreSQL Database
   # ---------------------------------------------------------------------------
-  db:
-    image: postgres:16
+  postgres:
+    image: postgres:16-alpine
     ports:
       - "5432:5432"
     environment:
@@ -90,7 +107,11 @@ services:
       POSTGRES_USER: ${DB_USER:-consent_manager}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-consent_manager}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # Renamed from `postgres-data` when the image moved from Debian (glibc) to Alpine
+      # (musl): the two collate text differently, and opening a glibc-initialised cluster
+      # under musl risks silently wrong index lookups. A fresh name makes every stack
+      # reinitialise; the old volume can be removed - see docker/README.md.
+      - postgres16-alpine-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-consent_manager} -d consent_manager"]
       interval: 5s
@@ -147,7 +168,7 @@ services:
       # Pins the management port rather than relying on its default, so the port the
       # healthcheck dials cannot drift from the one Keycloak listens on.
       KC_HTTP_MANAGEMENT_PORT: ${KEYCLOAK_MANAGEMENT_PORT:-9000}
-    # The app depends on this being *healthy*, so the check has to mean "serving", not
+    # consent-manager depends on this being *healthy*, so the check has to mean "serving", not
     # "process started". The image ships neither curl nor wget, so the readiness endpoint
     # is polled over bash's /dev/tcp; `start-dev --import-realm` reaches ready well inside
     # start_period + interval * retries.
@@ -186,7 +207,7 @@ services:
 # Volumes
 # ---------------------------------------------------------------------------
 volumes:
-  postgres-data:
+  postgres16-alpine-data:
     driver: local
 
 # ---------------------------------------------------------------------------
