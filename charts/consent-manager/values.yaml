@@ -6,6 +6,7 @@
 # logPseudonymKey,erasureVerificationSecret}. ci/minimal-values.yaml holds that set.
 # You must also create the signing-key Secret out of band (see signingKeys).
 
+# Ignored when autoscaling.enabled is true; the HPA owns the replica count then.
 replicaCount: 2
 
 image:
@@ -47,6 +48,46 @@ service:
 # Service must never be routed by an ingress or exposed outside the cluster.
 managementService:
   port: 9090
+
+# Routes external traffic to the API Service's http port. Every path's backend is fixed to that
+# port; the management port is never a backend. Each host defaults to path / (Prefix), which also
+# covers the origin-root routes (/.well-known/jwks.json, Swagger UI, /openapi.yaml).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: consent-manager.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: consent-manager-tls
+  #    hosts:
+  #      - consent-manager.local
+
+# HorizontalPodAutoscaler (autoscaling/v2). A target left empty is omitted. Both targets are
+# percentages of resources.requests. The JVM keeps its heap, so memory use rarely falls after a
+# load peak. A memory target can therefore hold the replica count at its peak, and none is set
+# by default.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: ""
+
+# Prometheus Operator ServiceMonitor. It scrapes /prometheus on the management Service, without
+# credentials, because metrics authentication is off and the scrape stays inside the cluster.
+# Requires the monitoring.coreos.com/v1 CRD; without it, the install fails with "no matches for
+# kind ServiceMonitor".
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  # Empty means Prometheus's default; must not exceed interval.
+  scrapeTimeout: ""
+  # Extra labels, e.g. the release label your Prometheus selects ServiceMonitors by.
+  labels: {}
 
 # Non-sensitive settings, rendered into the ConfigMap. An empty value is omitted, so the
 # application default from application.yml applies. Never put a credential here.
