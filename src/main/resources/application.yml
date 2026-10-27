@@ -248,12 +248,18 @@ consent-manager:
     jurisdiction: ${RECEIPTS_JURISDICTION:EU}
     # Secret private JWK (one line; EC P-256/384/521 or RSA) receipts are signed with. Its
     # public half is served at /.well-known/jwks.json; .env.sample shows how to make one.
+    # Inline form, local/test only; production mounts the key and sets the file form below.
     signing-key: ${RECEIPTS_SIGNING_KEY:}
+    # Path of a mounted file holding that JWK; the production form. Setting both forms, or
+    # pointing at a missing, unreadable or empty file, fails startup.
+    signing-key-file: ${RECEIPTS_SIGNING_KEY_FILE:}
     # Generate a throwaway key when none is set; its receipts stop verifying on restart.
     ephemeral-signing-key: ${RECEIPTS_EPHEMERAL_SIGNING_KEY:false}
     # Public-only JWKS of retired and upcoming keys. Rotation takes two deploys an hour
     # apart (the JWKS max-age); see docs/security.md and ADR-0014.
+    # Inline form local/test only; the file form is production. Setting both fails startup.
     retired-verification-keys: ${RECEIPTS_RETIRED_VERIFICATION_KEYS:}
+    retired-verification-keys-file: ${RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE:}
 
   erasure:
     # Key of the salted HMAC an erased record keeps to confirm a named person consented.

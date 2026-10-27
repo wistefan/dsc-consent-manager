@@ -16,6 +16,11 @@ import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import io.micronaut.context.annotation.Context;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.core.annotation.Nullable;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -29,7 +34,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * The receipt signing key and the public keys a receipt verifies against. Eager, so a bad key fails
- * startup; a message names the variable at fault, never key material. See ADR-0014.
+ * startup; a message names the variable or mounted file at fault, never key material. See ADR-0014.
  */
 @Context
 public class SigningKeyStore {
@@ -49,37 +54,51 @@ public class SigningKeyStore {
 
     private static final String SIGNING_KEY_VARIABLE = "RECEIPTS_SIGNING_KEY";
 
+    private static final String SIGNING_KEY_FILE_VARIABLE = "RECEIPTS_SIGNING_KEY_FILE";
+
     private static final String RETIRED_KEYS_VARIABLE = "RECEIPTS_RETIRED_VERIFICATION_KEYS";
 
-    private static final String MISSING_KEY =
-            "No receipt signing key is configured: set RECEIPTS_SIGNING_KEY, or allow a throwaway"
-                    + " key with RECEIPTS_EPHEMERAL_SIGNING_KEY=true.";
+    private static final String RETIRED_KEYS_FILE_VARIABLE =
+            "RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE";
 
-    private static final String MALFORMED_KEY = "RECEIPTS_SIGNING_KEY is not a JSON Web Key.";
+    /** How a message names a file source: its variable, then the path it holds. */
+    private static final String FILE_SOURCE = "%s (%s)";
+
+    private static final String MISSING_KEY =
+            "No receipt signing key is configured: set RECEIPTS_SIGNING_KEY_FILE, or"
+                    + " RECEIPTS_SIGNING_KEY for local use, or allow a throwaway key with"
+                    + " RECEIPTS_EPHEMERAL_SIGNING_KEY=true.";
+
+    private static final String CONFLICTING_SOURCES = "Set either %s or %s, not both.";
+
+    private static final String UNREADABLE_FILE = "%s cannot be read.";
+
+    private static final String EMPTY_FILE = "%s is empty.";
+
+    private static final String MALFORMED_KEY = "%s is not a JSON Web Key.";
 
     private static final String PUBLIC_KEY_ONLY =
-            "RECEIPTS_SIGNING_KEY holds no private key, so nothing can be signed with it.";
+            "%s holds no private key, so nothing can be signed with it.";
 
     private static final String UNSUPPORTED_KEY =
             "%s may hold only RSA keys and EC keys on P-256, P-384 or P-521.";
 
     private static final String MISMATCHED_ALGORITHM = "%s names alg %s, which its key cannot use.";
 
-    private static final String UNUSABLE_KEY = "RECEIPTS_SIGNING_KEY cannot sign with %s.";
+    private static final String UNUSABLE_KEY = "%s cannot sign with %s.";
 
-    private static final String MALFORMED_RETIRED_KEYS =
-            "RECEIPTS_RETIRED_VERIFICATION_KEYS is not a JSON Web Key Set.";
+    private static final String MALFORMED_RETIRED_KEYS = "%s is not a JSON Web Key Set.";
 
     private static final String PRIVATE_RETIRED_KEY =
-            "RECEIPTS_RETIRED_VERIFICATION_KEYS must hold public keys only, since it is published.";
+            "%s must hold public keys only, since it is published.";
 
     private static final String DUPLICATE_KEY_ID =
-            "RECEIPTS_RETIRED_VERIFICATION_KEYS publishes receipt verification key id %s more than"
-                    + " once.";
+            "%s publishes receipt verification key id %s more than once.";
 
     private static final String EPHEMERAL_KEY =
             "Signing receipts with a key generated at startup (kid {}): every receipt it signs"
-                    + " stops verifying when this instance restarts. Set RECEIPTS_SIGNING_KEY.";
+                    + " stops verifying when this instance restarts. Set RECEIPTS_SIGNING_KEY_FILE,"
+                    + " or RECEIPTS_SIGNING_KEY for local use.";
 
     private static final Logger LOG = LoggerFactory.getLogger(SigningKeyStore.class);
 
@@ -89,8 +108,14 @@ public class SigningKeyStore {
     private final List<JWK> verificationKeys;
 
     public SigningKeyStore(ConsentManagerConfiguration.Receipts settings) {
-        JWK key = load(settings);
-        this.algorithm = algorithmFor(key, SIGNING_KEY_VARIABLE);
+        Source signingKey =
+                Source.resolve(
+                        SIGNING_KEY_VARIABLE,
+                        settings.getSigningKey(),
+                        SIGNING_KEY_FILE_VARIABLE,
+                        settings.getSigningKeyFile());
+        JWK key = load(signingKey, settings.isEphemeralSigningKey());
+        this.algorithm = algorithmFor(key, signingKey.name());
         this.keyId = keyIdOf(key);
         JWK publicKey;
         try {
@@ -99,9 +124,16 @@ public class SigningKeyStore {
         } catch (JOSEException | ParseException | IllegalArgumentException e) {
             // Nimbus refuses a short RSA key with IllegalArgumentException. The cause is dropped,
             // since a JOSE error may quote the key it rejected.
-            throw new IllegalStateException(UNUSABLE_KEY.formatted(algorithm));
+            throw new IllegalStateException(UNUSABLE_KEY.formatted(signingKey.name(), algorithm));
         }
-        this.verificationKeys = verificationKeys(publicKey, settings.getRetiredVerificationKeys());
+        this.verificationKeys =
+                verificationKeys(
+                        publicKey,
+                        Source.resolve(
+                                RETIRED_KEYS_VARIABLE,
+                                settings.getRetiredVerificationKeys(),
+                                RETIRED_KEYS_FILE_VARIABLE,
+                                settings.getRetiredVerificationKeysFile()));
     }
 
     /** Signs with the active private key, which never leaves this bean. */
@@ -137,23 +169,22 @@ public class SigningKeyStore {
         return verificationKeys.stream().filter(key -> key.getKeyID().equals(keyId)).findFirst();
     }
 
-    private static JWK load(ConsentManagerConfiguration.Receipts settings) {
-        String configured = settings.getSigningKey();
-        if (configured == null || configured.isBlank()) {
-            if (!settings.isEphemeralSigningKey()) {
+    private static JWK load(Source configured, boolean ephemeralAllowed) {
+        if (configured.value() == null) {
+            if (!ephemeralAllowed) {
                 throw new IllegalStateException(MISSING_KEY);
             }
             return ephemeral();
         }
         JWK key;
         try {
-            key = JWK.parse(configured);
+            key = JWK.parse(configured.value());
         } catch (ParseException e) {
             // The cause is dropped: a parse error may quote the secret it failed on.
-            throw new IllegalStateException(MALFORMED_KEY);
+            throw new IllegalStateException(MALFORMED_KEY.formatted(configured.name()));
         }
         if (!key.isPrivate()) {
-            throw new IllegalStateException(PUBLIC_KEY_ONLY);
+            throw new IllegalStateException(PUBLIC_KEY_ONLY.formatted(configured.name()));
         }
         return key;
     }
@@ -172,36 +203,36 @@ public class SigningKeyStore {
      * The active key followed by the retired ones, so receipts signed before a rotation keep
      * verifying. A {@code kid} is how a verifier selects its key, so none may repeat.
      */
-    private static List<JWK> verificationKeys(JWK active, String retired) {
+    private static List<JWK> verificationKeys(JWK active, Source retired) {
         List<JWK> keys = new ArrayList<>(List.of(active));
         Set<String> keyIds = new HashSet<>(Set.of(active.getKeyID()));
         for (JWK key : parseRetired(retired)) {
             // Checked before anything else touches the key, so a secret is never published.
             if (key.isPrivate()) {
-                throw new IllegalStateException(PRIVATE_RETIRED_KEY);
+                throw new IllegalStateException(PRIVATE_RETIRED_KEY.formatted(retired.name()));
             }
             String keyId = keyIdOf(key);
             if (!keyIds.add(keyId)) {
-                throw new IllegalStateException(DUPLICATE_KEY_ID.formatted(keyId));
+                throw new IllegalStateException(DUPLICATE_KEY_ID.formatted(retired.name(), keyId));
             }
             try {
-                keys.add(publish(key, algorithmFor(key, RETIRED_KEYS_VARIABLE), keyId));
+                keys.add(publish(key, algorithmFor(key, retired.name()), keyId));
             } catch (ParseException e) {
-                throw new IllegalStateException(MALFORMED_RETIRED_KEYS);
+                throw new IllegalStateException(MALFORMED_RETIRED_KEYS.formatted(retired.name()));
             }
         }
         return List.copyOf(keys);
     }
 
-    private static List<JWK> parseRetired(String retired) {
-        if (retired == null || retired.isBlank()) {
+    private static List<JWK> parseRetired(Source retired) {
+        if (retired.value() == null) {
             return List.of();
         }
         try {
-            return JWKSet.parse(retired).getKeys();
+            return JWKSet.parse(retired.value()).getKeys();
         } catch (ParseException e) {
             // The cause is dropped: a parse error may quote a private member it failed on.
-            throw new IllegalStateException(MALFORMED_RETIRED_KEYS);
+            throw new IllegalStateException(MALFORMED_RETIRED_KEYS.formatted(retired.name()));
         }
     }
 
@@ -242,6 +273,40 @@ public class SigningKeyStore {
             return key.computeThumbprint().toString();
         } catch (JOSEException e) {
             throw new IllegalStateException("Could not derive a receipt signing key id", e);
+        }
+    }
+
+    /**
+     * A configured key value and the name a message blames for it; {@code value} is null when
+     * nothing is configured, never for a mounted file, so an empty mount cannot pass as unset.
+     */
+    private record Source(String name, @Nullable String value) {
+
+        static Source resolve(
+                String variable,
+                @Nullable String inline,
+                String fileVariable,
+                @Nullable String path) {
+            boolean hasInline = inline != null && !inline.isBlank();
+            if (path == null || path.isBlank()) {
+                return new Source(variable, hasInline ? inline : null);
+            }
+            if (hasInline) {
+                throw new IllegalStateException(
+                        CONFLICTING_SOURCES.formatted(fileVariable, variable));
+            }
+            String name = FILE_SOURCE.formatted(fileVariable, path);
+            String content;
+            try {
+                content = Files.readString(Path.of(path), StandardCharsets.UTF_8).strip();
+            } catch (IOException | InvalidPathException e) {
+                // The cause is dropped, as for a parse error: a decoding error may quote content.
+                throw new IllegalStateException(UNREADABLE_FILE.formatted(name));
+            }
+            if (content.isEmpty()) {
+                throw new IllegalStateException(EMPTY_FILE.formatted(name));
+            }
+            return new Source(name, content);
         }
     }
 
