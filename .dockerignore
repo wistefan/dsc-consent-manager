@@ -12,6 +12,17 @@
 # Build output (rebuilt inside Docker)
 target/
 
+# Key material, at any depth. Patterns anchor at the context root, so a bare
+# `*.jwk` would miss src/main/resources/x.jwk, which `COPY src/` bakes into the JAR.
+**/*.pem
+**/*.key
+**/*.jwk
+**/*.jwks
+**/keys/
+
+# Test sources and resources (tests run in CI, not in the image build)
+src/test/
+
 # Environment files (may contain secrets)
 .env
 .env.*
@@ -36,6 +47,9 @@ Desktop.ini
 docker/
 compose.yaml
 .dockerignore
+
+# Helm chart (deployed separately, never part of the image)
+charts/
 
 # Documentation
 *.md
