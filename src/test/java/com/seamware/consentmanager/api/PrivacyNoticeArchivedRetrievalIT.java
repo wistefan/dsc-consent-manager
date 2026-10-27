@@ -11,6 +11,7 @@ import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -54,6 +55,11 @@ class PrivacyNoticeArchivedRetrievalIT extends PrivacyNoticeApiTestSupport {
             "Produce aggregated mobility insights for the region of Example.";
 
     private final CatalogStub catalog = new CatalogStub();
+
+    @AfterEach
+    void resetCatalog() {
+        catalog.reset();
+    }
 
     @AfterAll
     void stopCatalog() {

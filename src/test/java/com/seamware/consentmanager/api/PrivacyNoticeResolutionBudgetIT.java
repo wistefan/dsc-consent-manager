@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +52,11 @@ class PrivacyNoticeResolutionBudgetIT extends PrivacyNoticeApiTestSupport {
         properties.put(
                 "consent-manager.self-description.max-documents", String.valueOf(MAX_DOCUMENTS));
         return properties;
+    }
+
+    @AfterEach
+    void resetCatalog() {
+        catalog.reset();
     }
 
     @AfterAll

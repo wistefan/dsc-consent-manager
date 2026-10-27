@@ -12,8 +12,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Stubbed catalog serving the self-descriptions a resolved retrieval walks; owned per test. Each
- * {@code serve} method returns the document's absolute URL, as a seeded notice carries.
+ * Stubbed catalog serving the self-descriptions a resolved retrieval walks; a per-class holder
+ * calls {@link #reset()} after each test. Each {@code serve} method returns the document's absolute
+ * URL, as a seeded notice carries.
  */
 public final class CatalogStub implements AutoCloseable {
 
@@ -139,6 +140,11 @@ public final class CatalogStub implements AutoCloseable {
     /** Requests this stub has received at all, which is how "nothing was read" is asserted. */
     public int requestCount() {
         return server.getAllServeEvents().size();
+    }
+
+    /** Drops every stub and recorded request, so the next test starts unstubbed. */
+    public void reset() {
+        server.resetAll();
     }
 
     @Override

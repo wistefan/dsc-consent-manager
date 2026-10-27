@@ -51,6 +51,7 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -164,6 +165,11 @@ class UserServiceIT extends PostgresTestResource {
                 IdentityProviderConfiguration.PREFIX + ".primary.discovery-url",
                 IDENTITY_PROVIDER.discoveryUrl());
         return properties;
+    }
+
+    @AfterEach
+    void resetIdentityProvider() {
+        IDENTITY_PROVIDER.reset();
     }
 
     @AfterAll

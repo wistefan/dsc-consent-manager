@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -65,6 +66,11 @@ class PrivacyNoticeRetrievalIT extends PrivacyNoticeApiTestSupport {
             "One record per trip: start, end and duration.";
 
     private final CatalogStub catalog = new CatalogStub();
+
+    @AfterEach
+    void resetCatalog() {
+        catalog.reset();
+    }
 
     @AfterAll
     void stopCatalog() {

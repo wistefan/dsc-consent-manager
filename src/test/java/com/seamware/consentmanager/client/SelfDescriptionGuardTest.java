@@ -17,7 +17,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -83,7 +85,7 @@ class SelfDescriptionGuardTest {
     @BeforeAll
     static void start() {
         catalog = new CatalogStub();
-        documentUrl = catalog.serveResource(DOCUMENT_PATH, DOCUMENT_NAME, DOCUMENT_DESCRIPTION);
+        documentUrl = catalog.url() + DOCUMENT_PATH;
         loopbackHost = URI.create(documentUrl).getHost();
         context =
                 ApplicationContext.builder(Environment.TEST)
@@ -98,6 +100,17 @@ class SelfDescriptionGuardTest {
                                         "consent-manager.contract-service.url",
                                         UNUSED_CONTRACT_SERVICE_URL))
                         .start();
+    }
+
+    /** Re-registers the document every case may read, since each case ends with a reset. */
+    @BeforeEach
+    void serveDocument() {
+        catalog.serveResource(DOCUMENT_PATH, DOCUMENT_NAME, DOCUMENT_DESCRIPTION);
+    }
+
+    @AfterEach
+    void resetCatalog() {
+        catalog.reset();
     }
 
     @AfterAll

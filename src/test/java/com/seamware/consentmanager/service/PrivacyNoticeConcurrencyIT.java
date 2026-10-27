@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -68,6 +69,11 @@ class PrivacyNoticeConcurrencyIT extends PostgresTestResource {
         Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
         properties.put("consent-manager.contract-service.url", CONTRACTS.url());
         return properties;
+    }
+
+    @AfterEach
+    void resetContractService() {
+        CONTRACTS.reset();
     }
 
     @AfterAll

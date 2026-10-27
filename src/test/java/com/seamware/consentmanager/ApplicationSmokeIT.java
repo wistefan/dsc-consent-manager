@@ -22,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -49,6 +50,11 @@ class ApplicationSmokeIT extends PostgresTestResource {
                 "consent-manager.identity-providers.primary.discovery-url",
                 IDENTITY_PROVIDER.discoveryUrl());
         return properties;
+    }
+
+    @AfterEach
+    void resetIdentityProvider() {
+        IDENTITY_PROVIDER.reset();
     }
 
     @AfterAll
