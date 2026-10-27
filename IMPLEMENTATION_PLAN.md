@@ -480,6 +480,8 @@ chart README, `docker/README.md` and `.env.sample`. Content:
 
 Also update the `AGENTS.md` project-structure entry for `charts/` and remove the "being added"
 note.
+_Deferred: a step agent may not edit `AGENTS.md`, so this edit is left to a plan-mode agent
+(requested in the step 6 Taiga comment)._
 
 Covers AC 16 and the documentation half of AC 13.
 
