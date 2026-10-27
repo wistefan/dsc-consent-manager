@@ -19,9 +19,13 @@ import com.nimbusds.jose.util.BigIntegerUtils;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.env.Environment;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.text.ParseException;
 import java.util.ArrayList;
@@ -30,9 +34,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -48,6 +54,11 @@ class SigningKeyStoreTest {
     private static final String SIGNING_KEY_VARIABLE = "RECEIPTS_SIGNING_KEY";
 
     private static final String RETIRED_KEYS_VARIABLE = "RECEIPTS_RETIRED_VERIFICATION_KEYS";
+
+    private static final String SIGNING_KEY_FILE_VARIABLE = "RECEIPTS_SIGNING_KEY_FILE";
+
+    private static final String RETIRED_KEYS_FILE_VARIABLE =
+            "RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE";
 
     private static final String SIGNING_KEY_PROPERTY = "consent-manager.receipts.signing-key";
 
@@ -229,6 +240,243 @@ class SigningKeyStoreTest {
         assertThat(keys.verificationKey(RETIRED_KEY_ID)).contains(keys.verificationKeys().get(1));
         assertThat(keys.verificationKey("unknown")).isEmpty();
         assertThat(keys.verificationKey(null)).isEmpty();
+    }
+
+    /** Where a test places a configured value: inline, in a file it writes, or a missing path. */
+    private enum Placement {
+        NONE,
+        INLINE,
+        FILE,
+        BOTH,
+        MISSING_FILE,
+        EMPTY_FILE
+    }
+
+    /** What a startup failure must name: both settings of a key, or a mounted file and path. */
+    private enum Blame {
+        NOTHING,
+        SIGNING_KEY_SETTINGS,
+        RETIRED_KEYS_SETTINGS,
+        SIGNING_KEY_FILE,
+        RETIRED_KEYS_FILE
+    }
+
+    /** A key source arrangement, what its failure must name and the secrets it holds. */
+    private record SourceCase(
+            Placement signingKey,
+            String signingKeyValue,
+            Placement retiredKeys,
+            String retiredKeysValue,
+            Blame blame,
+            List<JWK> secrets) {}
+
+    static Stream<Arguments> keySources() throws JOSEException {
+        ECKey active = new ECKeyGenerator(Curve.P_256).keyID(KEY_ID).generate();
+        String activeJson = active.toJSONString();
+        ECKey retired = new ECKeyGenerator(Curve.P_256).keyID(RETIRED_KEY_ID).generate();
+        String retiredJwks = new JWKSet(retired.toPublicJWK()).toString();
+        ECKey privateRetired = new ECKeyGenerator(Curve.P_256).keyID(RETIRED_KEY_ID).generate();
+        String malformed = activeJson.substring(0, activeJson.length() - 1);
+        List<JWK> held = List.of(active);
+        return Stream.of(
+                sourceCase(
+                        "inline",
+                        Placement.INLINE,
+                        activeJson,
+                        Placement.NONE,
+                        null,
+                        Blame.NOTHING,
+                        held),
+                sourceCase(
+                        "file",
+                        Placement.FILE,
+                        activeJson,
+                        Placement.FILE,
+                        retiredJwks,
+                        Blame.NOTHING,
+                        held),
+                sourceCase(
+                        "both forms of the signing key",
+                        Placement.BOTH,
+                        activeJson,
+                        Placement.NONE,
+                        null,
+                        Blame.SIGNING_KEY_SETTINGS,
+                        held),
+                sourceCase(
+                        "both forms of the retired keys",
+                        Placement.FILE,
+                        activeJson,
+                        Placement.BOTH,
+                        retiredJwks,
+                        Blame.RETIRED_KEYS_SETTINGS,
+                        held),
+                sourceCase(
+                        "missing signing key file",
+                        Placement.MISSING_FILE,
+                        null,
+                        Placement.NONE,
+                        null,
+                        Blame.SIGNING_KEY_FILE,
+                        List.of()),
+                sourceCase(
+                        "empty signing key file",
+                        Placement.EMPTY_FILE,
+                        null,
+                        Placement.NONE,
+                        null,
+                        Blame.SIGNING_KEY_FILE,
+                        List.of()),
+                sourceCase(
+                        "missing retired keys file",
+                        Placement.FILE,
+                        activeJson,
+                        Placement.MISSING_FILE,
+                        null,
+                        Blame.RETIRED_KEYS_FILE,
+                        held),
+                sourceCase(
+                        "file holding a public key only",
+                        Placement.FILE,
+                        active.toPublicJWK().toJSONString(),
+                        Placement.NONE,
+                        null,
+                        Blame.SIGNING_KEY_FILE,
+                        List.of()),
+                sourceCase(
+                        "file holding malformed JSON",
+                        Placement.FILE,
+                        malformed,
+                        Placement.NONE,
+                        null,
+                        Blame.SIGNING_KEY_FILE,
+                        held),
+                sourceCase(
+                        "retired keys file holding a private key",
+                        Placement.FILE,
+                        activeJson,
+                        Placement.FILE,
+                        new JWKSet(privateRetired).toString(false),
+                        Blame.RETIRED_KEYS_FILE,
+                        List.of(active, privateRetired)),
+                sourceCase(
+                        "neither inline nor file, no ephemeral key",
+                        Placement.NONE,
+                        null,
+                        Placement.NONE,
+                        null,
+                        Blame.SIGNING_KEY_SETTINGS,
+                        List.of()));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("keySources")
+    @DisplayName("reads each key inline or from a mounted file, naming the source at fault")
+    void resolvesKeySources(String name, SourceCase arranged, @TempDir Path directory)
+            throws IOException {
+        ConsentManagerConfiguration.Receipts settings = new ConsentManagerConfiguration.Receipts();
+        Path signingKeyFile = directory.resolve("signing-key.jwk");
+        Path retiredKeysFile = directory.resolve("retired-verification-keys.jwks");
+        place(
+                arranged.signingKey(),
+                arranged.signingKeyValue(),
+                signingKeyFile,
+                settings::setSigningKey,
+                settings::setSigningKeyFile);
+        place(
+                arranged.retiredKeys(),
+                arranged.retiredKeysValue(),
+                retiredKeysFile,
+                settings::setRetiredVerificationKeys,
+                settings::setRetiredVerificationKeysFile);
+
+        Throwable failure = catchThrowable(() -> new SigningKeyStore(settings));
+
+        if (arranged.blame() == Blame.NOTHING) {
+            assertThat(failure).isNull();
+            return;
+        }
+        List<String> named =
+                switch (arranged.blame()) {
+                    case SIGNING_KEY_SETTINGS ->
+                            List.of(SIGNING_KEY_FILE_VARIABLE, SIGNING_KEY_VARIABLE);
+                    case RETIRED_KEYS_SETTINGS ->
+                            List.of(RETIRED_KEYS_FILE_VARIABLE, RETIRED_KEYS_VARIABLE);
+                    case SIGNING_KEY_FILE ->
+                            List.of(fileSource(SIGNING_KEY_FILE_VARIABLE, signingKeyFile));
+                    case RETIRED_KEYS_FILE ->
+                            List.of(fileSource(RETIRED_KEYS_FILE_VARIABLE, retiredKeysFile));
+                    case NOTHING -> List.of();
+                };
+        assertThat(failure).isInstanceOf(IllegalStateException.class);
+        assertThat(failure.getMessage()).contains(named);
+        assertQuotesNoSecret(failure, arranged.secrets());
+    }
+
+    @Test
+    @DisplayName("trims a mounted key file and signs with the key it holds")
+    void readsATrimmedKeyFile(@TempDir Path directory) throws JOSEException, IOException {
+        Path file = directory.resolve("signing-key.jwk");
+        Files.writeString(
+                file,
+                System.lineSeparator()
+                        + new ECKeyGenerator(Curve.P_256).keyID(KEY_ID).generate().toJSONString()
+                        + System.lineSeparator(),
+                StandardCharsets.UTF_8);
+        ConsentManagerConfiguration.Receipts settings = new ConsentManagerConfiguration.Receipts();
+        settings.setSigningKeyFile(file.toString());
+
+        assertThat(new SigningKeyStore(settings).keyId()).isEqualTo(KEY_ID);
+    }
+
+    private static String fileSource(String variable, Path file) {
+        return variable + " (" + file + ")";
+    }
+
+    private static void place(
+            Placement placement,
+            String value,
+            Path file,
+            Consumer<String> inline,
+            Consumer<String> path)
+            throws IOException {
+        switch (placement) {
+            case NONE -> {}
+            case INLINE -> inline.accept(value);
+            case FILE -> {
+                Files.writeString(file, value, StandardCharsets.UTF_8);
+                path.accept(file.toString());
+            }
+            case BOTH -> {
+                Files.writeString(file, value, StandardCharsets.UTF_8);
+                inline.accept(value);
+                path.accept(file.toString());
+            }
+            case MISSING_FILE -> path.accept(file.toString());
+            case EMPTY_FILE -> {
+                Files.writeString(file, System.lineSeparator(), StandardCharsets.UTF_8);
+                path.accept(file.toString());
+            }
+        }
+    }
+
+    private static Arguments sourceCase(
+            String name,
+            Placement signingKey,
+            String signingKeyValue,
+            Placement retiredKeys,
+            String retiredKeysValue,
+            Blame blame,
+            List<JWK> secrets) {
+        return Arguments.of(
+                name,
+                new SourceCase(
+                        signingKey,
+                        signingKeyValue,
+                        retiredKeys,
+                        retiredKeysValue,
+                        blame,
+                        secrets));
     }
 
     private static Arguments signingKey(String name, String signingKey, List<JWK> secrets) {
