@@ -46,7 +46,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default (printf "%s-signing-keys" .Release.Name) .Values.signingKeys.secretName }}
 {{- end }}
 
-{{/* Cluster-internal Service for health and metrics; Step 5's ServiceMonitor selects it too. */}}
+{{/* Cluster-internal Service for health and metrics; the ServiceMonitor selects it too. */}}
 {{- define "consent-manager.managementServiceName" -}}
 {{- printf "%s-management" (include "consent-manager.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}

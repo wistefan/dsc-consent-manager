@@ -1,0 +1,29 @@
+{{- if .Values.serviceMonitor.enabled }}
+# Needs the Prometheus Operator CRD. Carries no credentials: metrics authentication is off and
+# the management Service is ClusterIP, so the scrape never leaves the cluster.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "consent-manager.fullname" . }}
+  labels:
+    {{- include "consent-manager.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "consent-manager.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: management
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: management
+      path: /prometheus
+      scheme: http
+      interval: {{ .Values.serviceMonitor.interval }}
+      {{- with .Values.serviceMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+{{- end }}
