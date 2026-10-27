@@ -7,12 +7,8 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 
 /**
- * The contract documents the Contract Service tests are written against, read from {@code
- * src/test/resources/contracts}.
- *
- * <p>Files rather than string literals so the deserialization tests, the stubbed upstream and the
- * extraction tests all describe the same documents, and a change to one of them is visible as a
- * diff of the document rather than scattered across suites.
+ * Contract documents under {@code src/test/resources/contracts}, kept as files so decoding, stub
+ * and extraction tests all describe the same documents.
  */
 public final class ContractFixtures {
 

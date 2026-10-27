@@ -196,6 +196,10 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   `consent-manager.participants.page-max-size` and answers `200` rather than refusing, and the
   response reports the size it actually applied. The spec carries no `maximum` because the
   ceiling is configured per deployment and a YAML literal would drift from it.
+- **Management routes.** Health/metrics/prometheus run on `MANAGEMENT_PORT` (9090) but still
+  under `micronaut.server.context-path` (`/v1/health/readiness`); the spec is served at
+  `/v1/static/openapi.yaml`. `ManagementEndpointSecurityIT.routingMatrix` pins every such path —
+  update it with any routing change. Tests run with `context-path: /` and management on the main port.
 - **Identifiers in paths.** A path variable never spans a `/`, so a URI-shaped identifier
   reaches `GET /users/{identifier}` or `GET /participants/{identifier}` only percent-encoded,
   and whether an encoded slash survives is a property of the deployment rather than of this

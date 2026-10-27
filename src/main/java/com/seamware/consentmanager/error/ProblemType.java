@@ -10,11 +10,8 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * The RFC 7807 problem types this service mints, each pinned to the status and title it renders
- * with, so one type URI can never appear under two statuses across the handlers that emit it.
- *
- * <p>The type URIs are a published part of the API contract: clients branch on them, so a slug is
- * as breaking to rename as a path.
+ * The RFC 7807 problem types this service mints, each pinned to one status and title. The type URIs
+ * are API contract: renaming a slug is as breaking as renaming a path.
  */
 public enum ProblemType {
 
@@ -44,8 +41,8 @@ public enum ProblemType {
     public static final String MEDIA_TYPE = "application/problem+json";
 
     /**
-     * Detail every server-side failure publishes in place of its own message, which is logged
-     * instead so that an internal host, dependency or stack frame never reaches the caller.
+     * Detail a server-side failure publishes in place of its logged message; only {@link
+     * ServerErrorDetail} may substitute the message, and only where configured to.
      */
     public static final String SERVER_ERROR_DETAIL =
             "An unexpected error occurred. Please try again later.";
@@ -53,16 +50,12 @@ public enum ProblemType {
     /** Lowest status code that reports a fault on this side of the connection. */
     public static final int LOWEST_SERVER_ERROR_STATUS = 500;
 
-    /** Namespace every problem type URI in this service is minted under. */
     private static final String TYPE_PREFIX = "https://consent-manager.example/problems/";
 
     /** RFC 7807's "no semantics beyond the status", for statuses this service mints no type for. */
     private static final URI UNTYPED = URI.create("about:blank");
 
-    /**
-     * Resolves the type a status is rendered with. Declaring a second type on an already-registered
-     * status fails here, at class initialisation, rather than producing two bodies for one status.
-     */
+    /** Type per status; a second type on one status fails class initialisation. */
     private static final Map<Integer, ProblemType> BY_STATUS =
             Arrays.stream(values())
                     .collect(
@@ -83,12 +76,8 @@ public enum ProblemType {
     }
 
     /**
-     * Renders a problem for a status reached without an {@link ApiException} — a framework-level
-     * refusal such as a 405 or an unroutable 404.
-     *
-     * <p>A status no type is registered for falls back to {@code about:blank} under the reason
-     * phrase the framework produced, which RFC 7807 defines as carrying no semantics beyond the
-     * status itself.
+     * Renders a problem for a framework-level refusal such as a 405; a status with no registered
+     * type falls back to {@code about:blank} under the framework's reason phrase.
      */
     public static ProblemDetail problemFor(
             int status, String reason, String detail, String instance) {
@@ -114,10 +103,8 @@ public enum ProblemType {
     }
 
     /**
-     * Renders one occurrence of this problem.
-     *
-     * <p>{@code detail} is published to the caller verbatim and must therefore name nothing
-     * internal; {@code instance} is the request path the failure occurred on.
+     * Renders one occurrence at request path {@code instance}; {@code detail} is published verbatim
+     * and must name nothing internal.
      */
     public ProblemDetail toProblemDetail(String detail, String instance) {
         return withInstance(
@@ -125,13 +112,8 @@ public enum ProblemType {
     }
 
     /**
-     * Sets {@code instance} from a raw request path, escaping it where it is not a URI already.
-     *
-     * <p>Netty passes the request target through unvalidated, so the path can hold characters a URI
-     * may not — {@code |}, {@code {}}, {@code ^}, raw non-ASCII. Throwing on those would turn a
-     * deliberate refusal into a rendering failure inside the handler itself, so such a path is
-     * escaped, and one that is unusable even then simply loses the member, which is optional. A
-     * path that already parses is kept verbatim, so existing percent-encoding is not encoded twice.
+     * Sets {@code instance} from a raw, unvalidated request path: kept verbatim when it parses,
+     * escaped when not, and omitted when unusable even then, so rendering never throws.
      */
     private static ProblemDetail withInstance(ProblemDetail problem, String instance) {
         if (instance == null || instance.isBlank()) {

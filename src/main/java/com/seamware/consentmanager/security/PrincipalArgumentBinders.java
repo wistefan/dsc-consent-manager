@@ -5,12 +5,8 @@ import io.micronaut.http.bind.binders.TypedRequestArgumentBinder;
 import jakarta.inject.Singleton;
 
 /**
- * Registers one {@link PrincipalArgumentBinder} per declarable principal type.
- *
- * <p>The binder registry matches a parameter against a binder by its exact declared type, so the
- * sealed supertype and each of its three permitted shapes each need an entry. Adding a fourth
- * principal is a compile error in every exhaustive {@code switch} over {@link
- * ConsentManagerPrincipal}, which is where the reminder to add it here belongs.
+ * Registers one {@link PrincipalArgumentBinder} per declarable principal type. Binders match by
+ * exact declared type, so the sealed supertype and each permitted shape need one.
  */
 @Factory
 public class PrincipalArgumentBinders {

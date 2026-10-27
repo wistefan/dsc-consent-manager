@@ -34,13 +34,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Proves the participant-facing query reads only the consents the caller is a party to, scopes that
- * in the predicate rather than after the read, and never turns an unknown subject into a refusal.
- *
- * <p>Scoping is the load-bearing assertion: {@code GET /consents} is the service's primary
- * integration point, so a window in which another participant's row is materialised - or a {@code
- * 403} that let a caller probe which subjects exist - would be a disclosure. A third participant,
- * party to none of the seeded consents, is what every case checks the scope against.
+ * Tests that the participant-facing query reads only consents the caller is party to, scopes in the
+ * predicate rather than after the read, and never turns an unknown subject into a refusal.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant consent queries")
@@ -50,9 +45,7 @@ class ConsentParticipantQueryServiceIT extends PostgresTestResource {
 
     private static final String CONSUMER = "urn:test:participant:pq-consumer";
 
-    /**
-     * A participant party to none of the seeded consents, so the scope has something to exclude.
-     */
+    /** Party to none of the seeded consents, so the scope has something to exclude. */
     private static final String BYSTANDER = "urn:test:participant:pq-bystander";
 
     private static final String CONTRACT_URI = "urn:test:contract:pq";
@@ -61,15 +54,12 @@ class ConsentParticipantQueryServiceIT extends PostgresTestResource {
 
     private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
 
-    /** No status filter: the service must then default to GRANTED alone. */
+    /** The service must then default to GRANTED alone. */
     private static final List<ConsentStatus> NO_STATUS_FILTER = null;
 
-    /** No notice filter: every notice is admitted. */
     private static final UUID ANY_NOTICE = null;
 
-    /**
-     * A page wide enough to hold every seeded consent, so the content size is never the limiter.
-     */
+    /** Wide enough to hold every seeded consent, so the page size is never the limiter. */
     private static final int WIDE_PAGE = 100;
 
     @Inject ConsentQueryService queries;
@@ -111,7 +101,7 @@ class ConsentParticipantQueryServiceIT extends PostgresTestResource {
                                         .ifPresent(participants::delete));
     }
 
-    /** Each caller paired with whether the seeded consent names it, which decides what it sees. */
+    /** Each caller paired with whether the seeded consent names it. */
     static List<Arguments> callers() {
         return List.of(
                 Arguments.of(
@@ -416,9 +406,7 @@ class ConsentParticipantQueryServiceIT extends PostgresTestResource {
         return subject;
     }
 
-    /**
-     * The participants and subject one case acts over, resolved together so a case reads cleanly.
-     */
+    /** The participants and subject one case acts over. */
     private record Fixtures(
             Participant provider, Participant consumer, Participant bystander, User subject) {}
 }

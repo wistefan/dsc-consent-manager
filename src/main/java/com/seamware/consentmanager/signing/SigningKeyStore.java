@@ -28,10 +28,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * This deployment's receipt signing key and the public keys a receipt verifies against.
- *
- * <p>A {@link Context} bean, so a missing or unusable key fails startup rather than the first
- * signature. A startup message names the variable at fault and never quotes key material.
+ * The receipt signing key and the public keys a receipt verifies against. Eager, so a bad key fails
+ * startup; a message names the variable at fault, never key material. See ADR-0014.
  */
 @Context
 public class SigningKeyStore {
@@ -99,8 +97,8 @@ public class SigningKeyStore {
             this.signer = new DefaultJWSSignerFactory().createJWSSigner(key, algorithm);
             publicKey = publish(key, algorithm, keyId);
         } catch (JOSEException | ParseException | IllegalArgumentException e) {
-            // Nimbus refuses a short RSA key with IllegalArgumentException. The cause is dropped:
-            // nothing proves a JOSE error never quotes the key it rejected.
+            // Nimbus refuses a short RSA key with IllegalArgumentException. The cause is dropped,
+            // since a JOSE error may quote the key it rejected.
             throw new IllegalStateException(UNUSABLE_KEY.formatted(algorithm));
         }
         this.verificationKeys = verificationKeys(publicKey, settings.getRetiredVerificationKeys());

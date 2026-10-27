@@ -59,12 +59,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Exercises {@code GET /consents/me/{id}} and {@code GET /consents/{id}} with {@code
- * format=receipt|receipt-kantara} against real Keycloak and PostgreSQL.
- *
- * <p>The defining case is stability: a receipt rendered before its notice is archived and
- * regenerated with different terms must read the same afterwards, because it is rendered from the
- * snapshot the consent froze rather than from the live notice.
+ * Receipt formats on both single-consent reads: guards against a receipt changing when its notice
+ * is regenerated, since it must render from the frozen snapshot. See ADR-0012.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent receipts")
@@ -84,13 +80,13 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
 
     private static final String MEMBER_JWS = "jws";
 
-    /** The member a receipt carried its signature in before the signature was detached. */
+    /** An in-receipt signature member a receipt must not carry; the JWS travels beside it. */
     private static final String LEGACY_SIGNATURE_MEMBER = "signature";
 
     /** A data subject a forger swaps in for the one the receipt was signed for. */
     private static final String FORGED_SUBJECT = "urn:test:user:someone-else";
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     /** The participant the {@code PARTICIPANT} token carries; registered as the provider. */
@@ -499,10 +495,7 @@ class ConsentReceiptIT extends KeycloakAndPostgresTestResource {
         return response.body();
     }
 
-    /**
-     * The receipt of a served {@code {receipt, jws}} body. The JWS travels beside the receipt, so
-     * the receipt itself carries no signature.
-     */
+    /** The receipt of a served {@code {receipt, jws}} body, which itself carries no signature. */
     @SuppressWarnings("unchecked")
     private Map<String, Object> receipt(HttpResponse<String> response) {
         assertThat(response.code()).isEqualTo(HttpStatus.OK.getCode());

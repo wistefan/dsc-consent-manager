@@ -36,15 +36,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Proves that two decisions taken at the same instant for one (user, notice) pair cannot leave the
- * pair holding two live consents, nor one consent recorded twice.
- *
- * <p>The two cases guard different mechanisms. A pair with no consent yet locks nothing - there is
- * no row - so {@code uq_consents_granted_per_user_notice} is what settles it, and what is under
- * test is that the loser is answered {@code 409} rather than a {@code 500}. A pair holding an
- * unanswered request is settled by the writer's {@code FOR UPDATE} read instead, because adopting
- * that row updates it in place and no index covers an update; without the lock both decisions would
- * pass the same stale check and the one row would carry two decision events.
+ * Tests that concurrent decisions on one (user, notice) pair leave neither two live consents nor a
+ * consent recorded twice: the unique index settles a fresh pair ({@code 409} to the loser), the
+ * writer's {@code FOR UPDATE} read settles a pair holding an unanswered request.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Concurrent consent decisions")
@@ -160,9 +154,7 @@ class ConsentGrantAtomicityIT extends PostgresTestResource {
                                         .doesNotHaveDuplicates());
     }
 
-    /**
-     * Runs {@link #RACERS} grants that start together, separating the recorded from the refused.
-     */
+    /** Runs {@link #RACERS} grants that start together. */
     private Outcomes race() throws Exception {
         CyclicBarrier start = new CyclicBarrier(RACERS);
         Callable<UUID> grant =

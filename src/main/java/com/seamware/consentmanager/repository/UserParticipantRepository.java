@@ -8,70 +8,26 @@ import io.micronaut.data.repository.CrudRepository;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * Repository for {@link UserParticipant} link entities, backed by the {@code user_participants}
- * database table.
- *
- * <p>This repository manages the many-to-many association between users and participants. The
- * entity uses a composite primary key ({@code user_id}, {@code participant_id}) represented by the
- * {@link UserParticipantId} embeddable class, which allows standard {@link CrudRepository}
- * operations to work with the composite key.
- */
+/** Repository over {@code user_participants}, keyed by the composite {@link UserParticipantId}. */
 @JdbcRepository(dialect = Dialect.POSTGRES)
 public interface UserParticipantRepository
         extends CrudRepository<UserParticipant, UserParticipantId> {
 
-    /**
-     * Finds all user–participant associations for the given user.
-     *
-     * @param userId the UUID of the user (from the embedded composite key)
-     * @return a list of associations for the user, or an empty list if none exist
-     */
+    /** Every link of the user. */
     List<UserParticipant> findByIdUserId(UUID userId);
 
-    /**
-     * Finds all user–participant associations for the given participant.
-     *
-     * @param participantId the UUID of the participant (from the embedded composite key)
-     * @return a list of associations for the participant, or an empty list if none exist
-     */
+    /** Every link of the participant. */
     List<UserParticipant> findByIdParticipantId(UUID participantId);
 
-    /**
-     * Checks whether an association between the given user and participant exists.
-     *
-     * @param userId the UUID of the user
-     * @param participantId the UUID of the participant
-     * @return {@code true} if the association exists, {@code false} otherwise
-     */
+    /** Whether the user and participant are linked. */
     boolean existsByIdUserIdAndIdParticipantId(UUID userId, UUID participantId);
 
-    /**
-     * Deletes the association between the given user and participant.
-     *
-     * @param userId the UUID of the user
-     * @param participantId the UUID of the participant
-     */
+    /** Deletes the link between the user and participant. */
     void deleteByIdUserIdAndIdParticipantId(UUID userId, UUID participantId);
 
-    /**
-     * Removes every association the given user has, in one statement.
-     *
-     * <p>The erasure path uses this: it ends all affiliations at once and needs the count it
-     * removed to report back to the data subject.
-     *
-     * @param userId the UUID of the user
-     * @return how many associations were removed
-     */
+    /** Deletes every link of the user in one statement and returns the count; for erasure. */
     long deleteByIdUserId(UUID userId);
 
-    /**
-     * Removes every affiliation the given participant has, in one statement.
-     *
-     * <p>Deregistration needs this on both of its branches. The foreign key's {@code ON DELETE
-     * CASCADE} only fires when the {@code participants} row is actually deleted, so a retained row
-     * would otherwise keep every link to users who no longer have a counterparty. Counted as an
-     * {@code int} because the tally is published through an {@code int32} field.
-     */
+    /** Deletes every link of the participant, returning the count; FK cascade skips kept rows. */
     int deleteByIdParticipantId(UUID participantId);
 }

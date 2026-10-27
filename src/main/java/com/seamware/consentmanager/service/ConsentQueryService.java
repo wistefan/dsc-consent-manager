@@ -22,14 +22,11 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * The read side of consents: a data subject reading their own decisions, and a participant reading
- * the decisions it is a party to.
+ * The read side of consents: a subject reading their own, a participant reading those it is party
+ * to.
  *
- * <p>Every query is scoped by predicate - the subject's own {@code user_id}, or the participant as
- * provider or consumer - never by a filter applied after the read, so no consent outside the
- * caller's scope is ever materialised here. The listing's {@code totalElements} is counted under
- * the same predicate as its content, which is what keeps a narrowed page from reporting the whole
- * history as its total.
+ * <p>Every query, counts included, is scoped by SQL predicate, never filtered after the read, so no
+ * consent outside the caller's scope is ever materialised. See ADR-0013.
  */
 @Singleton
 public class ConsentQueryService {
@@ -39,30 +36,21 @@ public class ConsentQueryService {
     private static final String UNKNOWN_CONSENT_FOR_PARTICIPANT =
             "No consent '%s' names the calling participant as a party.";
 
-    /**
-     * Why a validity check answered no when no grant was found. One message for both the unknown
-     * subject and the known subject with no grant, so the answer never discloses which.
-     */
+    /** The no-grant reason; shared by unknown and grantless subjects so neither is disclosed. */
     private static final String NO_GRANT_IN_FORCE =
             "No consent is in force for this subject and notice.";
 
-    /**
-     * Why a validity check answered no when a grant was found but did not cover the named purpose.
-     */
+    /** The reason when a grant was found but does not cover the named purpose. */
     private static final String PURPOSE_NOT_COVERED =
             "The consent in force does not cover the requested purpose.";
 
-    /** First page, applied when the caller names none. */
     private static final int FIRST_PAGE = 0;
 
-    /**
-     * Statuses a participant listing admits when it names none; the decisions in force are what a
-     * participant asking what it may act on wants, so an absent filter means {@code GRANTED} alone.
-     */
+    /** Statuses a participant listing admits when it names none. */
     private static final List<ConsentStatus> DEFAULT_PARTICIPANT_STATUSES =
             List.of(ConsentStatus.GRANTED);
 
-    /** Property the listing orders by; a UUIDv7 id breaks a tie within one creation microsecond. */
+    /** Listing order; the UUIDv7 id breaks a tie within one creation microsecond. */
     private static final Sort NEWEST_FIRST =
             Sort.of(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
 
@@ -83,10 +71,8 @@ public class ConsentQueryService {
     }
 
     /**
-     * One page of the subject's own consents, newest first, with both parties named.
-     *
-     * <p>{@code size} is clamped to the configured ceiling rather than refused; the returned page's
-     * size reports what was applied.
+     * One page of the subject's own consents, newest first, with both parties named. {@code size}
+     * is clamped to the configured ceiling, not refused.
      */
     @NonNull
     public Page<ConsentDetails> listForUser(
@@ -99,10 +85,7 @@ public class ConsentQueryService {
         return matching(subject.getId(), criteria, pageable).map(this::read);
     }
 
-    /**
-     * One consent the subject owns, or a {@code 404} that does not distinguish an unknown id from
-     * one owned by somebody else.
-     */
+    /** One consent the subject owns; unknown and foreign ids are the same {@code 404}. */
     @NonNull
     public ConsentDetails getForUser(@NonNull User subject, @NonNull UUID id) {
         Consent consent =
@@ -112,14 +95,10 @@ public class ConsentQueryService {
     }
 
     /**
-     * One page of the consents the participant is a party to, newest first, with both parties
-     * named.
+     * One page of the consents the participant is party to, newest first, with both parties named.
      *
-     * <p>{@code userIdentifier} narrows the page to one data subject. An identifier no user holds,
-     * or one the caller is party to no consent for, yields an empty page rather than a refusal: the
-     * scope is the predicate {@code provider = caller OR consumer = caller}, so a 403 here would
-     * let a participant probe which identifiers exist. An absent {@code status} filter means {@code
-     * GRANTED} alone; {@code size} is clamped to the configured ceiling rather than refused.
+     * <p>An unknown or out-of-scope {@code userIdentifier} yields an empty page, never a refusal,
+     * so identifiers cannot be probed. No status filter means {@code GRANTED}; size is clamped.
      */
     @NonNull
     public Page<ConsentDetails> listForParticipant(
@@ -141,10 +120,7 @@ public class ConsentQueryService {
         return participantPage(caller, null, criteria, pageable);
     }
 
-    /**
-     * One consent the participant is a party to, or a {@code 404} that does not distinguish an
-     * unknown id from one the caller is no party to.
-     */
+    /** One consent the participant is party to; unknown and out-of-scope are one {@code 404}. */
     @NonNull
     public ConsentDetails getForParticipant(@NonNull Participant caller, @NonNull UUID id) {
         Consent consent =
@@ -157,14 +133,11 @@ public class ConsentQueryService {
     }
 
     /**
-     * Whether a {@code GRANTED} consent the caller is a party to is in force for the subject and
-     * notice right now, and - where a {@code purpose} is named - covers it.
+     * Whether a {@code GRANTED} consent the caller is party to is in force for the subject and
+     * notice, and covers {@code purpose} verbatim when one is named.
      *
-     * <p>One statement resolves the subject and the grant together, scoped to the caller (provider
-     * or consumer) and restricted to {@code GRANTED}; the purpose must equal a frozen one verbatim.
-     * Every no-grant case answers {@code valid: false} with the same reason, so an unknown subject
-     * and a known subject with no grant are indistinguishable; the lookup reveals nothing about
-     * another participant's grant or whether the subject exists.
+     * <p>Every no-grant case answers alike, so neither the subject's existence nor another
+     * participant's grant is disclosed.
      */
     @NonNull
     public ConsentValidityResult checkValidity(
@@ -197,9 +170,7 @@ public class ConsentQueryService {
         return OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
     }
 
-    /**
-     * The scoped page for a resolved (or absent) subject, statuses defaulted to {@code GRANTED}.
-     */
+    /** The scoped page for a resolved or absent subject, statuses defaulted to GRANTED. */
     private Page<ConsentDetails> participantPage(
             Participant caller,
             @Nullable UUID userId,
@@ -237,16 +208,12 @@ public class ConsentQueryService {
         return consents.findByUserId(userId, pageable);
     }
 
-    /**
-     * The stored consent with its parties resolved; a read creates nothing, hence {@code false}.
-     */
+    /** The stored consent with its parties resolved; never {@code created}. */
     private ConsentDetails read(Consent consent) {
         return parties.details(consent, false);
     }
 
-    /**
-     * The requested size bounded by the configured ceiling, or the configured default when none.
-     */
+    /** The requested size capped at the configured ceiling, or the configured default. */
     private int applicableSize(@Nullable Integer size) {
         return Math.min(size == null ? paging.getPageDefaultSize() : size, paging.getPageMaxSize());
     }

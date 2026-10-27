@@ -3,12 +3,18 @@ package com.seamware.consentmanager;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micronaut.context.ApplicationContext;
+import io.micronaut.context.env.yaml.YamlPropertySourceLoader;
 import io.micronaut.core.io.socket.SocketUtils;
 import io.micronaut.http.HttpRequest;
+import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
 import io.micronaut.http.client.HttpClient;
 import io.micronaut.http.client.exceptions.HttpClientResponseException;
 import io.micronaut.runtime.server.EmbeddedServer;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.net.MalformedURLException;
 import java.net.URI;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -22,41 +28,16 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins where the health endpoint actually lives, and that it stays anonymous, once security is
- * enabled.
- *
- * <p>The dev profile now starts with {@code micronaut.security.enabled: true}, which puts every
- * route behind the security filter for the first time. That makes two previously untested
- * assumptions of the Docker Compose stack load-bearing, and this test settles both empirically
- * rather than by reading the framework:
- *
- * <ul>
- *   <li><strong>{@code endpoints.all.port} moves management endpoints to their own port but does
- *       <em>not</em> take them out of {@code micronaut.server.context-path}.</strong> With a
- *       context path of {@code /v1} the health endpoint is at {@code :${MANAGEMENT_PORT}/v1/health}
- *       and the bare {@code :${MANAGEMENT_PORT}/health} is a 404 - the same holds for the {@code
- *       /health/liveness} and {@code /health/readiness} routes served off it. The Compose
- *       healthcheck must therefore carry {@code ${API_PREFIX}}; an earlier comment in {@code
- *       application.yml} claimed the opposite and was wrong.
- *   <li><strong>{@code intercept-url-map} patterns are matched against the path with the context
- *       path already stripped.</strong> {@code /swagger-ui/**} therefore still covers {@code
- *       /v1/swagger-ui/**} once a context path is configured. That is asserted rather than assumed:
- *       the control case {@link #swaggerUiIsReachableOnlyBecauseItsInterceptEntryAllowsIt()} flips
- *       that single entry to {@code isAuthenticated()} and requires the same anonymous request to
- *       be challenged, which fails if the pattern were silently matching nothing.
- * </ul>
- *
- * <p>Every other integration test runs with {@code micronaut.security.enabled: false} and a root
- * context path, so none of this is covered anywhere else. This context deliberately sets a non-root
- * context path and a separate management port so that a regression in either is visible.
+ * Pins where management endpoints, the Swagger UI and the API resolve, and who may read them, with
+ * security enabled; the only such coverage, as every other IT runs with security off.
  */
 @DisplayName("Management endpoint access under enabled security")
 class ManagementEndpointSecurityIT {
 
-    /** Context path applied to the API, mirroring the {@code API_PREFIX} default. */
-    private static final String API_CONTEXT_PATH = "/v1";
+    /** Prefix of the generated controllers, mirroring the {@code API_PREFIX} default. */
+    private static final String API_PREFIX = "/v1";
 
-    /** Path the health endpoint is mapped to, before the context path is prepended. */
+    /** Aggregate health route, at the management port's origin root. */
     private static final String HEALTH_PATH = "/health";
 
     /** Health route reporting whether the process is alive, served off {@link #HEALTH_PATH}. */
@@ -69,7 +50,7 @@ class ManagementEndpointSecurityIT {
     private static final String SWAGGER_UI_PATH = "/swagger-ui/index.html";
 
     /** Static-resource mapping serving the published OpenAPI specification. */
-    private static final String OPENAPI_SPEC_PATH = "/static/openapi.yaml";
+    private static final String OPENAPI_SPEC_PATH = "/openapi.yaml";
 
     /** The one real API operation, declared {@code security: []} in the specification. */
     private static final String API_STATUS_PATH = "/api-status";
@@ -77,24 +58,32 @@ class ManagementEndpointSecurityIT {
     /** Well-known JWKS consent receipts verify against, declared {@code security: []}. */
     private static final String RECEIPT_JWKS_PATH = "/.well-known/jwks.json";
 
-    /** Metrics endpoint, protected only by its {@code intercept-url-map} entry in dev. */
+    /** Micrometer metrics endpoint, governed by {@code endpoints.metrics.sensitive}. */
     private static final String METRICS_PATH = "/metrics";
 
-    /** Prometheus scrape endpoint, protected only by its {@code intercept-url-map} entry in dev. */
+    /** Prometheus scrape endpoint, governed by {@code endpoints.prometheus.sensitive}. */
     private static final String PROMETHEUS_PATH = "/prometheus";
 
-    /** Selects the client bound to the dedicated management port. */
-    private static final String MANAGEMENT = "management port";
+    /** Micronaut's switch for whether {@link #METRICS_PATH} needs authentication. */
+    private static final String METRICS_SENSITIVE_PROPERTY = "endpoints.metrics.sensitive";
 
-    /** Selects the client bound to the API port. */
-    private static final String API = "API port";
+    /** Micronaut's switch for whether {@link #PROMETHEUS_PATH} needs authentication. */
+    private static final String PROMETHEUS_SENSITIVE_PROPERTY = "endpoints.prometheus.sensitive";
 
-    /**
-     * Index of the {@code /swagger-ui/**} entry in {@code application.yml}'s {@code
-     * intercept-url-map}. The control case overrides exactly this entry; {@link
-     * #SWAGGER_UI_INTERCEPT_PATTERN_PROPERTY} is read first so a reordering of that list fails the
-     * test with a clear message instead of quietly overriding the wrong rule.
-     */
+    /** Health detail visibility, which {@code application-test.yml} relaxes. */
+    private static final String HEALTH_DETAILS_VISIBLE_PROPERTY =
+            "endpoints.health.details-visible";
+
+    /** Production configuration, read directly so the test environment cannot mask it. */
+    private static final String BASE_CONFIGURATION = "application.yml";
+
+    /** Health detail visibility production must ship. */
+    private static final String SHIPPED_DETAILS_VISIBLE = "AUTHENTICATED";
+
+    /** Member of a health body that carries per-indicator detail. */
+    private static final String HEALTH_DETAILS_MEMBER = "\"details\"";
+
+    /** Index of the {@code /swagger-ui/**} entry in {@code application.yml}'s intercept map. */
     private static final int SWAGGER_UI_INTERCEPT_INDEX = 2;
 
     /** Property holding the pattern of the intercept entry the control case overrides. */
@@ -108,105 +97,84 @@ class ManagementEndpointSecurityIT {
     /** Pattern the entry at {@link #SWAGGER_UI_INTERCEPT_INDEX} is expected to carry. */
     private static final String SWAGGER_UI_INTERCEPT_PATTERN = "/swagger-ui/**";
 
-    /**
-     * Index of the {@code /metrics/**} entry in {@code application.yml}'s {@code
-     * intercept-url-map}. Read back before the control case relaxes it, so a reordering of that
-     * list fails with a clear message instead of quietly relaxing the wrong rule.
-     */
-    private static final int METRICS_INTERCEPT_INDEX = 4;
-
-    /** Property holding the pattern of the metrics intercept entry. */
-    private static final String METRICS_INTERCEPT_PATTERN_PROPERTY =
-            "micronaut.security.intercept-url-map[" + METRICS_INTERCEPT_INDEX + "].pattern";
-
-    /** Property holding the access expression of the metrics intercept entry. */
-    private static final String METRICS_INTERCEPT_ACCESS_PROPERTY =
-            "micronaut.security.intercept-url-map[" + METRICS_INTERCEPT_INDEX + "].access[0]";
-
-    /** Pattern the entry at {@link #METRICS_INTERCEPT_INDEX} is expected to carry. */
-    private static final String METRICS_INTERCEPT_PATTERN = "/metrics/**";
-
-    /** Access expression the control case substitutes for {@code isAuthenticated()}. */
-    private static final String ANONYMOUS_ACCESS = "isAnonymous()";
-
     /** Access expression the control case substitutes for {@code isAnonymous()}. */
     private static final String AUTHENTICATED_ACCESS = "isAuthenticated()";
 
-    /**
-     * Property prefix of the one trust-list entry every test context configures.
-     *
-     * <p>{@code application.yml} leaves this entry's issuer, discovery URL and audience blank so a
-     * misconfigured deployment aborts at startup, so a context must fill them in place rather than
-     * declare an entry of its own.
-     */
+    /** Prefix of the one trust-list entry; {@code application.yml} leaves it blank. */
     private static final String PROVIDER_PREFIX = "consent-manager.identity-providers.primary.";
 
-    /**
-     * Discovery address this context deliberately points its only provider at.
-     *
-     * <p>Port 1 is reserved and never listening, so discovery can never succeed here and readiness
-     * is {@code DOWN} for the whole class. That is pinned in {@link #start(Map, int)} rather than
-     * inherited from {@code application-test.yml}: the 503 row of {@link #routingMatrix()} asserts
-     * that the readiness <em>route</em> resolved and was answered anonymously, and it would turn
-     * into a confusing failure the day the shared test configuration grows a provider that actually
-     * resolves - a Testcontainers Keycloak, say. The unreachable address is this class's own
-     * fixture, so that cannot happen.
-     */
+    /** Port 1 never listens, so readiness stays {@code DOWN} and answers 503 anonymously. */
     private static final String UNREACHABLE_PROVIDER_BASE_URL = "http://localhost:1/realms/dead";
 
     /** Audience the unreachable provider's entry declares; never used, but must not be blank. */
     private static final String UNREACHABLE_PROVIDER_AUDIENCE = "consent-manager";
 
-    private static int managementPort;
-    private static ApplicationContext context;
-    private static EmbeddedServer server;
-    private static HttpClient managementClient;
-    private static HttpClient apiClient;
-
-    /**
-     * Starts a security-enabled context with the API behind a context path and management endpoints
-     * on their own port.
-     *
-     * @throws Exception if the management URL cannot be built
-     */
-    @BeforeAll
-    static void startContext() throws Exception {
-        managementPort = SocketUtils.findAvailableTcpPort();
-
-        context = start(Map.of(), managementPort);
-        server = context.getBean(EmbeddedServer.class).start();
-        managementClient =
-                HttpClient.create(URI.create("http://localhost:" + managementPort).toURL());
-        apiClient = HttpClient.create(server.getURL());
+    /** The port a probe is sent to. */
+    private enum Port {
+        MANAGEMENT,
+        API
     }
 
-    /**
-     * Starts a security-enabled context with the API behind a context path and management endpoints
-     * on their own port.
-     *
-     * @param overrides properties layered on top of the shared base, for control cases
-     * @param port the port management endpoints are bound to
-     * @return the started context
-     */
-    private static ApplicationContext start(Map<String, Object> overrides, int port) {
+    /** A started context with a client on each of its two ports. */
+    private record Deployment(
+            ApplicationContext context,
+            EmbeddedServer server,
+            HttpClient managementClient,
+            HttpClient apiClient)
+            implements AutoCloseable {
+
+        static Deployment start(Map<String, Object> overrides) throws MalformedURLException {
+            int managementPort = SocketUtils.findAvailableTcpPort();
+            ApplicationContext context = startContext(overrides, managementPort);
+            EmbeddedServer server = context.getBean(EmbeddedServer.class).start();
+            return new Deployment(
+                    context,
+                    server,
+                    HttpClient.create(URI.create("http://localhost:" + managementPort).toURL()),
+                    HttpClient.create(server.getURL()));
+        }
+
+        HttpClient client(Port port) {
+            return port == Port.MANAGEMENT ? managementClient : apiClient;
+        }
+
+        @Override
+        public void close() {
+            closeQuietly(managementClient);
+            closeQuietly(apiClient);
+            closeQuietly(server);
+            closeQuietly(context);
+        }
+    }
+
+    private static Deployment metricsAuthenticated;
+    private static Deployment metricsAnonymous;
+
+    @BeforeAll
+    static void startDeployments() throws MalformedURLException {
+        // No override: the endpoints keep application.yml's sensitive default.
+        metricsAuthenticated = Deployment.start(Map.of());
+        metricsAnonymous =
+                Deployment.start(
+                        Map.of(
+                                METRICS_SENSITIVE_PROPERTY,
+                                false,
+                                PROMETHEUS_SENSITIVE_PROPERTY,
+                                false));
+    }
+
+    /** Starts a security-enabled context: API under {@link #API_PREFIX}, management on its port. */
+    private static ApplicationContext startContext(Map<String, Object> overrides, int port) {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("micronaut.security.enabled", true);
-        properties.put("micronaut.server.context-path", API_CONTEXT_PATH);
+        properties.put("consent-manager.api-prefix", API_PREFIX);
         properties.put("micronaut.server.port", -1);
         properties.put("endpoints.all.enabled", true);
         properties.put("endpoints.all.port", port);
-        // Mirror application-dev.yml, which waives Micronaut's own endpoint-level
-        // `sensitive` check for these two. That leaves the intercept-url-map entries as
-        // the only thing standing between an anonymous caller and the metrics, so the
-        // 401 rows below fail if the security filter is not applied on this listener —
-        // and fail if the patterns do not cover the paths actually served.
-        properties.put("endpoints.metrics.sensitive", false);
-        properties.put("endpoints.prometheus.sensitive", false);
+        properties.put(
+                HEALTH_DETAILS_VISIBLE_PROPERTY, shippedProperty(HEALTH_DETAILS_VISIBLE_PROPERTY));
         properties.put("datasources.default.enabled", false);
         properties.put("flyway.enabled", false);
-        // Deliberately unresolvable: see UNREACHABLE_PROVIDER_BASE_URL. The readiness row of
-        // routingMatrix() expects 503 and must not depend on what the shared test configuration
-        // happens to point the trust list at.
         properties.put(PROVIDER_PREFIX + "issuer", UNREACHABLE_PROVIDER_BASE_URL);
         properties.put(
                 PROVIDER_PREFIX + "discovery-url",
@@ -222,20 +190,24 @@ class ManagementEndpointSecurityIT {
         return started;
     }
 
-    /** Releases the clients, the server and the context. */
-    @AfterAll
-    static void stopContext() {
-        closeQuietly(managementClient);
-        closeQuietly(apiClient);
-        closeQuietly(server);
-        closeQuietly(context);
+    /** Reads a property from {@link #BASE_CONFIGURATION} alone, without any environment overlay. */
+    private static Object shippedProperty(String name) {
+        try (InputStream yaml =
+                ManagementEndpointSecurityIT.class
+                        .getClassLoader()
+                        .getResourceAsStream(BASE_CONFIGURATION)) {
+            return new YamlPropertySourceLoader().read(BASE_CONFIGURATION, yaml).get(name);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
-    /**
-     * Closes a resource, ignoring failures so one bad close cannot mask a test result.
-     *
-     * @param closeable the resource to close, may be {@code null}
-     */
+    @AfterAll
+    static void stopDeployments() {
+        closeQuietly(metricsAuthenticated);
+        closeQuietly(metricsAnonymous);
+    }
+
     private static void closeQuietly(AutoCloseable closeable) {
         if (closeable == null) {
             return;
@@ -247,97 +219,127 @@ class ManagementEndpointSecurityIT {
         }
     }
 
-    /**
-     * Supplies the (port, path, expected status) matrix that fixes the routing contract.
-     *
-     * @return one argument row per probe
-     */
+    /** Each path the Compose stack probes, its port, the anonymous status expected and why. */
     private static Stream<Arguments> routingMatrix() {
         return Stream.of(
                 Arguments.of(
-                        MANAGEMENT,
-                        API_CONTEXT_PATH + LIVENESS_PATH,
-                        HttpStatus.OK,
-                        "liveness carries no indicator that depends on an external system, so it"
-                                + " answers UP anonymously on the management port under the API"
-                                + " prefix even though this context pins its trust list at an"
-                                + " unreachable address"),
-                Arguments.of(
-                        MANAGEMENT,
-                        API_CONTEXT_PATH + READINESS_PATH,
-                        HttpStatus.SERVICE_UNAVAILABLE,
-                        "the Compose healthcheck probes readiness on the management port under the"
-                                + " API prefix, without credentials; this context pins its only"
-                                + " provider at an unreachable address on purpose, so a 503 -"
-                                + " rather than the 401 a protected route would give or the 404 a"
-                                + " missing one would - shows the route resolved and was answered"
-                                + " anonymously"),
-                Arguments.of(
-                        MANAGEMENT,
+                        Port.MANAGEMENT,
                         LIVENESS_PATH,
-                        HttpStatus.NOT_FOUND,
-                        "a dedicated management port does not remove the server context path, so a"
-                                + " probe omitting the API prefix never reaches the endpoint"),
+                        HttpStatus.OK,
+                        "liveness depends on no external system, so it answers UP anonymously at"
+                                + " the management port's origin root"),
                 Arguments.of(
-                        API,
-                        API_CONTEXT_PATH + LIVENESS_PATH,
+                        Port.MANAGEMENT,
+                        READINESS_PATH,
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "the Compose healthcheck probes readiness without credentials; with the"
+                                + " only provider unreachable a 503 - not a 401 or 404 - shows the"
+                                + " route resolved and was answered anonymously"),
+                Arguments.of(
+                        Port.MANAGEMENT,
+                        API_PREFIX + LIVENESS_PATH,
+                        HttpStatus.UNAUTHORIZED,
+                        "management endpoints are not under the API prefix, so this path is"
+                                + " unrouted and refused like any unrouted path"),
+                Arguments.of(
+                        Port.API,
+                        LIVENESS_PATH,
                         HttpStatus.NOT_FOUND,
                         "endpoints.all.port moves management endpoints off the API port entirely"),
                 Arguments.of(
-                        API,
-                        API_CONTEXT_PATH + SWAGGER_UI_PATH,
+                        Port.API,
+                        SWAGGER_UI_PATH,
                         HttpStatus.OK,
-                        "the Swagger UI stays anonymously readable with security enabled"),
+                        "the Swagger UI sits at the origin root and stays anonymously readable"),
                 Arguments.of(
-                        API,
-                        API_CONTEXT_PATH + OPENAPI_SPEC_PATH,
+                        Port.API,
+                        OPENAPI_SPEC_PATH,
                         HttpStatus.OK,
-                        "the published specification stays anonymously readable with security"
-                                + " enabled"),
+                        "the published specification stays anonymously readable"),
                 Arguments.of(
-                        API,
-                        API_CONTEXT_PATH + API_STATUS_PATH,
+                        Port.API,
+                        API_PREFIX + API_STATUS_PATH,
                         HttpStatus.OK,
-                        "the generated controller carries @Secured(IS_ANONYMOUS) for the"
-                                + " specification's `security: []`, so the reachability probe stays"
-                                + " open once the filter is enabled"),
+                        "generated controllers sit under the API prefix, and the specification's"
+                                + " `security: []` keeps the reachability probe open"),
                 Arguments.of(
-                        API,
+                        Port.API,
                         RECEIPT_JWKS_PATH,
                         HttpStatus.OK,
-                        "the receipt JWKS sits at the origin root RFC 8615 defines, outside the"
-                                + " API prefix, and stays anonymously readable"),
+                        "the receipt JWKS sits at the origin root RFC 8615 defines and stays"
+                                + " anonymously readable now that the security filter sees it"),
                 Arguments.of(
-                        API,
-                        API_CONTEXT_PATH + RECEIPT_JWKS_PATH,
+                        Port.API,
+                        API_PREFIX + RECEIPT_JWKS_PATH,
                         HttpStatus.UNAUTHORIZED,
-                        "@OriginRoot takes the receipt JWKS out of the API prefix rather than"
-                                + " serving it in both places, so under the prefix it is an"
-                                + " unrouted path the security filter refuses anonymously"),
-                Arguments.of(
-                        MANAGEMENT,
-                        API_CONTEXT_PATH + METRICS_PATH,
-                        HttpStatus.UNAUTHORIZED,
-                        "the security filter applies on the dedicated management listener, so"
-                                + " metrics are not anonymously readable even with Micronaut's own"
-                                + " endpoint-level check waived"),
-                Arguments.of(
-                        MANAGEMENT,
-                        API_CONTEXT_PATH + PROMETHEUS_PATH,
-                        HttpStatus.UNAUTHORIZED,
-                        "the security filter applies on the dedicated management listener, so the"
-                                + " scrape endpoint is not anonymously readable even with"
-                                + " Micronaut's own endpoint-level check waived"));
+                        "@OriginRoot takes the JWKS out of the API prefix rather than serving it"
+                                + " twice, so under the prefix it is an unrouted path"));
     }
 
-    @ParameterizedTest(name = "GET {1} on the {0} answers {2}")
+    @ParameterizedTest(name = "GET {1} on the {0} port answers {2}")
     @MethodSource("routingMatrix")
     @DisplayName("unauthenticated probes resolve exactly where the Compose stack expects them")
     void routesResolveWhereTheComposeStackExpectsThem(
-            String port, String path, HttpStatus expected, String reason) {
-        HttpClient client = MANAGEMENT.equals(port) ? managementClient : apiClient;
+            Port port, String path, HttpStatus expected, String reason) {
+        assertThat(statusOf(metricsAuthenticated.client(port), path).getCode())
+                .as(reason)
+                .isEqualTo(expected.getCode());
+    }
 
-        assertThat(statusOf(client, path).getCode()).as(reason).isEqualTo(expected.getCode());
+    private static Stream<Arguments> metricsMatrix() {
+        return Stream.of(true, false)
+                .flatMap(
+                        sensitive ->
+                                Stream.of(METRICS_PATH, PROMETHEUS_PATH)
+                                        .flatMap(path -> metricsRows(sensitive, path)));
+    }
+
+    private static Stream<Arguments> metricsRows(boolean sensitive, String path) {
+        HttpStatus onManagementPort = sensitive ? HttpStatus.UNAUTHORIZED : HttpStatus.OK;
+        return Stream.of(
+                Arguments.of(sensitive, Port.MANAGEMENT, path, onManagementPort),
+                Arguments.of(sensitive, Port.API, path, HttpStatus.UNAUTHORIZED));
+    }
+
+    /** API-port metrics are unrouted; token reads are covered by MetricsSensitiveEndpointRuleIT. */
+    @ParameterizedTest(name = "sensitive={0}: anonymous GET {2} on the {1} port answers {3}")
+    @MethodSource("metricsMatrix")
+    @DisplayName("anonymous metrics access follows endpoint sensitivity on the management port")
+    void metricsAccessFollowsSensitivity(
+            boolean sensitive, Port port, String path, HttpStatus expected) {
+        Deployment deployment = sensitive ? metricsAuthenticated : metricsAnonymous;
+
+        assertThat(statusOf(deployment.client(port), path).getCode()).isEqualTo(expected.getCode());
+    }
+
+    @Test
+    @DisplayName("production ships metrics sensitive and health details hidden from anonymous")
+    void productionDefaultsAreTheSecureOnes() {
+        assertThat(shippedProperty(HEALTH_DETAILS_VISIBLE_PROPERTY))
+                .isEqualTo(SHIPPED_DETAILS_VISIBLE);
+        assertThat(Stream.of(METRICS_SENSITIVE_PROPERTY, PROMETHEUS_SENSITIVE_PROPERTY))
+                .allSatisfy(
+                        property ->
+                                assertThat(
+                                                metricsAuthenticated
+                                                        .context()
+                                                        .getProperty(property, Boolean.class))
+                                        .as(property)
+                                        .hasValue(true));
+    }
+
+    @Test
+    @DisplayName("anonymous health shows the aggregate status but no indicator details")
+    void anonymousHealthHidesDetails() {
+        HttpResponse<String> response =
+                exchange(metricsAuthenticated.managementClient(), HEALTH_PATH);
+
+        assertThat(response.getBody(String.class))
+                .hasValueSatisfying(
+                        body ->
+                                assertThat(body)
+                                        .contains("\"status\"")
+                                        .doesNotContain(HEALTH_DETAILS_MEMBER));
     }
 
     @Test
@@ -345,7 +347,9 @@ class ManagementEndpointSecurityIT {
             "control: the Swagger UI is challenged once its intercept entry stops being anonymous")
     void swaggerUiIsReachableOnlyBecauseItsInterceptEntryAllowsIt() throws Exception {
         assertThat(
-                        context.getEnvironment()
+                        metricsAuthenticated
+                                .context()
+                                .getEnvironment()
                                 .getProperty(SWAGGER_UI_INTERCEPT_PATTERN_PROPERTY, String.class))
                 .as(
                         "the control case overrides intercept entry %d, which must still be the"
@@ -353,77 +357,30 @@ class ManagementEndpointSecurityIT {
                         SWAGGER_UI_INTERCEPT_INDEX)
                 .hasValue(SWAGGER_UI_INTERCEPT_PATTERN);
 
-        int port = SocketUtils.findAvailableTcpPort();
-        try (ApplicationContext restricted =
-                start(Map.of(SWAGGER_UI_INTERCEPT_ACCESS_PROPERTY, AUTHENTICATED_ACCESS), port)) {
-            EmbeddedServer restrictedServer = restricted.getBean(EmbeddedServer.class).start();
-            try (HttpClient client = HttpClient.create(restrictedServer.getURL())) {
-                assertThat(statusOf(client, API_CONTEXT_PATH + SWAGGER_UI_PATH).getCode())
-                        .as(
-                                "the %s pattern is matched with the context path stripped, so"
-                                        + " tightening it must challenge %s",
-                                SWAGGER_UI_INTERCEPT_PATTERN, API_CONTEXT_PATH + SWAGGER_UI_PATH)
-                        .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
-            } finally {
-                closeQuietly(restrictedServer);
-            }
+        try (Deployment restricted =
+                Deployment.start(
+                        Map.of(SWAGGER_UI_INTERCEPT_ACCESS_PROPERTY, AUTHENTICATED_ACCESS))) {
+            assertThat(statusOf(restricted.apiClient(), SWAGGER_UI_PATH).getCode())
+                    .as(
+                            "the %s pattern is matched against the full path, so tightening it"
+                                    + " must challenge %s",
+                            SWAGGER_UI_INTERCEPT_PATTERN, SWAGGER_UI_PATH)
+                    .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
         }
     }
 
-    /**
-     * Shows that the metrics 401 is produced by the {@code /metrics/**} intercept entry, and not by
-     * a rule that would protect the path whatever that entry said.
-     *
-     * <p>The matrix above proves metrics are not anonymously readable, but a 401 alone cannot say
-     * which rule refused: Micronaut also rejects a request that no rule matched at all. That
-     * distinction is load-bearing for the dev profile, which waives {@code sensitive} on these two
-     * endpoints and is therefore relying on the intercept entry specifically. Relaxing exactly that
-     * entry to {@code isAnonymous()} must make the same request succeed — if the pattern did not
-     * cover the served path, the response would stay a 401 and this test fails.
-     *
-     * @throws Exception if the management URL cannot be built
-     */
-    @Test
-    @DisplayName("control: metrics become readable once their intercept entry turns anonymous")
-    void metricsAreRefusedByTheirInterceptEntry() throws Exception {
-        assertThat(
-                        context.getEnvironment()
-                                .getProperty(METRICS_INTERCEPT_PATTERN_PROPERTY, String.class))
-                .as(
-                        "the control case relaxes intercept entry %d, which must still be the"
-                                + " metrics rule",
-                        METRICS_INTERCEPT_INDEX)
-                .hasValue(METRICS_INTERCEPT_PATTERN);
-
-        int port = SocketUtils.findAvailableTcpPort();
-        try (ApplicationContext relaxed =
-                start(Map.of(METRICS_INTERCEPT_ACCESS_PROPERTY, ANONYMOUS_ACCESS), port)) {
-            relaxed.getBean(EmbeddedServer.class).start();
-            try (HttpClient client =
-                    HttpClient.create(URI.create("http://localhost:" + port).toURL())) {
-                assertThat(statusOf(client, API_CONTEXT_PATH + METRICS_PATH).getCode())
-                        .as(
-                                "the %s entry is what refuses %s, so relaxing it must let the same"
-                                        + " anonymous request through",
-                                METRICS_INTERCEPT_PATTERN, API_CONTEXT_PATH + METRICS_PATH)
-                        .isEqualTo(HttpStatus.OK.getCode());
-            }
-        }
-    }
-
-    /**
-     * Issues an anonymous GET and reports the status, treating an error response as a result rather
-     * than a failure.
-     *
-     * @param client the client to issue the request with
-     * @param path the path to request
-     * @return the status the server answered with
-     */
     private static HttpStatus statusOf(HttpClient client, String path) {
+        return exchange(client, path).getStatus();
+    }
+
+    /** Issues an anonymous GET, returning an error response rather than throwing it. */
+    private static HttpResponse<String> exchange(HttpClient client, String path) {
         try {
-            return client.toBlocking().exchange(HttpRequest.GET(path), String.class).getStatus();
+            return client.toBlocking().exchange(HttpRequest.GET(path), String.class);
         } catch (HttpClientResponseException e) {
-            return e.getStatus();
+            @SuppressWarnings("unchecked")
+            HttpResponse<String> response = (HttpResponse<String>) e.getResponse();
+            return response;
         }
     }
 }

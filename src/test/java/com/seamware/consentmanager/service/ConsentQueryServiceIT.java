@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -32,13 +33,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Proves the subject-facing query reads only the caller's own consents and counts a filtered page
- * under the same predicate as its content.
- *
- * <p>The filtered total is the load-bearing assertion: the original service counted the whole
- * collection and reported it as the subject's total (bug 18.3). Here a narrowed listing's {@code
- * totalElements} must be the number of the subject's consents the filter matches, never their whole
- * history nor another subject's rows.
+ * Tests that the subject-facing query reads only the caller's own consents and that a filtered
+ * page's {@code totalElements} counts under the same predicate as its content.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent queries")
@@ -54,9 +50,7 @@ class ConsentQueryServiceIT extends PostgresTestResource {
 
     private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
 
-    /**
-     * A page wide enough to hold every seeded consent, so the content size is never the limiter.
-     */
+    /** Wide enough to hold every seeded consent, so the page size is never the limiter. */
     private static final int WIDE_PAGE = 100;
 
     @Inject ConsentQueryService queries;
@@ -232,11 +226,7 @@ class ConsentQueryServiceIT extends PostgresTestResource {
     }
 
     private List<UUID> fourNotices() {
-        List<UUID> ids = new ArrayList<>();
-        for (int i = 0; i < 4; i++) {
-            ids.add(notice().getId());
-        }
-        return ids;
+        return IntStream.range(0, 4).mapToObj(i -> notice().getId()).toList();
     }
 
     private PrivacyNotice notice() {

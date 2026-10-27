@@ -8,6 +8,7 @@ import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.security.ConsentManagerPrincipal;
 import com.seamware.consentmanager.security.UserPrincipal;
 import com.seamware.consentmanager.service.CallerScope;
+import com.seamware.consentmanager.service.ConsentReporter;
 import com.seamware.consentmanager.service.ErasureResult;
 import com.seamware.consentmanager.service.UserSearchCriteria;
 import com.seamware.consentmanager.service.UserService;
@@ -16,14 +17,8 @@ import io.micronaut.http.annotation.Controller;
 import java.util.List;
 
 /**
- * Serves the {@code /users} operations declared in {@code api/openapi.yaml}: the {@code USER}-role
- * self-service pair and the {@code PARTICIPANT}-or-{@code CATALOG} read surface.
- *
- * <p>The self-service handlers provision nothing. {@code PrincipalResolutionFilter} has already run
- * {@code UserService.provisionFromToken} by the time a route with a principal parameter is invoked,
- * so the row exists and {@link UserPrincipal#created()} says whether this request's filter inserted
- * it. Asking the service again would always take the existing-row path and make {@code 201}
- * unreachable.
+ * Serves {@code /users}: {@code USER} self-service and the {@code PARTICIPANT}/{@code CATALOG}
+ * reads. Provisions nothing; the principal filter already did, see {@link UserPrincipal#created()}.
  */
 @Controller
 public class UserController extends AbstractUsersController {
@@ -33,16 +28,17 @@ public class UserController extends AbstractUsersController {
 
     private final UserService users;
 
+    private final ConsentReporter reporter;
+
     private final UserMapper mapper;
 
-    public UserController(UserService users, UserMapper mapper) {
+    public UserController(UserService users, UserMapper mapper, ConsentReporter reporter) {
         this.users = users;
+        this.reporter = reporter;
         this.mapper = mapper;
     }
 
-    /**
-     * {@code 201} when this request registered the caller, {@code 200} when it was already known.
-     */
+    /** {@code 201} when this request registered the caller, {@code 200} when already known. */
     @Override
     public HttpResponse<User> registerUser(UserPrincipal principal) {
         User body = mapper.toRepresentation(principal.user());
@@ -56,17 +52,13 @@ public class UserController extends AbstractUsersController {
     }
 
     /**
-     * Erases the caller's record and answers with what that entailed.
-     *
-     * <p>No {@code 404}: a subject this service has not seen is registered by its own
-     * authentication before the route runs, so there is always a record here to erase - and, having
-     * consented to nothing, that record is deleted rather than kept, which is why the pseudonym is
-     * omitted from such a response. When it is present it is published exactly once, because it is
-     * the only handle left on the consent records that are deliberately retained.
+     * Erases the caller's record (never {@code 404}). The pseudonym, the only handle on retained
+     * consents, is published once and absent when the record was deleted outright. See ADR-0007.
      */
     @Override
     public HttpResponse<ErasureSummary> eraseCurrentUser(UserPrincipal principal) {
         ErasureResult erased = users.erase(principal.user());
+        reporter.report(erased.moves());
         return HttpResponse.ok(
                 new ErasureSummary(
                                 erased.consentsRevoked(),
@@ -76,12 +68,8 @@ public class UserController extends AbstractUsersController {
     }
 
     /**
-     * The user the identifier names, or {@code 404} when the caller may not read them.
-     *
-     * <p>An unscoped user is reported exactly as an absent one, deliberately: a {@code 403} here
-     * would confirm that the identifier names a registered user. The {@code participants} array is
-     * scoped to the caller for the same reason the 404 is: a participant does not learn which
-     * others the user is affiliated with.
+     * The user the identifier names, or {@code 404} when out of the caller's scope (a 403 would
+     * confirm the identifier); {@code participants} is scoped to the caller too.
      */
     @Override
     public HttpResponse<User> getUser(ConsentManagerPrincipal principal, String identifier) {

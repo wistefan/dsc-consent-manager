@@ -25,11 +25,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Covers the payload cases an endpoint test cannot produce, where a contract carries no source for
- * a heading and the published notice has to leave it out rather than render it empty.
- *
- * <p>{@code PrivacyNotice} here is the generated API model; the stored row is named in full, as the
- * mapper itself names it.
+ * Payload cases an endpoint test cannot produce: a heading with no source in the contract must be
+ * left out, not rendered empty. {@code PrivacyNotice} here is the generated API model.
  */
 @DisplayName("Mapping a stored privacy notice to its representation")
 class PrivacyNoticeMapperTest {

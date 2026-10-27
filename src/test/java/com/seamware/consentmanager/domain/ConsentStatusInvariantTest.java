@@ -15,13 +15,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Keeps a consent's status changeable only through the one guarded path, over the sources.
- *
- * <p>Two bans, because two invariants would otherwise be prose: the setters stay unused outside the
- * entity, so {@code consented} cannot be stored out of step with {@code status}; and {@code
- * withStatus}/{@code updateStatus} stay unused outside {@code ConsentFactory}, so no transition
- * reaches the entity without {@code ConsentStateMachine} having admitted it first. Neither
- * violation would fail a runtime assertion, which is why the scan exists.
+ * Source scan keeping a consent's status changeable only through the one guarded path: setters are
+ * unused outside the entity, and status moves are unused outside {@code ConsentFactory}.
  */
 @DisplayName("Consent status/consented invariant")
 class ConsentStatusInvariantTest {
@@ -39,12 +34,7 @@ class ConsentStatusInvariantTest {
     private static final Path FACTORY =
             SOURCE_ROOT.resolve(PACKAGE_ROOT + "service/ConsentFactory.java");
 
-    /**
-     * An invocation of either setter on a receiver.
-     *
-     * <p>The receiver is what keeps javadoc out: prose names a setter bare, a javadoc link reaches
-     * it through a {@code #}, and only a call carries the dot.
-     */
+    /** A call of either setter; requiring the receiver's dot keeps Javadoc mentions out. */
     private static final Pattern SETTER_CALL =
             Pattern.compile("\\.\\s*set(Status|Consented)\\s*\\(");
 

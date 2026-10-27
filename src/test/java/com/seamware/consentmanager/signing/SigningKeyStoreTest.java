@@ -37,9 +37,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
-/**
- * Pins which keys fail startup, that the failure names its variable, and that it leaks no secret.
- */
+/** Pins which keys fail startup, naming the variable at fault and leaking no secret. */
 @DisplayName("Receipt signing keys")
 class SigningKeyStoreTest {
 

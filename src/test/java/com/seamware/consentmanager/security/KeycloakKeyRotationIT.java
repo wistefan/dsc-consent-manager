@@ -26,20 +26,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Signing-key rotation at the identity provider, survived without restarting this service.
- *
- * <p>A provider rotates its signing keys on its own schedule and tells nobody. The keys this
- * service verifies with are cached and there is no refresh-on-miss path, so a token signed by a key
- * minted after that cache was filled is refused until the cached set expires. That expiry is the
- * whole budget for rotation, and the previous key has to keep working while tokens signed by it are
- * still in flight.
- *
- * <p>The rotation here only <em>adds</em> a higher-priority key to the realm, which is what
- * Keycloak itself does, so tokens other test classes hold stay verifiable; the added key provider
- * is removed again afterwards, leaving the shared container as the realm import left it.
- *
- * <p>Uses the catalog role on purpose: it is the one principal that resolves from the token alone,
- * so nothing in this test depends on a database row.
+ * Tests that a signing-key rotation at the identity provider is picked up within one JWK Set cache
+ * lifetime without a restart, while the previous key keeps verifying in-flight tokens.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Identity provider signing-key rotation")
@@ -51,23 +39,10 @@ class KeycloakKeyRotationIT extends KeycloakAndPostgresTestResource {
     /** The secured route the tokens are presented to. */
     private static final String PROBE_ROUTE = "/key-rotation-probe";
 
-    /**
-     * Name of the key provider this test adds to the realm.
-     *
-     * <p>Suffixed per run because Keycloak does not enforce unique component names: a leftover
-     * provider from an earlier run in the same container would sit at the same priority as this
-     * one, leaving which key signs undecided. {@link #removeRotatedKey()} deletes it either way.
-     */
+    /** Key provider this test adds; suffixed per run since Keycloak allows duplicate names. */
     private static final String ROTATED_KEY_PROVIDER = "rotated-rsa-key-" + UUID.randomUUID();
 
-    /**
-     * JWK Set cache lifetime for this test's context.
-     *
-     * <p>Pinned rather than inherited: the rotated key is picked up exactly when the cached set
-     * expires, so {@code application.yml}'s production default of {@code 60s} would put a minute of
-     * dead waiting into every {@code verify} and silently couple {@link #ACCEPTANCE_TIMEOUT} to an
-     * environment variable.
-     */
+    /** JWK Set cache lifetime, pinned short so rotation is observed without a minute's wait. */
     private static final String JWKS_CACHE_TTL = "2s";
 
     /** Key of the JWK Set cache lifetime pinned by {@link #JWKS_CACHE_TTL}. */
@@ -80,10 +55,7 @@ class KeycloakKeyRotationIT extends KeycloakAndPostgresTestResource {
     /** How long the realm may take to start signing with the key just added. */
     private static final Duration ROTATION_TIMEOUT = Duration.ofSeconds(30);
 
-    /**
-     * How long this service may take to accept the rotated key: at most one {@link #JWKS_CACHE_TTL}
-     * plus slack for a loaded CI machine.
-     */
+    /** How long the rotated key may take to be accepted: one {@link #JWKS_CACHE_TTL} plus slack. */
     private static final Duration ACCEPTANCE_TIMEOUT = Duration.ofSeconds(15);
 
     /** Id Keycloak assigned to the key provider this test added, for cleanup. */
@@ -95,12 +67,7 @@ class KeycloakKeyRotationIT extends KeycloakAndPostgresTestResource {
 
     @Inject IdentityProviderRegistry registry;
 
-    /**
-     * Enables the probe controller and shortens the JWK Set cache lifetime, on top of the
-     * Testcontainers datasource and trust list.
-     *
-     * @return the property overrides for this test's context
-     */
+    /** Enables the probe controller and shortens the JWK Set cache lifetime. */
     @Override
     public Map<String, String> getProperties() {
         Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
@@ -118,10 +85,7 @@ class KeycloakKeyRotationIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    /**
-     * A token signed by a key minted after startup is accepted, and the key it replaced keeps
-     * verifying the tokens already issued under it.
-     */
+    /** The key it replaced must also keep verifying tokens already issued under it. */
     @Test
     @DisplayName("a token signed by a newly rotated key is accepted without a restart")
     void rotatedSigningKeyIsPickedUpWithoutARestart() {
@@ -159,12 +123,7 @@ class KeycloakKeyRotationIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo(HttpStatus.OK.getCode());
     }
 
-    /**
-     * Presents {@code token} to the probe route and reports the status.
-     *
-     * @param token the bearer token to send
-     * @return the response status code, refusals included
-     */
+    /** Presents {@code token} to the probe route and returns the status, refusals included. */
     private int statusOf(String token) {
         try {
             return client.toBlocking()
@@ -180,12 +139,7 @@ class KeycloakKeyRotationIT extends KeycloakAndPostgresTestResource {
     @Controller(PROBE_ROUTE)
     static class KeyRotationProbeController {
 
-        /**
-         * Confirms the token verified by naming who it resolved to.
-         *
-         * @param catalog the resolved caller
-         * @return the catalog service's subject
-         */
+        /** Confirms the token verified by returning the resolved catalog subject. */
         @Get
         @Secured("CATALOG")
         String probe(CatalogPrincipal catalog) {

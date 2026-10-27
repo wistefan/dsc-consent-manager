@@ -3,12 +3,7 @@ package com.seamware.consentmanager.api;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.classic.spi.LoggerContextListener;
-import ch.qos.logback.classic.spi.ThrowableProxyUtil;
-import ch.qos.logback.core.read.ListAppender;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
@@ -19,7 +14,6 @@ import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
-import com.nimbusds.jose.util.Base64;
 import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.jose.util.JSONObjectUtils;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
@@ -35,9 +29,11 @@ import com.seamware.consentmanager.security.IdentityProviderRegistry;
 import com.seamware.consentmanager.signing.SigningKeyStore;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.ConsentFixtures;
+import com.seamware.consentmanager.support.KeyMaterialForms;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
+import com.seamware.consentmanager.support.LogCapture;
 import io.micronaut.context.annotation.Replaces;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.core.annotation.NonNull;
@@ -52,7 +48,6 @@ import io.micronaut.http.uri.UriBuilder;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
-import java.math.BigInteger;
 import java.security.interfaces.ECPrivateKey;
 import java.text.ParseException;
 import java.time.Duration;
@@ -61,17 +56,14 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.slf4j.LoggerFactory;
 
 /**
  * Proves no private key member reaches a log event or a response body: from startup with a known
@@ -112,8 +104,6 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
 
     private static final int RSA_KEY_SIZE = 2048;
 
-    private static final int HEX = 16;
-
     /** RSA, the type with the most private members: d, p, q, dp, dq and qi. */
     private static final RSAKey SIGNING_KEY = rsaKey();
 
@@ -132,12 +122,10 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    private ReattachOnReset reattach;
-
     /** Attached before the context starts, so startup logging is captured too. */
-    private final ListAppender<ILoggingEvent> captured = attach();
+    private final LogCapture captured = LogCapture.attach();
 
-    private final Set<String> secrets = new HashSet<>(secretsOf(SIGNING_KEY));
+    private final Set<String> secrets = new HashSet<>(KeyMaterialForms.of(SIGNING_KEY));
 
     @Inject
     @Client("/")
@@ -214,26 +202,25 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
 
     @AfterAll
     void detach() {
-        rootLogger().getLoggerContext().removeListener(reattach);
-        rootLogger().detachAppender(captured);
+        captured.close();
     }
 
     @ParameterizedTest
     @EnumSource(Scenario.class)
     @DisplayName("quotes no private key member in any log event or response body")
     void noPrivateMemberLeaks(Scenario scenario) throws ParseException {
-        int before = events().size();
+        int before = captured.events().size();
 
         List<String> bodies = run(scenario);
 
-        List<ILoggingEvent> events = events();
+        List<ILoggingEvent> events = captured.events();
         if (scenario.logged != null) {
             assertThat(events.subList(before, events.size()))
                     .extracting(ILoggingEvent::getLevel)
                     .contains(scenario.logged);
         }
         assertThat(bodies).isNotEmpty();
-        List<String> rendered = events.stream().map(KeyMaterialLeakIT::render).toList();
+        List<String> rendered = events.stream().map(LogCapture::render).toList();
         for (String secret : secrets) {
             assertThat(rendered).noneMatch(event -> event.contains(secret));
             assertThat(bodies).noneMatch(body -> body.contains(secret));
@@ -312,13 +299,6 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    /** A snapshot taken under the appender's lock, since request threads append concurrently. */
-    private List<ILoggingEvent> events() {
-        synchronized (captured) {
-            return List.copyOf(captured.list);
-        }
-    }
-
     private static Map<String, Object> parse(HttpResponse<String> response) throws ParseException {
         return JSONObjectUtils.parse(response.body());
     }
@@ -327,64 +307,11 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
         return KeycloakTestResource.accessToken(RealmPrincipal.USER);
     }
 
-    /** Everything a log encoder could write: message, arguments, MDC and the throwable chain. */
-    private static String render(ILoggingEvent event) {
-        List<String> parts = new ArrayList<>();
-        parts.add(event.getFormattedMessage());
-        parts.add(event.getMessage());
-        if (event.getArgumentArray() != null) {
-            Stream.of(event.getArgumentArray()).map(String::valueOf).forEach(parts::add);
-        }
-        parts.addAll(event.getMDCPropertyMap().values());
-        if (event.getThrowableProxy() != null) {
-            parts.add(ThrowableProxyUtil.asString(event.getThrowableProxy()));
-        }
-        return String.join("\n", parts.stream().filter(Objects::nonNull).toList());
-    }
-
-    /** Each private member as base64url, and as the decimal and hex a key's toString may use. */
-    private static Set<String> secretsOf(RSAKey key) {
-        Set<String> secrets = new HashSet<>();
-        Stream.of(
-                        key.getPrivateExponent(),
-                        key.getFirstPrimeFactor(),
-                        key.getSecondPrimeFactor(),
-                        key.getFirstFactorCRTExponent(),
-                        key.getSecondFactorCRTExponent(),
-                        key.getFirstCRTCoefficient())
-                .forEach(member -> secrets.addAll(forms(member)));
-        return secrets;
-    }
-
-    /**
-     * The ephemeral key's {@code d}, recovered from its signer since the store never exposes it.
-     */
+    /** The ephemeral key's {@code d}, recovered from its signer since the store hides it. */
     private static Set<String> ephemeralSecrets(SigningKeyStore ephemeral) {
         ECPrivateKey key = (ECPrivateKey) ((ECDSASigner) ephemeral.signer()).getPrivateKey();
         ECKey published = ephemeral.verificationKeys().getFirst().toECKey();
-        return forms(new ECKey.Builder(published).privateKey(key).build().getD());
-    }
-
-    private static Set<String> forms(Base64URL member) {
-        BigInteger value = member.decodeToBigInteger();
-        return Set.of(
-                member.toString(),
-                Base64.encode(member.decode()).toString(),
-                value.toString(),
-                value.toString(HEX));
-    }
-
-    private ListAppender<ILoggingEvent> attach() {
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        rootLogger().addAppender(appender);
-        reattach = new ReattachOnReset(appender);
-        rootLogger().getLoggerContext().addListener(reattach);
-        return appender;
-    }
-
-    private static Logger rootLogger() {
-        return (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        return KeyMaterialForms.of(new ECKey.Builder(published).privateKey(key).build().getD());
     }
 
     private static RSAKey rsaKey() {
@@ -395,38 +322,7 @@ class KeyMaterialLeakIT extends KeycloakAndPostgresTestResource {
         }
     }
 
-    /**
-     * Logback drops every appender when the context reconfigures it at startup; this restores ours.
-     */
-    private record ReattachOnReset(ListAppender<ILoggingEvent> appender)
-            implements LoggerContextListener {
-
-        @Override
-        public boolean isResetResistant() {
-            return true;
-        }
-
-        @Override
-        public void onReset(LoggerContext context) {
-            // The reset stopped it as well as detaching it, and a stopped appender drops events.
-            appender.start();
-            context.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME).addAppender(appender);
-        }
-
-        @Override
-        public void onStart(LoggerContext context) {}
-
-        @Override
-        public void onStop(LoggerContext context) {}
-
-        @Override
-        public void onLevelChange(Logger logger, Level level) {}
-    }
-
-    /**
-     * The configured store, whose signer can be broken so Nimbus itself refuses to sign: it is
-     * handed a header naming an algorithm the configured key cannot sign with.
-     */
+    /** The configured store, breakable so Nimbus refuses to sign with a foreign algorithm. */
     @Singleton
     @Replaces(SigningKeyStore.class)
     @Requires(property = BREAKABLE_STORE, value = "true")

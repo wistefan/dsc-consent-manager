@@ -35,39 +35,25 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The participant directory: what an organization may record about itself and what others may read
- * of it.
- *
- * <p>Every operation here is scoped by an identifier the caller's token asserted, never by one a
- * request body or path carried, so a participant can only ever act on itself.
+ * The participant directory: registration, self-service updates, lookup and deregistration. Writes
+ * are scoped by the identifier the caller's token asserted, never by one from the request.
  */
 @Singleton
 public class ParticipantService {
 
     private static final Logger LOG = LoggerFactory.getLogger(ParticipantService.class);
 
-    /**
-     * Why a second registration of the same identifier is refused; published as the problem detail.
-     * Unlike a user, a participant is not registered on first sight of a token, so the caller is
-     * told plainly which operation does what it was evidently trying to do.
-     */
+    /** Problem detail for a second registration; points the caller at the update route. */
     private static final String ALREADY_REGISTERED_DETAIL =
             "Participant '%s' is already registered. Update its registration with"
                     + " PUT /participants/me.";
 
-    /**
-     * Why a deregistration is refused while a user's permission still stands; published as the
-     * problem detail. It names the blocking consents because the remedy is not the participant's:
-     * only the users who granted them can revoke them.
-     */
+    /** Problem detail for a deregistration blocked by granted consents, which it names. */
     private static final String GRANTED_CONSENTS_DETAIL =
             "Participant '%s' cannot be deregistered while consents naming it are still GRANTED:"
                     + " %s. Only the users who granted them can revoke them.";
 
-    /**
-     * How many blocking consent ids the refusal names before summarising the rest, so a long-lived
-     * participant's refusal stays a readable problem detail rather than a dump.
-     */
+    /** Blocking consent ids the refusal names before summarising the rest. */
     private static final int MAX_REPORTED_BLOCKING_CONSENTS = 20;
 
     /** Appended to the blocking-consent list when it was truncated. */
@@ -83,12 +69,7 @@ public class ParticipantService {
     /** Actor recorded on the events deregistration appends; no person triggered them. */
     private static final String DEREGISTRATION_ACTOR = "consent-manager";
 
-    /**
-     * Trigger recorded on the events deregistration appends.
-     *
-     * <p>Not {@link ConsentEventTrigger#EXPLICIT}: the counterparty left, so the consent was not
-     * closed by anyone acting on it.
-     */
+    /** Trigger on deregistration events; not {@code EXPLICIT}, as nobody acted on the consent. */
     private static final ConsentEventTrigger DEREGISTRATION_TRIGGER = ConsentEventTrigger.SYSTEM;
 
     /** Key of the reason carried in a deregistration event's details. */
@@ -97,41 +78,24 @@ public class ParticipantService {
     /** Why a deregistration event closed the consent, recorded in its details. */
     private static final String DEREGISTRATION_DETAIL_REASON = "participant-deregistered";
 
-    /**
-     * Why an update whose row is gone is a conflict rather than a {@code 500}; published as the
-     * problem detail. The row is read back before the write, and deregistration is the only thing
-     * that removes one.
-     */
+    /** Problem detail for an update whose row a concurrent deregistration removed. */
     private static final String DEREGISTERED_CONCURRENTLY_DETAIL =
             "Participant '%s' was deregistered while its registration was being updated. The update"
                     + " was not applied.";
 
-    /**
-     * Why an update to a retained but deregistered row is refused; published as the problem detail.
-     * Such a row is kept only so the consents and privacy notices naming it stay legible, so it may
-     * not be edited back into a live registration.
-     */
+    /** Problem detail for an update to a retained, deregistered row. */
     private static final String DEREGISTERED_DETAIL =
             "Participant '%s' is deregistered. Its registration can no longer be updated.";
 
-    /**
-     * Why a second deregistration is refused; published as the problem detail. Re-running the
-     * cascade would move the recorded departure time of a record that already left, and the row
-     * being gone altogether means the same thing to the caller.
-     */
+    /** Problem detail for deregistering a record that is already deregistered or gone. */
     private static final String DEREGISTERED_ALREADY_DETAIL =
             "Participant '%s' is already deregistered. Register it again with POST /participants"
                     + " before deregistering it anew.";
 
-    /** Why an identifier naming nobody is a {@code 404}; published as the problem detail. */
+    /** Problem detail for an identifier naming nobody. */
     private static final String UNKNOWN_DETAIL = "No participant is registered as '%s'.";
 
-    /**
-     * Column the directory is ordered by. Unique, so a record keeps its place across page requests
-     * while the directory itself does not change - an order on a non-unique column could not
-     * promise even that. Concurrent registrations still move records across boundaries; the listing
-     * is not served from a snapshot.
-     */
+    /** Directory order; unique, so pages are stable while the directory does not change. */
     private static final String DIRECTORY_ORDER_PROPERTY = "identifier";
 
     /** First page, applied when the caller names none. */
@@ -169,13 +133,8 @@ public class ParticipantService {
     }
 
     /**
-     * One page of the directory, ordered by identifier and excluding deregistered participants.
-     *
-     * <p>{@code size} is clamped to the configured ceiling rather than refused, so a caller asking
-     * for more than a deployment serves gets a smaller page instead of an error; the returned
-     * page's size reports what was applied. An {@code identifier} narrows the page to that exact,
-     * case-sensitive value and then resolves a deregistered participant too - it is the dependable
-     * way to reach one whose identifier contains a {@code /}.
+     * One page of active participants by identifier; {@code size} is clamped to the configured max.
+     * An exact {@code identifier} filter also resolves a deregistered participant.
      */
     public Page<Participant> list(
             @Nullable Integer page, @Nullable Integer size, @Nullable String identifier) {
@@ -190,10 +149,9 @@ public class ParticipantService {
     }
 
     /**
-     * The participant an identifier names, deregistered or not - a retained record still has to
-     * resolve, or a consent naming it would name nobody a reader could identify.
+     * The participant an identifier names, deregistered or not.
      *
-     * @throws NotFoundException {@code 404} when no participant carries the identifier
+     * @throws NotFoundException when no participant carries the identifier
      */
     public Participant find(String identifier) {
         return participants
@@ -201,26 +159,19 @@ public class ParticipantService {
                 .orElseThrow(() -> new NotFoundException(UNKNOWN_DETAIL.formatted(identifier)));
     }
 
-    /**
-     * The requested size bounded by the configured ceiling, or the configured default when none.
-     */
+    /** The requested size (or the default) bounded by the configured ceiling. */
     private int applicableSize(@Nullable Integer size) {
         return Math.min(size == null ? paging.getPageDefaultSize() : size, paging.getPageMaxSize());
     }
 
     /**
-     * Records an organization's self-description under the identifier its token asserts.
+     * Records an organization under the identifier its token asserts, reactivating a deregistered
+     * record. See ADR-0008.
      *
-     * <p>An identifier whose record was deregistered is <em>reactivated</em> rather than refused:
-     * {@code uq_participants_identifier} makes a second row impossible, so refusing would bar the
-     * organization from the dataspace permanently on the strength of one {@code DELETE}. Only an
-     * active record is a conflict. See ADR 0008.
+     * <p>Not transactional: {@code uq_participants_identifier} settles concurrent first requests,
+     * and the re-read after the failed insert is impossible inside an aborted transaction.
      *
-     * <p>Deliberately not transactional, for the reason {@link UserService}'s create paths are not:
-     * {@code uq_participants_identifier} is what settles concurrent first requests, and reading the
-     * table again after the failed insert is impossible inside the aborted transaction.
-     *
-     * @throws ConflictException {@code 409} when the identifier is already registered and active
+     * @throws ConflictException when the identifier is already registered and active
      */
     public Participant register(String identifier, ParticipantRegistration registration) {
         Optional<Participant> existing = participants.findByIdentifier(identifier);
@@ -237,7 +188,7 @@ public class ParticipantService {
                             registration.endpoints(),
                             registration.legalPerson()));
         } catch (DataAccessException e) {
-            // Another request registered first; no row means the insert failed for another reason.
+            // Lost the race; no row means the insert failed for another reason.
             return participants
                     .findByIdentifier(identifier)
                     .map(stored -> reactivate(stored, registration))
@@ -246,16 +197,12 @@ public class ParticipantService {
     }
 
     /**
-     * Brings a deregistered record back under the body it was re-registered with, mutable fields
-     * and all.
+     * Restores a deregistered record from the re-registration body.
      *
-     * <p>Written back whole without the row lock {@link #update} and {@link #deregister} take, and
-     * deliberately so: {@code stored} was read by {@link #register} one statement earlier rather
-     * than carried in from authentication, and every mutable column here comes from the request
-     * body, so there is no stale value to lose. A re-registration racing another write is simply
-     * the later writer of a full replacement, which is what {@code POST /participants} promises.
+     * <p>Unlocked by design: {@code stored} was just read and every mutable column comes from the
+     * body, so a racing write is simply superseded by this full replacement.
      *
-     * @throws ConflictException {@code 409} when the record is active, which is a plain re-register
+     * @throws ConflictException when the record is active
      */
     private Participant reactivate(Participant stored, ParticipantRegistration registration) {
         if (stored.getDeregisteredAt() == null) {
@@ -273,19 +220,13 @@ public class ParticipantService {
     }
 
     /**
-     * Replaces a registered participant's self-description, leaving its identifier alone.
+     * Replaces a participant's self-description ({@code PUT}: omitted optional fields are cleared).
      *
-     * <p>A {@code PUT}, so an optional field the body omits is cleared rather than kept. The row is
-     * re-read and locked inside the transaction rather than written back from {@code current}: that
-     * snapshot is the row as it stood when the request was authenticated, and persisting it whole
-     * would write every column it carries - {@code deregistered_at} among them - from a stale read.
-     * Concurrent writers therefore serialize on the row, the later update wins outright, and one
-     * racing a deregistration is refused instead of resurrecting the row. The row is read once more
-     * after the write, so the response is the stored row by construction and a column the database
-     * rather than the application owns is never reported stale.
+     * <p>Re-reads and locks the row rather than persisting the stale authenticated {@code current},
+     * so concurrent writers serialize and one racing a deregistration is refused, not resurrected.
+     * Returns the row as re-read after the write.
      *
-     * @throws ConflictException {@code 409} when the row was deregistered or removed under the
-     *     update, which leaves it unapplied
+     * @throws ConflictException when the row was deregistered or removed under the update
      */
     @Transactional
     public Participant update(Participant current, ParticipantUpdate update) {
@@ -313,38 +254,26 @@ public class ParticipantService {
     }
 
     /**
-     * Removes the organization from the dataspace and reports what that entailed, in one
-     * all-or-nothing transaction.
+     * Deregisters the participant in one all-or-nothing transaction and reports what it entailed.
+     * See ADR-0008.
      *
-     * <p>The cascade is ADR 0008 in code: a consent still {@code GRANTED} refuses the whole
-     * operation, because that permission is the user's to withdraw and not the participant's; the
-     * unanswered {@code PENDING} and {@code DRAFT} ones are terminated so no later lifecycle
-     * operation can advance an offer whose counterparty has left; every affiliation goes and every
-     * live privacy notice is archived. The {@code participants} row is then deleted when nothing
-     * refers to it and otherwise retained, marked and mostly intact - its identity fields are kept
-     * deliberately, so the consents still naming it stay legible, and only the contact {@code
-     * email} and the {@code endpoints} are cleared.
+     * <p>Transactional, unlike the create paths: nothing here inserts-and-catches, and a partial
+     * deregistration is worse than none. The row is re-read and locked as in {@link #update}, which
+     * also serializes concurrent deregistrations, so the repeat refusal is reliable.
      *
-     * <p>{@code @Transactional} where the create paths are not: a half-deregistered participant -
-     * unlinked but still advertising endpoints, or archived but still answerable - is worse than an
-     * undeparted one, and nothing here inserts-and-catches.
-     *
-     * <p>The row is re-read and locked rather than written back from {@code current}, for the
-     * reason {@link #update} does it: that snapshot is the row as it stood when the request was
-     * authenticated, so persisting it whole would revert a {@code PUT} that committed since. The
-     * lock also serializes two concurrent deregistrations, which is what makes the
-     * already-deregistered refusal below reliable rather than a race.
-     *
-     * @throws ConflictException {@code 409} while any consent naming the participant is granted,
-     *     and when the record is already deregistered or was removed under the call
+     * @throws ConflictException while any consent naming the participant is granted, or when the
+     *     record is already deregistered or was removed under the call
      */
     @Transactional
     public DeregistrationResult deregister(Participant current) {
         Participant participant = lockActive(current);
         UUID participantId = participant.getId();
+        // Lock before counting grants, so a concurrent grant is seen and refused, not skipped.
+        List<Consent> unanswered =
+                consents.findNamingParticipantForUpdate(participantId, UNANSWERED_STATUSES);
         refuseWhileGranted(participant, participantId);
 
-        int consentsTerminated = terminateUnanswered(participantId);
+        List<ConsentMove> terminated = terminate(unanswered);
         int linksRemoved = links.deleteByIdParticipantId(participantId);
         int noticesArchived = archiveNotices(participantId);
         int consentsRetained = consents.countByParticipant(participantId);
@@ -354,24 +283,19 @@ public class ParticipantService {
                 "Deregistered participant {}: terminated {}, retained {}, archived {}, unlinked {},"
                         + " record {}",
                 participant.getIdentifier(),
-                consentsTerminated,
+                terminated.size(),
                 consentsRetained,
                 noticesArchived,
                 linksRemoved,
                 deregisteredAt == null ? "deleted" : "retained");
         return new DeregistrationResult(
-                deregisteredAt,
-                consentsTerminated,
-                consentsRetained,
-                noticesArchived,
-                linksRemoved);
+                deregisteredAt, terminated, consentsRetained, noticesArchived, linksRemoved);
     }
 
     /**
-     * The caller's row as it stands now, locked for the rest of the transaction.
+     * The caller's current row, locked for the rest of the transaction.
      *
-     * @throws ConflictException {@code 409} when the record is already deregistered, so a repeated
-     *     call cannot move the recorded departure time, or when the row is gone altogether
+     * @throws ConflictException when the record is already deregistered or gone
      */
     private Participant lockActive(Participant current) {
         Participant stored =
@@ -388,12 +312,7 @@ public class ParticipantService {
         return stored;
     }
 
-    /**
-     * Refuses the deregistration, naming the consents, while any of them is still granted.
-     *
-     * <p>Counted first and then listed up to the cap the detail prints, rather than materialised in
-     * full: the refusal reads a fixed number of rows however long the participant has been trading.
-     */
+    /** Refuses the deregistration while any consent is granted, naming at most the capped few. */
     private void refuseWhileGranted(Participant participant, UUID participantId) {
         int blocking = consents.countByParticipantAndStatus(participantId, ConsentStatus.GRANTED);
         if (blocking > 0) {
@@ -406,20 +325,6 @@ public class ParticipantService {
         }
     }
 
-    /**
-     * Every consent in one of the given statuses that names the participant on either side.
-     *
-     * <p>The two sides are read separately so the derived queries can bind the status enums; a
-     * self-dealing consent comes back from both and is de-duplicated by id here.
-     */
-    private List<Consent> naming(UUID participantId, Set<ConsentStatus> statuses) {
-        return distinctById(
-                Stream.concat(
-                        consents.findByProviderIdAndStatusIn(participantId, statuses).stream(),
-                        consents.findByConsumerIdAndStatusIn(participantId, statuses).stream()),
-                Consent::getId);
-    }
-
     /** The items in encounter order, keeping the first of each id. */
     private static <T> List<T> distinctById(Stream<T> items, Function<T, UUID> id) {
         Map<UUID, T> byId = new LinkedHashMap<>();
@@ -427,7 +332,7 @@ public class ParticipantService {
         return List.copyOf(byId.values());
     }
 
-    /** The blocking consent ids, in a bounded, readable list, summarising the ones not listed. */
+    /** The listed blocking ids, plus a count of the ones not listed. */
     private static String blockingConsents(List<UUID> listed, int blocking) {
         String names =
                 listed.stream()
@@ -440,27 +345,26 @@ public class ParticipantService {
     }
 
     /**
-     * Moves every unanswered consent naming the participant to {@code TERMINATED}, appending a
-     * {@code CONSENT_TERMINATED} event to each trail, and reports how many moved.
+     * Terminates the locked unanswered consents with an event each; returns each move and its prior
+     * status. Not reported here, as only a committed move may be counted.
      */
-    private int terminateUnanswered(UUID participantId) {
-        List<RecordedConsent> closed =
-                naming(participantId, UNANSWERED_STATUSES).stream().map(this::terminated).toList();
-        if (closed.isEmpty()) {
-            return 0;
+    private List<ConsentMove> terminate(List<Consent> unanswered) {
+        List<ConsentMove> closed =
+                unanswered.stream()
+                        .map(
+                                consent -> {
+                                    ConsentStatus held = consent.getStatus();
+                                    return new ConsentMove(held, terminated(consent));
+                                })
+                        .toList();
+        if (!closed.isEmpty()) {
+            consents.updateAll(closed.stream().map(move -> move.recorded().consent()).toList());
+            consentEvents.saveAll(closed.stream().map(move -> move.recorded().event()).toList());
         }
-        consents.updateAll(closed.stream().map(RecordedConsent::consent).toList());
-        consentEvents.saveAll(closed.stream().map(RecordedConsent::event).toList());
-        return closed.size();
+        return closed;
     }
 
-    /**
-     * The consent moved to {@code TERMINATED}, with the trail entry saying a deregistration closed
-     * it and naming the service rather than a person.
-     *
-     * <p>Through {@link ConsentFactory} like every other transition, so the move is checked against
-     * the lifecycle table rather than applied to the entity directly.
-     */
+    /** The consent terminated by deregistration, via {@link ConsentFactory} and its table. */
     private RecordedConsent terminated(Consent consent) {
         return consentFactory.transition(
                 consent,
@@ -470,10 +374,7 @@ public class ParticipantService {
                 Map.of(DEREGISTRATION_DETAIL_KEY, DEREGISTRATION_DETAIL_REASON));
     }
 
-    /**
-     * Archives every live privacy notice naming the participant on either side and reports how
-     * many. Already-archived notices keep their original timestamp.
-     */
+    /** Archives live notices naming the participant on either side; returns how many. */
     private int archiveNotices(UUID participantId) {
         List<PrivacyNotice> live =
                 distinctById(
@@ -493,16 +394,8 @@ public class ParticipantService {
     }
 
     /**
-     * Deletes the record when nothing refers to it, otherwise marks it deregistered and returns the
-     * instant it was marked at.
-     *
-     * <p>Deleting is only possible for a participant that never transacted: both participant
-     * foreign keys on {@code consents} and both on {@code privacy_notices} are {@code ON DELETE
-     * RESTRICT}, and archiving a notice does not release its reference. The retained record keeps
-     * its identifier, legal name, self-description and legal person - an organization has no
-     * erasure right and a scrubbed one could be recovered by nobody - and loses the contact {@code
-     * email}, which is a natural person's, and the {@code endpoints}, because a departed
-     * participant must not keep advertising a callback.
+     * Deletes an unreferenced record (returning null), else marks it deregistered, clears {@code
+     * email} and {@code endpoints}, and returns the mark. See ADR-0008.
      */
     @Nullable
     private Instant deleteOrRetain(Participant participant, int consentsRetained) {
@@ -519,10 +412,7 @@ public class ParticipantService {
         return deregisteredAt;
     }
 
-    /**
-     * The clock at the resolution PostgreSQL keeps, so a stamp reported back matches the stored row
-     * digit for digit - the same reason {@code MicrosecondDateTimeProvider} exists.
-     */
+    /** Now at PostgreSQL's microsecond resolution, so reported stamps match the stored row. */
     private static Instant now() {
         return Instant.now().truncatedTo(ChronoUnit.MICROS);
     }

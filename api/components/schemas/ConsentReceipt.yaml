@@ -79,12 +79,16 @@ properties:
     properties:
       name:
         type: string
+        description: Legal name of the controller.
       contact:
         type: string
+        description: Contact address for the controller.
       identifier:
         type: string
+        description: Global participant identifier of the controller.
       selfDescriptionUri:
         type: string
+        description: Absolute URL of the controller's self-description document.
   purposes:
     type: array
     description: The purposes elected in the decision.
@@ -103,12 +107,16 @@ properties:
       properties:
         uri:
           type: string
+          description: Absolute URI of the catalog document.
         title:
           type: string
+          description: Title of the catalog document.
         description:
           type: string
+          description: Description of the catalog document.
         partOf:
           type: string
+          description: URI of the service offering this document was discovered behind.
   recipients:
     type: array
     description: The participants the notice named as recipients.
@@ -117,12 +125,16 @@ properties:
       properties:
         identifier:
           type: string
+          description: Global participant identifier of the recipient.
         name:
           type: string
+          description: Legal name of the recipient.
         contact:
           type: string
+          description: Contact address for the recipient.
         selfDescriptionUri:
           type: string
+          description: Absolute URL of the recipient's self-description document.
   retentionPeriod:
     type: string
     description: How long the data is kept, as the notice stated it.

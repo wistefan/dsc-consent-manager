@@ -52,15 +52,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code GET /consents/check} end to end against a real Keycloak and a real PostgreSQL.
- *
- * <p>What is under test is the runtime control point the service exists for: a participant asks
- * whether a subject's consent is in force before it processes, and the answer must be right, scoped
- * to the caller, and silent about everything it does not turn on. So the cases prove the true
- * answer for a grant the caller is party to, the false answer for every other status and for a
- * purpose the grant does not cover, that a grant naming another participant is invisible, that an
- * unknown subject and a known subject with no grant are indistinguishable, that a deregistered
- * caller is refused, and that the answer is never cached.
+ * {@code GET /consents/check} end to end: guards a wrong answer, a leak of grants the caller is not
+ * party to or of whether a subject exists, a deregistered caller being served, and caching.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent validity check endpoint")
@@ -74,12 +67,10 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
 
     private static final String PARAM_PURPOSE = "purpose";
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
-    /**
-     * The participant the {@code PARTICIPANT} token carries; registered as the notice's provider.
-     */
+    /** The {@code PARTICIPANT} token's participant, registered as the notice's provider. */
     private static final String CALLER = KeycloakTestResource.PARTICIPANT_IDENTIFIER;
 
     private static final String COUNTERPARTY = "urn:test:participant:check-consumer";
@@ -104,10 +95,7 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
     /** A subject that exists, holding whatever grant each case seeds. */
     private static final String SUBJECT = "urn:test:user:check-subject";
 
-    /**
-     * An identifier no user holds, to prove an unknown subject is indistinguishable from a bare
-     * one.
-     */
+    /** An identifier no user holds, to prove it is indistinguishable from a bare subject. */
     private static final String UNKNOWN_SUBJECT = "urn:test:user:check-nobody";
 
     /** A purpose the seeded grant's frozen scope names. */
@@ -170,12 +158,7 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
         subject = users.save(new User(SUBJECT, null, null, null));
     }
 
-    /**
-     * Rows committed by these cases outlive the transaction, so they are removed by hand.
-     *
-     * <p>Consents hold their user and both participants against {@code ON DELETE RESTRICT}, so they
-     * go first; their events cascade with them.
-     */
+    /** Removes committed rows; consents go first because they restrict their user and parties. */
     @AfterEach
     void removeCommittedRows() {
         consents.deleteAll();
@@ -195,10 +178,7 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
         CONSUMER
     }
 
-    /**
-     * Each side the caller may hold, crossed with the purpose a valid answer is asked about: an
-     * omitted one, or one the grant covers.
-     */
+    /** Each caller side crossed with an omitted or a covered purpose. */
     static Stream<Arguments> coveredPurposes() {
         return Arrays.stream(CallerSide.values())
                 .flatMap(
@@ -303,10 +283,7 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
         assertThat(knownButBare).containsEntry(PROPERTY_VALID, false).containsKey(PROPERTY_REASON);
     }
 
-    /**
-     * The window the role matrix cannot sweep: it only deletes the caller's row, while a retained
-     * record is registered and departed, and still names every grant it was a party to.
-     */
+    /** A retained, deregistered caller, which the role matrix (unregistered only) misses. */
     @Test
     @DisplayName("refuses a deregistered participant with 403 rather than answering valid:true")
     void refusesADeregisteredParticipant() {
@@ -354,12 +331,7 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
                 null, List.of(COVERED_PURPOSE), null, null, null, null, null, null, null, null);
     }
 
-    /**
-     * Writes a consent for the seeded subject against the given notice.
-     *
-     * <p>Written straight to the table because what is under test is how the check reads a stored
-     * consent, not how one comes to be.
-     */
+    /** Writes a consent for the seeded subject straight to the table. */
     private UUID seedConsent(
             PrivacyNotice against, ConsentStatus status, ConsentSnapshot snapshot) {
         return consents.save(

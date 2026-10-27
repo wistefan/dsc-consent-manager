@@ -1,0 +1,14 @@
+openapi: 3.0.3
+info: {title: Unnamed file, version: '1'}
+paths:
+  /pets:
+    get:
+      responses:
+        '200':
+          description: A ref to a file no component names.
+          content:
+            application/json:
+              schema:
+                $ref: ./schemas/Pet.yaml
+components:
+  schemas: {}

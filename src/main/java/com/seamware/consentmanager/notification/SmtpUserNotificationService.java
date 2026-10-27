@@ -4,6 +4,7 @@ import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.User;
+import com.seamware.consentmanager.observability.FailureSummary;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.email.BodyType;
 import io.micronaut.email.Contact;
@@ -22,15 +23,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Sends the notifications as multipart HTML + text mail. The caller's thread only builds the model
- * and queues it; rendering and the SMTP exchange run on the notification executor, and every
- * failure, including a full queue, is logged rather than thrown.
+ * Sends notifications as multipart HTML + text mail on the notification executor. Every failure, a
+ * full queue included, is logged rather than thrown.
  */
 @Singleton
 @Requires(condition = SmtpConfiguredCondition.class)
 public class SmtpUserNotificationService implements UserNotificationService {
 
     private static final Logger LOG = LoggerFactory.getLogger(SmtpUserNotificationService.class);
+
+    private static final String QUEUE_FAILED = "Could not queue {} notification for consent {}: {}";
+
+    private static final String SEND_FAILED =
+            "Failed to send {} notification to user {} for consent {}: {}";
 
     private final EmailSender<?, ?> emailSender;
     private final Executor executor;
@@ -102,12 +107,14 @@ public class SmtpUserNotificationService implements UserNotificationService {
             executor.execute(() -> send(recipient, message));
         } catch (RejectedExecutionException e) {
             LOG.error(
-                    "Notification queue full or stopped; {} notification for consent {} dropped",
+                    "Notification queue full or stopped; {} notification for consent {} dropped: {}",
                     kind,
                     consent.getId(),
-                    e);
+                    FailureSummary.of(e));
         } catch (RuntimeException e) {
-            LOG.error("Could not queue {} notification for consent {}", kind, consent.getId(), e);
+            // Building the model reads the user's name, which the failure may quote.
+            LOG.error(QUEUE_FAILED, kind, consent.getId(), FailureSummary.of(e));
+            LOG.debug(QUEUE_FAILED, kind, consent.getId(), e.getMessage(), e);
         }
     }
 
@@ -115,11 +122,19 @@ public class SmtpUserNotificationService implements UserNotificationService {
         try {
             emailSender.send(email(sender, recipient, model));
         } catch (RuntimeException e) {
+            // A transport failure may quote the recipient, so its message stays at DEBUG.
             LOG.error(
-                    "Failed to send {} notification to user {} for consent {}",
+                    SEND_FAILED,
                     model.kind(),
                     model.userId(),
                     model.consentId(),
+                    FailureSummary.of(e));
+            LOG.debug(
+                    SEND_FAILED,
+                    model.kind(),
+                    model.userId(),
+                    model.consentId(),
+                    e.getMessage(),
                     e);
         }
     }

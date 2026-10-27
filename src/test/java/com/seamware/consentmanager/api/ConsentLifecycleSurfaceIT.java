@@ -47,17 +47,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code POST /consents/{id}/revoke}, {@code /refuse} and {@code /terminate} end to end
- * against a real Keycloak and a real PostgreSQL.
- *
- * <p>What is under test is who reaches a move rather than what the state table permits, which
- * {@code ConsentLifecycleIT} owns: the subject is read off the token, a record belonging to anyone
- * else is indistinguishable from one that does not exist, and the subject's routes admit no role
- * but {@code USER}. Termination is the participant's counterpart, so it is checked against the
- * consent's two parties - including the case the role matrix cannot sweep, a caller whose record is
- * deregistered rather than absent. Resuming is the one route two roles reach, so both are driven
- * over the wire - including the shape the role matrix cannot send, a resume carrying no request
- * body at all, which the subject's call is answered by and the relay's refused for.
+ * Who may reach the consent lifecycle routes end to end: guards against a caller moving another's
+ * consent, a deregistered participant terminating one, and a body-less resume being mishandled.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent lifecycle endpoints")
@@ -76,7 +67,7 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
     /** Where a participant reads its own record back, which deregistration leaves open. */
     private static final String PATH_PARTICIPANTS_ME = "/participants/me";
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     private static final String PROVIDER = "urn:test:participant:lifecycle-provider";
@@ -86,15 +77,10 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
     private static final String CONTRACT_URI =
             "https://contract.example.org/v1/contracts/lifecycle-1";
 
-    /**
-     * The identifier the {@code PARTICIPANT} token carries, registered by the cases that use it.
-     */
+    /** The identifier the {@code PARTICIPANT} token carries. */
     private static final String CALLER_PARTICIPANT = KeycloakTestResource.PARTICIPANT_IDENTIFIER;
 
-    /**
-     * The contract the termination cases record their notice against, distinct because the active
-     * notice index is unique per (contract, provider) and one of them names the same provider.
-     */
+    /** Distinct contract for termination, since active notices are unique per contract+provider. */
     private static final String TERMINATION_CONTRACT_URI =
             "https://contract.example.org/v1/contracts/lifecycle-2";
 
@@ -112,7 +98,6 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
     /** What a relaying catalog names the subject with; ignored when the subject calls itself. */
     private static final String PROPERTY_USER_IDENTIFIER = "userIdentifier";
 
-    /** The media type every refusal is rendered as. */
     private static final String PROBLEM_JSON = "application/problem+json";
 
     /** Routes carrying no request body still need one to post. */
@@ -134,13 +119,13 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
 
     @Inject ConsentRepository consents;
 
-    /** The caller's global identifier, resolved once because reading it costs a token request. */
+    /** The caller's identifier, resolved once because reading it costs a token request. */
     private String identifier;
 
     /** The notice every seeded consent is recorded against, re-seeded per case. */
     private PrivacyNotice notice;
 
-    /** The two moves this step serves, with the status each needs and the one it leaves. */
+    /** The subject's two moves, with the status each needs and the one it leaves. */
     static Stream<Arguments> moves() {
         return Stream.of(
                 Arguments.of(REVOKE, ConsentStatus.GRANTED, "REVOKED"),
@@ -179,12 +164,7 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
         provisionTheCaller();
     }
 
-    /**
-     * Rows committed by these cases outlive the transaction, so they are removed by hand.
-     *
-     * <p>Consents hold their user and both participants against {@code ON DELETE RESTRICT}, so they
-     * go first; their events cascade with them.
-     */
+    /** Removes committed rows; consents go first because they restrict their user and parties. */
     @AfterEach
     void removeCommittedRows() {
         consents.deleteAll();
@@ -315,12 +295,7 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo(ConsentStatus.GRANTED);
     }
 
-    /**
-     * The window the role matrix cannot sweep: its own case deletes the participants row, so it
-     * only ever exercises an unregistered caller. A retained record is registered and departed, and
-     * a consent can still arise against its notices after it leaves, so this is what keeps a
-     * departed participant from reaching into the dataspace to end one.
-     */
+    /** A retained, deregistered participant, which the role matrix (unregistered only) misses. */
     @Test
     @DisplayName("refuses a deregistered participant with 403 while it still reads its own record")
     void refusesADeregisteredParticipant() {
@@ -351,12 +326,7 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
                 .isEqualTo(ConsentStatus.GRANTED);
     }
 
-    /**
-     * The form the role matrix cannot send: it always posts a body, so a body-less request is the
-     * only end-to-end proof that the generated parameter is nullable. Were it not, Micronaut would
-     * refuse the request with a {@code 400} before the handler ran, and a subject resuming their
-     * own consent - who has nothing to state - could never reach the route.
-     */
+    /** A body-less resume proves the generated body parameter is nullable for the subject. */
     @Test
     @DisplayName("resumes the caller's own consent sent with no request body at all")
     void resumesTheCallersOwnConsentWithoutABody() {
@@ -393,11 +363,7 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
                 .containsEntry(PROPERTY_CONSENTED, true);
     }
 
-    /**
-     * The other half of the body-less case: nothing about the absent body decides the answer, the
-     * caller's role does. The shape that is ordinary for a subject is a refusal for a relay, which
-     * has no other way to name the subject whose decision it carries.
-     */
+    /** A relay must name the subject, so its body-less resume is refused. */
     @Test
     @DisplayName("refuses a CATALOG resume sent with no request body at all as a 400 problem")
     void refusesACatalogResumeWithoutABody() {
@@ -463,12 +429,7 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
         return verbs().flatMap(verb -> nonSubjectRoles().map(role -> Arguments.of(verb, role)));
     }
 
-    /**
-     * Writes a consent for the given subject, as the grant flow would have left it.
-     *
-     * <p>Written straight to the table because what is under test is who may move a consent, not
-     * how it came to be.
-     */
+    /** Writes a consent straight to the table, as the grant flow would have left it. */
     private UUID seedConsent(UUID userId, ConsentStatus status) {
         return consents.save(
                         Consent.withStatus(
@@ -483,12 +444,7 @@ class ConsentLifecycleSurfaceIT extends KeycloakAndPostgresTestResource {
                 .getId();
     }
 
-    /**
-     * Gives the caller its {@code users} row, which a seeded consent needs as a foreign key.
-     *
-     * <p>The row is provisioned from the token on the first authenticated call, so any call does -
-     * one against an identifier nothing stores costs the least and asserts the 404 besides.
-     */
+    /** Provisions the caller's {@code users} row via one authenticated call to an absent id. */
     private void provisionTheCaller() {
         assertThat(move(REVOKE, UUID.randomUUID(), userToken()).code())
                 .isEqualTo(HttpStatus.NOT_FOUND.getCode());

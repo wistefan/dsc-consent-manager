@@ -12,18 +12,9 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Unit tests for the decisions {@link IdentityProviderRegistry} makes without talking to anything.
- *
- * <p>The registry's network behaviour - discovery, retries, readiness - is covered by {@code
- * IdentityProviderDiscoveryTest}, which needs a stub provider and real elapsed time. What is
- * asserted here are the two pure functions that decide <em>how long</em> to wait and
- * <em>whether</em> a discovered JWK Set URL may be trusted. Both are plain functions of their
- * arguments, so they belong in the fast phase: a regression in the backoff curve or in the
- * transport rule should fail {@code ./mvnw test}, not only the integration phase.
- *
- * <p>The cleartext rule in particular cannot be reached end-to-end at all: a WireMock stub is
- * served over {@code http}, so any context pointed at one has already set {@code
- * allow-insecure-transport}, which is exactly the flag that suppresses the rejection.
+ * Tests the pure decisions of {@link IdentityProviderRegistry}: the retry backoff and whether a
+ * discovered JWK Set URL may be trusted. Network behaviour is in {@code
+ * IdentityProviderDiscoveryTest}.
  */
 class IdentityProviderRegistryTest {
 
@@ -80,14 +71,8 @@ class IdentityProviderRegistryTest {
     }
 
     /**
-     * The JWK Set URLs a discovery document must not be trusted with.
-     *
-     * <p>The cleartext row is the security-relevant one: the document itself may well have arrived
-     * over https, so the entry's secure-transport opt-in would be bypassed by a provider that
-     * simply points at an {@code http} key set.
-     *
-     * @return rows of {@code (jwks_uri, allow-insecure-transport, expected reason fragment,
-     *     description)}
+     * Rows of (jwks_uri, allow-insecure-transport, reason fragment, description) never trusted. The
+     * cleartext row matters most: an https document may still point at an {@code http} key set.
      */
     private static Stream<Arguments> unusableJwksUris() {
         return Stream.of(

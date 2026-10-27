@@ -51,14 +51,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 /**
- * Exercises {@code DELETE /participants/me} end to end: the summary the route actually returns, and
- * what the caller's token may still do once its organization has left.
- *
- * <p>{@code ParticipantDeregistrationIT} proves the cascade itself against the service. What is
- * untested there is the controller's own contribution - four same-typed counts handed to one
- * constructor, where a transposition compiles - and the refusal of the write routes afterwards,
- * which lives in {@link com.seamware.consentmanager.security.ParticipantPrincipal#requireActive()}
- * and is only reachable through HTTP.
+ * {@code DELETE /participants/me} over HTTP: guards against transposed summary counts and a
+ * departed participant still reaching the write routes {@code requireActive()} refuses.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant deregistration over HTTP")
@@ -80,11 +74,7 @@ class ParticipantDeregistrationSurfaceIT extends KeycloakAndPostgresTestResource
 
     private static final String LOCAL_IDENTIFIER = "deregistration-surface-local";
 
-    /**
-     * Stem of each seeded notice's contract URI; a per-notice suffix keeps {@code
-     * uq_privacy_notices_active_contract} satisfied, since one provider may hold only one active
-     * notice per contract.
-     */
+    /** Stem of each seeded notice's contract URI; a per-notice suffix keeps them unique. */
     private static final String CONTRACT_URI_PREFIX = "urn:test:contract:deregistration-surface:";
 
     private static final String LEGAL_NAME = "Departing Surface Clinic Ltd";
@@ -117,7 +107,7 @@ class ParticipantDeregistrationSurfaceIT extends KeycloakAndPostgresTestResource
     /** An event already on the trail before the cascade runs. */
     private static final ConsentEventState PRIOR_EVENT_STATE = ConsentEventState.CONSENT_REQUESTED;
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject
@@ -276,9 +266,8 @@ class ParticipantDeregistrationSurfaceIT extends KeycloakAndPostgresTestResource
     }
 
     /**
-     * The operations that act in the dataspace in the participant's name, as opposed to reading or
-     * amending its own record. Each carries its own request, because a parameterized test may not
-     * take a {@code Supplier} parameter - Micronaut's JUnit extension claims it as a bean.
+     * Operations acting in the dataspace in the participant's name; each carries its request since
+     * Micronaut's extension would inject a {@code Supplier} parameter.
      */
     enum WriteRoute {
         REGISTER_USER(
@@ -308,10 +297,7 @@ class ParticipantDeregistrationSurfaceIT extends KeycloakAndPostgresTestResource
         }
     }
 
-    /**
-     * Gives the caller an affiliation, three consents and four live notices, so every count in the
-     * summary is non-zero and no two of them are equal.
-     */
+    /** Seeds business so every summary count is non-zero and no two are equal. */
     private void seedBusiness() {
         Participant caller = caller();
         Participant counterparty = participants.save(participant(COUNTERPARTY_PREFIX + "other"));

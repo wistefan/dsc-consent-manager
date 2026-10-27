@@ -35,7 +35,7 @@ class ContractDiscoveryDeadlineIT extends PrivacyNoticeApiTestSupport {
     /** How long the stubbed contract takes to answer; well past the deadline. */
     private static final Duration UPSTREAM_DELAY = MAX_DURATION.multipliedBy(5);
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject IdentityProviderRegistry registry;

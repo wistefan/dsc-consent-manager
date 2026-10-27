@@ -40,13 +40,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Exercises {@code GET /users/{identifier}} and {@code POST /users/search} end to end against a
- * real Keycloak and a real PostgreSQL.
- *
- * <p>What is under test is caller scoping: the same stored population has to look different to a
- * participant and to the catalog, and a participant must not be able to widen its own view through
- * the request body. The fixture is seeded through the repositories because no endpoint creates a
- * link until a later step.
+ * User lookup and search scoping end to end: guards against a participant seeing the catalog's view
+ * or widening its own through the request body.
  */
 @MicronautTest(transactional = false)
 @DisplayName("User lookup and search")
@@ -64,10 +59,7 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
 
     private static final String SHARED_USER = "urn:test:user:shared";
 
-    /**
-     * A user whose global identifier collides with the self route's literal path segment, which
-     * {@code GET /users/me} claims; reachable through search alone.
-     */
+    /** A user identified as {@code me}, which {@code GET /users/me} claims; search only. */
     private static final String ME_USER = "me";
 
     /** Names nobody, so a lookup for it is the genuinely-absent case. */
@@ -79,11 +71,14 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
     private static final List<String> SEEDED_USERS =
             List.of(LINKED_USER, OTHER_USER, SHARED_USER, ME_USER);
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     /** Problem-detail member naming the requested URL; it necessarily differs per request. */
     private static final String PROBLEM_INSTANCE = "instance";
+
+    /** Problem member naming the request it answers, unique to every response. */
+    private static final String PROBLEM_CORRELATION_ID = "correlationId";
 
     private static final String PATH_SEARCH = "/users/search";
 
@@ -168,11 +163,11 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
         HttpResponse<String> absent = lookup(ABSENT_USER, token(RealmPrincipal.PARTICIPANT));
 
         assertThat(unscoped.code()).isEqualTo(HttpStatus.NOT_FOUND.getCode());
-        assertThat(withoutInstance(unscoped))
+        assertThat(withoutRequestEcho(unscoped))
                 .as("a body that differed would confirm the identifier names a registered user")
-                .isEqualTo(withoutInstance(absent));
+                .isEqualTo(withoutRequestEcho(absent));
         assertThat(body(unscoped))
-                .as("the one differing member only echoes the URL the caller itself requested")
+                .as("the differing URL member only echoes what the caller itself requested")
                 .containsEntry(PROBLEM_INSTANCE, "/users/" + OTHER_USER);
     }
 
@@ -241,12 +236,7 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
                 .containsExactly(ME_USER);
     }
 
-    /**
-     * Which <em>other</em> participants a user is affiliated with is not a participant's to learn.
-     *
-     * <p>Asserted on both read routes and in both directions, so neither a widening of the mapper
-     * nor a narrowing of the catalog view can pass unnoticed.
-     */
+    /** A participant must not learn a user's other affiliations; the catalog must see them all. */
     @ParameterizedTest(name = "{0} reading the shared user is told about {1}")
     @MethodSource("disclosedLinks")
     @DisplayName("the participant links a caller is told about are scoped to that caller")
@@ -322,10 +312,12 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
         links.save(new UserParticipant(user.getId(), participant.getId(), null));
     }
 
-    /** The problem detail minus the member that merely echoes the requested URL. */
-    private Map<String, Object> withoutInstance(HttpResponse<String> response) throws IOException {
+    /** The problem detail minus the members that echo the requested URL and the request's ID. */
+    private Map<String, Object> withoutRequestEcho(HttpResponse<String> response)
+            throws IOException {
         Map<String, Object> problem = new LinkedHashMap<>(body(response));
         problem.remove(PROBLEM_INSTANCE);
+        problem.remove(PROBLEM_CORRELATION_ID);
         return problem;
     }
 

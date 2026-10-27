@@ -44,8 +44,11 @@ properties:
       clears it even on a record it has to retain.
     example: "data-protection@clinic.example.org"
   legalPerson:
+    description: >
+      Legal-entity metadata the participant declared, absent when none is known.
     $ref: "./ParticipantLegalPerson.yaml"
   endpoints:
+    description: Service endpoints the participant declared, absent when none is known.
     $ref: "./ParticipantEndpoints.yaml"
   createdAt:
     type: string

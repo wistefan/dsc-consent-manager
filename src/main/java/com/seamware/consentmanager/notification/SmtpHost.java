@@ -10,10 +10,7 @@ final class SmtpHost {
 
     private SmtpHost() {}
 
-    /**
-     * True when {@code smtp.host} resolves to a non-blank string; an empty variable counts as
-     * unset.
-     */
+    /** True when {@code smtp.host} is non-blank; an empty variable counts as unset. */
     static boolean isConfigured(ConditionContext<?> context) {
         return context.getProperty(PROPERTY, String.class)
                 .filter(host -> !host.isBlank())

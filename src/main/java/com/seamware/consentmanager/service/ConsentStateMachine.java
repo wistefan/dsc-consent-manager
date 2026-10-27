@@ -11,37 +11,21 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The one table of consent lifecycle rules: which status a consent may be created in, and which
- * status it may move to from the one it holds.
- *
- * <p>A table rather than branches scattered over the services, so a transition nobody thought about
- * is refused by default: a pair absent from {@link #TRANSITIONS} is not permitted, and a terminal
- * status is an empty entry rather than a missing one.
+ * The one table of consent lifecycle rules: valid creation statuses and permitted moves. A pair
+ * absent from {@link #TRANSITIONS} is refused; a terminal status is an empty entry.
  */
 @Singleton
 public class ConsentStateMachine {
 
-    /**
-     * The statuses a consent may be created in.
-     *
-     * <p>{@link ConsentStatus#DRAFT} is deliberately absent, although the ticket's state table
-     * lists it as a creation: nothing in this service prepares a draft, so admitting it would ship
-     * a state no endpoint can produce and none can answer. The status survives here only as a
-     * transition source, and the ticket that adds draft preparation adds it to this table and to
-     * the factory's event table together.
-     */
+    /** Statuses a consent may be created in; {@code DRAFT} is absent, as nothing prepares one. */
     private static final Set<ConsentStatus> CREATABLE =
             Collections.unmodifiableSet(
                     EnumSet.of(
                             ConsentStatus.GRANTED, ConsentStatus.REFUSED, ConsentStatus.PENDING));
 
     /**
-     * Where an unanswered offer may go: answered either way, or terminated.
-     *
-     * <p>{@link ConsentStatus#TERMINATED} is not decoration - an erasure closes the offers its
-     * subject can no longer answer, and a deregistration closes the ones naming the departing
-     * participant, so omitting the edge would make the table declare invalid a move the service
-     * performs.
+     * Where an unanswered offer may go: answered either way, or terminated. {@code TERMINATED} is
+     * the move erasure and deregistration make on open offers.
      */
     private static final Set<ConsentStatus> UNANSWERED_MOVES =
             Collections.unmodifiableSet(
@@ -51,36 +35,20 @@ public class ConsentStateMachine {
                             ConsentStatus.TERMINATED));
 
     /**
-     * The statuses a data subject's decision may be recorded in.
-     *
-     * <p>Narrower than {@link #CREATABLE}, which also admits the {@code PENDING} a participant
-     * opens: a subject either consents or does not, so without this table a decision carried as a
-     * status would let a subject request consent from themselves or terminate an open request as a
-     * deliberate act of their own. The generated request enum narrows the HTTP surface the same
-     * way, but the service contract is enforced here rather than left to it.
+     * The statuses a data subject's decision may be recorded in; narrower than {@link #CREATABLE}.
+     * Enforced here, not left to the generated request enum.
      */
     private static final Set<ConsentStatus> DECISIONS =
             Collections.unmodifiableSet(EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.REFUSED));
 
     /**
-     * The statuses in which a consent still stands between the parties: one in force, and one
-     * nobody has answered yet.
-     *
-     * <p>Here rather than on either reader, so the writer's filter over the rows it locked and the
-     * duplicate check that refuses a second request for the same pair cannot drift apart. Not
-     * derived from {@link #TRANSITIONS}: {@link ConsentStatus#DRAFT} is non-terminal there and
-     * still binds nobody.
+     * Statuses in which a consent still stands between the parties: in force, or unanswered. Not
+     * derived from {@link #TRANSITIONS}, where {@code DRAFT} is non-terminal yet binds nobody.
      */
     public static final Set<ConsentStatus> OPEN_STATUSES =
             Collections.unmodifiableSet(EnumSet.of(ConsentStatus.GRANTED, ConsentStatus.PENDING));
 
-    /**
-     * The statuses an affirmation may be recorded against: a consent in force, and nothing else.
-     *
-     * <p>Re-confirmation moves no status, so it cannot be expressed as an entry in {@link
-     * #TRANSITIONS} and cannot go through {@link #requireTransition}. The rule still belongs in
-     * this table rather than as a branch in a service, for the same reason every other one does.
-     */
+    /** Statuses an affirmation may be recorded against; it moves no status, so not a transition. */
     private static final Set<ConsentStatus> AFFIRMABLE =
             Collections.unmodifiableSet(EnumSet.of(ConsentStatus.GRANTED));
 
@@ -102,9 +70,14 @@ public class ConsentStateMachine {
         return TRANSITIONS.getOrDefault(from, Set.of()).contains(to);
     }
 
+    /** Whether a consent may be created holding {@code status}. */
+    public boolean permitsCreation(@NonNull ConsentStatus status) {
+        return CREATABLE.contains(status);
+    }
+
     /** Refuses a creation in a status this service does not create, naming that status. */
     public void requireCreatable(@NonNull ConsentStatus target) {
-        if (!CREATABLE.contains(target)) {
+        if (!permitsCreation(target)) {
             throw new BadRequestException(NOT_CREATABLE.formatted(target));
         }
     }

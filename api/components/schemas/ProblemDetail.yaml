@@ -32,12 +32,27 @@ properties:
     example: "Consent record with ID 'abc-123' was not found."
   instance:
     type: string
-    format: uri
+    format: uri-reference
     description: >
       A URI reference that identifies the specific occurrence of the
       problem. It may or may not yield further information if
       dereferenced.
     example: "/v1/consents/abc-123"
+  correlationId:
+    type: string
+    description: >
+      Identifier of the request this problem occurred on, equal to the
+      `X-Request-ID` response header. Quote it when reporting a failure; it is
+      the key the service's logs are searched by.
+    example: "0192f3a4-5b6c-7d8e-9f01-23456789abcd"
+  errors:
+    type: array
+    description: >
+      Every rejected field of a request that failed validation, ordered by field
+      and then message. Present only on a validation failure; `detail` then lists
+      the same rejections as one sentence.
+    items:
+      $ref: "./ProblemFieldError.yaml"
 required:
   - type
   - title

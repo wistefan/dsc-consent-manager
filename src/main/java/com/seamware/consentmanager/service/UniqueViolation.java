@@ -6,11 +6,8 @@ import java.util.Objects;
 import java.util.stream.Stream;
 
 /**
- * Tells a write rejected by a unique index apart from any other data access failure.
- *
- * <p>One definition for the whole service layer, so the SQLState appears once: every caller races
- * for a different constraint, but all of them have to recognise the same loss, and a deadlock or a
- * severed connection must not be mistaken for one.
+ * Tells a write rejected by a unique index apart from any other data access failure. A deadlock or
+ * severed connection must never be mistaken for a lost race.
  */
 final class UniqueViolation {
 

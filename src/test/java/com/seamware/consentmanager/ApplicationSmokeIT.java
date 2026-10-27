@@ -23,47 +23,20 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Smoke integration test that verifies the application context starts correctly and can connect to
- * a real PostgreSQL database via Testcontainers.
- *
- * <p>This test runs as part of the Failsafe integration test phase ({@code ./mvnw verify}) because
- * it follows the {@code *IT.java} naming convention. It uses a shared Testcontainers PostgreSQL
- * instance provided by {@link PostgresTestResource}.
- *
- * <p>Verifications performed:
- *
- * <ul>
- *   <li>Application context starts successfully
- *   <li>Health endpoint returns HTTP 200 with {@code UP} status once OpenID Connect discovery has
- *       resolved the configured identity provider
- *   <li>Datasource health indicator reports {@code UP}
- *   <li>Flyway has executed (schema history table exists)
- *   <li>DataSource bean is injectable and functional
- * </ul>
+ * Smoke test: the context starts against real PostgreSQL, Flyway has run, and {@code /health}
+ * reports {@code UP} once discovery has resolved the configured identity provider.
  */
 @MicronautTest
 @DisplayName("Application Smoke Test")
 class ApplicationSmokeIT extends PostgresTestResource {
 
-    /**
-     * Stub identity provider the trust list points at.
-     *
-     * <p>{@code application-test.yml} points the trust list at a port nothing listens on, which is
-     * right for tests that only need a context to start - but it would hold readiness, and with it
-     * the aggregate {@code /health}, permanently {@code DOWN}. This smoke test asserts the shape a
-     * deployment actually runs in, where every configured provider does resolve, so it supplies a
-     * provider that answers.
-     */
+    /** Answering provider; the test default points at a dead port, which holds readiness DOWN. */
     private static final OidcDiscoveryStub IDENTITY_PROVIDER = new OidcDiscoveryStub();
 
     /** Longest the health assertions wait for discovery, which runs off the startup thread. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(30);
 
-    /**
-     * Points the configured trust-list entry at {@link #IDENTITY_PROVIDER}.
-     *
-     * @return the datasource properties of the shared container, plus this provider's coordinates
-     */
+    /** Adds the coordinates of {@link #IDENTITY_PROVIDER} to the shared datasource properties. */
     @Override
     public Map<String, String> getProperties() {
         Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
@@ -75,21 +48,17 @@ class ApplicationSmokeIT extends PostgresTestResource {
         return properties;
     }
 
-    /** Stops the stub provider once every test in this class has run. */
     @AfterAll
     static void stopIdentityProvider() {
         IDENTITY_PROVIDER.close();
     }
 
-    /** HTTP client targeting the embedded test server. */
     @Inject
     @Client("/")
     HttpClient httpClient;
 
-    /** The Micronaut application context. */
     @Inject ApplicationContext applicationContext;
 
-    /** The datasource bean, expected to be connected to the Testcontainers PostgreSQL instance. */
     @Inject DataSource dataSource;
 
     @Test
@@ -110,16 +79,10 @@ class ApplicationSmokeIT extends PostgresTestResource {
         }
     }
 
-    /** Reusable type argument for {@code Map<String, Object>} to avoid raw types. */
     private static final Argument<Map<String, Object>> MAP_TYPE =
             Argument.mapOf(String.class, Object.class);
 
-    /**
-     * Waits for the aggregate health endpoint to report {@code UP}.
-     *
-     * <p>Readiness covers the identity provider registry, whose discovery deliberately runs after
-     * the context is up, so the aggregate is {@code DOWN} for a moment after startup.
-     */
+    /** Waits for {@code UP}; discovery runs after startup, so health is briefly {@code DOWN}. */
     private void awaitHealthUp() {
         Await.until(
                 "the aggregate health endpoint to report UP once discovery has resolved",
@@ -165,8 +128,6 @@ class ApplicationSmokeIT extends PostgresTestResource {
 
         assertThat(body).as("Health response body should not be null").isNotNull();
 
-        // The health details contain individual indicator statuses.
-        // With details-visible: ANONYMOUS, the response includes a "details" map.
         Object details = body.get("details");
         assertThat(details)
                 .as("Health details should be present (details-visible: ANONYMOUS)")
@@ -175,7 +136,6 @@ class ApplicationSmokeIT extends PostgresTestResource {
 
         Map<String, Object> detailsMap = (Map<String, Object>) details;
 
-        // The JDBC health indicator key is "jdbc" in Micronaut
         assertThat(detailsMap)
                 .as("Health details should contain a JDBC health indicator")
                 .containsKey("jdbc");

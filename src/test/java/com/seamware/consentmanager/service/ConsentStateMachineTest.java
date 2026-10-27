@@ -18,10 +18,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins the lifecycle table over the whole status square, not only the pairs the flows use.
- *
- * <p>The expectation is written out here rather than read from the production table, so adding a
- * transition to the service fails this suite until the addition is stated twice.
+ * Tests the lifecycle table over the whole status square against an independently restated
+ * expectation, so a new transition fails this suite until it is stated here too.
  */
 @DisplayName("Consent state machine")
 class ConsentStateMachineTest {

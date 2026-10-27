@@ -28,27 +28,16 @@ import java.util.stream.Collectors;
 import org.openapitools.jackson.nullable.JsonNullable;
 
 /**
- * Serves the {@code /participants/me/users} operations: the registration surface a participant uses
- * to put its own users into the directory.
+ * Serves {@code /participants/me/users}. The participant is only {@link
+ * ParticipantPrincipal#requireActive()}, so a departed one cannot re-acquire its affiliations.
  *
- * <p>The participant is {@link ParticipantPrincipal#requireActive()} and nothing else, so an
- * identifier with no row behind it, or one whose record has been deregistered, is refused here
- * rather than served - a departed organization must not be able to re-acquire the affiliations its
- * deregistration removed. The body deliberately cannot name one, and a {@code
- * participantIdentifier} property sent anyway is ignored rather than refused - the generated model
- * does not forbid unknown properties, so such a request succeeds and still links the user to the
+ * <p>A {@code participantIdentifier} in the body is ignored; the user is still linked to the
  * caller.
- *
- * <p>{@code UserRegistration} here is the generated API model; the service's record of the same
- * name is written out in full to keep the two apart.
  */
 @Controller
 public class ParticipantUserController extends AbstractParticipantUsersController {
 
-    /**
-     * Placeholder for the counts of a summary still being assembled. The generated constructor
-     * demands all five positionally; every one is then set through its named setter.
-     */
+    /** Placeholder for the generated constructor's positional counts, each then set by name. */
     private static final int UNCOUNTED = 0;
 
     private final UserService users;
@@ -61,12 +50,8 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
     }
 
     /**
-     * {@code 201} when this request created the user, {@code 200} when it only linked or re-linked
-     * one that already existed.
-     *
-     * <p>The returned user's {@code participants} array is scoped to the caller, as on every other
-     * route: registering a user does not disclose which other participants they are affiliated
-     * with.
+     * {@code 201} when this request created the user, {@code 200} when it only (re-)linked one; the
+     * returned {@code participants} array is scoped to the caller.
      */
     @Override
     public HttpResponse<UserRegistrationResult> registerParticipantUser(
@@ -83,12 +68,8 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
     }
 
     /**
-     * Always {@code 207}: a batch mixing users this participant has just acquired with users it
-     * registered long ago is a success, and no single status says that.
-     *
-     * <p>Results are one per entry in request order, so a caller correlates by position; each
-     * entry's {@code identifier} is echoed as a cross-check. A rejected entry stops neither the
-     * entries after it nor the ones already applied.
+     * Always {@code 207}, with one result per entry in request order; a rejected entry stops
+     * neither the entries after it nor those already applied.
      */
     @Override
     public HttpResponse<BulkRegistrationResult> registerParticipantUsersBulk(
@@ -106,11 +87,7 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
         return HttpResponse.status(HttpStatus.MULTI_STATUS).body(payload);
     }
 
-    /**
-     * The published tally. Every count goes in through its own named setter, so reordering the
-     * properties of {@code BulkRegistrationSummary.yaml} - and with them the generated
-     * constructor's five same-typed parameters - cannot silently transpose one count onto another.
-     */
+    /** The tally, set by named setters so a schema reorder cannot transpose two counts. */
     private static BulkRegistrationSummary summaryOf(List<BulkEntryResult> results) {
         Map<RegistrationOutcome, Long> counted =
                 results.stream()
@@ -136,10 +113,8 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
     }
 
     /**
-     * The published outcome of one entry; a null service outcome is the rejection only this path
-     * can report. Exhaustive on purpose: the published enum has to keep pace with {@link
-     * RegistrationOutcome}, and a new constant must fail compilation rather than surface as a
-     * runtime 500.
+     * One entry's published outcome, null meaning rejected; exhaustive so a new constant fails
+     * compilation rather than a request.
      */
     private static BulkRegistrationEntryResult.OutcomeEnum bulkOutcomeOf(
             @Nullable RegistrationOutcome outcome) {
@@ -165,15 +140,8 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
     }
 
     /**
-     * Applies the body to the caller's own link and returns the link as re-read.
-     *
-     * <p>Three cases, which the {@link JsonNullable} wrapper is here to keep apart: a mentioned
-     * value is written, an explicit {@code null} clears the stored one, and a property the body
-     * never mentions leaves it alone - so a later property added to this schema cannot silently
-     * wipe a local identifier its client never named.
-     *
-     * <p>{@code 404} for a link the caller does not hold, deliberately indistinguishable from an
-     * identifier naming nobody; the service decides that.
+     * Patches the caller's own link: a value is written, an explicit {@code null} clears, an
+     * omitted property is untouched. A link the caller lacks is a {@code 404}.
      */
     @Override
     public HttpResponse<ParticipantUserLink> updateParticipantUserLink(
@@ -207,12 +175,7 @@ public class ParticipantUserController extends AbstractParticipantUsersControlle
                 body.getLastName());
     }
 
-    /**
-     * The service outcome as the published enum.
-     *
-     * <p>Exhaustive by constant rather than by name: {@code fromValue} would throw at runtime on a
-     * constant the spec does not carry.
-     */
+    /** The service outcome as the published enum; by constant, as {@code fromValue} may throw. */
     private static UserRegistrationResult.OutcomeEnum outcomeOf(RegistrationOutcome outcome) {
         return switch (outcome) {
             case CREATED -> UserRegistrationResult.OutcomeEnum.CREATED;

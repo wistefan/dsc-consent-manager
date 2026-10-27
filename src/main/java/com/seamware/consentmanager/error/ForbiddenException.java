@@ -1,10 +1,8 @@
 package com.seamware.consentmanager.error;
 
 /**
- * The caller authenticated but may not perform the operation (HTTP 403).
- *
- * <p>For a refusal that would confirm the existence of a resource the caller may not see, throw
- * {@link NotFoundException} instead.
+ * The caller authenticated but may not perform the operation (HTTP 403). Where a refusal would
+ * confirm a resource the caller may not see, throw {@link NotFoundException} instead.
  */
 public class ForbiddenException extends ApiException {
 

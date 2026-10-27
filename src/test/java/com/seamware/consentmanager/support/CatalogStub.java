@@ -12,16 +12,11 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * A stubbed catalog, serving the self-descriptions a resolved retrieval walks.
- *
- * <p>Every method returns the absolute URL the document is reachable at, because that is what a
- * stored notice carries and what the test has to put into the payload it seeds; the path is only
- * how the stub recognises the request. Owned per test, so one case's request count cannot be
- * another's.
+ * Stubbed catalog serving the self-descriptions a resolved retrieval walks; owned per test. Each
+ * {@code serve} method returns the document's absolute URL, as a seeded notice carries.
  */
 public final class CatalogStub implements AutoCloseable {
 
-    /** Content type a catalog document is served as. */
     private static final String JSON = "application/json";
 
     private static final String CONTENT_TYPE = "Content-Type";
@@ -41,10 +36,8 @@ public final class CatalogStub implements AutoCloseable {
     }
 
     /**
-     * A URL on a port nothing listens on, so reading it is refused at the transport.
-     *
-     * <p>A stub that is started and immediately stopped, because a hard-coded port might be in use
-     * and a connection that is refused has to be refused for the reason the case is about.
+     * A URL on a port nothing listens on, so reading it is refused at the transport. Uses a
+     * started-then-stopped stub, since a hard-coded port might be in use.
      */
     public static String unreachableUrl(String path) {
         WireMockServer dead = new WireMockServer(options().dynamicPort());

@@ -207,6 +207,7 @@ class ConsentReceiptIssuanceIT extends PostgresTestResource {
     /** An unanswered request for the pair, as a participant's ask would leave it. */
     private UUID request() {
         return writer.request(subject, notice, ConsentSnapshot.of(notice, null, null), PROVIDER)
+                .primary()
                 .consent()
                 .getId();
     }

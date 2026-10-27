@@ -21,11 +21,11 @@ import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Property;
 import io.micronaut.context.annotation.Replaces;
 import io.micronaut.context.annotation.Requires;
+import io.micronaut.data.model.Pageable;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import java.lang.reflect.Proxy;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -34,14 +34,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Proves the {@code @Transactional} on {@link ParticipantService#deregister} is load-bearing rather
- * than decorative: every happy-path assertion elsewhere passes whether the advice applies or not,
- * so only a failure part-way through a deregistration tells the two apart.
- *
- * <p>The failure is injected by replacing {@link UserParticipantRepository} with one that refuses
- * every call. The cascade reaches it only after it has already terminated the unanswered consents
- * and appended an event to each trail, so without a transaction those writes would stand and leave
- * a participant whose offers are closed but which is still registered and still linked.
+ * Tests that {@link ParticipantService#deregister} is atomic: a {@link UserParticipantRepository}
+ * failing after the consents were terminated must roll the whole cascade back.
  */
 @MicronautTest(transactional = false)
 @Property(name = ParticipantDeregistrationAtomicityIT.FAILING_LINKS, value = "true")
@@ -51,7 +45,7 @@ class ParticipantDeregistrationAtomicityIT extends PostgresTestResource {
     /** Gates the refusing link repository, so it exists only for this test class. */
     static final String FAILING_LINKS = "test.failing-participant-link-repository.enabled";
 
-    /** Carried by the injected failure, so the assertion can name what it expected to go wrong. */
+    /** Carried by the injected failure, so the assertion can recognise it. */
     static final String FAILURE_MESSAGE = "link deletion refused by the atomicity fixture";
 
     private static final String SUBJECT_PARTICIPANT =
@@ -89,8 +83,8 @@ class ParticipantDeregistrationAtomicityIT extends PostgresTestResource {
         participant(SUBJECT_PARTICIPANT)
                 .ifPresent(
                         subject -> {
-                            consents.findByProviderIdAndStatusIn(
-                                            subject.getId(), List.of(ConsentStatus.values()))
+                            consents.findByProviderId(subject.getId(), Pageable.UNPAGED)
+                                    .getContent()
                                     .forEach(
                                             consent -> {
                                                 events.findByConsentIdOrderByOccurredAtAsc(
@@ -175,11 +169,8 @@ class ParticipantDeregistrationAtomicityIT extends PostgresTestResource {
     }
 
     /**
-     * Supplies a {@link UserParticipantRepository} that refuses every call, standing in for any
-     * write that can fail part-way through the cascade.
-     *
-     * <p>A dynamic proxy rather than a hand-written stub: nothing in this test calls the repository
-     * except the deregistration under test, so every method but {@link Object}'s own is a refusal.
+     * Supplies a {@link UserParticipantRepository} proxy that refuses every call but {@link
+     * Object}'s own, standing in for any write that can fail part-way through the cascade.
      */
     @Factory
     @Requires(property = FAILING_LINKS, value = "true")

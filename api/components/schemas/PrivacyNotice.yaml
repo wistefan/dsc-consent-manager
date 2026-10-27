@@ -192,6 +192,8 @@ properties:
       When this notice was superseded by a regeneration. Absent while the notice
       is the active one for its contract and provider.
   resolution:
+    description: >
+      How far each section of this notice could be filled in from external documents.
     $ref: "./PrivacyNoticeResolution.yaml"
 required:
   - id

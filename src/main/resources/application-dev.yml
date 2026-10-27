@@ -1,14 +1,9 @@
-# Development environment overrides
-# Activate with: MICRONAUT_ENVIRONMENTS=dev
+# Development overrides; activate with MICRONAUT_ENVIRONMENTS=dev.
 
 micronaut:
   security:
-    # Security is ENABLED in dev so the local stack exercises the same wiring as
-    # production: the Keycloak service in compose.yaml is discovered, its JWKS is
-    # fetched and bearer tokens are actually verified. Running without that Keycloak
-    # (plain `./mvnw mn:run`) still starts the service — discovery simply fails, no
-    # signing key is registered and every bearer token is rejected, while the
-    # anonymous routes (/health, /swagger-ui, /static) stay reachable.
+    # Enabled so the local stack verifies tokens against compose.yaml's Keycloak. Without
+    # it, every bearer token is rejected while the anonymous routes stay reachable.
     enabled: true
 
 datasources:
@@ -17,43 +12,28 @@ datasources:
     username: ${DB_USER:consent_manager}
     password: ${DB_PASSWORD:consent_manager}
 
-# Management endpoints. Note that with security enabled above, the
-# `intercept-url-map` in application.yml still governs access: /metrics and
-# /prometheus require a bearer token in dev too. `sensitive: false` only waives
-# Micronaut's own endpoint-level check, it does not make the paths anonymous.
-#
-# Until the token-validation pipeline lands in steps 3-5 of this ticket no bearer
-# token authenticates at all, so in dev these two endpoints are currently
-# unreachable by design - a token from the local Keycloak opens them once that
-# pipeline exists. /health stays anonymous throughout and is the probe to use in
-# the meantime.
+# /metrics and /prometheus still need a local Keycloak token unless
+# METRICS_AUTHENTICATION_ENABLED=false; /health shows details here.
 endpoints:
   all:
     port: ${MANAGEMENT_PORT:9090}
   health:
     details-visible: ANONYMOUS
-  metrics:
-    sensitive: false
-  prometheus:
-    sensitive: false
 
-# Disable OpenTelemetry tracing in dev — no collector is required locally.
+# No collector is required locally.
 tracing:
   opentelemetry:
     enabled: false
 
-# Local Keycloak trust list entry, matching the `keycloak` service in compose.yaml.
-#
-# Only the values application.yml leaves blank are filled in here; clock skew, the
-# JWKS cache TTL, the claim paths and the role mapping of the `primary` entry are
-# inherited per leaf key from application.yml.
-#
-# The entry must be present whatever `micronaut.security.enabled` says: the trust-list
-# check is unconditional, because a resource server with no trust list is
-# misconfigured either way. An unreachable Keycloak does not abort startup - from
-# step 3 on, discovery is retried with backoff and readiness reports DOWN until it
-# succeeds, so `./mvnw mn:run` without the compose stack still starts.
+# Local Keycloak trust list entry, matching compose.yaml; unset keys inherit from
+# application.yml. An unreachable Keycloak only keeps readiness DOWN.
 consent-manager:
+  # Local runs show the message of a 5xx; production publishes a fixed sentence.
+  errors:
+    expose-exception-detail: ${ERRORS_EXPOSE_EXCEPTION_DETAIL:true}
+  # A fixed, non-secret key so local runs start; production configures LOG_PSEUDONYM_KEY.
+  logging:
+    pseudonym-key: ${LOG_PSEUDONYM_KEY:dev-only-log-pseudonym-key-not-a-secret}
   # Local runs need no key material; production configures RECEIPTS_SIGNING_KEY.
   receipts:
     ephemeral-signing-key: ${RECEIPTS_EPHEMERAL_SIGNING_KEY:true}
@@ -63,7 +43,5 @@ consent-manager:
       issuer: ${IDP_ISSUER:`http://localhost:8180/realms/consent-manager`}
       discovery-url: ${IDP_DISCOVERY_URL:`http://localhost:8180/realms/consent-manager/.well-known/openid-configuration`}
       audience: ${IDP_AUDIENCE:consent-manager}
-      # The local Keycloak in compose.yaml is served over plain http. Accepting that is
-      # a development-only decision, so it is written down here rather than defaulted:
-      # application.yml leaves it false, and this override is logged at WARN on startup.
+      # The local Keycloak is plain http; a development-only override, warned at startup.
       allow-insecure-transport: ${IDP_ALLOW_INSECURE_TRANSPORT:true}

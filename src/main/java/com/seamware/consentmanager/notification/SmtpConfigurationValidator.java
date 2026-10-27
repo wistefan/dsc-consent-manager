@@ -11,10 +11,7 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * Checks the SMTP settings while the context starts, so a broken or insecure transport is reported
- * at boot rather than on the first send, which may be hours later or never.
- */
+/** Checks the SMTP settings at startup, so a broken or insecure transport fails boot. */
 @Context
 @Requires(condition = SmtpConfiguredCondition.class)
 public class SmtpConfigurationValidator {

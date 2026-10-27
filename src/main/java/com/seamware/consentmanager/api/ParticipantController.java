@@ -8,6 +8,7 @@ import com.seamware.consentmanager.api.generated.model.ParticipantRegistration;
 import com.seamware.consentmanager.api.generated.model.ParticipantUpdate;
 import com.seamware.consentmanager.security.ConsentManagerPrincipal;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
+import com.seamware.consentmanager.service.ConsentReporter;
 import com.seamware.consentmanager.service.DeregistrationResult;
 import com.seamware.consentmanager.service.ParticipantService;
 import io.micronaut.data.model.Page;
@@ -15,14 +16,8 @@ import io.micronaut.http.HttpResponse;
 import io.micronaut.http.annotation.Controller;
 
 /**
- * Serves the {@code /participants} operations declared in {@code api/openapi.yaml}.
- *
- * <p>This is the one route a {@link ParticipantPrincipal} whose row is absent may reach, which is
- * what makes self-registration possible at all; every other participant-scoped handler takes its
- * row through {@link ParticipantPrincipal#requireRegistered()}.
- *
- * <p>{@code Participant} and {@code ParticipantRegistration} here are the generated API models; the
- * stored row and the service's record of the same name are written out in full to keep them apart.
+ * Serves {@code /participants}. Registration is the one route an unregistered {@link
+ * ParticipantPrincipal} may reach; the rest use {@link ParticipantPrincipal#requireRegistered()}.
  */
 @Controller
 public class ParticipantController extends AbstractParticipantsController {
@@ -31,17 +26,18 @@ public class ParticipantController extends AbstractParticipantsController {
 
     private final ParticipantMapper mapper;
 
-    public ParticipantController(ParticipantService participants, ParticipantMapper mapper) {
+    private final ConsentReporter reporter;
+
+    public ParticipantController(
+            ParticipantService participants, ParticipantMapper mapper, ConsentReporter reporter) {
         this.participants = participants;
+        this.reporter = reporter;
         this.mapper = mapper;
     }
 
     /**
-     * Registers the organization the token names, under the identifier the token carries.
-     *
-     * <p>Always {@code 201} or a refusal: an identifier already registered is a {@code 409} rather
-     * than an idempotent {@code 200}, because the body is a full self-description that would
-     * otherwise be silently either discarded or applied.
+     * Registers the token's organization under its identifier: {@code 201}, or {@code 409} when
+     * already registered, so a full body is never silently discarded or applied.
      */
     @Override
     public HttpResponse<Participant> registerParticipant(
@@ -58,10 +54,8 @@ public class ParticipantController extends AbstractParticipantsController {
     }
 
     /**
-     * Replaces the caller's own self-description with the body, in full.
-     *
-     * <p>The stored row travels from the principal rather than being looked up again, so the
-     * identifier written is the one the token resolved and never one the body named.
+     * Replaces the caller's own self-description in full; the row comes from the principal, so the
+     * body can never name another identifier.
      */
     @Override
     public HttpResponse<Participant> updateCurrentParticipant(
@@ -72,15 +66,14 @@ public class ParticipantController extends AbstractParticipantsController {
     }
 
     /**
-     * Deregisters the caller's own organization and reports what the cascade closed.
-     *
-     * <p>A {@code 200} with a summary rather than a {@code 204}: the caller has to be able to see
-     * that its record was retained rather than deleted, and what was terminated on the way out.
+     * Deregisters the caller's organization, answering a summary of what the cascade closed; moves
+     * are reported only after commit. See ADR-0008.
      */
     @Override
     public HttpResponse<DeregistrationSummary> deregisterCurrentParticipant(
             ParticipantPrincipal principal) {
         DeregistrationResult result = participants.deregister(principal.requireRegistered());
+        reporter.report(result.moves());
         return HttpResponse.ok(
                 new DeregistrationSummary(
                                 result.consentsTerminated(),
@@ -90,12 +83,7 @@ public class ParticipantController extends AbstractParticipantsController {
                         .deregisteredAt(ParticipantMapper.atUtc(result.deregisteredAt())));
     }
 
-    /**
-     * One page of the directory, for a caller discovering who it may transact with.
-     *
-     * <p>Readable by every role, and by a participant whose own row is still absent, because
-     * reading the directory is how an organization finds out who is in it.
-     */
+    /** One page of the directory; readable by every role, unregistered participants included. */
     @Override
     public HttpResponse<ParticipantPage> listParticipants(
             ConsentManagerPrincipal principal, Integer page, Integer size, String identifier) {

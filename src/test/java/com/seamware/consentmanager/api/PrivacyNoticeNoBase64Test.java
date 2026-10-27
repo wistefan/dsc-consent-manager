@@ -21,19 +21,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * Keeps base64-encoded identifiers out of the privacy-notice module, on this service's API and on
- * the calls it makes upstream.
- *
- * <p>The API this ticket replaces passed self-description URLs base64-encoded, under parameter
- * names like {@code SD64}. Nothing here encodes anything: a contract URI and a participant
- * identifier travel verbatim. That is a decision a later change can undo in one line and nobody
- * would notice until a stored {@code contract_uri} no longer matched the key its uniqueness is held
- * against, so it is pinned rather than documented.
- *
- * <p>The guard targets the mechanism, not the word: an encoded identifier shows up as a name
- * carrying {@code 64}, as OpenAPI's {@code byte} format, or as a use of {@link java.util.Base64}.
- * Prose saying that nothing is encoded is left alone, because forbidding the sentence would only
- * delete the explanation.
+ * Keeps base64-encoded identifiers out of the privacy-notice API and its upstream calls: catches
+ * names carrying {@code 64}, the {@code byte} format and {@link java.util.Base64}, not prose.
  */
 @DisplayName("No base64-encoded identifiers in the privacy-notice module")
 class PrivacyNoticeNoBase64Test {
@@ -55,12 +44,8 @@ class PrivacyNoticeNoBase64Test {
     private static final String MODULE_PREFIX = "PrivacyNotice";
 
     /**
-     * What a privacy-notice source outside {@link #CLIENT_PACKAGE} carries in its name.
-     *
-     * <p>Matched anywhere in the name rather than as a prefix, because the module's service-side
-     * sources are named for what they do to a contract or a notice rather than for the notice type
-     * - {@code ContractContentExtractor}, {@code ResolvedNotice} - and a prefix match would leave
-     * exactly the file that derives an upstream contract id out of the scan.
+     * What a module source outside {@link #CLIENT_PACKAGE} carries anywhere in its name; a prefix
+     * match would miss {@code ContractContentExtractor}.
      */
     private static final Set<String> MODULE_NAME_TOKENS = Set.of("Notice", "Contract");
 
@@ -112,7 +97,8 @@ class PrivacyNoticeNoBase64Test {
     }
 
     static Stream<Path> specificationDocuments() {
-        return filesUnder(SPEC_ROOT, YAML_SUFFIX);
+        return filesUnder(SPEC_ROOT, YAML_SUFFIX)
+                .filter(document -> !document.startsWith(SpecBaseline.DIRECTORY));
     }
 
     static Stream<Path> moduleSources() {

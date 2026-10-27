@@ -4,128 +4,51 @@ micronaut:
 
   server:
     port: ${PORT:8080}
-    context-path: ${API_PREFIX:/v1}
+    # No `context-path`: only API controllers sit under `consent-manager.api-prefix`;
+    # management endpoints, Swagger UI and the `@OriginRoot` JWKS stay at the origin root.
 
   router:
-    # Static resources for Swagger UI and the OpenAPI specification.
-    # The openapi.yaml is copied from api/ to target/classes/static/ at build time.
+    # Swagger UI and the bundled spec (target/classes/static/openapi.yaml). `/*.yaml`, not
+    # the literal path: an exact mapping resolves to `index.html`.
     static-resources:
       swagger-ui:
         paths: classpath:static/swagger-ui
         mapping: /swagger-ui/**
       openapi-spec:
         paths: classpath:static
-        mapping: /static/**
+        mapping: /*.yaml
 
   serde:
     serialization:
-      # Default is `non-empty`, which drops an empty collection from a response body
-      # entirely. Arrays the specification marks required - `User.participants`, say -
-      # must still be published as `[]` for a user linked to no participant, or the
-      # response contradicts its own schema. `non-absent` publishes them while still
-      # leaving out an attribute whose value is null, which is how every optional field
-      # under api/components/schemas is documented: unknown means absent, not null.
-      #
-      # Deliberately global, not narrowed per schema, and not to be narrowed back. The
-      # generator emits @Serdeable from the specification and offers no per-schema
-      # inclusion hook, so the alternatives were to make every required array
-      # non-empty by construction - which `User.participants` cannot be - or to keep a
-      # setting that silently contradicts the published schema. The side effect is
-      # accepted: an empty string or empty collection is now published everywhere
-      # rather than hidden, ProblemDetail included, where it is also the more honest
-      # answer. Nulls stay absent, which is what the problem details actually rely on
-      # (see ProblemResponseIT.omitsAnAbsentDetailRatherThanPublishingItEmpty).
+      # Publishes required empty arrays (e.g. `User.participants: []`) while still omitting
+      # nulls. Deliberately global: the generator offers no per-schema inclusion hook.
       inclusion: non-absent
 
   security:
     enabled: true
 
-    # This resource server accepts one credential: a bearer JWT from the trust list.
-    # Left at its default basic auth is ENABLED, which registers an authentication
-    # fetcher for `Authorization: Basic` and a challenge provider that answers every
-    # 401 with `Basic realm="<application name>"` alongside the Bearer challenge -
-    # inviting a client to retry with a credential this service has no way to verify,
-    # since it holds no passwords at all.
+    # Bearer JWT only; enabled basic auth would add a `Basic` challenge to every 401.
     basic-auth:
       enabled: false
 
-    # A resource server answers a refused request; it never sends the caller somewhere
-    # to log in. Left at its default this is ENABLED, and the module's authorization
-    # handler then turns any refusal whose `Accept` includes `text/html` into a 303 to
-    # `/` - a browser or a curl with a wildcard Accept would see a redirect instead of
-    # the 401 or 403 the specification promises, and the WWW-Authenticate challenge
-    # would be dropped with it. Switched off so the status is the same for every client.
+    # A resource server refuses, never redirects to a login (else `text/html` gets a 303).
     redirect:
       enabled: false
 
-    # Left at its default, stated here because it is a deliberate choice rather than
-    # an oversight: a request that matches no route is refused like any other
-    # unauthorised request instead of being answered 404. Answering 404 would let an
-    # anonymous caller map the URL space by watching which paths come back as missing.
-    #
-    # This flag is also the whole of "no implicit access". A MATCHED route that no
-    # security rule allowed is already rejected by `SecurityFilter` - the branch taken
-    # when every rule returns UNKNOWN errors with an `AuthorizationException` unless the
-    # route is absent AND this flag is false - so an endpoint that simply forgets
-    # `@Secured` is refused, not public. There is deliberately no catch-all
-    # `intercept-url-map` entry and no custom catch-all `SecurityRule`: either would
-    # only restate that. A `/**` entry would in fact be worse than nothing, because
-    # `ConfigurationInterceptUrlMapRule` is ordered ahead of `SecuredAnnotationRule` and
-    # the filter stops at the first rule that answers, so a `/**` entry granting
-    # `isAuthenticated()` would silence every `@Secured` role requirement.
-    # `PrincipalResolutionIT.routeWithoutSecuredAnnotationIsRefused` pins the behaviour.
+    # Unrouted requests are refused like unauthorised ones, so the URL space cannot be
+    # mapped; this also refuses a route lacking `@Secured`. Never add a `/**` catch-all.
     reject-not-found: true
 
-    # Keep every route-publishing bean of micronaut-security-oauth2 switched off.
-    #
-    # That module is a compile dependency for its OpenID discovery components alone
-    # (docs/adr/0003-use-micronaut-security-oauth2-for-openid-discovery.md):
-    # `IdentityProviderRegistry` drives its `DefaultOpenIdProviderMetadataFetcher`
-    # directly. This service is a resource server - it issues no tokens and runs no
-    # OAuth2 client.
-    #
-    # The login, callback and logout routes stay unregistered on their own because no
-    # `micronaut.security.oauth2.clients.*` property is set. The RFC 9728
-    # protected-resource-metadata beans do NOT: they are gated on the two properties
-    # below and default to ENABLED, so both have to be switched off by hand.
-    #
-    #   enabled:          serves `/.well-known/oauth-protected-resource` anonymously,
-    #                     advertising this service's own base URL and, once
-    #                     authorization servers are listed, the very issuers the trust
-    #                     list deliberately does not disclose (US-ID-008).
-    #   www-authenticate: adds a `resource_metadata="<base-url>/.well-known/
-    #                     oauth-protected-resource"` parameter to every 401 challenge.
-    #                     It is a SEPARATE switch: the challenge provider is gated on
-    #                     this property alone and is NOT gated on `enabled`, so turning
-    #                     the controller off would otherwise leave every 401 pointing
-    #                     at a route that 404s while still leaking the base URL.
-    #
-    # This block must stay the only `micronaut.security.oauth2` key in this file: YAML
-    # takes the last of two duplicate keys, so a second block would silently drop
-    # whichever of these two lines it did not repeat.
-    #
-    # TokenSignatureEnforcementTest pins both: `exposesNoOAuth2Routes` for the routes and
-    # `challengeCarriesNoResourceMetadataParameter` for the challenge parameter.
+    # Only the oauth2 module's discovery components are used (ADR-0003). Its RFC 9728
+    # beans default to ENABLED and would publish this service's base URL and issuers;
+    # `www-authenticate` is a separate switch. Keep this the only `oauth2` key in the file.
     oauth2:
       protected-resource-metadata:
         enabled: false
         www-authenticate: false
 
-    # Allow unauthenticated access to the health endpoints.
-    #
-    # These patterns are matched against the request path with the server context
-    # path already stripped, so `/swagger-ui/**` still covers `${API_PREFIX}/swagger-ui/**`.
-    # ManagementEndpointSecurityIT pins that, including a control case that tightens
-    # the Swagger UI entry and requires the request to be challenged.
-    #
-    # Note that `endpoints.all.port` moves management endpoints to their own port but
-    # does NOT take them out of the context path: the health endpoint is reached at
-    # `http://<host>:${MANAGEMENT_PORT}${API_PREFIX}/health`. That is the URL the
-    # compose healthcheck and any orchestrator probe must use.
-    #
-    # Both `/health` and `/health/**` are listed: the bare path is what a liveness
-    # probe actually requests, and relying on `/**` to also match the empty remainder
-    # is an assumption about the matcher rather than something this file states.
+    # Anonymous access to health, Swagger UI and the spec, matched on the full path. API
+    # routes are governed by `@Secured`; metrics by `endpoints.<id>.sensitive` below.
     intercept-url-map:
       - pattern: /health
         http-method: GET
@@ -139,115 +62,42 @@ micronaut:
         http-method: GET
         access:
           - isAnonymous()
-      - pattern: /static/**
+      - pattern: /openapi.yaml
         http-method: GET
         access:
           - isAnonymous()
-      - pattern: /metrics/**
-        http-method: GET
-        access:
-          - isAuthenticated()
-      - pattern: /prometheus/**
-        http-method: GET
-        access:
-          - isAuthenticated()
-    # Micronaut's own JWT support stays ENABLED: the flag gates the `TokenValidator`
-    # SPI that `ConsentManagerTokenValidator` plugs into, along with the security filter
-    # and the bearer-token reader.
-    #
-    # There are deliberately no `claims-validators.issuer` / `.audience` entries: each
-    # holds a single global value, while every provider in the trust list has its own.
+    # Enabled for the `TokenValidator` SPI `ConsentManagerTokenValidator` plugs into. No
+    # global issuer/audience validators: each provider in the trust list has its own.
     token:
       jwt:
         enabled: true
 
-        # A security control, not a tidy-up: `TokenAuthenticationFetcher` takes the first
-        # `Authentication` ANY registered `TokenValidator` returns, so the module's own
-        # validator would be a laxer path beside `ConsentManagerTokenValidator`. No
-        # verifier is a bean here, so only `UnsignedTokenRejector` keeps that validator
-        # from treating `alg: none` as validly signed - a latent hole, not an open one.
-        # Both guards are kept so undoing either alone cannot open it, and
-        # `TokenSignatureEnforcementTest` pins both. Reasoning in
-        # docs/adr/0005-own-token-validator-on-micronaut-security-jwt.md.
+        # Security control: the module's own validator would be a laxer path beside
+        # `ConsentManagerTokenValidator`. See ADR-0005.
         nimbus:
           validator: false
           reactive-validator: false
 
-  # ---------------------------------------------------------------------------
-  # JWK Set cache
-  # ---------------------------------------------------------------------------
-  # Declaring a cache named `jwks` is what switches `micronaut-security-jwt` from its
-  # built-in in-memory fetcher to `CacheableJwkSetFetcher`, so this block is not tuning -
-  # it selects the implementation. Keys are cached per (provider name, jwks_uri).
-  #
-  # `expire-after-write` is the only knob that matters here, and it sets both halves of
-  # the key-handling budget:
-  #
-  #   rotation latency   - the module has no refresh-on-miss path, so from the moment a
-  #                        provider starts signing with a newly published key until this
-  #                        cache expires, EVERY token signed by that key is rejected.
-  #                        Keycloak publishes the new key and starts signing with it at
-  #                        the same moment, so this window is a total authentication
-  #                        outage, not a degraded mode. No restart is needed to recover,
-  #                        it just takes up to one TTL (AC 13).
-  #   outbound request   - in steady state, with a REACHABLE provider, at most one JWK Set
-  #     rate               request per provider per TTL whatever the inbound traffic is. A
-  #                        flood of tokens bearing `kid` values no provider ever published
-  #                        costs no extra request at all, because nothing invalidates this
-  #                        cache on a miss (AC 14). Only a burst of concurrent FIRST-EVER
-  #                        verifications for one provider can exceed one load, and that is
-  #                        bounded by concurrency at that instant, not by traffic.
-  #
-  # This cache does NOT bound the request rate while a provider's key endpoint is failing.
-  # A failed fetch is never cached: the module's JWKS client turns an HTTP failure into an
-  # empty result and Micronaut Cache invalidates the key instead of storing it. Once the
-  # entry has expired with the endpoint down, every verification would issue its own
-  # request. That case is handled one layer up, in `IssuerSignatureVerifier`, which stops
-  # consulting a provider whose key set could not be read for a fixed cooldown - see
-  # `IssuerSignatureVerifier.KEY_SET_UNAVAILABLE_COOLDOWN`. Tokens from that provider are
-  # rejected for as long as its keys are unreadable, whichever layer answers.
-  #
-  # The two pull in opposite directions, and the trade is lopsided: a short lifetime costs
-  # one request per provider per minute, which no provider notices, while a long one buys
-  # that back with minutes of blanket 401s after every rotation. Hence 60s rather than the
-  # 5m first proposed. RAISING THIS VALUE BUYS ROTATION DOWNTIME - see
-  # docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md.
+  # JWK Set cache. Naming it `jwks` selects `CacheableJwkSetFetcher`. The TTL bounds the
+  # outage after a key rotation, so raising it buys rotation downtime. See ADR-0004.
   caches:
     jwks:
       expire-after-write: ${IDP_JWKS_CACHE_TTL:60s}
 
-    # Contracts fetched from the Contract Service, keyed on the contract URI exactly as a
-    # caller gave it - the same key `privacy_notices` is indexed on. `ContractGateway`
-    # reads and writes this cache itself rather than through `@Cacheable`, because the
-    # annotation has no way to skip storing a miss and would freeze an unknown contract
-    # for a whole lifetime; see docs in the gateway.
-    #
-    # The lifetime is NOT a latency knob. A notice is generated from whatever document
-    # this cache holds, so it bounds how stale the contract behind a freshly published
-    # notice may be, and how long a contract change stays invisible to a repeated
-    # generation. It is declared once under `consent-manager.contract-service.cache-ttl`
-    # and read from there, so the two can never drift apart.
+    # Contracts by URI, written by `ContractGateway` (never a miss). The TTL bounds how
+    # stale a freshly generated notice's contract may be; set via contract-service.cache-ttl.
     contracts:
       expire-after-write: ${consent-manager.contract-service.cache-ttl}
       maximum-size: ${CONTRACT_SERVICE_CACHE_MAX_SIZE:1000}
 
-    # Catalog self-descriptions read while resolving a notice, keyed on the absolute URL
-    # they were read from. Written by `SelfDescriptionClient` itself for the gateway's
-    # reason and a stronger one: a failed read here can mean a blipped network as easily
-    # as an unknown document, so storing it would pin a momentarily unreachable catalog
-    # to UNAVAILABLE for a whole lifetime. Only a parsed document is stored.
-    #
-    # Longer-lived than `contracts` may be: a catalog document carries a title and a
-    # description rather than the terms a notice is published under, so staleness here
-    # costs a label and not a legal statement.
+    # Catalog self-descriptions by URL; only a parsed document is stored. May live longer
+    # than `contracts`: staleness here costs a label, not a legal statement.
     self-descriptions:
       expire-after-write: ${consent-manager.self-description.cache-ttl}
       maximum-size: ${SELF_DESCRIPTION_CACHE_MAX_SIZE:1000}
 
-  # Per-service HTTP client settings. `micronaut.http.services.<id>` is the only place
-  # Micronaut reads a declarative client's timeouts from, so the values are forwarded
-  # here from `consent-manager.contract-service`, which stays the one place a deployment
-  # sets them.
+  # Declarative client timeouts are read only from here; forwarded from
+  # `consent-manager.contract-service`, where a deployment sets them.
   http:
     services:
       contract-service:
@@ -285,325 +135,181 @@ flyway:
 
 endpoints:
   all:
-    # Serve management endpoints on a dedicated port so they can be exposed to an
-    # orchestrator without exposing the API port. The dedicated port does NOT take
-    # them out of `micronaut.server.context-path`: with a context path of /v1 the
-    # health endpoints are under http://<host>:${MANAGEMENT_PORT}/v1/health. The
-    # healthcheck in compose.yaml probes the readiness branch of that tree,
-    # .../v1/health/readiness, not the aggregate .../v1/health - the aggregate also
-    # folds in liveness, so an identity provider outage would restart the container
-    # instead of draining it. ManagementEndpointSecurityIT pins both paths.
+    # Management endpoints on a dedicated, cluster-internal port at the origin root.
+    # ManagementEndpointSecurityIT pins these paths.
     port: ${MANAGEMENT_PORT:9090}
+    # Keeps endpoints out of API_PREFIX even if the URI naming strategy changes.
+    context-path: /
   health:
     enabled: true
     sensitive: false
-    # Per-indicator detail — including which identity providers are configured and
-    # how far their discovery has got — is shown only to an authenticated caller.
-    # An anonymous probe sees the aggregate UP/DOWN and nothing else, so the
-    # readiness endpoint cannot be used to enumerate this deployment's trust list.
+    # Per-indicator detail only for an authenticated caller, so an anonymous probe
+    # cannot enumerate the trust list.
     details-visible: AUTHENTICATED
-    # Health indicators (DiskSpaceHealthIndicator, JdbcHealthIndicator,
-    # IdentityProviderHealthIndicator) are auto-discovered from the classpath — no
-    # explicit enablement needed.
-    #
-    # Micronaut serves three distinct routes off this one endpoint, and an
-    # orchestrator must use them for different purposes:
-    #
-    #   /health            — the aggregate: UP only when liveness AND readiness are UP.
-    #   /health/liveness   — "is the process alive?". No indicator here depends on an
-    #                        external system, so this stays UP through a database or
-    #                        identity-provider outage. This is the one a restart policy
-    #                        may act on; probing /health instead would restart the
-    #                        service over someone else's downtime.
-    #   /health/readiness  — "can this instance serve?". Covers the datasource and
-    #                        IdentityProviderHealthIndicator, so an instance whose
-    #                        identity providers are not yet discovered is drained
-    #                        rather than killed. This is the one a load balancer uses.
-    #
-    # compose.yaml's healthcheck probes /health/readiness, because a Compose
-    # dependency must wait for an instance that can actually serve; its restart
-    # policy deliberately does not act on that signal. ManagementEndpointSecurityIT
-    # pins where these routes resolve.
+    # Restart on /health/liveness (no external dependencies); route traffic on
+    # /health/readiness (datasource and identity providers). Not the aggregate /health.
+  # Set METRICS_AUTHENTICATION_ENABLED false only where the management port is otherwise
+  # protected. Any valid token opens /metrics and /prometheus.
   metrics:
     enabled: true
-    sensitive: true
+    sensitive: ${METRICS_AUTHENTICATION_ENABLED:true}
   prometheus:
     enabled: true
-    sensitive: true
+    sensitive: ${METRICS_AUTHENTICATION_ENABLED:true}
 
-# OpenTelemetry tracing configuration.
-# The Micronaut OTel module autoconfigures the SDK from standard OTel environment
-# variables (OTEL_SERVICE_NAME, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_TRACES_EXPORTER).
-# Trace IDs and span IDs are automatically added to the SLF4J MDC for log correlation.
+# OpenTelemetry, configured from the standard OTEL_* variables; trace IDs reach the MDC.
 tracing:
   opentelemetry:
     enabled: ${OTEL_TRACING_ENABLED:true}
+  # Matched against the full path; every excluded route sits at the origin root.
   exclusions:
     - /health/**
     - /metrics/**
     - /prometheus/**
     - /swagger-ui/**
-    - /static/**
+    - /openapi.yaml
 
-# Custom application configuration bound to environment variables
 consent-manager:
   url: ${CONSENT_MANAGER_URL:`http://localhost:8080`}
 
+  # Path prefix of every API controller; management and `@OriginRoot` routes stay at root.
+  api-prefix: ${API_PREFIX:/v1}
+
   contract-service:
-    # Base URL of the Contract Service, the owner of the contracts a privacy notice is
-    # generated from. Forwarded to `micronaut.http.services.contract-service.url` above.
+    # Base URL of the Contract Service; forwarded to `micronaut.http.services` above.
     url: ${CONTRACT_SERVICE_URL:`http://localhost:8081`}
 
-    # Bounds on one upstream attempt, not on a whole fetch: a fetch is bounded by
-    # (retry-attempts + 1) x read-timeout plus the growing retry pauses - about 23.5s at
-    # the defaults - and by twice that when the ecosystem endpoint misses and the
-    # bilateral one is tried as well. Size a caller's own timeout from that bound.
+    # Per attempt, not per fetch: a fetch takes up to about 23.5s at the defaults, twice
+    # that when the bilateral endpoint is tried too.
     connect-timeout: ${CONTRACT_SERVICE_CONNECT_TIMEOUT:2s}
     read-timeout: ${CONTRACT_SERVICE_READ_TIMEOUT:5s}
 
-    # Retries after a failed fetch, counted after the initial attempt, and the growing
-    # pause between them - three retries are at most four upstream requests, and one is
-    # the smallest budget accepted. Only a 5xx or a transport failure is retried: a 4xx
-    # is a defect retrying cannot fix, and a 404 never reaches the retry at all because
-    # it is the "no such contract" answer.
+    # Retries after the initial attempt (minimum one), with a growing pause. Only a 5xx or
+    # a transport failure is retried.
     retry-attempts: ${CONTRACT_SERVICE_RETRY_ATTEMPTS:3}
     retry-delay: ${CONTRACT_SERVICE_RETRY_DELAY:500ms}
     retry-multiplier: ${CONTRACT_SERVICE_RETRY_MULTIPLIER:2.0}
 
-    # How long a fetched contract is served from `micronaut.caches.contracts`. Short on
-    # purpose: see the comment on that cache.
+    # Lifetime of `micronaut.caches.contracts`; short on purpose, see that cache.
     cache-ttl: ${CONTRACT_SERVICE_CACHE_TTL:60s}
 
-  # Reading of the catalog self-descriptions a contract only names. Only a resolved
-  # retrieval reads these, and the URLs come out of a document this service does not
-  # own, so the two guards below are what keeps that from being an open proxy into the
-  # deployment's own network. The timeouts are the Contract Service's: both are reads of
-  # an upstream catalog on the same request path.
+  # Catalog self-descriptions a contract names. Their URLs come from documents this
+  # service does not own, so the guards below keep this from being an open proxy.
   self-description:
-    # Hosts a self-description may be fetched from. Empty - the default - admits any
-    # host whose addresses all lie outside this network. An entry does double duty: it
-    # restricts fetching to the listed hosts AND waives the private-address refusal for
-    # them, because naming a host here is an operator's statement about their own
-    # network and outranks the address heuristic.
-    #
-    # It is operator configuration and nothing else writes it. A participant that
-    # self-registers does NOT add its own host here: a list a stranger can extend is not
-    # a guard, and the private-address waiver each entry carries is exactly what a
-    # self-registered host must not be able to grant itself. Leaving the list empty is
-    # the usual deployment - public catalogs are already admitted - and an entry is
-    # added only to pin the catalog down, or to read one inside this network.
+    # Empty admits any host whose addresses are all external. An entry restricts fetching
+    # to the listed hosts AND waives the private-address check; operator-only.
     allowed-hosts: ${SELF_DESCRIPTION_ALLOWED_HOSTS:}
 
-    # Documents one resolved retrieval reads before it stops walking the catalog and
-    # reports the data section UNAVAILABLE. The walk is over lists this service does not
-    # author - the offerings a contract names, and the resources each offering names -
-    # so without a ceiling a single authenticated GET fans out as far as whoever
-    # publishes them decides.
+    # Documents one resolved retrieval reads before reporting the data section UNAVAILABLE.
     max-documents: ${SELF_DESCRIPTION_MAX_DOCUMENTS:50}
 
-    # Longest one resolved retrieval spends walking the catalog before it stops and
-    # reports the data section UNAVAILABLE. The companion of max-documents rather than a
-    # duplicate: a document ceiling bounds how many reads a retrieval makes but not how
-    # long each one sits out the read timeout, so without a deadline the walk's worst
-    # case is the ceiling times that timeout and a few concurrent retrievals of one
-    # notice hold the request pool for minutes.
+    # Deadline for one resolved retrieval's catalog walk; bounds what max-documents cannot.
     max-duration: ${SELF_DESCRIPTION_MAX_DURATION:15s}
 
-    # Whether a self-description may be read over plain http. False on purpose: a
-    # catalog document is fetched by URL from an upstream contract, and plaintext would
-    # let whoever can see that traffic rewrite what a published notice says.
+    # False on purpose: plaintext would let an on-path party rewrite a published notice.
     allow-plaintext-http: ${SELF_DESCRIPTION_ALLOW_PLAINTEXT_HTTP:false}
 
-    # How long a fetched self-description is served from `micronaut.caches
-    # .self-descriptions`. May be longer than the contract's: see that cache.
+    # Lifetime of `micronaut.caches.self-descriptions`.
     cache-ttl: ${SELF_DESCRIPTION_CACHE_TTL:10m}
 
   users:
-    # Most users POST /users/search may return. The operation is not paginated, so a
-    # result of exactly this size may have been truncated; the result is sorted by
-    # identifier first, which makes the truncation deterministic rather than arbitrary.
+    # Cap on POST /users/search results; sorted by identifier, so truncation is deterministic.
     search-max-results: ${USERS_SEARCH_MAX_RESULTS:200}
 
-    # Most entries POST /participants/me/users/bulk may carry. Entries are applied one
-    # at a time and share no transaction, so the cost of a batch is linear in its size;
-    # a larger batch is refused whole with 400 before anything is written.
+    # Cap on bulk registration entries; a larger batch is refused whole with 400.
     bulk-max-size: ${USERS_BULK_MAX_SIZE:500}
 
   participants:
-    # Records GET /participants returns when the caller names no size. Not written in
-    # the specification, which could not track a value configured per deployment; the
-    # response reports the size it actually applied.
+    # GET /participants page size when the caller names none.
     page-default-size: ${PARTICIPANTS_PAGE_DEFAULT_SIZE:20}
 
-    # Most records one directory page may carry. A larger requested size is clamped to
-    # this and answered 200, never refused, so changing the ceiling cannot turn a
-    # caller's working request into a 400.
+    # A larger requested size is clamped to this and answered 200, never refused.
     page-max-size: ${PARTICIPANTS_PAGE_MAX_SIZE:100}
 
   consents:
-    # Records GET /consents/me returns when the caller names no size. Not written in the
-    # specification, which could not track a value configured per deployment; the
-    # response reports the size it actually applied.
+    # GET /consents/me page size when the caller names none.
     page-default-size: ${CONSENTS_PAGE_DEFAULT_SIZE:20}
 
-    # Most records one consent page may carry. A larger requested size is clamped to this
-    # and answered 200, never refused, so changing the ceiling cannot turn a caller's
-    # working request into a 400.
+    # A larger requested size is clamped to this and answered 200, never refused.
     page-max-size: ${CONSENTS_PAGE_MAX_SIZE:100}
 
-    # Most superseded records one includeLineage walk reads and renders per consent. The
-    # walk also stops on a record it has already visited, so a cycle across rows ends
-    # rather than hanging; this caps the cost of a long but acyclic history. Each chain is
-    # one recursive query, so a GET /consents/me?includeLineage=true page costs one query
-    # per entry and reads at most page-max-size x lineage-max-depth superseded rows.
+    # Most superseded records one includeLineage walk reads per consent; cycles also stop it.
     lineage-max-depth: ${CONSENTS_LINEAGE_MAX_DEPTH:20}
 
   contract-discovery:
-    # Contracts one GET /contracts/available listing reads from the Contract Service at
-    # once. The candidates are every contract this service holds a notice for, so a
-    # serial read would hold the request for one full fetch bound per contract; this
-    # caps the fan-out an upstream sees from a single listing.
+    # Concurrent Contract Service reads for one GET /contracts/available listing.
     max-concurrency: ${CONTRACT_DISCOVERY_MAX_CONCURRENCY:8}
 
-    # Longest one listing waits on the Contract Service before it answers 502 with no
-    # partial list. Shorter than one worst-case fetch (see contract-service above) on
-    # purpose: an upstream that slow is answered as unavailable rather than waited out.
+    # Longest a listing waits before answering 502 with no partial list.
     max-duration: ${CONTRACT_DISCOVERY_MAX_DURATION:30s}
 
   receipts:
-    # Jurisdiction a Kantara consent receipt (format=receipt-kantara) names as governing
-    # the processing. KI-CR-v1.1.0 requires one and neither a notice nor a contract
-    # carries it, so it is stated per deployment.
+    # Jurisdiction a Kantara receipt names; required by KI-CR-v1.1.0, stated per deployment.
     jurisdiction: ${RECEIPTS_JURISDICTION:EU}
-    # Private JSON Web Key (RFC 7517, one line of JSON, EC P-256/P-384/P-521 or RSA)
-    # every receipt is signed with; a secret. Its public half is published at the
-    # origin root, GET /.well-known/jwks.json (RFC 8615, outside API_PREFIX), under
-    # the key's `kid` (or, absent one, its RFC 7638 thumbprint). ES256 is preferred,
-    # RS256 is for compatibility; .env.sample gives the openssl + `step crypto jwk
-    # create --from-pem` commands that produce one.
+    # Secret private JWK (one line; EC P-256/384/521 or RSA) receipts are signed with. Its
+    # public half is served at /.well-known/jwks.json; .env.sample shows how to make one.
     signing-key: ${RECEIPTS_SIGNING_KEY:}
-    # With no signing key, generate a throwaway one at startup instead of failing.
-    # Receipts it signs stop verifying on restart, so only dev and test enable it.
+    # Generate a throwaway key when none is set; its receipts stop verifying on restart.
     ephemeral-signing-key: ${RECEIPTS_EPHEMERAL_SIGNING_KEY:false}
-    # Public-only JWKS (RFC 7517 `{"keys":[...]}`, one line) of every published key
-    # that does not sign: retired keys, so receipts saved before a rotation keep
-    # verifying, and an upcoming key, pre-published before it signs. Private
-    # members, unsupported key types and repeated `kid`s fail startup.
-    # The JWKS is cached up to its max-age (one hour), so rotation takes two
-    # deploys: (1) add the new public key here and deploy; (2) wait an hour;
-    # (3) put the new private key in signing-key, moving the new key's entry out
-    # of this list and the old key's public entry into it, and deploy. Keep the
-    # old entry while its receipts are in use. See docs/security.md, ADR-0014.
+    # Public-only JWKS of retired and upcoming keys. Rotation takes two deploys an hour
+    # apart (the JWKS max-age); see docs/security.md and ADR-0014.
     retired-verification-keys: ${RECEIPTS_RETIRED_VERIFICATION_KEYS:}
 
   erasure:
-    # Key of the salted HMAC an erased record keeps instead of its identifier, so
-    # that the operator - and nobody else, since the key is not in the database -
-    # can still confirm that a named person consented. The salt is per record, so
-    # two erased records never carry the same value. Unset (the default) means
-    # erased records carry no verifier and nothing can be confirmed against them,
-    # ever. Rotating the key abandons every verifier written under the previous one.
+    # Key of the salted HMAC an erased record keeps to confirm a named person consented.
+    # Unset means no verifier; rotating it abandons existing verifiers. See ADR-0007.
     verification-secret: ${ERASURE_VERIFICATION_SECRET:}
 
   notifications:
-    # Client the consent-requested email links the data subject to. Only this bare URL
-    # is rendered - never a consent id, token or query parameter - and unset (the
-    # default) means the email carries no link at all. With SMTP_HOST set, startup fails
-    # unless it is an absolute http(s) URL with a host.
+    # Bare client URL linked from the consent-requested email; unset means no link. With
+    # SMTP_HOST set, startup fails unless it is an absolute http(s) URL with a host.
     client-url: ${NOTIFICATION_CLIENT_URL:}
 
-  # ---------------------------------------------------------------------------
-  # Identity provider trust list
-  # ---------------------------------------------------------------------------
-  # One entry per trusted OpenID Connect provider, keyed by name. Each entry is
-  # self-contained: the issuer, the discovery document URL, the audience this service
-  # expects, the clock skew, the claim paths and the role mapping. No `client-id` and no
-  # `client-secret` appear anywhere - this service is a resource server, runs no OAuth2
-  # flow and stores no credential.
-  #
-  # The JWK Set cache is deliberately NOT per provider. Fetching and caching the keys is
-  # done by `micronaut-security-jwt`, whose cache is a single Micronaut Cache named
-  # `jwks` shared by every provider (see `micronaut.caches.jwks` above and
-  # docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md). A
-  # per-provider lifetime is not expressible without reimplementing the cache, which is
-  # not worth a knob nobody has asked to turn.
-  #
-  # The trust list is read ONCE at startup and is immutable for the lifetime of the
-  # process: no runtime reload, no admin endpoint, no auto-registration. Adding,
-  # removing or re-pointing a provider requires a config change and a restart. Only the
-  # per-provider metadata discovered for that fixed set (the jwks_uri and the cached
-  # signing keys) changes afterwards, which is what lets a key rotation be picked up
-  # without a restart.
-  #
-  # Startup FAILS when the list is empty, an entry is malformed, two entries declare the
-  # same issuer, or an entry declares a key this service does not read. `IDP_ISSUER`,
-  # `IDP_DISCOVERY_URL` and `IDP_AUDIENCE` intentionally have no default, so a deployment
-  # that forgets to configure an IdP aborts at startup with a message naming the missing
-  # property rather than silently trusting something.
-  #
-  # Environment variables can only OVERRIDE values of a provider already declared here;
-  # they cannot ADD one. A name that appears only in an environment variable never
-  # becomes a configuration entry and is silently ignored - add the second provider to
-  # this file (or to a deployment overlay) and parameterise its values.
-  #
-  # Why the issuer, discovery and key caching are configured here rather than delegated
-  # to `micronaut.security.oauth2.clients.<name>.openid.issuer`:
-  #   docs/adr/0002-own-identity-provider-registry-on-nimbus.md
+  errors:
+    # Publish a 5xx exception message as `detail`. Dev-only debugging aid; stack traces
+    # are never published.
+    expose-exception-detail: ${ERRORS_EXPOSE_EXCEPTION_DETAIL:false}
+
+  logging:
+    # Required HMAC key (at least 32 bytes) pseudonymising identifiers in INFO+ log lines.
+    # Keep it secret and stable: rotating it unlinks earlier pseudonyms.
+    pseudonym-key: ${LOG_PSEUDONYM_KEY:}
+
+  # Identity provider trust list, read once at startup and immutable; changes need a
+  # restart. Env vars can override a declared provider's values but never add one.
+  # Startup fails on an empty or malformed list or a duplicate issuer. See ADR-0002.
   identity-providers:
     primary:
       issuer: ${IDP_ISSUER:}
-      # Fetched at startup to discover the provider's jwks_uri. Kept separate from the
-      # issuer because a provider may publish its metadata at a path that is not the
-      # issuer plus the well-known suffix; step 3 verifies that the document's `issuer`
-      # equals the value above and refuses the provider when they disagree.
+      # Fetched at startup for the jwks_uri; its `issuer` must equal the value above.
       discovery-url: ${IDP_DISCOVERY_URL:}
       audience: ${IDP_AUDIENCE:}
-      # The discovery document is this service's trust anchor: it names the issuer that
-      # is verified byte-for-byte and the jwks_uri signing keys are fetched from. Over
-      # cleartext http anyone on the network path supplies both, so an http issuer or
-      # discovery-url aborts startup unless this is switched on. Leave it false outside
-      # local development; it is logged at WARN on every startup when it is not.
+      # Permits an http issuer or discovery-url; local development only, warned at startup.
       allow-insecure-transport: ${IDP_ALLOW_INSECURE_TRANSPORT:false}
       # Tolerance applied to the exp, iat and nbf claims.
       clock-skew: ${IDP_CLOCK_SKEW:30s}
-      # Claim names are per provider and are configured as a list of segments, so how a
-      # name is read is fixed here and never inferred from the token: a nested path is
-      # [realm_access, roles], while a top-level name that merely contains dots is one
-      # segment. A scalar is one segment; a comma-separated scalar is its segments,
-      # which is how an environment variable supplies a nested path.
+      # Claim paths as segment lists: [realm_access, roles] is nested; a comma-separated
+      # scalar is its segments.
       claims:
-        # The user identifier keys the `users` row and is not scoped by issuer, so
-        # it must be unique across every provider in this trust list - the default,
-        # `sub`, is only unique within one. A deployment trusting more than one
-        # provider must point this at a claim that is unique across all of them.
+        # Keys the `users` row unscoped by issuer, so must be unique across all providers.
         user-identifier: ${IDP_CLAIM_USER_IDENTIFIER:sub}
         participant-identifier: ${IDP_CLAIM_PARTICIPANT_IDENTIFIER:participant_id}
         roles: ${IDP_CLAIM_ROLES:realm_access,roles}
-      # Maps this service's roles to the raw role strings the provider emits.
-      # Keys are written in lower case so that an override replaces the configured
-      # value instead of adding a second entry for the same role.
+      # This service's roles to the provider's role strings; lower-case keys so an
+      # override replaces rather than adds.
       role-mapping:
         user: ${IDP_ROLE_USER:consent-user}
         participant: ${IDP_ROLE_PARTICIPANT:consent-participant}
         catalog: ${IDP_ROLE_CATALOG:consent-catalog}
 
-# -----------------------------------------------------------------------------
-# Outgoing mail (subject notifications)
-# -----------------------------------------------------------------------------
-# SMTP_HOST is deliberately not written here: it reaches `smtp.host` through Micronaut's
-# environment mapping. Unset or blank disables notifications - nothing is sent and a
-# logging implementation is bound instead. A `host: ${SMTP_HOST:}` line would make the
-# key present with an empty value, which is why the host is read only from the variable.
-# SMTP_PORT (default 587; STARTTLS only, so 465/implicit TLS warns at startup) and SMTP_STARTTLS (default true; false sends unencrypted, warns at
-# startup and refuses to start while SMTP_USER is set) are likewise read only from the
-# environment, so the defaults live once, in NotificationConfiguration, and cannot drift.
+# Outgoing mail. SMTP_HOST, SMTP_PORT and SMTP_STARTTLS are read only from the environment;
+# an unset or blank SMTP_HOST disables notifications. Defaults live in NotificationConfiguration.
 smtp:
-  # Credentials are optional; without a user the session does not authenticate.
+  # Optional; without a user the session does not authenticate.
   user: ${SMTP_USER:}
   password: ${SMTP_PASSWORD:}
-  # Sender of every notification. Startup fails when SMTP_HOST is set and this is blank.
+  # Startup fails when SMTP_HOST is set and this is blank.
   from-address: ${SMTP_FROM_ADDRESS:}
   from-name: ${SMTP_FROM_NAME:}
-  # Dev-only: trust every server certificate and skip the host-name check. Logged at
-  # WARN on every startup while on.
+  # Dev-only: trust every certificate and skip the host-name check; warned at startup.
   insecure-trust-all-certificates: ${SMTP_INSECURE_TRUST_ALL_CERTIFICATES:false}

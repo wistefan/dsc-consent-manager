@@ -22,71 +22,14 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 /**
- * Checks a token's signature against the JWK Set of the issuer that is supposed to have minted it.
+ * Checks a token's signature against the JWK Set of the issuer it claims; makes no claim checks.
  *
- * <p>This is the second half of the trust chain. {@link IdentityProviderRegistry} answers <em>is
- * this issuer on the trust list, and where does it publish its keys?</em>; this type answers
- * <em>was this token signed by one of the keys that issuer publishes?</em> Nothing here decides
- * whether a token is valid overall - the claim checks live in the validator built on top of it.
- *
- * <h2>What is delegated, and what is not</h2>
- *
- * <p>Fetching the JWK Set, caching it, matching the token's {@code kid} against it and verifying
- * the signature are all done by {@code micronaut-security-jwt}'s {@link ReactiveJwksSignature},
- * constructed per provider the same way {@code IdentityProviderRegistry} constructs the module's
- * discovery fetcher (see {@code
- * docs/adr/0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md}). None of that
- * behaviour is written here, which also means its {@code kid} rules are the module's, not this
- * service's: the matcher constrains on {@code kid} only when the <em>token</em> carries one, so a
- * token without a {@code kid} is offered every published key, and two keys published under one
- * {@code kid} are both tried with the token accepted if either verifies. A token whose {@code kid}
- * matches nothing in the cached set is rejected outright - the module has no refresh-on-miss path -
- * so a provider that publishes keys <em>without</em> a {@code kid} while minting tokens that carry
- * one cannot be used with this service. No such provider is on the trust list today; supporting one
- * would be a change to the module or a reason to revisit ADR 0004, not something this class can
- * paper over.
- *
- * <p>What is <em>not</em> delegated is the routing. The module's own wiring registers every
- * configured JWKS endpoint as a global verifier and checks a token against each in turn until one
- * succeeds, without ever reading the token's {@code iss}. With two providers configured that lets
- * provider B mint tokens that authenticate as provider A. Here the issuer is resolved through the
- * trust list <em>first</em> and the token is only ever offered to that one provider's keys, so a
- * key that is valid at B can never satisfy a token claiming A.
- *
- * <h2>Caching and key rotation</h2>
- *
- * <p>The key set is cached by Micronaut Cache under the name {@code jwks}; its lifetime is {@code
- * micronaut.caches.jwks.expire-after-write}. That one setting covers both halves of the
- * requirement, and it is the only lever over either.
- *
- * <p>While the provider is reachable, nothing invalidates that entry on a miss, so a flood of
- * tokens bearing {@code kid} values no provider ever published costs <em>no</em> outbound request
- * at all: the request rate this service can put on a healthy identity provider is bounded by the
- * cache lifetime and nothing else, whatever an attacker sends. The bound is a steady-state one - a
- * burst of concurrent <em>first-ever</em> verifications for one provider can each miss before the
- * first load is cached, which is bounded by concurrency at that instant rather than by traffic.
- *
- * <p>The same absence of a refresh-on-miss path is what makes the lifetime expensive in the other
- * direction: from the moment a provider starts signing with a newly published key until the cached
- * set expires, every token it issues is rejected. Recovery needs no restart, but it does take up to
- * one lifetime, which is why the default is measured in seconds.
- *
- * <h2>What the cache does not bound: a failing key endpoint</h2>
- *
- * <p>A <em>failed</em> fetch is never cached. The module's JWKS client resumes an HTTP failure to
- * an empty result, and Micronaut Cache stores nothing for an empty result - it invalidates the key
- * instead. So once the entry has expired while the provider's key endpoint is unreachable or
- * answering 5xx, the cache bounds nothing: every single verification would issue its own request,
- * with no rate limit and no backoff, which is 1:1 amplification aimed at a provider that is already
- * unhealthy.
- *
- * <p>That gap is closed here rather than in the module, because it is a routing decision and not a
- * cache: after a lookup fails to produce a key set, this class stops consulting that provider for
- * {@link #KEY_SET_UNAVAILABLE_COOLDOWN} and rejects its tokens outright. Nothing is remembered
- * across the window - no last-known-good key set is held, because holding one would be a second
- * cache alongside the module's and would keep honouring keys the provider may have withdrawn.
- * Tokens from that provider are rejected during an outage either way; all the cooldown changes is
- * how much traffic this service relays onto a provider that cannot answer.
+ * <p>Security invariant: the issuer is resolved through the trust list first and the token is
+ * offered only to that provider's keys, so a key valid at provider B never satisfies a token
+ * claiming A. Fetching, caching ({@code micronaut.caches.jwks.expire-after-write}), {@code kid}
+ * matching and verification are the module's {@link ReactiveJwksSignature}; see ADR-0004. A failed
+ * fetch is never cached, so a provider whose key set is unreadable is skipped for {@link
+ * #KEY_SET_UNAVAILABLE_COOLDOWN} rather than hit once per inbound token.
  */
 @Singleton
 public class IssuerSignatureVerifier {
@@ -107,34 +50,20 @@ public class IssuerSignatureVerifier {
     public static final String OUTCOME_VERIFIED = "verified";
 
     /**
-     * Value of {@link #OUTCOME_TAG} for a token the provider's keys did not verify.
-     *
-     * <p>Worth alerting on. A rising count is either a key rotation the cache has not caught up
-     * with yet or an attempt to pass forged tokens, and an operator wants to know which; the
-     * matching WARN line carries the {@code kid} that failed so the two can be told apart.
+     * Value of {@link #OUTCOME_TAG} for a token the provider's keys did not verify. Worth alerting
+     * on: an uncaught key rotation or forged tokens; the WARN line's {@code kid} tells them apart.
      */
     public static final String OUTCOME_REJECTED = "rejected";
 
     /**
-     * Value of {@link #OUTCOME_TAG} for a token whose issuer's key set could not be read at all.
-     *
-     * <p>Kept apart from {@link #OUTCOME_REJECTED} so that an identity provider outage does not
-     * look like a flood of forged tokens in a dashboard. The caller cannot tell the two apart - it
-     * sees {@code false} either way, which is what US-ID-008 requires - but an operator must be
-     * able to, because the remedy is entirely different.
+     * Value of {@link #OUTCOME_TAG} for an unreadable key set; separate from {@link
+     * #OUTCOME_REJECTED} so an outage does not look like forgery. The caller sees {@code false}.
      */
     public static final String OUTCOME_UNAVAILABLE = "unavailable";
 
     /**
-     * How long a provider whose key set could not be read is left alone before it is asked again.
-     *
-     * <p>This is the only thing standing between a failing JWK Set endpoint and one outbound
-     * request per inbound token. A failed fetch is never cached (see the class documentation), so
-     * without this window the cache stops bounding the request rate exactly when the provider can
-     * least afford it. Within the window a token from that provider is rejected without any
-     * outbound request, so the cost of the window is at most this much extra delay before a
-     * recovered provider starts verifying again - comfortably inside the cache lifetime that
-     * already bounds rotation latency.
+     * How long a provider with an unreadable key set is left alone; its tokens are rejected
+     * meanwhile. Bounds outbound requests to a failing JWK Set endpoint.
      */
     static final Duration KEY_SET_UNAVAILABLE_COOLDOWN = Duration.ofSeconds(10);
 
@@ -143,27 +72,10 @@ public class IssuerSignatureVerifier {
     private final JwkSetFetcher<JWKSet> jwkSetFetcher;
     private final MeterRegistry meterRegistry;
 
-    /**
-     * Per-provider outage and logging state, keyed by the trust-list entry name.
-     *
-     * <p>Bounded by the trust list, which is fixed at startup, so this map cannot grow with
-     * traffic.
-     */
+    /** Per-provider state by entry name; bounded by the fixed trust list, not by traffic. */
     private final Map<String, ProviderState> stateByProvider = new ConcurrentHashMap<>();
 
-    /**
-     * Creates the verifier.
-     *
-     * @param registry the trust list, consulted on every check so that only an issuer that is both
-     *     configured and discovered can have its key set fetched at all
-     * @param jwkValidator the module's signature validator, which picks the verifier matching the
-     *     key and the token's algorithm
-     * @param jwkSetFetcher the module's key-set fetcher; the cached implementation when a {@code
-     *     jwks} cache is configured, which {@code application.yml} always does
-     * @param meterRegistry where the outcome counter is published; {@code null} when metrics are
-     *     switched off, in which case a throwaway registry keeps the instrumentation from needing a
-     *     second code path
-     */
+    /** Creates the verifier; a {@code null} meter registry is replaced by a throwaway one. */
     public IssuerSignatureVerifier(
             IdentityProviderRegistry registry,
             JwkValidator jwkValidator,
@@ -176,23 +88,9 @@ public class IssuerSignatureVerifier {
     }
 
     /**
-     * Reports whether the token was signed by a key the named issuer currently publishes.
-     *
-     * <p>Non-blocking: the key set is fetched reactively, so a stalled identity provider parks no
-     * thread. Callers must compose the returned publisher rather than awaiting it on a request
-     * thread.
-     *
-     * <p>An issuer that is not on the trust list, or one whose discovery has not succeeded, emits
-     * {@code false} without any outbound request - it is indistinguishable, from the caller's side,
-     * from a token whose signature simply did not verify. That is deliberate: a caller must not be
-     * able to probe which issuers this deployment trusts. The same holds for an issuer whose key
-     * set could not be read within the last {@link #KEY_SET_UNAVAILABLE_COOLDOWN}.
-     *
-     * @param issuer the {@code iss} claim of the token, read before anything about it is trusted;
-     *     may be {@code null} for a token that carries no issuer
-     * @param jwt the parsed token
-     * @return a single-element publisher emitting {@code true} only if the signature verified
-     *     against a key of that issuer
+     * Emits {@code true} only if a key the issuer currently publishes signed the token.
+     * Non-blocking; compose, never await. An unknown, unresolved or cooling-down issuer emits
+     * {@code false} with no outbound request, indistinguishable from a bad signature.
      */
     @SingleResult
     public Publisher<Boolean> verify(@Nullable String issuer, SignedJWT jwt) {
@@ -226,22 +124,12 @@ public class IssuerSignatureVerifier {
                 .map(outcome -> record(resolved, jwt, outcome));
     }
 
-    /**
-     * Returns the mutable state kept for one provider, creating it on first use.
-     *
-     * @param provider the provider whose state is wanted
-     * @return that provider's state, never {@code null}
-     */
+    /** The provider's state, created on first use. */
     private ProviderState stateOf(ResolvedIdentityProvider provider) {
         return stateByProvider.computeIfAbsent(provider.name(), name -> new ProviderState());
     }
 
-    /**
-     * Reads the issuer the token claims, without trusting it.
-     *
-     * @param jwt the token to read
-     * @return the {@code iss} claim, or {@code null} if the token carries none or cannot be read
-     */
+    /** The untrusted {@code iss} claim, or {@code null} if absent or unreadable. */
     @Nullable
     private static String claimedIssuer(SignedJWT jwt) {
         try {
@@ -253,17 +141,8 @@ public class IssuerSignatureVerifier {
     }
 
     /**
-     * Turns a thrown failure of the key-set lookup into the unreadable-key-set outcome.
-     *
-     * <p>Anything thrown while resolving or calling the provider's key endpoint has to come out of
-     * this publisher as {@code false} rather than as an error signal. An error would surface to the
-     * caller as a 500 carrying internal detail, which both tells an unauthenticated caller
-     * something about this deployment's upstreams and makes an unreachable provider look different
-     * from a bad signature - the distinction US-ID-008 exists to deny.
-     *
-     * @param provider the provider whose keys could not be consulted
-     * @param error what went wrong
-     * @return {@link #OUTCOME_UNAVAILABLE}, always
+     * Maps a key-set lookup failure to {@link #OUTCOME_UNAVAILABLE}, never an error signal, which
+     * would surface as a 500 that tells an outage apart from a bad signature.
      */
     private static String unreadable(ResolvedIdentityProvider provider, Throwable error) {
         LOG.debug("Consulting the key set of provider '{}' threw", provider.name(), error);
@@ -271,21 +150,8 @@ public class IssuerSignatureVerifier {
     }
 
     /**
-     * Publishes the outcome of one signature check, updates the provider's state and logs it.
-     *
-     * <p>Logging is deliberately not one line per rejected token. A caller chooses how many forged
-     * tokens to send and what {@code kid} each carries, so an unconditional WARN per rejection is a
-     * log pipeline an unauthenticated caller can fill, and the genuine signal - a key rotation this
-     * service has not caught up with - would be buried in it. A WARN is therefore emitted only when
-     * the outcome for a provider <em>changes</em> for the worse, which is exactly when a rotation
-     * or an outage starts; the steady state is counted, not logged. The counter above carries every
-     * outcome and is the thing to alert on.
-     *
-     * @param provider the provider whose keys were consulted
-     * @param jwt the token that was checked, read only for the {@code kid} in the log line
-     * @param outcome one of {@link #OUTCOME_VERIFIED}, {@link #OUTCOME_REJECTED} or {@link
-     *     #OUTCOME_UNAVAILABLE}
-     * @return whether the token may be treated as signed by that provider
+     * Counts one check's outcome, updates state, and returns whether the token is signed. WARNs
+     * only when a provider's outcome worsens, so forged-token floods cannot fill the logs.
      */
     private Boolean record(ResolvedIdentityProvider provider, SignedJWT jwt, String outcome) {
         Counter.builder(SIGNATURE_VERIFICATION_METRIC)
@@ -306,6 +172,7 @@ public class IssuerSignatureVerifier {
         }
         boolean verified = OUTCOME_VERIFIED.equals(outcome);
         boolean changed = state.markChecked(verified);
+        // A kid is a public key-set index, not key material, so it is safe above DEBUG.
         if (!verified && changed && LOG.isWarnEnabled()) {
             LOG.warn(
                     "No key published by provider '{}' verified a token presenting kid '{}'; "
@@ -325,47 +192,25 @@ public class IssuerSignatureVerifier {
     }
 
     /**
-     * The mutable state this class keeps about one provider.
-     *
-     * <p>Two things only: whether that provider's key endpoint is currently believed to be
-     * unreadable, and whether the last conclusive check against its keys verified. Both are plain
-     * volatile fields rather than locks, because both are advisory - a lost update costs at most
-     * one extra outbound request or one extra log line, and never changes whether a token is
-     * accepted.
+     * Advisory per-provider state: outage cooldown and last conclusive outcome. Volatile, not
+     * locked: a lost update costs one request or log line, never a token decision.
      */
     private static final class ProviderState {
 
-        /**
-         * {@link System#nanoTime()} reading before which the key set is assumed unreadable.
-         *
-         * <p>Initialised to "now", so a freshly created state is available. Compared by
-         * subtraction, which stays correct across {@code nanoTime} wraparound.
-         */
+        /** {@link System#nanoTime()} before which the key set is assumed unreadable. */
         private volatile long unavailableUntilNanos = System.nanoTime();
 
         /** Whether the last check that did reach a key set verified. */
         private volatile boolean lastCheckVerified = true;
 
-        /**
-         * Reports whether this provider is inside its outage cooldown.
-         *
-         * @return {@code true} while its key set must not be requested again
-         */
+        /** Whether this provider is inside its outage cooldown; subtraction survives wraparound. */
         private boolean isUnavailable() {
             return System.nanoTime() - unavailableUntilNanos < 0L;
         }
 
         /**
-         * Opens the outage cooldown if it is not already open.
-         *
-         * <p>An open window is deliberately <em>not</em> extended. Extending it would let a steady
-         * stream of inbound tokens hold the window open indefinitely, so a provider that had
-         * recovered would never be asked again for as long as traffic kept arriving. Letting it
-         * lapse on its own means one request probes the provider per window, which is the bound
-         * this class is here to put on the outage case.
-         *
-         * @return {@code true} if the provider was considered available until this call, which is
-         *     the transition worth logging
+         * Opens the cooldown unless open; never extends it, so traffic cannot hold it open forever.
+         * Returns {@code true} on the available-to-unavailable transition.
          */
         private boolean markUnavailable() {
             if (isUnavailable()) {
@@ -375,12 +220,7 @@ public class IssuerSignatureVerifier {
             return true;
         }
 
-        /**
-         * Records a check that did reach the provider's key set, ending any cooldown.
-         *
-         * @param verified whether the signature verified
-         * @return {@code true} if this outcome differs from the previous one
-         */
+        /** Records a conclusive check, ending any cooldown; {@code true} if the outcome changed. */
         private boolean markChecked(boolean verified) {
             unavailableUntilNanos = System.nanoTime();
             boolean changed = verified != lastCheckVerified;

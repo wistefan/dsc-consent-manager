@@ -40,11 +40,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Exercises {@code GET /contracts/available} and {@code GET /contracts/available/{role}} against a
- * real Keycloak, a real PostgreSQL and a stubbed Contract Service.
- *
- * <p>Each case serves its contracts under ids of its own: the gateway caches what it fetched, so a
- * shared id would let one case's contract answer another's.
+ * Contract discovery routes against a stubbed Contract Service; each case uses its own contract
+ * ids, since the gateway's cache would otherwise let one case answer another's.
  */
 @MicronautTest(transactional = false)
 class ContractDiscoveryIT extends PrivacyNoticeApiTestSupport {
@@ -62,7 +59,7 @@ class ContractDiscoveryIT extends PrivacyNoticeApiTestSupport {
     /** Status an upstream failure is stubbed with; any 5xx the retry budget does not survive. */
     private static final int UPSTREAM_FAILURE = 503;
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject UserRepository users;

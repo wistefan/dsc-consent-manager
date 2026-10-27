@@ -64,6 +64,31 @@ servers:
 security:
   - bearerAuth: []
 
+# A tag also names the generated Abstract*Controller, so renaming one renames that class.
+tags:
+  - name: Status
+    description: Service status.
+  - name: Users
+    description: Data subjects registered with the service.
+  - name: Participants
+    description: Dataspace participants and the participant directory.
+  - name: Participant Users
+    description: A participant's affiliations with its users.
+  - name: Privacy Notices
+    description: Privacy notices generated from contracts.
+  - name: Consents
+    description: The data subject's grant of consent.
+  - name: Consent Requests
+    description: Consent requests a participant raises for a user.
+  - name: Consent Lifecycle
+    description: Moves of an existing consent through its lifecycle.
+  - name: ConsentQuery
+    description: Consent reads, validity checks and receipts.
+  - name: ContractDiscovery
+    description: Contracts available for consent.
+  - name: ReceiptSigning
+    description: Public keys that verify signed consent receipts.
+
 paths:
   /api-status:
     get:
@@ -1131,14 +1156,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: >
-            Concurrent generations are contending for this contract and
-            provider's one active notice faster than this request could claim
-            it. Nothing was written; the request is safe to retry.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ProblemDetail"
+          $ref: "#/components/responses/NoticeGenerationContended"
         "502":
           description: >
             The Contract Service could not be reached, so the contract behind the
@@ -1227,14 +1245,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: >
-            Concurrent generations are contending for this contract and
-            provider's one active notice faster than this request could claim
-            it. Nothing was written; the request is safe to retry.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ProblemDetail"
+          $ref: "#/components/responses/NoticeGenerationContended"
         "502":
           description: >
             The Contract Service could not be reached, so the contract behind the
@@ -2590,6 +2601,9 @@ components:
     ProblemDetail:
       $ref: "./components/schemas/ProblemDetail.yaml"
 
+    ProblemFieldError:
+      $ref: "./components/schemas/ProblemFieldError.yaml"
+
     User:
       $ref: "./components/schemas/User.yaml"
 
@@ -2715,6 +2729,7 @@ components:
           items:
             $ref: "#/components/schemas/BulkRegistrationEntryResult"
         summary:
+          description: The entries counted by outcome.
           $ref: "#/components/schemas/BulkRegistrationSummary"
       required:
         - results
@@ -2775,6 +2790,7 @@ components:
       description: An ISO/IEC 29184 consent record and the detached JWS over it.
       properties:
         receipt:
+          description: The ISO/IEC 29184 consent record `jws` signs.
           $ref: "#/components/schemas/ConsentReceipt"
         jws:
           type: string
@@ -2794,6 +2810,7 @@ components:
       description: A Kantara KI-CR-v1.1.0 consent receipt and the detached JWS over it.
       properties:
         receipt:
+          description: The Kantara consent receipt `jws` signs.
           $ref: "#/components/schemas/ConsentReceiptKantara"
         jws:
           type: string
@@ -2911,6 +2928,9 @@ components:
 
     Conflict:
       $ref: "./components/responses/Conflict.yaml"
+
+    NoticeGenerationContended:
+      $ref: "./components/responses/NoticeGenerationContended.yaml"
 
     BadGateway:
       $ref: "./components/responses/BadGateway.yaml"

@@ -3,6 +3,7 @@ package com.seamware.consentmanager.security;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.seamware.consentmanager.support.TestPseudonymizer;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.env.Environment;
 import io.micronaut.context.env.PropertySource;
@@ -27,37 +28,26 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Unit tests for the identity provider trust list: {@link Role}, {@link
- * IdentityProviderConfiguration} and the startup check in {@link
- * IdentityProviderRegistryValidator}.
- *
- * <p>A trusted provider is one {@code consent-manager.identity-providers.<name>} block owned
- * entirely by this service — issuer, discovery URL, audience, durations, claim paths and role
- * mapping all live there, as recorded in {@code
- * docs/adr/0002-own-identity-provider-registry-on-nimbus.md}. These tests exercise the binding of
- * that block and the startup validation of the assembled list.
- *
- * <p>Each test starts a throwaway {@link ApplicationContext} from an explicit property map with
- * default property sources disabled, so neither {@code application.yml} nor {@code
- * application-test.yml} can leak a trust list in and mask a binding defect.
- *
- * <p>Every issuer used here points at {@link #UNREACHABLE_AUTHORITY}, a port nothing listens on, so
- * nothing in these tests can accidentally reach a real provider.
+ * Tests the trust list: {@link Role}, binding of {@link IdentityProviderConfiguration} and the
+ * {@link IdentityProviderRegistryValidator} startup check, each from explicit properties only.
  */
 @DisplayName("Identity provider trust list configuration")
 class IdentityProviderConfigurationTest {
 
-    /** No property file is read, so the receipt signer, which fails startup keyless, needs this. */
-    private static final Map<String, Object> EPHEMERAL_RECEIPT_KEY =
-            Map.of("consent-manager.receipts.ephemeral-signing-key", true);
+    /**
+     * No property file is read, so the receipt signer and the log pseudonymizer, which both fail
+     * startup keyless, need these.
+     */
+    private static final Map<String, Object> STARTUP_KEYS =
+            Map.of(
+                    "consent-manager.receipts.ephemeral-signing-key",
+                    true,
+                    "consent-manager.logging.pseudonym-key",
+                    TestPseudonymizer.KEY);
 
     /**
-     * Host and port that refuse connections instantly, keeping any discovery attempt cheap.
-     *
-     * <p>{@code https} rather than {@code http} so the baseline trust list every test starts from
-     * is the one a deployment is meant to have: cleartext is refused unless the entry opts in, and
-     * that opt-in is exercised explicitly in {@link RegistryValidation} rather than baked into
-     * every other test here.
+     * Authority that refuses connections instantly; {@code https} so the baseline list is a
+     * deployment's, with the cleartext opt-in exercised only in {@link RegistryValidation}.
      */
     private static final String UNREACHABLE_AUTHORITY = "https://localhost:1";
 
@@ -74,21 +64,12 @@ class IdentityProviderConfigurationTest {
     private static final String OTHER_PROVIDER = "secondary";
 
     /**
-     * Per-entry key that step 2 shipped and step 4 retired.
-     *
-     * <p>The JWK Set cache is {@code micronaut-security-jwt}'s and is a single Micronaut Cache
-     * shared by every provider ({@code micronaut.caches.jwks}), so a per-provider lifetime cannot
-     * be honoured. Both spellings of the key must therefore abort startup rather than bind to
-     * nothing: an operator who still sets it would otherwise get a clean start, no warning, and a
-     * cache lifetime other than the one they asked for.
+     * Per-entry cache lifetime key that cannot be honoured: the JWK Set cache is global, so both
+     * spellings must abort startup rather than bind to nothing.
      */
     private static final String RETIRED_JWKS_CACHE_TTL_KEY = "jwks-cache-ttl";
 
-    /**
-     * An environment name that is not {@link Environment#TEST}, standing in for a deployment.
-     *
-     * <p>Used by the checks that must behave differently in a deployment than under test.
-     */
+    /** An environment name other than {@link Environment#TEST}, standing in for a deployment. */
     private static final String DEPLOYMENT_ENVIRONMENT = "deployment";
 
     private static final String ISSUER = UNREACHABLE_AUTHORITY + "/realms/dataspace";
@@ -109,23 +90,12 @@ class IdentityProviderConfigurationTest {
 
     private static final String CONFIGURED_CLOCK_SKEW = "45s";
 
-    /**
-     * Returns the configuration key prefix of a provider entry.
-     *
-     * @param name the provider name
-     * @return for example {@code consent-manager.identity-providers.primary}
-     */
+    /** Returns the configuration key prefix of the named provider entry. */
     private static String settingsKey(String name) {
         return IdentityProviderConfiguration.PREFIX + "." + name;
     }
 
-    /**
-     * Adds a fully specified, valid entry for a provider.
-     *
-     * @param properties the map to populate
-     * @param name the provider name
-     * @param issuer the issuer the provider stamps into its tokens
-     */
+    /** Adds a fully specified, valid entry for a provider stamping the given issuer. */
     private static void putValidProvider(
             Map<String, Object> properties, String name, String issuer) {
         String prefix = settingsKey(name);
@@ -141,45 +111,32 @@ class IdentityProviderConfigurationTest {
         properties.put(prefix + ".role-mapping.catalog", CATALOG_ROLE_STRING);
     }
 
-    /**
-     * Builds a valid single-provider trust list.
-     *
-     * @return a mutable property map that individual tests mutate to produce variants
-     */
+    /** Builds a mutable, valid single-provider trust list for tests to vary. */
     private static Map<String, Object> validTrustList() {
         Map<String, Object> properties = new LinkedHashMap<>();
         putValidProvider(properties, PROVIDER, ISSUER);
         return properties;
     }
 
-    /**
-     * Starts an isolated application context from the supplied properties.
-     *
-     * @param properties the complete configuration for the context
-     * @return the started context; the caller is responsible for closing it
-     */
+    /** Starts an isolated context from the supplied properties; the caller closes it. */
     private static ApplicationContext startContext(Map<String, Object> properties) {
         return ApplicationContext.builder()
                 .enableDefaultPropertySources(false)
-                .properties(EPHEMERAL_RECEIPT_KEY)
+                .properties(STARTUP_KEYS)
                 .properties(properties)
                 .build()
                 .start();
     }
 
     /**
-     * Starts an isolated application context in which the given values are delivered the way the
-     * operating system delivers environment variables.
-     *
-     * @param properties the configuration the context would otherwise have
-     * @param environmentVariables raw environment-variable names and their values
-     * @return the started context; the caller is responsible for closing it
+     * Starts an isolated context with the given values delivered as raw environment variables; the
+     * caller closes it.
      */
     private static ApplicationContext startContextWithEnvironmentVariables(
             Map<String, Object> properties, Map<String, Object> environmentVariables) {
         return ApplicationContext.builder()
                 .enableDefaultPropertySources(false)
-                .properties(EPHEMERAL_RECEIPT_KEY)
+                .properties(STARTUP_KEYS)
                 .properties(properties)
                 .propertySources(
                         PropertySource.of(
@@ -191,21 +148,14 @@ class IdentityProviderConfigurationTest {
     }
 
     /**
-     * Starts an isolated application context with environment deduction switched off, so the active
-     * environment names are exactly those given.
-     *
-     * <p>Micronaut otherwise deduces {@link Environment#TEST} from the JUnit frames on the stack,
-     * which would mask any check that treats a test context differently from a deployment.
-     *
-     * @param properties the complete configuration for the context
-     * @param environments the environment names to activate
-     * @return the started context; the caller is responsible for closing it
+     * Starts an isolated context with environment deduction off, so the active environments are
+     * exactly those given rather than an inferred {@link Environment#TEST}.
      */
     private static ApplicationContext startContextInEnvironments(
             Map<String, Object> properties, String... environments) {
         return ApplicationContext.builder()
                 .enableDefaultPropertySources(false)
-                .properties(EPHEMERAL_RECEIPT_KEY)
+                .properties(STARTUP_KEYS)
                 .deduceEnvironment(false)
                 .environments(environments)
                 .properties(properties)
@@ -213,26 +163,14 @@ class IdentityProviderConfigurationTest {
                 .start();
     }
 
-    /**
-     * Returns the assembled trust list, ordered by provider name.
-     *
-     * @param context a started context
-     * @return the trusted providers as the validator assembled them
-     */
+    /** Returns the assembled trust list, ordered by provider name. */
     private static List<IdentityProviderConfiguration> providersOf(ApplicationContext context) {
         return context.getBean(IdentityProviderRegistryValidator.class).getProviders();
     }
 
     /**
-     * Asserts that a configuration prevents the context from starting, naming the offending
-     * property.
-     *
-     * <p>Every expected fragment must appear somewhere in the stack trace. Pass both the property
-     * name and a distinctive phrase from the validator's own message wherever the property name
-     * alone would also be produced by an unrelated binding or conversion failure on that property.
-     *
-     * @param properties the configuration under test
-     * @param expectedMessageFragments fragments the failure message must all contain
+     * Asserts the configuration prevents startup with every fragment in the stack trace; pass a
+     * validator phrase too where the property name alone could come from a binding failure.
      */
     private static void assertStartupFails(
             Map<String, Object> properties, String... expectedMessageFragments) {
@@ -364,12 +302,7 @@ class IdentityProviderConfigurationTest {
     @DisplayName("A malformed provider entry")
     class MalformedSettings {
 
-        /**
-         * Supplies one malformed variant of the valid trust list per case.
-         *
-         * @return the case name, the property overrides to apply, the property keys to remove and
-         *     the fragment the failure message must contain
-         */
+        /** One malformed variant per case: name, overrides, removed keys, expected fragment. */
         static Stream<Arguments> malformedVariants() {
             String prefix = settingsKey(PROVIDER);
             return Stream.of(
@@ -477,10 +410,8 @@ class IdentityProviderConfigurationTest {
                     "claims.email",
                     "role-mappings.user",
                     "jwks-url",
-                    // Retired in step 4: the JWK Set cache belongs to micronaut-security-jwt and
-                    // is global, so a per-provider lifetime binds to nothing. A knob that is
-                    // silently ignored is worse than no knob, so the old spelling must stay
-                    // rejected rather than quietly accepted.
+                    // The JWK Set cache is global to micronaut-security-jwt, so a per-provider
+                    // lifetime would bind to nothing; a silently ignored knob must stay rejected.
                     RETIRED_JWKS_CACHE_TTL_KEY
                 })
         @DisplayName("rejects a settings key this service does not read")
@@ -488,9 +419,8 @@ class IdentityProviderConfigurationTest {
             Map<String, Object> properties = validTrustList();
             properties.put(settingsKey(PROVIDER) + "." + key, "whatever");
 
-            // @EachProperty ignores an unknown key silently, so without this check a misspelled
-            // security-boundary setting would bind to nothing and leave the real one at its
-            // default, with a clean startup.
+            // @EachProperty ignores unknown keys silently, so a misspelled security setting would
+            // otherwise bind to nothing and start cleanly.
             assertStartupFails(properties, "unrecognised key(s)");
         }
 
@@ -524,10 +454,8 @@ class IdentityProviderConfigurationTest {
         @DisplayName("does not report the guard removed when its switch did not remove it")
         void doesNotReportTheGuardRemovedWhenItIsStillRegistered() {
             Map<String, Object> properties = validTrustList();
-            // The @Requires that decides the bean's fate compares the property to "false" as an
-            // exact, case-sensitive string, so this spelling leaves the guard registered. A check
-            // that re-derived the state by reading the property back as a Boolean would convert
-            // this to false and abort startup, reporting a guard removed that is in fact present.
+            // @Requires compares the property to "false" case-sensitively, so this spelling keeps
+            // the guard registered; reading it back as a Boolean would wrongly report it removed.
             properties.put(UnsignedTokenRejector.ENABLED_PROPERTY, "FALSE");
 
             try (ApplicationContext context =
@@ -610,10 +538,8 @@ class IdentityProviderConfigurationTest {
             Map<String, Object> properties = validTrustList();
             properties.put(settingsKey(PROVIDER) + ".issuer", issuer);
 
-            // Assert the validator's own wording, not just the property name: Micronaut silently
-            // repairs some malformed values and fails to convert others, and either outcome would
-            // also name the property. Only these phrases prove that the trust-list check is what
-            // rejected the value.
+            // Assert the validator's own wording: Micronaut repairs some malformed values and fails
+            // to convert others, either of which would also name the property.
             assertStartupFails(properties, settingsKey(PROVIDER) + ".issuer", expectedMessage);
         }
 
@@ -633,12 +559,7 @@ class IdentityProviderConfigurationTest {
         }
     }
 
-    /**
-     * Rewrites a configured URL to its cleartext equivalent.
-     *
-     * @param url a URL built on {@link #UNREACHABLE_AUTHORITY}
-     * @return the same URL served over {@code http}
-     */
+    /** Rewrites a URL built on {@link #UNREACHABLE_AUTHORITY} to its {@code http} equivalent. */
     private static String cleartext(String url) {
         return url.replace(UNREACHABLE_AUTHORITY, CLEARTEXT_AUTHORITY);
     }
@@ -678,23 +599,14 @@ class IdentityProviderConfigurationTest {
     }
 
     /**
-     * Pins the precedence by which a token granting several roles settles on one identity.
-     *
-     * <p>The order is published in {@code api/components/security.yaml} as part of the token
-     * contract, so it is a compatibility promise and not an implementation detail. The
-     * participant-plus-catalog case is the one a dataspace actually issues: a catalog token is a
-     * participant token that additionally bears the catalog role.
+     * Tests the role precedence a multi-role token settles on, a compatibility promise published in
+     * {@code api/components/security.yaml}.
      */
     @Nested
     @DisplayName("Role.effective")
     class RolePrecedence {
 
-        /**
-         * Every granted role set and the identity it settles on where the operation accepts any
-         * authenticated caller.
-         *
-         * @return the granted roles and the expected effective role
-         */
+        /** Each granted role set and its effective role on an any-authenticated operation. */
         static Stream<Arguments> grantedRoles() {
             return Stream.of(
                     Arguments.of(Set.of(Role.USER), Role.USER),
@@ -713,11 +625,7 @@ class IdentityProviderConfigurationTest {
             assertThat(Role.effective(granted, Set.of())).contains(expected);
         }
 
-        /**
-         * What the same multi-role token acts as on operations scoped to different roles.
-         *
-         * @return the granted roles, the roles the operation accepts and the expected identity
-         */
+        /** Granted roles, roles the operation accepts, and the identity the token acts as. */
         static Stream<Arguments> scopedOperations() {
             Set<Role> userAndParticipant = Set.of(Role.USER, Role.PARTICIPANT);
             Set<Role> participantAndCatalog = Set.of(Role.PARTICIPANT, Role.CATALOG);
@@ -759,14 +667,8 @@ class IdentityProviderConfigurationTest {
     }
 
     /**
-     * Pins what environment variables can and cannot do to the trust list.
-     *
-     * <p>Externalised configuration is the documented deployment mechanism ({@code .env.sample}),
-     * and every one of these behaviours is load-bearing: an operator who believes a second issuer
-     * is trusted, or that a misspelled variable took effect, would otherwise get a service that
-     * starts cleanly with a trust list it does not have. Micronaut does not enumerate
-     * environment-supplied keys under a prefix, so {@link IdentityProviderRegistryValidator} reads
-     * the raw variable names; these tests keep that path honest.
+     * Tests what environment variables can and cannot do to the trust list; the validator reads raw
+     * variable names because Micronaut does not enumerate them under a prefix.
      */
     @Nested
     @DisplayName("environment-variable binding")
@@ -775,12 +677,7 @@ class IdentityProviderConfigurationTest {
         /** Prefix of the environment variables that configure a provider entry. */
         private static final String ENV_PREFIX = "CONSENT_MANAGER_IDENTITY_PROVIDERS_";
 
-        /**
-         * Returns the environment-variable spelling of a key below the provider under test.
-         *
-         * @param key the key as written in YAML, for example {@code clock-skew}
-         * @return for example {@code CONSENT_MANAGER_IDENTITY_PROVIDERS_PRIMARY_CLOCK_SKEW}
-         */
+        /** Environment-variable spelling of a YAML key below the provider under test. */
         private static String variableFor(String key) {
             return ENV_PREFIX
                     + PROVIDER.toUpperCase(Locale.ROOT)
@@ -814,10 +711,8 @@ class IdentityProviderConfigurationTest {
                     "audiance",
                     "jwks-url",
                     "claims.email",
-                    // The environment-variable spelling of the retired per-provider cache
-                    // lifetime. It is checked against a separate list from the YAML spelling
-                    // above, so removing the knob from one list and not the other leaves it
-                    // accepted here, bound to nothing.
+                    // Environment-variable spelling of the per-provider cache lifetime, checked
+                    // against a separate list from the YAML spelling, so both must reject it.
                     RETIRED_JWKS_CACHE_TTL_KEY
                 })
         @DisplayName("rejects an unrecognised key that arrives only as an environment variable")
@@ -836,12 +731,7 @@ class IdentityProviderConfigurationTest {
                     .hasStackTraceContaining("unrecognised key(s)");
         }
 
-        /**
-         * Supplies one documented key per case, with the value an operator would set and the
-         * assertion that reads it back.
-         *
-         * @return the key, the value to set and the accessor that must return it
-         */
+        /** One documented key per case: the key, the value an operator sets, its accessor. */
         static Stream<Arguments> documentedKeys() {
             return Stream.of(
                     Arguments.of(
@@ -910,12 +800,7 @@ class IdentityProviderConfigurationTest {
     @DisplayName("Claim names configured as segments")
     class ClaimNameSegments {
 
-        /**
-         * Supplies one configured claim name per case, with whether it reads as a dotted path that
-         * was never split into segments.
-         *
-         * @return the case name, the configured segments and the expected verdict
-         */
+        /** One configured claim name per case, and whether it reads as an unsplit dotted path. */
         static Stream<Arguments> claimNames() {
             return Stream.of(
                     Arguments.of("a dotted name left unsplit", List.of("realm_access.roles"), true),

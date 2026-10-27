@@ -4,17 +4,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.json.tree.JsonNode;
 import io.micronaut.serde.annotation.Serdeable;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 /**
- * A contract as the Contract Service serves it, covering both the ecosystem and the bilateral
- * shape.
- *
- * <p>One record for two shapes, because the two endpoints answer with documents that share an
- * identifier, a status and a purpose list and differ only in which further members they carry.
- * Every component is therefore nullable and {@link #shape()} says which document arrived. Unknown
- * members are ignored, so an upstream addition does not break the fetch.
+ * A Contract Service contract in either the ecosystem or bilateral shape; every component is
+ * nullable, unknown members are ignored, and {@link #shape()} says which arrived.
  */
 @Serdeable
 public record ContractResponse(
@@ -48,39 +44,21 @@ public record ContractResponse(
         BILATERAL
     }
 
-    /**
-     * The contract's own identifier, {@code uid} when the document declares it and {@code _id}
-     * otherwise.
-     *
-     * <p>The two are the same value under two names: the service's schema calls it {@code uid}
-     * while the stored document carries mongo's {@code _id}, and which one is serialized has
-     * varied. Null only for a document declaring neither, which no endpoint produces.
-     */
+    /** The contract's identifier: {@code uid}, else the same value as {@code _id}; else null. */
     @Nullable
     public String contractId() {
         return uid != null ? uid : mongoId;
     }
 
     /**
-     * Which shape this document is.
-     *
-     * <p>Decided on the two parties: {@code dataProvider} and {@code dataConsumer} exist only on a
-     * bilateral contract and are mandatory there, where an ecosystem contract names its parties
-     * through {@code members} instead. Deliberately read off the document rather than off the
-     * endpoint that answered, so a document kept in the cache or in a fixture carries its own
-     * shape.
+     * Bilateral when it names {@code dataProvider} or {@code dataConsumer}; read off the document,
+     * not the endpoint, so a cached document carries its own shape.
      */
     public Shape shape() {
         return dataProvider != null || dataConsumer != null ? Shape.BILATERAL : Shape.ECOSYSTEM;
     }
 
-    /**
-     * The data provider a bilateral contract names, as a participant identifier.
-     *
-     * <p>Trimmed, and null when the document states nothing, so that the identity of a party is
-     * read the same way wherever it is read - the bound check and the stored recipient list cannot
-     * disagree over a value the document padded.
-     */
+    /** The bilateral data provider's identifier, trimmed, null when blank, so readers agree. */
     @Nullable
     public String dataProviderIdentifier() {
         return stated(dataProvider);
@@ -120,12 +98,7 @@ public record ContractResponse(
     @Serdeable
     public record Policy(@Nullable String ruleId, @Nullable String description) {}
 
-    /**
-     * One GDPR purpose the contract declares.
-     *
-     * <p>The dedicated purpose list, not the policies: these entries are what a privacy notice's
-     * purposes section is actually about.
-     */
+    /** One GDPR purpose from the dedicated purpose list, the source of a notice's purposes. */
     @Serdeable
     public record Purpose(
             @Nullable String uid,
@@ -138,12 +111,8 @@ public record ContractResponse(
             @Nullable String thirdPartyName) {
 
         /**
-         * The PII categories this purpose names, whichever way the document declared them.
-         *
-         * <p>Held as a tree because the two shapes disagree: the ecosystem document declares one
-         * string, the bilateral one an array of them. Either fixed type would fail to decode the
-         * other shape and turn a perfectly well-formed contract into a 502, so the one form is read
-         * and both are normalised here. Never null; a purpose naming none yields an empty list.
+         * The PII categories, normalised from a string (ecosystem) or an array (bilateral); never
+         * null.
          */
         public List<String> piiCategories() {
             if (piiCategory == null || piiCategory.isNull()) {
@@ -152,13 +121,10 @@ public record ContractResponse(
             if (!piiCategory.isArray()) {
                 return List.of(piiCategory.coerceStringValue());
             }
-            List<String> categories = new ArrayList<>();
-            for (JsonNode element : piiCategory.values()) {
-                if (!element.isNull()) {
-                    categories.add(element.coerceStringValue());
-                }
-            }
-            return List.copyOf(categories);
+            return StreamSupport.stream(piiCategory.values().spliterator(), false)
+                    .filter(element -> !element.isNull())
+                    .map(JsonNode::coerceStringValue)
+                    .collect(Collectors.toUnmodifiableList());
         }
     }
 

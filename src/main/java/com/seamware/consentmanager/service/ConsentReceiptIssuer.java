@@ -10,10 +10,8 @@ import jakarta.inject.Singleton;
 import java.time.Instant;
 
 /**
- * Signs and stores the Kantara receipt of a grant, from inside the transaction that granted it.
- *
- * <p>Throws {@link com.seamware.consentmanager.signing.ReceiptSigningException} when signing fails,
- * which rolls that transaction back: no grant is stored without its receipt.
+ * Signs and stores the Kantara receipt of a grant, from inside the transaction that granted it. A
+ * signing failure throws and rolls that transaction back: no grant is stored without its receipt.
  */
 @Singleton
 public class ConsentReceiptIssuer {

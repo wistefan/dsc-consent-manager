@@ -16,25 +16,19 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Stream;
+import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * Asserts the specification's {@code $ref} tree resolves in both layouts it is read in: the
- * hand-authored {@code api/} tree and the copy under {@code target/classes/static/} that Swagger UI
- * loads.
- *
- * <p>Every reference here is relative, so the tree is only as sound as the directory shape around
- * it. The generator reads the authored layout and the browser reads the copy, which means a
- * reference can resolve for the build and still leave Swagger UI with an unrenderable document -
- * the failure this suite exists to catch, since no other test loads the specification the way a
- * browser does.
+ * The authored {@code $ref} tree resolves, and the served bundle is self-contained and dereferences
+ * to the same content; guards against Swagger UI receiving an unrenderable document.
  */
 @DisplayName("Specification reference resolution")
 class SpecReferenceResolutionTest {
 
-    /** Root of the copy on the classpath, which is what Swagger UI is served. */
+    /** Directory of the classpath holding the bundle, which is what the service serves. */
     private static final String BUNDLE_ROOT = "static";
 
     /** Root of the hand-authored tree, relative to the module directory. */
@@ -43,13 +37,13 @@ class SpecReferenceResolutionTest {
     /** The entry document of either layout. */
     private static final String ROOT_DOCUMENT = "openapi.yaml";
 
-    /**
-     * Directory a path item must never be externalised into; see {@code
-     * SpecSecurityConsistencyTest}.
-     */
+    /** Directory a path item must never be externalised into. */
     private static final String FORBIDDEN_PATHS_DIRECTORY = "paths";
 
     private static final String REF_KEY = "$ref";
+
+    /** Stands in for a reference back into its own ancestry; depth-free, as layouts differ. */
+    private static final Map<String, Object> CYCLE = Map.of("$cycle", true);
 
     /** Separates a reference's file part from its JSON pointer. */
     private static final char FRAGMENT_SEPARATOR = '#';
@@ -61,13 +55,16 @@ class SpecReferenceResolutionTest {
 
     private static final String YAML_SUFFIX = ".yaml";
 
+    /** Marks tool configuration such as the Spectral ruleset, which is not part of the spec. */
+    private static final String TOOL_CONFIGURATION_PREFIX = ".";
+
     /** Reads one document of a layout, addressed by its path relative to that layout's root. */
     @FunctionalInterface
     interface Layout {
         InputStream open(String relativePath) throws IOException;
     }
 
-    /** The classpath copy, read exactly as the static resource handler serves it. */
+    /** The classpath bundle, read exactly as the static resource handler serves it. */
     private static Layout bundle() {
         return path -> {
             String resource = BUNDLE_ROOT + POINTER_SEPARATOR + path;
@@ -87,37 +84,53 @@ class SpecReferenceResolutionTest {
     }
 
     @Test
-    @DisplayName("every reference in the copy Swagger UI loads resolves to a node that is there")
-    void theBundledSpecificationResolvesEveryReference() {
-        assertThat(resolvedReferences(bundle()))
-                .as("the specification is a tree of relative references, not a flat document")
+    @DisplayName("every reference in the authored tree resolves to a node that is there")
+    void theAuthoredSpecificationResolvesEveryReference() {
+        assertThat(resolvedReferences(source()))
+                .as("the authored specification is a tree of relative references")
                 .isNotEmpty();
     }
 
     @Test
-    @DisplayName("the authored tree and the copy resolve to the same set of references")
-    void bothLayoutsResolveTheSameReferences() {
-        assertThat(resolvedReferences(source()))
+    @DisplayName("the served bundle resolves every reference within itself")
+    void theServedBundleContainsNoExternalReference() {
+        assertThat(resolvedReferences(bundle()))
                 .as(
-                        "a reference missing from either layout has already failed above, so what is"
-                                + " left for this comparison is content drift: a copy that still"
-                                + " resolves while pointing somewhere the authored tree does not,"
-                                + " which publishes to the browser a contract the generator never"
-                                + " compiled against")
-                .isEqualTo(resolvedReferences(bundle()));
+                        "a reference into another file has nothing to resolve against once the"
+                                + " bundle is served on its own")
+                .isNotEmpty()
+                .allSatisfy(reference -> assertThat(fileOf(reference)).isEqualTo(ROOT_DOCUMENT));
     }
 
     @Test
-    @DisplayName("the copy holds exactly the documents the authored tree holds")
-    void theCopyHoldsExactlyTheAuthoredDocuments() {
-        assertThat(bundledDocuments())
+    @DisplayName("the served bundle dereferences to the authored specification, section by section")
+    void theServedBundleIsTheAuthoredContract() {
+        Map<String, Object> authored = asMap(dereferenced(source()));
+        Map<String, Object> served = asMap(dereferenced(bundle()));
+
+        assertThat(served.keySet()).containsExactlyElementsOf(authored.keySet());
+        SoftAssertions.assertSoftly(
+                softly ->
+                        authored.forEach(
+                                (section, content) ->
+                                        softly.assertThat(served.get(section))
+                                                .as(
+                                                        "`%s` of the bundle, every reference"
+                                                                + " followed, is what the"
+                                                                + " generator compiles",
+                                                        section)
+                                                .isEqualTo(content)));
+    }
+
+    @Test
+    @DisplayName("the bundle is the only YAML document the static mapping can serve")
+    void theBundleIsTheOnlyServedDocument() {
+        assertThat(servedDocuments())
                 .as(
-                        "the copy is refreshed by overwriting and never by deleting, so a document"
-                                + " dropped from `%s` lingers in it and goes on being served as part"
-                                + " of the published contract; no other assertion here sees that,"
-                                + " because a leftover is referenced from neither root",
-                        SOURCE_ROOT)
-                .containsExactlyInAnyOrderElementsOf(authoredDocuments());
+                        "the `/*.yaml` mapping serves every top-level YAML file of `%s/`, and the"
+                                + " build refreshes it by overwriting, never by deleting",
+                        BUNDLE_ROOT)
+                .containsExactly(ROOT_DOCUMENT);
     }
 
     @Test
@@ -130,9 +143,9 @@ class SpecReferenceResolutionTest {
 
         assertThat(authoredDocuments())
                 .as(
-                        "an unreferenced file is still copied to `static/` and still served, so it"
-                                + " reads as part of the published contract while being part of"
-                                + " nothing")
+                        "the bundler inlines only what the root references, so an unreferenced file"
+                                + " reads as part of the contract while being dropped from what is"
+                                + " served")
                 .allSatisfy(document -> assertThat(reachable).contains(document));
     }
 
@@ -151,9 +164,18 @@ class SpecReferenceResolutionTest {
                 asMap(load(source(), new LinkedHashMap<>(), ROOT_DOCUMENT).get("paths")));
     }
 
-    /**
-     * Every reference reachable from the root document, each one resolved, as {@code file#pointer}.
-     */
+    /** The root document with every reference followed, so layouts compare by content alone. */
+    private static Object dereferenced(Layout layout) {
+        Map<String, Object> documents = new LinkedHashMap<>();
+        return inlined(
+                layout,
+                ROOT_DOCUMENT,
+                load(layout, documents, ROOT_DOCUMENT),
+                documents,
+                new ArrayList<>());
+    }
+
+    /** Every reference reachable from the root, resolved, as {@code file#pointer}. */
     private static Set<String> resolvedReferences(Layout layout) {
         Map<String, Object> documents = new LinkedHashMap<>();
         Set<String> resolved = new TreeSet<>();
@@ -178,18 +200,97 @@ class SpecReferenceResolutionTest {
         }
     }
 
-    /**
-     * Resolves one reference against the document holding it and descends into what it points at.
-     *
-     * <p>A reference already resolved is not followed twice, which also ends a cycle between two
-     * schemas that name each other.
-     */
+    /** Resolves one reference and descends into it; one already resolved is not followed again. */
     private static void resolve(
             Layout layout,
             String document,
             String reference,
             Map<String, Object> documents,
             Set<String> resolved) {
+        String target = targetOf(document, reference);
+        if (!resolved.add(target)) {
+            return;
+        }
+        walk(
+                layout,
+                fileOf(target),
+                follow(layout, documents, target, reference, document),
+                documents,
+                resolved);
+    }
+
+    /**
+     * A copy of {@code node} with every {@code $ref} mapping replaced by a copy of its target, or
+     * by {@link #CYCLE} when the target is already in {@code stack}. A {@code $ref} with siblings
+     * keeps them, its target copied under the {@code $ref} key.
+     */
+    private static Object inlined(
+            Layout layout,
+            String document,
+            Object node,
+            Map<String, Object> documents,
+            List<String> stack) {
+        if (node instanceof Map<?, ?> map) {
+            if (map.size() == 1 && map.get(REF_KEY) instanceof String reference) {
+                return inlinedTarget(layout, document, reference, documents, stack);
+            }
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach(
+                    (key, value) ->
+                            copy.put(
+                                    (String) key,
+                                    REF_KEY.equals(key) && value instanceof String reference
+                                            ? inlinedTarget(
+                                                    layout, document, reference, documents, stack)
+                                            : inlined(layout, document, value, documents, stack)));
+            return copy;
+        }
+        if (node instanceof List<?> list) {
+            return list.stream()
+                    .map(value -> inlined(layout, document, value, documents, stack))
+                    .toList();
+        }
+        return node;
+    }
+
+    private static Object inlinedTarget(
+            Layout layout,
+            String document,
+            String reference,
+            Map<String, Object> documents,
+            List<String> stack) {
+        String target = targetOf(document, reference);
+        if (stack.contains(target)) {
+            return CYCLE;
+        }
+        stack.add(target);
+        Object copy =
+                inlined(
+                        layout,
+                        fileOf(target),
+                        follow(layout, documents, target, reference, document),
+                        documents,
+                        stack);
+        stack.removeLast();
+        return copy;
+    }
+
+    /** The node a resolved {@code file#pointer} names, failing when it names nothing. */
+    private static Object follow(
+            Layout layout,
+            Map<String, Object> documents,
+            String target,
+            String reference,
+            String from) {
+        return dereference(
+                load(layout, documents, fileOf(target)),
+                target.substring(target.indexOf(FRAGMENT_SEPARATOR) + 1),
+                reference,
+                from);
+    }
+
+    /** Resolves a reference against the document holding it, as {@code file#pointer}. */
+    private static String targetOf(String document, String reference) {
         int fragment = reference.indexOf(FRAGMENT_SEPARATOR);
         String file = fragment < 0 ? reference : reference.substring(0, fragment);
         String pointer = fragment < 0 ? "" : reference.substring(fragment + 1);
@@ -197,11 +298,7 @@ class SpecReferenceResolutionTest {
                 file.isEmpty()
                         ? document
                         : Path.of(document).resolveSibling(file).normalize().toString();
-        if (!resolved.add(target + FRAGMENT_SEPARATOR + pointer)) {
-            return;
-        }
-        Object node = dereference(load(layout, documents, target), pointer, reference, document);
-        walk(layout, target, node, documents, resolved);
+        return target + FRAGMENT_SEPARATOR + pointer;
     }
 
     /** Follows a JSON pointer into a document, failing when a segment names nothing. */
@@ -253,7 +350,13 @@ class SpecReferenceResolutionTest {
         try (Stream<Path> tree = Files.walk(SOURCE_ROOT)) {
             List<String> documents =
                     tree.filter(Files::isRegularFile)
+                            .filter(file -> !file.startsWith(SpecBaseline.DIRECTORY))
                             .filter(file -> file.getFileName().toString().endsWith(YAML_SUFFIX))
+                            .filter(
+                                    file ->
+                                            !file.getFileName()
+                                                    .toString()
+                                                    .startsWith(TOOL_CONFIGURATION_PREFIX))
                             .map(file -> SOURCE_ROOT.relativize(file).toString())
                             .filter(path -> !ROOT_DOCUMENT.equals(path))
                             .collect(ArrayList::new, List::add, List::addAll);
@@ -266,23 +369,20 @@ class SpecReferenceResolutionTest {
         }
     }
 
-    /** Every document of the copy except the root, as paths relative to the copy's root. */
-    private static List<String> bundledDocuments() {
+    /** Every top-level YAML document beside the bundle on the classpath. */
+    private static List<String> servedDocuments() {
         Path root = bundleRoot();
-        try (Stream<Path> tree = Files.walk(root)) {
-            return tree.filter(Files::isRegularFile)
-                    .filter(file -> file.getFileName().toString().endsWith(YAML_SUFFIX))
-                    .map(file -> root.relativize(file).toString())
-                    .filter(path -> !ROOT_DOCUMENT.equals(path))
+        try (Stream<Path> files = Files.list(root)) {
+            return files.filter(Files::isRegularFile)
+                    .map(file -> file.getFileName().toString())
+                    .filter(name -> name.endsWith(YAML_SUFFIX))
                     .toList();
         } catch (IOException e) {
-            throw new UncheckedIOException("Unable to walk " + root, e);
+            throw new UncheckedIOException("Unable to list " + root, e);
         }
     }
 
-    /**
-     * The directory the copy is served from, located through the root document on the classpath.
-     */
+    /** The directory the bundle is served from, located through it on the classpath. */
     private static Path bundleRoot() {
         String resource = BUNDLE_ROOT + POINTER_SEPARATOR + ROOT_DOCUMENT;
         URL root = Thread.currentThread().getContextClassLoader().getResource(resource);

@@ -14,6 +14,8 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.error.ProblemType;
+import com.seamware.consentmanager.observability.FailureSummary;
+import com.seamware.consentmanager.observability.LogPseudonymizer;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.IssuedReceiptRepository;
@@ -39,37 +41,27 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Owns the {@code users} row and its participant links: just-in-time provisioning from a {@code
- * USER} token, the deterministic create-or-link registration rule, and the scoped reads behind the
- * lookup and search operations. Blocks on JDBC.
+ * Owns the {@code users} row and its participant links: JIT provisioning, create-or-link
+ * registration, scoped lookup and search. Blocks on JDBC.
  *
- * <p>Users only - participants are registered explicitly (TICKET-005).
- *
- * <p>No registration path here is {@code @Transactional}, and that is load-bearing rather than an
- * oversight. Both writes resolve a concurrent first caller by letting the unique constraint reject
- * the duplicate and then re-reading the winner's row, which PostgreSQL permits only outside a
- * transaction: inside one the violation aborts the transaction and the re-read fails with "current
- * transaction is aborted" instead. Each repository call is therefore its own transaction, and
- * {@link #registerForParticipant} is written to be safe when re-entered rather than atomic across
- * the two tables. {@link #erase} is the one exception and explains itself there.
- *
- * <p>The cost of that is an orphan: <em>any</em> failure of the link insert - not only a lost race,
- * but a connection loss, a timeout or a deleted participant - leaves behind the {@code users} row
- * the same call just created, and propagates the exception. Re-entering repairs the link, but
- * because attributes are write-on-create the orphan permanently carries the first caller's {@code
- * email}, {@code firstName} and {@code lastName}, which every later participant - and the user's
- * own identity provider, for any claim it does not assert - then inherits. The retry also reports
- * {@link RegistrationOutcome#LINKED} rather than {@code CREATED}, so the caller that in fact
- * created the record never learns it did.
+ * <p>Registration is deliberately not {@code @Transactional}: a concurrent first caller is resolved
+ * by catching the unique violation and re-reading, which PostgreSQL forbids inside a transaction.
+ * {@link #registerForParticipant} is re-entrant rather than atomic, so a failed link insert leaves
+ * the just-created user (with its write-on-create attributes) behind, and a retry reports {@link
+ * RegistrationOutcome#LINKED}. {@link #erase} is the one transactional write.
  */
 @Singleton
 public class UserService {
 
     private static final Logger LOG = LoggerFactory.getLogger(UserService.class);
 
-    /**
-     * Why a search naming no criterion is refused; published to the caller as the problem detail.
-     */
+    private static final String BULK_ENTRY_FAILED =
+            "Entry {} of a bulk registration for participant {} failed: {}";
+
+    private static final String BULK_ENTRY_SERVER_ERROR =
+            "A bulk registration entry failed with server-error problem type {}: {}";
+
+    /** Why a search naming no criterion is refused; published as the problem detail. */
     private static final String EMPTY_SEARCH_DETAIL =
             "A user search must name at least one of identifier, email or participantIdentifier.";
 
@@ -77,25 +69,17 @@ public class UserService {
     private static final String BLANK_IDENTIFIER_DETAIL =
             "A registration must name a non-blank identifier.";
 
-    /**
-     * Why a bulk entry carrying an unusable address is refused; published as that entry's reason.
-     */
+    /** Why a bulk entry carrying an unusable address is refused; published as its reason. */
     private static final String MALFORMED_EMAIL_DETAIL =
             "The email address is not a valid address.";
 
     /**
-     * The address shape a bulk entry has to satisfy, checked here rather than declared on {@code
-     * BulkUserRegistrationEntry}: a schema constraint cascades into the array and would fail the
-     * whole batch over one dirty address. Deliberately as permissive as bean validation's own
-     * {@code @Email} - a local part, an {@code @}, a domain, no whitespace - since narrowing it
-     * would reject addresses the single-registration route accepts.
+     * Bulk entry address shape, checked here so one dirty address cannot fail the whole batch. As
+     * permissive as {@code @Email}, so it accepts what single registration accepts.
      */
     private static final Pattern EMAIL_SHAPE = Pattern.compile("[^\\s@]+@[^\\s@]+");
 
-    /**
-     * Stands in for an unexpected failure of a single bulk entry. The exception's own message may
-     * name a column or a constraint, which no caller is entitled to see.
-     */
+    /** Replaces an unexpected entry failure's message, which may name a column or constraint. */
     private static final String UNREGISTERABLE_ENTRY_DETAIL =
             "The entry could not be registered. Retrying it on its own will report why.";
 
@@ -104,9 +88,8 @@ public class UserService {
             "A bulk registration carried %d entries, more than the %d this deployment permits.";
 
     /**
-     * Published for a link the caller does not hold and for an identifier naming nobody alike. A
-     * {@code 403} telling the two apart would confirm that the identifier names a registered user,
-     * which a participant without a link is not entitled to learn.
+     * Published alike for an unheld link and an unknown identifier, so a participant without a link
+     * cannot learn that the identifier is registered.
      */
     private static final String NO_LINK_DETAIL =
             "This participant holds no link to a user under this identifier.";
@@ -117,31 +100,22 @@ public class UserService {
                     + "Revoke them before unlinking.";
 
     /**
-     * Reserved prefix of the opaque identifier an erased record carries.
-     *
-     * <p>The suffix is a fresh UUIDv7, not a hash of the original identifier: a hash over the space
-     * of email addresses and subject identifiers is reversible by enumeration, which would defeat
-     * the erasure.
+     * Prefix of an erased record's identifier; the suffix is a fresh UUIDv7, never a hash, which
+     * enumeration could reverse. See ADR-0007.
      */
     private static final String ERASED_IDENTIFIER_PREFIX = "urn:consent-manager:erased:";
 
-    /**
-     * Statuses an erasure terminates rather than revokes: offers that were never answered and now
-     * never can be, because the person they were put to is gone.
-     */
-    private static final Set<ConsentStatus> UNANSWERED_STATUSES =
-            Set.of(ConsentStatus.PENDING, ConsentStatus.DRAFT);
+    /** Where an erasure moves each open status: grant revoked, unanswered offer terminated. */
+    private static final Map<ConsentStatus, ConsentStatus> ERASURE_CLOSINGS =
+            Map.of(
+                    ConsentStatus.GRANTED, ConsentStatus.REVOKED,
+                    ConsentStatus.PENDING, ConsentStatus.TERMINATED,
+                    ConsentStatus.DRAFT, ConsentStatus.TERMINATED);
 
     /** Attributed to the service rather than to a person, who no longer exists by then. */
     private static final String ERASURE_ACTOR = "consent-manager";
 
-    /**
-     * Marks the trail entries an erasure appends as automated.
-     *
-     * <p>Not {@link ConsentEventTrigger#EXPLICIT}: the subject asked to be erased, but no one
-     * answered the consent itself - least of all the {@code PENDING} offers this closes unanswered
-     * - so attributing the entry to the service and typing it explicit would contradict each other.
-     */
+    /** Marks erasure trail entries as automated: no one answered the consent itself. */
     private static final ConsentEventTrigger ERASURE_TRIGGER = ConsentEventTrigger.SYSTEM;
 
     /** Says, in the retained audit trail, why a consent was revoked without naming anyone. */
@@ -165,6 +139,8 @@ public class UserService {
 
     private final ErasureVerifier erasureVerifier;
 
+    private final LogPseudonymizer pseudonymizer;
+
     private final ConsentManagerConfiguration.Users configuration;
 
     public UserService(
@@ -176,6 +152,7 @@ public class UserService {
             IssuedReceiptRepository issuedReceipts,
             ConsentFactory consentFactory,
             ErasureVerifier erasureVerifier,
+            LogPseudonymizer pseudonymizer,
             ConsentManagerConfiguration.Users configuration) {
         this.users = users;
         this.links = links;
@@ -185,16 +162,14 @@ public class UserService {
         this.issuedReceipts = issuedReceipts;
         this.consentFactory = consentFactory;
         this.erasureVerifier = erasureVerifier;
+        this.pseudonymizer = pseudonymizer;
         this.configuration = configuration;
     }
 
     /**
-     * Returns the row the principal's identifier names, inserting it on first sight and refreshing
-     * the display claims the token asserts.
-     *
-     * <p>{@code uq_users_identifier} settles concurrent first requests; the leading read only skips
-     * a doomed insert. {@link ProvisionedUser#created()} is the signal {@code POST /users/register}
-     * answers {@code 201} from, so it must come from here rather than be re-derived downstream.
+     * The principal's user row, inserted on first sight, with asserted display claims refreshed.
+     * {@code uq_users_identifier} settles concurrent first requests; {@link
+     * ProvisionedUser#created()} drives the {@code 201} of {@code POST /users/register}.
      */
     public ProvisionedUser provisionFromToken(UserPrincipal principal) {
         Optional<User> existing = users.findByIdentifier(principal.identifier());
@@ -211,7 +186,7 @@ public class UserService {
                                     principal.familyName()));
             return new ProvisionedUser(inserted, true);
         } catch (DataAccessException e) {
-            // Another request inserted first, so adopt its row; no row means this was not the race.
+            // Lost the insert race: adopt the winner's row; no row means it was not the race.
             return users.findByIdentifier(principal.identifier())
                     .map(row -> adopted(refresh(row, principal)))
                     .orElseThrow(() -> e);
@@ -224,29 +199,17 @@ public class UserService {
     }
 
     /**
-     * The user an identifier names, as far as this caller may see it.
-     *
-     * <p>Empty for an identifier naming nobody and for a user outside the caller's scope alike, so
-     * the lookup route answers {@code 404} for both and never confirms that an identifier it may
-     * not read is registered.
+     * The user an identifier names, as far as this caller may see it. Empty alike for nobody and
+     * for a user out of scope, so the route never confirms existence.
      */
     public Optional<User> lookup(String identifier, CallerScope scope) {
         return search(new UserSearchCriteria(identifier, null, null), scope).stream().findFirst();
     }
 
     /**
-     * The users matching every supplied criterion, confined to what the caller may read.
-     *
-     * <p>A {@code PARTICIPANT} caller's result is intersected with its own links whatever the
-     * criteria say, so a {@code participantIdentifier} naming somebody else only narrows it; a
-     * {@code CATALOG} caller reads across the dataspace. Criteria naming nobody is an empty list,
-     * but criteria naming <em>nothing</em> is a {@link BadRequestException} rather than a listing
-     * of every registered user.
-     *
-     * <p>Sorted by identifier and then capped at {@code consent-manager.users.search-max-results},
-     * so an unbounded population cannot be serialised in one response and what the cap drops is the
-     * same set on every request. There is no pagination: a result of exactly the cap's size may be
-     * truncated, which the operation description tells the caller to answer by narrowing criteria.
+     * Users matching every criterion, intersected with a {@code PARTICIPANT} caller's own links. No
+     * criterion at all is a {@link BadRequestException}. Sorted by identifier and capped at {@code
+     * consent-manager.users.search-max-results}, without pagination.
      */
     public List<User> search(UserSearchCriteria criteria, CallerScope scope) {
         if (criteria.isEmpty()) {
@@ -268,12 +231,8 @@ public class UserService {
     }
 
     /**
-     * Participants every match must be linked to, or empty when no user can possibly satisfy them.
-     *
-     * <p>The caller's own participant comes first so {@link #candidates} starts from its links when
-     * the criteria name no user attribute. An unregistered {@code participantIdentifier} has no
-     * links at all, which is an empty result rather than an error: whether that identifier exists
-     * is not something a search is entitled to reveal.
+     * Participants every match must be linked to, caller's own first; empty when none can match. An
+     * unregistered {@code participantIdentifier} yields empty, never an error revealing it.
      */
     private Optional<List<UUID>> requiredParticipants(
             UserSearchCriteria criteria, CallerScope scope) {
@@ -296,11 +255,8 @@ public class UserService {
     }
 
     /**
-     * The rows the cheapest criterion narrows to, before the remaining criteria filter them.
-     *
-     * <p>Falling through to the links means the criteria named no user attribute, which - the empty
-     * set having already been rejected - leaves {@code participantIdentifier} as the only
-     * possibility and therefore guarantees {@code participantIds} is not empty.
+     * The rows the cheapest criterion narrows to; the link fall-through implies a non-empty {@code
+     * participantIds}, since empty criteria were already refused.
      */
     private Candidates candidates(UserSearchCriteria criteria, List<UUID> participantIds) {
         if (criteria.identifier() != null) {
@@ -315,13 +271,7 @@ public class UserService {
         return new Candidates(usersLinkedTo(from), from);
     }
 
-    /**
-     * Candidate rows, plus the participant whose link set produced them.
-     *
-     * <p>That link needs no re-checking, which on the commonest participant path - a caller listing
-     * its own users - removes the link query {@link #isLinkedToAll} would otherwise issue for every
-     * single candidate.
-     */
+    /** Candidate rows, plus the participant whose link set produced them and needs no re-check. */
     private record Candidates(List<User> users, @Nullable UUID provenLink) {
 
         /** The required links a candidate's provenance does not already establish. */
@@ -345,29 +295,15 @@ public class UserService {
                 || (user.getEmail() != null && user.getEmail().equalsIgnoreCase(email));
     }
 
-    /**
-     * Whether the user is linked to every one of the participants the search still requires.
-     *
-     * <p>Asks the index one membership question per participant rather than materialising the
-     * user's whole link set: the list never holds more than the caller's own participant and the
-     * one the criteria name, and the commonest case has been emptied by {@link Candidates}.
-     */
+    /** Whether the user is linked to every still-required participant; one index probe each. */
     private boolean isLinkedToAll(User user, List<UUID> participantIds) {
         return participantIds.stream()
                 .allMatch(id -> links.existsByIdUserIdAndIdParticipantId(user.getId(), id));
     }
 
     /**
-     * The participant identifiers a caller may be told about, which is not always every one.
-     *
-     * <p>A {@code PARTICIPANT} is told about its own link and nothing else: which <em>other</em>
-     * participants a user is affiliated with is a more sensitive disclosure than whether the
-     * identifier exists at all, and the scoped reads already answer {@code 404} rather than {@code
-     * 403} to withhold the latter. A caller reading dataspace-wide sees the full list, as does the
-     * user's own record.
-     *
-     * <p>Costs one index probe rather than the whole link set for a participant caller, so a search
-     * returning many users does not materialise every one of their affiliations only to discard it.
+     * The participant identifiers a caller may be told about. A {@code PARTICIPANT} sees only its
+     * own link, never the user's other affiliations; a dataspace-wide caller sees the full list.
      */
     public List<String> participantIdentifiersFor(User user, CallerScope scope) {
         Participant caller = scope.participant();
@@ -395,15 +331,9 @@ public class UserService {
     }
 
     /**
-     * Creates or adopts the user the registration names and links it to the participant.
-     *
-     * <p>Matching is on the global identifier alone - never on email, and two rows are never
-     * merged. Attributes are written only on the insert that creates the user, so one participant
-     * cannot overwrite what another participant or the user's own identity provider asserted; a
-     * supplied {@code localIdentifier} is the one value a later call may still change, and it lives
-     * on the link rather than on the user.
-     *
-     * <p>Deliberately not transactional; see the class note.
+     * Creates or adopts the user by global identifier alone and links it to the participant.
+     * Attributes are write-on-create; only the link's {@code localIdentifier} may change later.
+     * Deliberately not transactional; see the class note.
      */
     public RegistrationResult registerForParticipant(
             Participant participant, UserRegistration registration) {
@@ -421,25 +351,13 @@ public class UserService {
     }
 
     /**
-     * Applies {@link #registerForParticipant} to every entry of a batch, independently.
+     * Applies {@link #registerForParticipant} to each entry independently, one result per entry in
+     * order; an unusable entry is {@link RegistrationOutcome#REJECTED}, not a failed batch. A batch
+     * over {@code consent-manager.users.bulk-max-size} is a {@link BadRequestException}.
      *
-     * <p>Results come back one per entry, in the order the entries were given. An entry that cannot
-     * be applied is reported as {@link RegistrationOutcome#REJECTED} with a reason instead of
-     * failing the batch, which is the whole point of the operation: a batch routinely mixes users
-     * the participant has just acquired with users it registered long ago, and one unusable entry
-     * is no reason to discard the rest.
-     *
-     * <p>A batch larger than {@code consent-manager.users.bulk-max-size} is a {@link
-     * BadRequestException} and writes nothing. That is a fact about the request rather than about
-     * an entry, so it is not an outcome.
-     *
-     * <p>Deliberately not transactional, and the isolation between entries rests on exactly that.
-     * Wrapping an entry in a transaction of its own - a {@code REQUIRES_NEW} collaborator, a
-     * programmatic {@code executeWrite} - would put {@link #registerForParticipant} inside one and
-     * break the re-read in its catch block, so an entry that merely lost the race on an identifier
-     * would be reported {@code REJECTED} where it belongs {@code LINKED}. With no ambient
-     * transaction every repository call autocommits, which is what keeps one entry's constraint
-     * violation out of the next entry.
+     * <p>Deliberately not transactional, not even per entry: a transaction would break the
+     * catch-and-re-read, turning a lost identifier race into {@code REJECTED} instead of {@code
+     * LINKED}. Autocommit keeps one entry's constraint violation out of the next.
      */
     public List<BulkEntryResult> registerBulkForParticipant(
             Participant participant, List<UserRegistration> registrations) {
@@ -452,19 +370,9 @@ public class UserService {
     }
 
     /**
-     * Writes the local identifier the caller asked for onto its own link and returns it as re-read.
-     *
-     * <p>A {@code null} clears the stored value: this is the explicit-null arm of the {@code PATCH}
-     * body's tri-state, and the only way to remove a local identifier once written. A property the
-     * caller omitted never reaches this method - the handler reads the link through {@link
-     * #linkFor} instead, so an unmentioned property is left alone, as a merge-patch client expects.
-     *
-     * <p>Returning the re-read entity rather than the object just mutated is deliberate: the
-     * response then reports what the database holds, including anything a concurrent write settled
-     * differently, instead of echoing an optimistic in-memory copy back to the caller.
-     *
-     * <p>The {@code users} row is out of reach here by design; attributes belong to whoever created
-     * the record and to the user's own identity provider.
+     * Writes the caller's link's local identifier and returns the link as re-read. {@code null}
+     * clears it (the PATCH explicit-null arm); an omitted property goes to {@link #linkFor}
+     * instead. Never touches the {@code users} row.
      */
     public UserParticipant updateLink(
             Participant participant, String identifier, @Nullable String localIdentifier) {
@@ -476,26 +384,12 @@ public class UserService {
     }
 
     /**
-     * Removes the caller's link to a user, leaving the user row, its consents and every other
-     * participant's link in place.
+     * Removes the caller's link to a user, leaving the user, its consents and other links intact. A
+     * {@link ConflictException} while a {@code GRANTED} consent names the caller as a party.
      *
-     * <p>Refused with a {@link ConflictException} while any consent for that user is {@code
-     * GRANTED} and names the caller as provider or consumer: unlinking would strand a consent whose
-     * participant no longer knows the user. A granted consent between two other participants does
-     * not block it, and neither does one in any other status - {@code PENDING} and {@code DRAFT}
-     * included, deliberately: neither authorises any data flow today, so neither is worth refusing
-     * an unlink over.
-     *
-     * <p>The check is therefore advisory in both directions, and cannot be made otherwise from this
-     * side: a consent granted - or a pending one approved - between the select and the delete slips
-     * through, since the two are separate statements and {@code consents} has no constraint that
-     * could serialise them. TODO(consent-lifecycle): the complementary half belongs on the
-     * consent-creation path, which must refuse to grant a consent for a participant holding no link
-     * to the subject. Only the two together uphold "no granted consent without a link"; see
-     * docs/user-identifiers.md.
-     *
-     * <p>Erasure is the data subject's own concern and goes through a different path; this
-     * operation never touches {@link UserRepository}.
+     * <p>The check is advisory: a grant landing between the select and the delete slips through, as
+     * nothing serialises them. TODO(consent-lifecycle): granting must also refuse an unlinked
+     * participant; see docs/user-identifiers.md.
      */
     public void unlink(Participant participant, String identifier) {
         UserParticipant link = linkFor(participant, identifier);
@@ -510,76 +404,56 @@ public class UserService {
     }
 
     /**
-     * Erases the data subject and reports what that cost, in one all-or-nothing transaction.
+     * Erases the data subject in one all-or-nothing transaction and reports what it closed. Mutates
+     * {@code user} in place when pseudonymised. See ADR-0007.
      *
-     * <p>Every consent still open is closed - {@code GRANTED} ones are revoked, the unanswered
-     * {@code PENDING} and {@code DRAFT} ones are terminated - each with the matching event appended
-     * to its trail, every participant link is removed, and every signed grant receipt is deleted
-     * (it names the subject). The {@code users} row then goes one of two ways. A row no consent
-     * refers to is deleted outright: nothing is being retained that would need it, and leaving a
-     * renamed husk behind would accumulate rows no later call can ever remove. A row consents still
-     * name survives with its display attributes cleared and its global identifier replaced by a
-     * fresh opaque pseudonym, because those consents are the evidence of what was authorised while
-     * it was authorised and {@code consents.user_id} is {@code ON DELETE RESTRICT}. Either way what
-     * dies is the tie between the records and the person.
-     *
-     * <p>{@code @Transactional} is right here and nowhere else in this class. Erasure must be
-     * atomic - a half-erased subject is worse than an un-erased one - and unlike the registration
-     * writes it contains no insert-and-catch to recover from: the pseudonym is a fresh UUIDv7 that
-     * will not collide, so no constraint violation is expected to be caught inside the transaction.
-     *
-     * <p>A retained row carries a keyed verifier of the identifier it lost; see {@link
-     * ErasureVerifier}.
-     *
-     * <p>The {@code user} argument is mutated in place when the record is pseudonymised, so a
-     * caller holding the pre-erasure row - the request's own {@code UserPrincipal} - sees the
-     * erased state afterwards.
+     * <p>{@code @Transactional} only here: erasure must be atomic, and unlike registration it has
+     * no insert-and-catch, since the UUIDv7 pseudonym cannot collide.
      */
     @Transactional
     public ErasureResult erase(User user) {
         UUID userId = user.getId();
-        int revoked = close(userId, Set.of(ConsentStatus.GRANTED), ConsentStatus.REVOKED);
-        int terminated = close(userId, UNANSWERED_STATUSES, ConsentStatus.TERMINATED);
+        List<ConsentMove> closed = close(userId);
         // A signed receipt names the subject and cannot be pseudonymised without breaking it.
         issuedReceipts.deleteByUserId(userId);
         long linksRemoved = links.deleteByIdUserId(userId);
         String pseudonym = pseudonymiseOrDelete(user);
 
+        ErasureResult result = new ErasureResult(pseudonym, closed, Math.toIntExact(linksRemoved));
         LOG.info(
                 "Erased user {}: revoked {}, terminated {}, unlinked {}, record {}",
                 userId,
-                revoked,
-                terminated,
+                result.consentsRevoked(),
+                result.consentsTerminated(),
                 linksRemoved,
                 pseudonym == null ? "deleted" : "pseudonymised");
-        return new ErasureResult(pseudonym, revoked, terminated, Math.toIntExact(linksRemoved));
+        return result;
     }
 
     /**
-     * Moves every consent of the user in {@code from} to {@code to}, appending the matching trail
-     * entry to each, and reports how many moved.
-     *
-     * <p>Through {@link ConsentFactory} like every other transition, so the lifecycle table is
-     * consulted and the event state is derived from {@code to} rather than restated here. Batched
-     * rather than updated row by row: an erasure costs two statements however long the subject has
-     * been a member.
+     * Closes every open consent per {@link #ERASURE_CLOSINGS}, returning each move with its held
+     * status. One locked read, so a concurrently granted request is revoked, not terminated stale.
      */
-    private int close(UUID userId, Set<ConsentStatus> from, ConsentStatus to) {
-        List<RecordedConsent> closed =
-                consents.findByUserIdAndStatusIn(userId, from).stream()
-                        .map(consent -> terminate(consent, to))
+    private List<ConsentMove> close(UUID userId) {
+        List<ConsentMove> closed =
+                consents
+                        .findByUserIdAndStatusInForUpdate(userId, ERASURE_CLOSINGS.keySet())
+                        .stream()
+                        .map(
+                                consent -> {
+                                    ConsentStatus held = consent.getStatus();
+                                    return new ConsentMove(
+                                            held, terminate(consent, ERASURE_CLOSINGS.get(held)));
+                                })
                         .toList();
-        if (closed.isEmpty()) {
-            return 0;
+        if (!closed.isEmpty()) {
+            consents.updateAll(closed.stream().map(move -> move.recorded().consent()).toList());
+            consentEvents.saveAll(closed.stream().map(move -> move.recorded().event()).toList());
         }
-        consents.updateAll(closed.stream().map(RecordedConsent::consent).toList());
-        consentEvents.saveAll(closed.stream().map(RecordedConsent::event).toList());
-        return closed.size();
+        return closed;
     }
 
-    /**
-     * The consent moved to {@code to}, with the trail entry saying an erasure is what closed it.
-     */
+    /** The consent moved to {@code to}, with a trail entry attributing it to erasure. */
     private RecordedConsent terminate(Consent consent, ConsentStatus to) {
         return consentFactory.transition(
                 consent,
@@ -590,20 +464,8 @@ public class UserService {
     }
 
     /**
-     * Deletes the record, or pseudonymises it and returns the pseudonym when consents still name
-     * it.
-     *
-     * <p>Deleting is the default because it is the more complete erasure; the row survives only to
-     * satisfy the {@code ON DELETE RESTRICT} that protects the retained audit trail. Keeping one
-     * regardless would be unbounded: the route's own authentication registers an unknown subject
-     * before the handler runs, so a token replayed against it would mint a consent-free husk per
-     * request, and nothing in this service ever deletes those.
-     *
-     * <p>A retained row also keeps the {@link ErasureVerifier} value for the identifier it is
-     * losing, so the operator can still confirm that a named person consented. It is salted per
-     * record, so it links no two erasures, and it is written here and read nowhere: provisioning
-     * matches on {@code identifier} alone, so a returning subject is a stranger rather than a
-     * recognised one.
+     * Deletes the record, or, when consents still name it ({@code ON DELETE RESTRICT}), stores an
+     * {@link ErasureVerifier} value, pseudonymises it and returns the pseudonym. See ADR-0007.
      */
     @Nullable
     private String pseudonymiseOrDelete(User user) {
@@ -622,10 +484,8 @@ public class UserService {
     }
 
     /**
-     * The caller's own link to the user an identifier names; absence either way is a 404.
-     *
-     * <p>Public because a {@code PATCH} that mentions no property still has to answer with the link
-     * - and still has to 404 when the caller holds none - without writing anything.
+     * The caller's own link to the user an identifier names; absence either way is a 404. Public so
+     * a {@code PATCH} naming no property can answer without writing.
      */
     public UserParticipant linkFor(Participant participant, String identifier) {
         return users.findByIdentifier(identifier)
@@ -642,12 +502,7 @@ public class UserService {
                 || participant.getId().equals(consent.getConsumerId());
     }
 
-    /**
-     * One entry, isolated: whatever goes wrong here is reported and never reaches the next one.
-     *
-     * <p>The per-entry shape checks live here rather than on the schema precisely so that one
-     * unusable entry costs only itself; see {@code BulkUserRegistrationEntry.yaml}.
-     */
+    /** One entry, isolated: any failure is reported as its result and never reaches the next. */
     private BulkEntryResult apply(Participant participant, UserRegistration registration) {
         String identifier = registration.identifier();
         if (identifier == null || identifier.isBlank()) {
@@ -663,32 +518,31 @@ public class UserService {
         } catch (ApiException e) {
             return BulkEntryResult.rejected(identifier, publishable(e));
         } catch (RuntimeException e) {
+            // The identifier is personal data; above DEBUG log only its pseudonym and class chain.
             LOG.warn(
-                    "Entry {} of a bulk registration for participant {} failed",
-                    identifier,
+                    BULK_ENTRY_FAILED,
+                    pseudonymizer.pseudonym(identifier),
                     participant.getIdentifier(),
-                    e);
+                    FailureSummary.of(e));
+            LOG.debug(
+                    BULK_ENTRY_FAILED, identifier, participant.getIdentifier(), e.getMessage(), e);
             return BulkEntryResult.rejected(identifier, UNREGISTERABLE_ENTRY_DETAIL);
         }
     }
 
-    /**
-     * An entry's reason, under the same rule {@code ApiExceptionHandler} applies to a problem
-     * detail: a 4xx message reaches the caller verbatim, a 5xx one is logged and replaced.
-     */
+    /** An entry's reason: a 4xx message verbatim, a 5xx one logged and replaced. */
     private static String publishable(ApiException e) {
         if (e.problemType().status().getCode() >= ProblemType.LOWEST_SERVER_ERROR_STATUS) {
-            LOG.warn("A bulk registration entry failed with a server-error problem type", e);
+            LOG.warn(BULK_ENTRY_SERVER_ERROR, e.problemType(), FailureSummary.of(e));
+            LOG.debug(BULK_ENTRY_SERVER_ERROR, e.problemType(), e.getMessage(), e);
             return UNREGISTERABLE_ENTRY_DETAIL;
         }
         return e.getMessage();
     }
 
     /**
-     * The user the identifier names, inserted from the registration's attributes on first sight.
-     *
-     * <p>Existence is settled by {@code uq_users_identifier}, never by the leading read, which is
-     * only a fast path past a doomed insert.
+     * The user the identifier names, inserted on first sight; {@code uq_users_identifier}, not the
+     * leading read, settles existence.
      */
     private ProvisionedUser findOrCreate(UserRegistration registration) {
         Optional<User> existing = users.findByIdentifier(registration.identifier());
@@ -705,7 +559,7 @@ public class UserService {
                                     registration.lastName()));
             return new ProvisionedUser(inserted, true);
         } catch (DataAccessException e) {
-            // A concurrent registration inserted first; adopt its row and leave its attributes be.
+            // Lost the insert race: adopt the winner's row and leave its attributes be.
             return users.findByIdentifier(registration.identifier())
                     .map(UserService::adopted)
                     .orElseThrow(() -> e);
@@ -713,10 +567,8 @@ public class UserService {
     }
 
     /**
-     * Links the user to the participant, reporting whether this call inserted the link.
-     *
-     * <p>{@code pk_user_participants} settles a concurrent duplicate the same way the user insert
-     * does: the loser re-reads and reports an existing link.
+     * Links the user to the participant, reporting whether this call inserted the link. A lost race
+     * on {@code pk_user_participants} re-reads and reports an existing link.
      */
     private boolean link(User user, Participant participant, @Nullable String supplied) {
         String localIdentifier = blankToNull(supplied);
@@ -740,13 +592,7 @@ public class UserService {
         }
     }
 
-    /**
-     * A blank local identifier is no local identifier: it is stored as {@code null}.
-     *
-     * <p>Without this the column would hold two encodings of "this participant has none" - SQL
-     * {@code NULL} and the empty string - which no read path distinguishes and every one has to
-     * handle.
-     */
+    /** A blank local identifier is stored as {@code null}, so "none" has one encoding. */
     @Nullable
     private static String blankToNull(@Nullable String localIdentifier) {
         return localIdentifier == null || localIdentifier.isBlank() ? null : localIdentifier;

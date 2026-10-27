@@ -20,11 +20,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Pins how the gateway treats an upstream that fails, refuses or does not know a contract.
- *
- * <p>"Not retried" and "failed" are different claims, so every case asserts the request count the
- * stub actually saw rather than only the outcome the caller sees: a predicate that retried a 400
- * would still raise the same exception while tripling the load on an upstream that already refused.
+ * Pins how the gateway treats an upstream that fails, refuses or does not know a contract; each
+ * case asserts the request count the stub saw, since "not retried" differs from "failed".
  */
 @DisplayName("Contract Service gateway")
 class ContractGatewayTest {
@@ -32,12 +29,7 @@ class ContractGatewayTest {
     /** Retries each test configures, low enough to keep the retried cases quick. */
     private static final int RETRY_ATTEMPTS = 3;
 
-    /**
-     * Requests a fully retried fetch leaves at the stub: the initial attempt plus every retry.
-     *
-     * <p>{@code @Retryable} counts retries after the first attempt, so a budget of three retries is
-     * four upstream requests.
-     */
+    /** Requests a fully retried fetch makes: {@code @Retryable} counts retries after the first. */
     private static final int EXPECTED_UPSTREAM_REQUESTS = RETRY_ATTEMPTS + 1;
 
     /** Pause between attempts, kept short because the suite asserts counts and not timing. */
@@ -55,7 +47,7 @@ class ContractGatewayTest {
     /** Contract URI under test; its last segment is the id the upstream is asked for. */
     private static final String CONTRACT_URI = "https://contract.example.org/v1/contracts/c-1";
 
-    /** The identifier derived from that URI. */
+    /** Identifier derived from that URI. */
     private static final String CONTRACT_ID = "c-1";
 
     /** A 200 that is no contract: what a proxy in front of the upstream answers with. */
@@ -216,7 +208,7 @@ class ContractGatewayTest {
     static ApplicationContext startContext(
             ContractServiceStub stub, Map<String, Object> overrides) {
         Map<String, Object> properties = new LinkedHashMap<>();
-        // No datasource and no Flyway: the gateway talks to an HTTP stub and never to the database.
+        // The gateway never touches the database.
         properties.put("datasources.default.enabled", false);
         properties.put("flyway.enabled", false);
         properties.put("micronaut.server.port", -1);

@@ -24,11 +24,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins that extraction is deterministic and that its lists follow the contract's own order.
- *
- * <p>This is what repeated generation rests on: it decides whether a contract changed by comparing
- * the content it would store against the stored one, so a payload that reshuffled between two
- * extractions of the same document would report a change nobody made.
+ * Tests that extraction is deterministic and its lists follow the contract's order, since repeated
+ * generation detects a contract change by comparing extracted content against the stored one.
  */
 @DisplayName("Contract content extraction order")
 class ContractContentExtractorOrderTest {
@@ -53,8 +50,7 @@ class ContractContentExtractorOrderTest {
     @MethodSource("fixtures")
     @DisplayName("yields equal content for two independent readings of the same document")
     void extractsDeterministically(String fixture) {
-        // Decoded twice rather than extracted twice from one instance: extraction is pure, so a
-        // second call on the same object cannot differ, and the reading is where an order could.
+        // Decoded twice: the reading, not the pure extraction, is where an order could differ.
         assertThat(extractor.extract(ContractFixtures.contract(fixture), provider()))
                 .isEqualTo(extractor.extract(ContractFixtures.contract(fixture), provider()));
     }
@@ -63,9 +59,7 @@ class ContractContentExtractorOrderTest {
     @MethodSource("fixtures")
     @DisplayName("yields a payload that still equals itself after being stored and read back")
     void survivesSerialization(String fixture) {
-        // What repeated generation actually compares: a freshly extracted payload against one that
-        // has been through the JSONB column, so any reordering or absent-to-empty drift in the
-        // serialized form would report a contract change nobody made.
+        // Repeated generation compares a fresh payload against one read back from the JSONB column.
         PrivacyNoticePayload extracted =
                 extractor.extract(ContractFixtures.contract(fixture), provider()).payload();
 

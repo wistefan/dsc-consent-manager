@@ -3,17 +3,12 @@ package com.seamware.consentmanager.service;
 import io.micronaut.core.annotation.Nullable;
 
 /**
- * What a user search filters on. Criteria combine conjunctively; a set naming none is rejected
- * rather than treated as "everybody".
- *
- * <p>A criterion present but blank is normalised to {@code null} on construction, so every consumer
- * sees "absent" and "empty string" the same way.
+ * Conjunctive user search criteria; none at all is rejected, and blank normalises to {@code null}.
  *
  * @param identifier exact, case-sensitive global user identifier
- * @param email exact contact address, matched case-insensitively and possibly matching several
- *     users, because email is neither unique nor authoritative here
- * @param participantIdentifier participant whose linked users the result is confined to; for a
- *     {@code PARTICIPANT} caller this can only narrow what {@link CallerScope} already allows
+ * @param email exact address, case-insensitive; may match several users
+ * @param participantIdentifier confines to that participant's users; only narrows {@link
+ *     CallerScope}
  */
 public record UserSearchCriteria(
         @Nullable String identifier,

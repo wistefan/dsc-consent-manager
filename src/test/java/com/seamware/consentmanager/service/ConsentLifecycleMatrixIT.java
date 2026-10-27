@@ -41,30 +41,9 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * The lifecycle table proven total: every move the service offers, attempted from every status a
- * consent can hold, lands where {@link ConsentStateMachine} says and nowhere else.
- *
- * <p>This is the only suite asserting which statuses a <em>move</em> is permitted from, and {@link
- * Operation} the only restatement of {@link ConsentStateMachine} among the lifecycle suites: {@code
- * ConsentLifecycleIT} proves each move's own rules instead — who may ask for it, what it
- * supersedes, which {@code 404} it gives. {@code ConsentStateMachineTest} restates the table a
- * second time, independently and without a database, to pin the machine itself; an edge that
- * changes is therefore three edits — the production table, {@link Operation} here, and {@code
- * PERMITTED} there. This suite asserts the outcome and nothing else: the status the record ends in,
- * the single event naming who acted, and - for every refusal - that nothing was written.
- *
- * <p>Totality is held two ways, so a sixth move cannot slip past it. A move added to {@link
- * Operation} without its outcome fails to compile, because the switches that invoke it and name its
- * actor are exhaustive over the enum and declare no default. A move added to the <em>service</em>
- * without a row here fails {@link #coversEveryMoveTheServiceOffers}. Every status is covered by
- * construction: the refused cells are the complement of the permitted ones, so a status added to
- * {@code ConsentStatus} lands in one source or the other with no table to update.
- *
- * <p>{@code DRAFT} and {@code EXPIRED} are seeded straight through {@link ConsentRepository}: the
- * first is deliberately absent from {@code ConsentStateMachine.CREATABLE} and the second has no
- * producer at all, so neither fixture is reachable through a service. {@code
- * ConsentStatusInvariantTest} scans {@code src/main/java} only, which is what lets a suite hold a
- * status the production code may not mint.
+ * Every lifecycle move from every status lands where {@link ConsentStateMachine} says, writing
+ * nothing when refused. {@code DRAFT} and {@code EXPIRED} are seeded straight through the
+ * repository because no service produces them.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Consent lifecycle matrix")
@@ -81,7 +60,7 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
     /** What {@code consent_events.event_type} reads for a move an identified caller asked for. */
     private static final String EXPLICIT_EVENT_TYPE = "explicit";
 
-    /** The provider of a token this suite never validates; only its shape matters here. */
+    /** Issuer of a token this suite never validates; only its shape matters. */
     private static final String ISSUER = "https://issuer.test/realms/consent-matrix";
 
     private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
@@ -243,11 +222,8 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
     }
 
     /**
-     * The one notice every cell acts against.
-     *
-     * <p>Shared rather than seeded per case, because {@code uq_privacy_notices_active_contract}
-     * admits one active notice per (contract, provider); each case brings its own subject instead,
-     * which is the dimension {@code uq_consents_granted_per_user_notice} ranges over.
+     * The one notice every cell acts against, shared because {@code
+     * uq_privacy_notices_active_contract} admits one active notice per (contract, provider).
      */
     private PrivacyNotice notice() {
         if (notice == null) {
@@ -264,16 +240,9 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
     }
 
     /**
-     * Every move the lifecycle offers, with the status it leaves behind, the event it appends and
-     * the statuses it is permitted from.
-     *
-     * <p>{@code leaves} is the status the record ends in rather than a transition target, which is
-     * what lets {@code RE_CONFIRM} - an affirmation that moves nothing - sit in the same table: it
-     * leaves {@code GRANTED}, and {@code GRANTED} is equally what its refusal names as required.
-     *
-     * <p>Read off {@link ConsentStateMachine}, never invented: the unanswered statuses share one
-     * entry, which is why termination is permitted from {@code PENDING} and {@code DRAFT} as well
-     * as from the grant in force.
+     * Every lifecycle move with the status it leaves, the event it appends and where it is
+     * permitted from, as read off {@link ConsentStateMachine}. {@code leaves} is the end status,
+     * not a transition target, so the no-op {@code RE_CONFIRM} fits the same table.
      */
     private enum Operation {
         REVOKE(
@@ -318,7 +287,7 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
             this.permittedFrom = permittedFrom;
         }
 
-        /** The service method this row drives, which is what ties the table to the service. */
+        /** The service method this row drives. */
         String method() {
             return method;
         }
@@ -337,7 +306,7 @@ class ConsentLifecycleMatrixIT extends PostgresTestResource {
             };
         }
 
-        /** Whose identifier the appended event records: the one who asked for this move. */
+        /** The identifier the appended event records as actor. */
         String actor(User subject, Participant party) {
             return switch (this) {
                 case REVOKE, REFUSE, RE_CONFIRM, RESUME -> subject.getIdentifier();

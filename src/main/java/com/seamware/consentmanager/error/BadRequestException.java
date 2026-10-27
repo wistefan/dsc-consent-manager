@@ -1,10 +1,7 @@
 package com.seamware.consentmanager.error;
 
 /**
- * The client request was malformed or semantically invalid (HTTP 400).
- *
- * <p>Thrown where request validation that bean validation cannot express fails, or where a required
- * parameter is missing or unparseable.
+ * The request was malformed or semantically invalid beyond what bean validation expresses (400).
  */
 public class BadRequestException extends ApiException {
 

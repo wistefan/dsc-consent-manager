@@ -3,12 +3,8 @@ package com.seamware.consentmanager.domain;
 import io.micronaut.core.annotation.NonNull;
 
 /**
- * What caused a consent event: a deliberate act of the actor it names, or an automated job acting
- * on its behalf.
- *
- * <p>Carried separately from {@link ConsentEventState} because the two are independent: an expiry
- * and a termination are each reachable from a job and from a person, and an audit trail that
- * records a scheduler's expiry as explicit misstates who decided.
+ * What caused a consent event: the named actor's own act, or an automated job on its behalf.
+ * Independent of {@link ConsentEventState}, since expiry and termination arise from either.
  */
 public enum ConsentEventTrigger {
 

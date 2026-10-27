@@ -3,7 +3,7 @@
   Swagger UI for the Consent Manager API.
 
   This page loads the Swagger UI library from a CDN and points it at
-  the hand-authored OpenAPI specification served as a static resource.
+  the bundled OpenAPI specification served at /openapi.yaml.
 -->
 <html lang="en">
 <head>
@@ -22,7 +22,7 @@
     <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.18.2/swagger-ui-bundle.js"></script>
     <script>
         SwaggerUIBundle({
-            url: "/static/openapi.yaml",
+            url: "/openapi.yaml",
             dom_id: "#swagger-ui",
             deepLinking: true,
             presets: [

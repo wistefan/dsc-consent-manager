@@ -11,20 +11,8 @@ import jakarta.inject.Singleton;
 import java.util.Optional;
 
 /**
- * Resolves a contract URI to the contract behind it, trying both upstream shapes and caching what
- * came back.
- *
- * <p>The bean every caller depends on, and the only place contracts are cached. The cache is not on
- * {@link ContractServiceClient}: {@code @Cacheable} is around-advice and {@code @Client} is
- * introduction advice, so stacking them would make the applied order an implementation detail, and
- * caching one endpoint call would miss the ecosystem-then-bilateral fallback that a repeated
- * generation has to avoid repeating.
- *
- * <p>It is not {@code @Cacheable} either. That annotation has no way to decline to store a result,
- * so an empty one - "no such contract" - would be served for a whole lifetime, and a contract
- * created upstream a second after the miss would stay invisible with nothing able to tell the two
- * apart. So the cache is read and written here by hand, and only a contract that actually arrived
- * is stored; a miss and a failure are both returned uncached.
+ * Resolves a contract URI via the ecosystem, then the bilateral endpoint; the only contract cache.
+ * Cached by hand, not {@code @Cacheable}, so a miss or a failure is never stored.
  */
 @Singleton
 public class ContractGateway {
@@ -32,10 +20,9 @@ public class ContractGateway {
     /** Name of the cache declared under {@code micronaut.caches.contracts}. */
     public static final String CACHE_NAME = "contracts";
 
-    /** Separator whose last occurrence in a contract URI precedes the contract's identifier. */
     private static final char PATH_SEPARATOR = '/';
 
-    /** Characters that end a URI's path; a query or a fragment is no part of the identifier. */
+    /** Characters that end a URI's path; a query or fragment is no part of the identifier. */
     private static final String PATH_TERMINATORS = "?#";
 
     private final ContractServiceClient client;
@@ -53,14 +40,9 @@ public class ContractGateway {
     }
 
     /**
-     * Returns the contract the URI names, from the cache when it is there; empty when neither
-     * upstream endpoint knows it.
+     * The contract the URI names, cached when possible; empty when neither endpoint knows it.
      *
-     * <p>Throws {@link UpstreamServiceException} when the Contract Service could not be reached,
-     * answered with a failure the retry budget did not survive, or answered with a body that is no
-     * contract at all - the cases that must not be mistaken for an unknown contract. An undecodable
-     * body is upstream's problem too: it is a 502 rather than the 500 an escaping decode failure
-     * would otherwise render.
+     * @throws UpstreamServiceException when unreachable, failing past retries or undecodable
      */
     public Optional<ContractResponse> fetch(String contractUri) {
         Optional<ContractResponse> cached = cache.get(contractUri, ContractResponse.class);
@@ -73,34 +55,18 @@ public class ContractGateway {
     }
 
     /**
-     * Derives the upstream identifier from a contract URI: the last segment of its path, or the
-     * whole value when it carries no separator.
-     *
-     * <p>An http address is the ordinary case - {@code https://contract.example.org/contracts/c-1}
-     * is read as {@code c-1} and fetched from the Contract Service this deployment is configured
-     * against. A query or fragment is dropped first, so {@code .../c-1?v=2} is still {@code c-1}
-     * rather than an identifier that URL-encodes into a 404.
-     *
-     * <p>The authority is deliberately not checked against {@code
-     * consent-manager.contract-service.url}: the URI a contract is published under is a public one
-     * and a deployment commonly reaches the same service on an internal address, so requiring the
-     * two to agree would refuse contracts that resolve perfectly well. The cost is that two URIs
-     * naming one document are two cache keys and, downstream, two rows under {@code
-     * uq_privacy_notices_active_contract}. That is a property of taking the URI as the caller's own
-     * key, which {@code privacy_notices.contract_uri} does by design, and it is recorded here
-     * rather than papered over with a normalisation that would split the uniqueness guarantee.
-     *
-     * <p>Never applied to what is stored. {@code privacy_notices.contract_uri} keeps the URI
-     * verbatim, because it is the key of the partial unique index.
+     * The upstream identifier: the last path segment, query and fragment dropped, or the whole URI.
+     * The authority is deliberately unchecked; never applied to the stored, verbatim URI.
      */
     static String contractIdOf(String contractUri) {
-        String path = contractUri;
-        for (int i = 0; i < PATH_TERMINATORS.length(); i++) {
-            int terminator = path.indexOf(PATH_TERMINATORS.charAt(i));
-            if (terminator >= 0) {
-                path = path.substring(0, terminator);
-            }
-        }
+        int end =
+                PATH_TERMINATORS
+                        .chars()
+                        .map(contractUri::indexOf)
+                        .filter(terminator -> terminator >= 0)
+                        .min()
+                        .orElse(contractUri.length());
+        String path = contractUri.substring(0, end);
         while (!path.isEmpty() && path.charAt(path.length() - 1) == PATH_SEPARATOR) {
             path = path.substring(0, path.length() - 1);
         }

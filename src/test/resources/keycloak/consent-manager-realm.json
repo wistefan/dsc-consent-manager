@@ -72,8 +72,8 @@
       "enabled": true,
       "emailVerified": true,
       "email": "user-principal@test.invalid",
-      "firstName": "User",
-      "lastName": "Principal",
+      "firstName": "Ulrika",
+      "lastName": "Leakmoor",
       "requiredActions": [],
       "credentials": [{ "type": "password", "value": "test-password", "temporary": false }],
       "realmRoles": ["dataspace-user"]

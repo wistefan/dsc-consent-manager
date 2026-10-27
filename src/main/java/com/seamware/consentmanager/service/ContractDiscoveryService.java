@@ -35,20 +35,16 @@ import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 /**
- * Lists the contracts a caller takes part in, for a data subject across their participants or for a
- * participant on one side.
+ * Lists the contracts a data subject's participants, or one participant on one side, take part in.
  *
- * <p>The Contract Service cannot enumerate, so the candidates are the contract URIs of the active
- * privacy notices this service holds; each is then hydrated through {@link ContractGateway} and
- * every side a notice claims is kept only while the fetched document still binds the participant to
- * it, judged by {@link ContractPartyResolver}. One upstream no longer knows, or that binds none of
- * the claims, is dropped. An upstream failure, or a listing outrunning its configured deadline,
- * answers {@code 502} and aborts the whole listing - a truncated list would read as a complete one.
+ * <p>Candidates are the contract URIs of active privacy notices, each fetched and kept only for the
+ * sides {@link ContractPartyResolver} confirms. Any upstream failure or the configured deadline
+ * aborts the whole listing with {@code 502}, never a truncated list.
  */
 @Singleton
 public class ContractDiscoveryService {
 
-    /** Fewest concurrent reads a listing makes, whatever is configured; zero would never read. */
+    /** Floor on the configured concurrency; zero would never read. */
     private static final int MIN_CONCURRENCY = 1;
 
     private final PrivacyNoticeRepository notices;
@@ -79,10 +75,7 @@ public class ContractDiscoveryService {
         this.maxDuration = configuration.getMaxDuration();
     }
 
-    /**
-     * The contracts any participant the subject is linked to takes part in, each listed once with
-     * every side those participants take; ordered by contract URI.
-     */
+    /** Contracts of the subject's linked participants, once each with all their sides, by URI. */
     public List<DiscoveredContract> forUser(@NonNull User subject) {
         List<UUID> linked =
                 links.findByIdUserId(subject.getId()).stream()
@@ -108,7 +101,7 @@ public class ContractDiscoveryService {
         return hydrate(candidates);
     }
 
-    /** Adds the participant's contract URIs on one side to the candidates, as claims to verify. */
+    /** Adds the participant's contract URIs on one side as claims to verify. */
     private void collect(
             Map<String, List<Claim>> candidates, Participant participant, ContractSide side) {
         UUID participantId = participant.getId();
@@ -122,10 +115,7 @@ public class ContractDiscoveryService {
                 uri -> candidates.computeIfAbsent(uri, ignored -> new ArrayList<>()).add(claim));
     }
 
-    /**
-     * Reads every candidate concurrently and returns none until all have answered, so a failure or
-     * the deadline on any one still leaves the caller with nothing rather than a prefix.
-     */
+    /** Fetches all candidates concurrently; all or nothing, never a prefix. */
     private List<DiscoveredContract> hydrate(SortedMap<String, List<Claim>> candidates) {
         if (candidates.isEmpty()) {
             return List.of();
@@ -146,11 +136,10 @@ public class ContractDiscoveryService {
                                                 }
                                             })));
             long deadline = System.nanoTime() + maxDuration.toNanos();
-            List<DiscoveredContract> discovered = new ArrayList<>(pending.size());
-            for (Future<Optional<DiscoveredContract>> fetch : pending) {
-                awaitBy(fetch, deadline).ifPresent(discovered::add);
-            }
-            return List.copyOf(discovered);
+            return pending.stream()
+                    .map(fetch -> awaitBy(fetch, deadline))
+                    .flatMap(Optional::stream)
+                    .toList();
         } finally {
             pending.forEach(fetch -> fetch.cancel(true));
         }
@@ -180,7 +169,7 @@ public class ContractDiscoveryService {
                 .collect(Collectors.toCollection(() -> EnumSet.noneOf(ContractSide.class)));
     }
 
-    /** Waits for one fetch until the listing's deadline, translating every way it can fail. */
+    /** Awaits one fetch until the listing's deadline; other failures surface as {@code 502}. */
     private Optional<DiscoveredContract> awaitBy(
             Future<Optional<DiscoveredContract>> fetch, long deadline) {
         try {
@@ -200,8 +189,6 @@ public class ContractDiscoveryService {
         }
     }
 
-    /**
-     * A notice's claim that the participant takes the side in the contract it is published under.
-     */
+    /** A notice's claim that the participant takes this side in its contract. */
     private record Claim(String participant, ContractSide side) {}
 }

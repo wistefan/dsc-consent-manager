@@ -42,13 +42,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Exercises {@code POST /participants/me/users} end to end against a real Keycloak and a real
- * PostgreSQL.
- *
- * <p>What is under test is the registration rule as the API publishes it: which of the three
- * outcomes each starting state reaches, that the status code agrees with the outcome in the body,
- * that adopting an existing user never rewrites its attributes, and that the caller is taken from
- * the token however the body tries to name one.
+ * {@code POST /participants/me/users} end to end: guards the outcome and status per starting state,
+ * an adoption rewriting attributes, and the body naming a participant other than the token's.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant user registration")
@@ -59,9 +54,7 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     /** Participant the realm's {@code PARTICIPANT} token acts as. */
     private static final String CALLER_PARTICIPANT = KeycloakTestResource.PARTICIPANT_IDENTIFIER;
 
-    /**
-     * Registered, but never the caller: smuggling it into the body must still link to the caller.
-     */
+    /** Registered but never the caller; naming it in the body must still link the caller. */
     private static final String FOREIGN_PARTICIPANT = "urn:test:participant:registration-foreign";
 
     /** Names no participant at all, so the body cannot be read as a valid instruction either. */
@@ -96,11 +89,7 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     private static final Map<String, Object> OVERWRITING_ATTRIBUTES =
             Map.of("email", "grace@example.org", "firstName", "Grace", "lastName", "Hopper");
 
-    /**
-     * Every optional property, each with a value no other property could be mistaken for, so that a
-     * transposed or dropped argument in the controller's mapping shows up as a wrong column rather
-     * than as a passing assertion.
-     */
+    /** Every optional property with a distinct value, so a transposed mapping shows. */
     private static final Map<String, Object> EVERY_ATTRIBUTE =
             Map.of(
                     "localIdentifier", "local-10427",
@@ -114,7 +103,7 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     /** The looser bound {@code localIdentifier} carries, so that a DID or a URI fits. */
     private static final int MAX_LOCAL_IDENTIFIER_LENGTH = 2048;
 
-    /** Longest a cold Keycloak container may take to import its realm and serve discovery. */
+    /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
     @Inject
@@ -150,9 +139,7 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
             }
         },
 
-        /**
-         * The caller registered the user already, so a repeat changes nothing that is published.
-         */
+        /** The caller registered the user already, so a repeat changes nothing published. */
         ALREADY_LINKED_USER(REPEATED_USER, HttpStatus.OK, "ALREADY_LINKED") {
             @Override
             void prime(ParticipantUserRegistrationIT it) {
@@ -268,8 +255,7 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     @MethodSource("boundedProperties")
     @DisplayName("a property longer than its maximum is refused before anything is written")
     void anOverlongPropertyIsRefused(String property, int maximum) {
-        // Written in this order on purpose: `identifier` is one of the properties under test, so
-        // the overlong value has to be able to replace the otherwise-valid one.
+        // Seeded first so an overlong `identifier` can replace the valid one.
         Map<String, Object> body = new LinkedHashMap<>(Map.of("identifier", MAPPED_USER));
         body.put(property, "x".repeat(maximum + 1));
 
@@ -277,12 +263,7 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
         assertThat(users.findByIdentifier(MAPPED_USER)).isEmpty();
     }
 
-    /**
-     * Every bounded property with the bound its own schema declares.
-     *
-     * <p>{@code localIdentifier} is deliberately looser than the rest: it may carry a DID or
-     * another URI, which the bound that suits a human-scale name does not accommodate.
-     */
+    /** Every bounded property with its schema's bound; {@code localIdentifier} is looser. */
     static Stream<Arguments> boundedProperties() {
         return Stream.of(
                 Arguments.of("identifier", MAX_FIELD_LENGTH),

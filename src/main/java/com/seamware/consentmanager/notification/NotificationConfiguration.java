@@ -6,9 +6,8 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * Outgoing mail transport, bound under {@code smtp}. Blank strings stand for unset values, since
- * the {@code ${VAR:}} placeholders in application.yml resolve an unset variable to the empty
- * string.
+ * Outgoing mail transport, bound under {@code smtp}. A blank string means unset, since an unset
+ * {@code ${VAR:}} placeholder resolves to the empty string.
  */
 @Getter
 @Setter

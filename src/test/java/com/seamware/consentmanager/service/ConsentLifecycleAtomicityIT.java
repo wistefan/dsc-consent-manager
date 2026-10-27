@@ -47,34 +47,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Proves that two lifecycle moves sent at the same instant cannot leave a pair holding two live
- * consents, nor one consent carrying a move recorded twice.
- *
- * <p>Two mechanisms are under test. A move addressing one record is settled by {@code
- * ConsentWriter}'s {@code FOR UPDATE} re-read of that row: the loser is guarded on the status the
- * winner left, so the second revocation is refused rather than appending a second event to a
- * consent already withdrawn. A move that may land in {@code GRANTED} is settled by the {@code
- * (user, notice)} lock the writer takes before reading, which is the same lock {@code
- * ConsentService.decide} takes - so a resume and a decision for one pair serialise, and the second
- * sees what the first left rather than racing it to {@code uq_consents_granted_per_user_notice}.
- *
- * <p>That lock is why neither racing pair here produces the {@code 409} {@code
- * ConsentWriter#resume} documents: both writers take it, and a decision answers the request a
- * resume addresses in place rather than inserting beside it, so the loser is refused on the status
- * the winner left. The index is the backstop for the one interleaving no lock can cover - a grant
- * committed outside the locking read's snapshot, which that read can neither see nor lock - and
- * {@link #refusesAResumeLosingToAGrantOutsideItsSnapshot} seeds that state directly rather than
- * racing for it, so the branch answering it is exercised rather than argued.
- *
- * <p>What the racing cases pin is therefore the end state - the pair holds one consent in force,
- * and no consent records a state twice - rather than one particular status a given interleaving
- * happens to produce. Which racer loses is not fixed by anything here: where the decision reaches
- * the row first the other is refused, and where it does not both moves land legitimately, so the
- * refusal assertions in those two cases hold only of the runs that produced a refusal. The AC 16
- * property itself - a loser answered as a client error rather than a {@code 500} - is pinned where
- * exactly one racer must lose: {@link #concurrentRevocationsAppendOneEvent}, two withdrawals of one
- * consent, and {@link #refusesAResumeLosingToAGrantOutsideItsSnapshot}, whose conflict is seeded
- * rather than raced for.
+ * Two simultaneous lifecycle moves never leave a pair with two live consents, nor one consent with
+ * a move recorded twice; a loser is refused as a client error, never a {@code 500}.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Concurrent consent lifecycle moves")
@@ -89,20 +63,15 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
 
     private static final String CONTRACT_URI = "urn:test:contract:lifecycle-atomicity";
 
-    /** The provider of a token this suite never validates; only its shape matters here. */
+    /** Issuer of a token this suite never validates; only its shape matters. */
     private static final String ISSUER = "https://issuer.test/realms/lifecycle-atomicity";
 
     /** Long enough for a blocked statement to register as waiting, short enough to fail fast. */
     private static final Duration BLOCKED = Duration.ofSeconds(10);
 
     /**
-     * A backend of <em>this</em> database held up by another transaction while writing a consent.
-     *
-     * <p>Narrow on purpose: the container behind {@link PostgresTestResource} is shared by every
-     * suite in the JVM, so a cluster-wide {@code pg_locks} probe would be released by any unrelated
-     * backend waiting on anything, letting the held grant commit before the resume ever reached the
-     * index. The probe's own backend is excluded because this very statement names {@code
-     * consents}.
+     * A backend of <em>this</em> database blocked on a lock while writing a consent; narrow because
+     * the container is shared by every suite in the JVM. Excludes the probe's own backend.
      */
     private static final String WAITING_BACKENDS =
             "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"
@@ -233,21 +202,7 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
                         ConsentEventState.CONSENT_GIVEN, ConsentEventState.CONSENT_REVOKED);
     }
 
-    /**
-     * The one interleaving the pair lock cannot cover, and the only reachable proof of AC 12.
-     *
-     * <p>The held grant is invisible to the resume's locking read, so the resume runs on: it
-     * terminates {@code straggler}, the open request its own grant would leave redundant, and only
-     * then does its own update reach {@code uq_consents_granted_per_user_notice} and fail. That
-     * ordering is what makes the case load-bearing twice over - every refusal elsewhere in these
-     * suites is thrown by {@link ConsentStateMachine} <em>before</em> the writer is entered, and
-     * would read the same with no transaction at all. Here a write has already landed when the
-     * failure comes, so a straggler still {@code PENDING} and still carrying no termination is the
-     * transaction unwinding rather than the guard refusing. That the close really is written on
-     * this fixture, rather than skipped before the conflict, is what {@code
-     * ConsentLifecycleIT.closesTheRequestsTheAnswerMakesRedundant} pins on the same two rows with
-     * nothing holding the index.
-     */
+    /** The race no lock covers: a write lands before the conflict, so the rollback is visible. */
     @Test
     @DisplayName("a resume losing to a grant outside its locking read is refused with nothing kept")
     void refusesAResumeLosingToAGrantOutsideItsSnapshot() throws Exception {
@@ -293,7 +248,7 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
                 .containsExactly(ConsentEventState.CONSENT_REQUESTED);
     }
 
-    /** Whether a backend is held up by another transaction, which is the resume blocked below. */
+    /** Whether a backend of this database is blocked on a lock on {@code consents}. */
     private static boolean isWaitingOnALock(DataSource pool) {
         try (Connection probe = pool.getConnection();
                 PreparedStatement statement = probe.prepareStatement(WAITING_BACKENDS);
@@ -304,12 +259,7 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
         }
     }
 
-    /**
-     * Inserts a grant for the pair on a transaction the caller has not committed.
-     *
-     * <p>Raw SQL on a held connection rather than the repository, because the point is a row the
-     * resume's locking read cannot see: a committed one is found and superseded instead.
-     */
+    /** Inserts an uncommitted grant for the pair, invisible to the resume's locking read. */
     private void insertGrant(Connection held) throws SQLException {
         try (PreparedStatement statement = held.prepareStatement(INSERT_GRANT)) {
             statement.setObject(1, UUID.randomUUID());
@@ -321,14 +271,14 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
         }
     }
 
-    /** Fails unless the refusal is one the API renders as a client error the caller can act on. */
+    /** Fails unless the API renders the refusal as a client error. */
     private static void isClientError(Throwable refusal) {
         assertThat(refusal).isInstanceOf(ApiException.class);
         assertThat(((ApiException) refusal).problemType().status().getCode())
                 .isLessThan(ProblemType.LOWEST_SERVER_ERROR_STATUS);
     }
 
-    /** Fails if any consent of the pair records the same state twice, which no move may do. */
+    /** Fails if any consent of the pair records the same state twice. */
     private void assertNoConsentReachedAStateTwice() {
         consents.findByPrivacyNoticeId(notice.getId())
                 .forEach(
@@ -345,7 +295,7 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
                                         .doesNotHaveDuplicates());
     }
 
-    /** Runs the two moves so that neither starts before the other, separating win from refusal. */
+    /** Starts both moves together and collects which moved and which were refused. */
     private Outcomes race(Callable<UUID> first, Callable<UUID> second) throws Exception {
         CyclicBarrier start = new CyclicBarrier(RACERS);
         List<Callable<UUID>> racers = List.of(started(start, first), started(start, second));
@@ -404,9 +354,7 @@ class ConsentLifecycleAtomicityIT extends PostgresTestResource {
                                 PrivacyNoticeFixtures.emptyPayload()));
     }
 
-    /**
-     * A consent for the pair as an earlier flow would have left it, with the trail it would hold.
-     */
+    /** A consent for the pair as an earlier flow would have left it, with its trail. */
     private UUID seedConsent(ConsentStatus status) {
         Consent seeded =
                 consents.save(

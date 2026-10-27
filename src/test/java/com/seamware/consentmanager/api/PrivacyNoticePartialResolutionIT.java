@@ -25,18 +25,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Pins that an external document this service cannot read degrades its section and never the
- * request.
- *
- * <p>Every case is a 200 with the notice still in it, which is the whole point: a notice that
- * cannot be displayed at all is worse than one displayed with a section marked unavailable. The
- * expectation is not uniformly one section - a contract that could not be read takes {@code
- * purposes} with it, because the purposes are resolved from the contract by construction.
- *
- * <p>Each case seeds its notice straight into the table under a contract URI of its own. Generating
- * it through the API would leave the contract cached, and the retrieval under test would then
- * report {@code RESOLVED} whatever the stub does - a green test asserting nothing. The request
- * count at the Contract Service is asserted for that reason rather than for its own sake.
+ * An unreadable external document degrades its section, never the request: each case is a 200.
+ * Notices are seeded directly, since generating them would cache the contract and assert nothing.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Privacy notice resolution against failing upstreams")
@@ -58,7 +48,7 @@ class PrivacyNoticePartialResolutionIT extends PrivacyNoticeApiTestSupport {
     /** Status an upstream answers with when it is there but cannot serve the document. */
     private static final int UPSTREAM_FAILURE = 500;
 
-    /** Title the seeded rows carry, so a contract case can be seen to have fallen back to it. */
+    /** Title the seeded rows carry, so a contract case visibly falls back to it. */
     private static final String STORED_TITLE = "Title as the contract read at generation";
 
     /** Purpose the seeded rows carry, for the same reason. */
@@ -78,7 +68,7 @@ class PrivacyNoticePartialResolutionIT extends PrivacyNoticeApiTestSupport {
     @Override
     public Map<String, String> getProperties() {
         Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
-        // Shared by both upstream clients, which is what keeps the timeout cases quick.
+        // Shared by both upstream clients, keeping the timeout cases quick.
         properties.put("consent-manager.contract-service.read-timeout", READ_TIMEOUT);
         return properties;
     }
@@ -111,13 +101,7 @@ class PrivacyNoticePartialResolutionIT extends PrivacyNoticeApiTestSupport {
         expected.assertions().accept(body);
     }
 
-    /**
-     * The case names, which is all the test method takes.
-     *
-     * <p>The arrangement is looked up rather than passed: Micronaut's JUnit extension resolves any
-     * parameter it can make a bean of, and a {@code Supplier} argument makes it compete with the
-     * parameterized runner for the slot, which fails every case before it runs.
-     */
+    /** Case names only; Micronaut's extension would claim a {@code Supplier} parameter. */
     private Stream<String> degradationCases() {
         return degradations.keySet().stream();
     }
@@ -150,12 +134,7 @@ class PrivacyNoticePartialResolutionIT extends PrivacyNoticeApiTestSupport {
                 PrivacyNoticePartialResolutionIT::assertStoredTextSurvives);
     }
 
-    /**
-     * The transport failure that would be a 502 if the resolver did not catch it.
-     *
-     * <p>The case {@code UpstreamServiceException} is caught for: the gateway raises it rather than
-     * returning empty, and letting it out of a GET would answer the 502 resolution exists to avoid.
-     */
+    /** A transport failure, which would be a 502 if the resolver did not catch it. */
     private Expectation contractUnreachable() {
         String contractId = "partial-contract-unreachable";
         contracts.serveFault(contractId);
@@ -165,9 +144,7 @@ class PrivacyNoticePartialResolutionIT extends PrivacyNoticeApiTestSupport {
                 PrivacyNoticePartialResolutionIT::assertStoredTextSurvives);
     }
 
-    /**
-     * A body that will not decode is upstream's problem too, and degrades the same two sections.
-     */
+    /** A body that will not decode degrades the same two sections. */
     private Expectation contractMalformed() {
         String contractId = "partial-contract-malformed";
         contracts.serveMalformedContract(contractId);
@@ -212,13 +189,7 @@ class PrivacyNoticePartialResolutionIT extends PrivacyNoticeApiTestSupport {
                 body -> assertBareEntry(body, offeringUrl));
     }
 
-    /**
-     * The second hop failing while the first one succeeded.
-     *
-     * <p>A partially filled list reports {@code UNAVAILABLE}: an offering that resolved while the
-     * resources behind it did not is not a resolved section, and claiming otherwise would let a
-     * caller take the list for complete.
-     */
+    /** The second hop failing after the first succeeded; a partial list is {@code UNAVAILABLE}. */
     private Expectation resourceFails() {
         String resourceUrl =
                 catalog.serveStatus("/catalog/dataresources/failing", UPSTREAM_FAILURE);

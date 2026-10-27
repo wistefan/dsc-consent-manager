@@ -10,6 +10,7 @@ import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.notification.UserNotificationService;
+import com.seamware.consentmanager.observability.FailureSummary;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import io.micronaut.core.annotation.NonNull;
@@ -21,13 +22,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The two ways a consent comes into being: the data subject's own decision, and a participant's
- * request that they take one - what each is checked against before it is written, and what it reads
- * back as.
+ * The two ways a consent comes into being: the subject's own decision, and a participant's request.
  *
- * <p>Everything that touches the database transactionally lives in {@link ConsentWriter}; this bean
- * resolves the notice, the parties and the elected scope around it, and turns a race lost on the
- * one-grant-per-notice index into a {@code 409} instead of a {@code 500}.
+ * <p>Deliberately not transactional: every transactional write is in {@link ConsentWriter}, so a
+ * race lost on the one-grant-per-notice index is caught here, outside the transaction, as 409.
  */
 @Singleton
 public class ConsentService {
@@ -35,7 +33,7 @@ public class ConsentService {
     private static final Logger LOG = LoggerFactory.getLogger(ConsentService.class);
 
     private static final String NOTIFICATION_FAILED =
-            "Consent {} was requested, but notifying its subject failed";
+            "Consent {} was requested, but notifying its subject failed: {}";
 
     private static final String NOTHING_TO_NARROW =
             "Privacy notice '%s' declares no %s, so none can be elected.";
@@ -62,7 +60,7 @@ public class ConsentService {
     private final UserParticipantRepository links;
     private final ConsentWriter writer;
     private final ConsentStateMachine lifecycle;
-    private final ConsentParties parties;
+    private final ConsentReporter reporter;
     private final UserNotificationService notifications;
 
     public ConsentService(
@@ -71,30 +69,20 @@ public class ConsentService {
             UserParticipantRepository links,
             ConsentWriter writer,
             ConsentStateMachine lifecycle,
-            ConsentParties parties,
+            ConsentReporter reporter,
             UserNotificationService notifications) {
         this.noticeGuard = noticeGuard;
         this.users = users;
         this.links = links;
         this.writer = writer;
         this.lifecycle = lifecycle;
-        this.parties = parties;
+        this.reporter = reporter;
         this.notifications = notifications;
     }
 
     /**
-     * Records the subject's decision about one privacy notice and reads it back with its parties
-     * named.
-     *
-     * <p>The subject comes from the token rather than from {@code decision}, which is what makes a
-     * grant in someone else's name unrepresentable here. Refuses an unknown notice with {@code
-     * 404}, a status that is not a decision, an archived or unconsentable notice and an election
-     * outside its terms with {@code 400}, and a decision overtaken by a concurrent grant with
-     * {@code 409}.
-     *
-     * <p>{@link ConsentDetails#created()} reports which of the writer's branches ran: a decision
-     * answering a request that was still open is written onto that record rather than creating one,
-     * and the API owes the caller a different success code for it.
+     * Records the token subject's decision on one notice; the subject never comes from the body.
+     * {@code 404} unknown notice, {@code 400} invalid decision/notice/election, {@code 409} race.
      */
     @NonNull
     public ConsentDetails decide(@NonNull User subject, @NonNull ConsentDecision decision) {
@@ -107,24 +95,16 @@ public class ConsentService {
 
         ConsentSnapshot snapshot =
                 ConsentSnapshot.of(notice, decision.purposes(), decision.dataCategories());
-        return parties.details(record(subject, notice, decision, snapshot));
+        return reporter.report(record(subject, notice, decision, snapshot));
     }
 
     /**
-     * Opens a request for {@code command}'s user to decide on a notice, in the caller's name.
+     * Opens a {@code PENDING} request, in the token participant's name, for a user to decide on a
+     * notice; it confers nothing. See ADR-0009.
      *
-     * <p>A request confers nothing: it is recorded {@code PENDING} over the notice's full terms,
-     * and only the subject can answer it. Refuses an unknown notice and a user the caller is not
-     * affiliated with - or that does not exist, indistinguishably - with {@code 404}, an archived
-     * or unconsentable notice with {@code 400}, a caller the notice does not name with {@code 403},
-     * and a pair already holding an open consent with {@code 409}.
-     *
-     * <p>The caller is the registered participant behind the token, not a party named in the body,
-     * so a participant cannot ask on another's behalf.
-     *
-     * <p>The subject is notified once {@link ConsentWriter} has committed; this bean is
-     * deliberately not transactional, so the notification never runs inside the write, and a
-     * failure in it is logged rather than allowed to turn a committed request into an error.
+     * <p>{@code 404} for an unknown notice and, indistinguishably, an unknown or unaffiliated user;
+     * {@code 400} unconsentable notice; {@code 403} caller not a party; {@code 409} already open.
+     * The subject is notified after commit, and a notification failure is only logged.
      */
     @NonNull
     public ConsentDetails request(
@@ -134,23 +114,18 @@ public class ConsentService {
         User subject = affiliated(caller, command.userIdentifier());
 
         ConsentSnapshot snapshot = ConsentSnapshot.of(notice, null, null);
-        RecordedConsent recorded =
-                writer.request(subject, notice, snapshot, caller.getIdentifier());
+        ConsentWrite written = writer.request(subject, notice, snapshot, caller.getIdentifier());
+        RecordedConsent recorded = written.primary();
         try {
             notifications.consentRequested(subject, recorded.consent(), caller);
         } catch (RuntimeException e) {
-            LOG.error(NOTIFICATION_FAILED, recorded.consent().getId(), e);
+            LOG.error(NOTIFICATION_FAILED, recorded.consent().getId(), FailureSummary.of(e));
+            LOG.debug(NOTIFICATION_FAILED, recorded.consent().getId(), e.getMessage(), e);
         }
-        return parties.details(recorded);
+        return reporter.report(written);
     }
 
-    /**
-     * Refuses a caller the notice names on neither side.
-     *
-     * <p>Both parties may ask: the provider holds the terms, and the consumer is who the data would
-     * flow to, so either has business putting the question. Anyone else has none, even holding a
-     * link to the user.
-     */
+    /** Refuses a caller the notice names on neither side, even one linked to the user. */
     private static void requireParty(Participant caller, PrivacyNotice notice) {
         if (!caller.getId().equals(notice.getProviderId())
                 && !caller.getId().equals(notice.getConsumerId())) {
@@ -159,12 +134,7 @@ public class ConsentService {
         }
     }
 
-    /**
-     * The user the caller may ask, or a {@code 404} that does not say which half failed.
-     *
-     * <p>An unknown identifier and one belonging to a user affiliated with someone else answer
-     * alike, so the route cannot be used to probe which users this service holds.
-     */
+    /** The user the caller may ask; unknown and unaffiliated answer the same 404, so no probing. */
     private User affiliated(Participant caller, String userIdentifier) {
         return users.findByIdentifier(userIdentifier)
                 .filter(
@@ -179,7 +149,7 @@ public class ConsentService {
     }
 
     /** The decision as stored, with a race on the one-grant-per-notice index answered as 409. */
-    private RecordedConsent record(
+    private ConsentWrite record(
             User subject,
             PrivacyNotice notice,
             ConsentDecision decision,
@@ -195,13 +165,8 @@ public class ConsentService {
     }
 
     /**
-     * Refuses an election the notice cannot honour, naming the heading at fault.
-     *
-     * <p>Every heading of a notice is optional, so an election against one the notice never
-     * declared is a client error rather than an empty subset test, and is checked first because the
-     * subset test would otherwise dereference nothing. An explicitly empty election is refused too:
-     * narrowing to nothing records a consent to nothing, which an omitted field - consenting to the
-     * notice's full scope - cannot be mistaken for.
+     * Refuses an election the notice cannot honour, naming the heading at fault. An undeclared
+     * heading and an explicitly empty election are both refused; omitted means all.
      */
     private static void requireWithinScope(
             String heading,

@@ -4,12 +4,8 @@ import io.micronaut.core.annotation.Nullable;
 import java.util.Map;
 
 /**
- * What an organization asks {@link ParticipantService#register} to record about itself, kept free
- * of the generated API models.
- *
- * <p>Carries no identifier: the participant being registered is the one the caller's token names,
- * and leaving it out here is what keeps a body-supplied identifier from ever reaching a column.
- * {@code endpoints} and {@code legalPerson} are the JSONB columns as they will be stored.
+ * What an organization asks {@link ParticipantService#register} to record about itself. Carries no
+ * identifier, so only the token's identifier can ever reach the column.
  */
 public record ParticipantRegistration(
         String legalName,

@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.error;
 
 import com.seamware.consentmanager.api.generated.model.ProblemDetail;
+import com.seamware.consentmanager.observability.FailureSummary;
 import io.micronaut.context.annotation.Replaces;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.MediaType;
@@ -14,15 +15,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Renders every error the framework itself produces as an RFC 7807 problem detail, replacing the
- * Hateoas body Micronaut ships with.
- *
- * <p>The exception handlers in this package only cover what this service throws. A malformed
- * request body, a missing required parameter, a 405, a 415 and an unroutable 404 never reach them:
- * the framework builds those responses through this processor. Without the replacement the same API
- * would answer {@code application/problem+json} for a refusal it chose and {@code application/json}
- * with {@code _embedded.errors} for one the framework chose, and the shared {@code BadRequest}
- * response component would be a promise the service does not keep.
+ * Renders framework-produced errors (malformed body, missing parameter, 405, 415, unroutable 404)
+ * as RFC 7807 problem details, replacing Micronaut's Hateoas body.
  */
 @Singleton
 @Replaces(ErrorResponseProcessor.class)
@@ -33,9 +27,14 @@ public class ProblemErrorResponseProcessor implements ErrorResponseProcessor<Pro
     /** Separator between the individual messages listed in one detail string. */
     private static final String MESSAGE_SEPARATOR = "; ";
 
-    /**
-     * Renders the error as a problem, withholding the cause of anything that is this side's fault.
-     */
+    private final ServerErrorDetail serverErrorDetail;
+
+    /** Creates the processor. */
+    public ProblemErrorResponseProcessor(ServerErrorDetail serverErrorDetail) {
+        this.serverErrorDetail = serverErrorDetail;
+    }
+
+    /** Renders the error as a problem, withholding the cause of a server-side fault. */
     @Override
     public MutableHttpResponse<ProblemDetail> processResponse(
             ErrorContext errorContext, MutableHttpResponse<?> baseResponse) {
@@ -45,16 +44,14 @@ public class ProblemErrorResponseProcessor implements ErrorResponseProcessor<Pro
         boolean serverError = status >= ProblemType.LOWEST_SERVER_ERROR_STATUS;
 
         if (serverError) {
-            LOG.error(
-                    "{} {} failed with {}",
-                    request.getMethod(),
-                    request.getUri(),
-                    status,
-                    errorContext.getRootCause().orElse(null));
+            FailureSummary.logRequestFailure(
+                    LOG, request, status, errorContext.getRootCause().orElse(null));
         }
 
         String detail =
-                serverError ? ProblemType.SERVER_ERROR_DETAIL : describe(errorContext, reason);
+                serverError
+                        ? serverErrorDetail.detailFor(errorContext.getRootCause().orElse(null))
+                        : describe(errorContext, reason);
         return baseResponse
                 .body(ProblemType.problemFor(status, reason, detail, request.getPath()))
                 .contentType(MediaType.of(ProblemType.MEDIA_TYPE));

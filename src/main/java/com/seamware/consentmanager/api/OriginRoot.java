@@ -7,9 +7,8 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Serves a controller's routes at the origin root, outside {@code micronaut.server.context-path}.
- * Filters bound to {@code /**}, the security filter among them, are context-path-relative and never
- * see such a route, so only a public route that needs none of them may carry it.
+ * Serves a controller's routes at the origin root, outside {@code consent-manager.api-prefix}.
+ * Filters and the security rules still see the route under its full path, as they see every other.
  */
 @Documented
 @Retention(RetentionPolicy.RUNTIME)

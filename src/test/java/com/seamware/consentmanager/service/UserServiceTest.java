@@ -3,7 +3,9 @@ package com.seamware.consentmanager.service;
 import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
+import ch.qos.logback.classic.Level;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
@@ -19,6 +21,7 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.ForbiddenException;
 import com.seamware.consentmanager.error.NotFoundException;
+import com.seamware.consentmanager.observability.LogPseudonymizer;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.IssuedReceiptRepository;
@@ -27,6 +30,8 @@ import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.Role;
 import com.seamware.consentmanager.security.UserPrincipal;
+import com.seamware.consentmanager.support.LogCapture;
+import com.seamware.consentmanager.support.TestPseudonymizer;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
 import io.micronaut.data.model.Page;
@@ -50,9 +55,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Covers the rule {@link UserService} implements, plus what {@link UserServiceIT} cannot force
- * deterministically: the duplicate-key branch of either write, both when the winner's row is there
- * to adopt and when the failure was never the race.
+ * {@link UserService}'s rules over in-memory stubs, plus the duplicate-key branches {@link
+ * UserServiceIT} cannot force deterministically: a race to adopt, and a failure that is not one.
  */
 @DisplayName("User service")
 class UserServiceTest {
@@ -124,6 +128,8 @@ class UserServiceTest {
 
     private final ErasureVerifier erasureVerifier = verifierWith(VERIFICATION_SECRET);
 
+    private static final LogPseudonymizer PSEUDONYMIZER = TestPseudonymizer.create();
+
     private final ConsentFactory consentFactory = new ConsentFactory(new ConsentStateMachine());
 
     private final UserService service =
@@ -136,9 +142,9 @@ class UserServiceTest {
                     issuedReceipts,
                     consentFactory,
                     erasureVerifier,
+                    PSEUDONYMIZER,
                     limits);
 
-    /** An identifier no row exists for is inserted from the claims, and reported as created. */
     @Test
     @DisplayName("provisioning inserts a row built from the claims on first sight")
     void insertsOnFirstSight() {
@@ -154,7 +160,6 @@ class UserServiceTest {
         assertThat(provisioned.user().getLastName()).isEqualTo("Lovelace");
     }
 
-    /** Only the call whose own insert landed reports {@code created}; a later one adopts. */
     @Test
     @DisplayName("provisioning reports created only for the call that inserted the row")
     void reportsCreatedOnlyOnce() {
@@ -168,10 +173,6 @@ class UserServiceTest {
         assertThat(second.user()).isSameAs(first.user());
     }
 
-    /**
-     * The row a concurrent request committed between this one's read and its insert is adopted, and
-     * the claims this token carries are written onto it.
-     */
     @Test
     @DisplayName("provisioning adopts and refreshes the row a concurrent request committed")
     void adoptsTheWinnersRow() {
@@ -188,7 +189,7 @@ class UserServiceTest {
         assertThat(users.updated).containsExactly(winner);
     }
 
-    /** A save failure that was not the race is not swallowed, and not turned into another type. */
+    /** A non-race save failure is neither swallowed nor wrapped. */
     @Test
     @DisplayName("provisioning rethrows a save failure that left no row behind")
     void rethrowsAFailureThatWasNotTheRace() {
@@ -203,11 +204,6 @@ class UserServiceTest {
         assertThat(users.updated).isEmpty();
     }
 
-    /**
-     * Only a claim the token actually asserts, and that differs, causes a write.
-     *
-     * @param description what the token carries, for the test name
-     */
     @ParameterizedTest(name = "{0}")
     @MethodSource("refreshCases")
     @DisplayName("provisioning writes the row only when an asserted claim differs")
@@ -293,12 +289,7 @@ class UserServiceTest {
                         STORED_FAMILY_NAME));
     }
 
-    /**
-     * The four states a registration can find, each settling on one outcome and never on a second
-     * user row. A pre-existing row keeps the attributes it was created with, whoever asserted them.
-     *
-     * @param description the entry state, for the test name
-     */
+    /** A pre-existing row keeps the attributes it was created with, whoever asserted them. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("registrationCases")
     @DisplayName("registration creates, links or adopts according to the entry state")
@@ -431,7 +422,30 @@ class UserServiceTest {
                 .isSameAs(failure);
     }
 
-    /** The links of a user resolve to participant identifiers, sorted so responses are stable. */
+    @Test
+    @DisplayName("a failed bulk entry logs the pseudonym, not the identifier or the message")
+    void bulkEntryFailureLogsOnlyThePseudonym() {
+        Participant participant = participants.put(participant());
+        users.put(stored());
+        String message = "Key (identifier)=(%s) already exists".formatted(IDENTIFIER);
+        links.commitDuringSave(null, new DataAccessException(message));
+
+        List<String> logged;
+        try (LogCapture captured = LogCapture.attach()) {
+            service.registerBulkForParticipant(
+                    participant, List.of(registration(STORED_LOCAL_IDENTIFIER)));
+            logged =
+                    captured.events().stream()
+                            .filter(event -> event.getLevel().isGreaterOrEqual(Level.INFO))
+                            .map(LogCapture::render)
+                            .toList();
+        }
+
+        assertThat(logged).anyMatch(line -> line.contains(PSEUDONYMIZER.pseudonym(IDENTIFIER)));
+        assertThat(logged).noneMatch(line -> line.contains(IDENTIFIER) || line.contains(message));
+    }
+
+    /** Sorted so responses are stable. */
     @Test
     @DisplayName("a user's participant identifiers come back sorted")
     void participantIdentifiersAreSorted() {
@@ -452,13 +466,7 @@ class UserServiceTest {
         assertThat(service.participantIdentifiersFor(users.put(stored()))).isEmpty();
     }
 
-    /**
-     * The three bodies a {@code PATCH} can reach the service with. A blank string is stored as no
-     * local identifier at all, so the column never holds two encodings of "this participant holds
-     * none".
-     *
-     * @param description the body, for the test name
-     */
+    /** A blank is stored as null, so the column never holds two encodings of "none". */
     @ParameterizedTest(name = "{0}")
     @MethodSource("linkUpdates")
     @DisplayName("the link update stores what the caller asked for, a blank as nothing")
@@ -485,12 +493,7 @@ class UserServiceTest {
                 Arguments.of("a blank string clears it too", "   ", null));
     }
 
-    /**
-     * Absence is a 404 on every link path, and the two kinds of absence are indistinguishable: a
-     * 403 for the second would confirm that the identifier names somebody.
-     *
-     * @param description the entry state, for the test name
-     */
+    /** Both absences are 404: a 403 would confirm that the identifier names somebody. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("missingLinks")
     @DisplayName("a link the caller does not hold is not found, whatever it is asked to do")
@@ -515,7 +518,6 @@ class UserServiceTest {
                 Arguments.of("a user linked to another participant", true));
     }
 
-    /** Unlinking removes the caller's link and nothing else - not the user, not another link. */
     @Test
     @DisplayName("the unlink reaches the caller's link alone")
     void unlinkRemovesOnlyTheCallersLink() {
@@ -532,13 +534,7 @@ class UserServiceTest {
         assertThat(users.rows()).hasSize(1);
     }
 
-    /**
-     * Only a {@code GRANTED} consent naming the caller blocks the unlink. {@code PENDING} and
-     * {@code DRAFT} authorise no data flow, so neither is worth refusing over; a granted consent
-     * between two other participants is none of the caller's business.
-     *
-     * @param description the consent seeded against the user, for the test name
-     */
+    /** {@code PENDING} and {@code DRAFT} authorise no data flow, so neither blocks. */
     @ParameterizedTest(name = "{0}")
     @MethodSource("unlinkBlockers")
     @DisplayName("a granted consent naming the caller blocks the unlink, nothing else does")
@@ -580,10 +576,7 @@ class UserServiceTest {
                 Arguments.of("draft, caller provides", ConsentStatus.DRAFT, true, false, false));
     }
 
-    /**
-     * Erasure closes everything still open, unlinks everything, clears the attributes and renames
-     * the row - while leaving the consent and event rows themselves in place.
-     */
+    /** Erasure closes, unlinks, clears and renames, leaving consent and event rows in place. */
     @Test
     @DisplayName("erasure closes, unlinks and pseudonymises, and keeps the audit trail")
     void erasureRevokesUnlinksAndPseudonymises() {
@@ -603,6 +596,16 @@ class UserServiceTest {
 
         assertThat(result.consentsRevoked()).isEqualTo(1);
         assertThat(result.consentsTerminated()).isEqualTo(2);
+        assertThat(result.moves())
+                .as("each closing names the status it was locked in, and the published counts")
+                .extracting(
+                        move -> move.recorded().consent().getId(),
+                        ConsentMove::held,
+                        move -> move.recorded().consent().getStatus())
+                .containsExactlyInAnyOrder(
+                        tuple(granted.getId(), ConsentStatus.GRANTED, ConsentStatus.REVOKED),
+                        tuple(pending.getId(), ConsentStatus.PENDING, ConsentStatus.TERMINATED),
+                        tuple(draft.getId(), ConsentStatus.DRAFT, ConsentStatus.TERMINATED));
         assertThat(result.linksRemoved()).isEqualTo(2);
         assertThat(result.pseudonym()).startsWith(ERASED_PREFIX).isNotEqualTo(IDENTIFIER);
 
@@ -635,10 +638,7 @@ class UserServiceTest {
                 .isEmpty();
     }
 
-    /**
-     * Two erasures must not produce the same pseudonym, or they would be linkable to each other.
-     * Both subjects hold a consent, since that is what makes a pseudonym exist at all.
-     */
+    /** Shared pseudonyms would link erasures; each subject holds a consent so one is minted. */
     @Test
     @DisplayName("each erasure mints its own pseudonym")
     void erasureMintsAFreshPseudonymEveryTime() {
@@ -654,10 +654,7 @@ class UserServiceTest {
         assertThat(one).isNotEqualTo(other);
     }
 
-    /**
-     * A record no consent refers to is deleted outright rather than tombstoned, so a replayed token
-     * cannot grow the table with husks nothing will ever remove.
-     */
+    /** Deleted rather than tombstoned, so a replayed token cannot grow the table with husks. */
     @Test
     @DisplayName("erasing a user no consent refers to deletes the record and reports no pseudonym")
     void erasureOfABareUserDeletesTheRecord() {
@@ -672,10 +669,7 @@ class UserServiceTest {
         assertThat(users.rows()).isEmpty();
     }
 
-    /**
-     * One subject's erasure must not reach another's rows - the service filters by user id, and
-     * this is the assertion that keeps it that way.
-     */
+    /** Pins the service's filtering by user id. */
     @Test
     @DisplayName("erasure leaves another subject's consents and links untouched")
     void erasureSparesEveryOtherSubject() {
@@ -700,10 +694,6 @@ class UserServiceTest {
         assertThat(bystander.getEmail()).isEqualTo(STORED_EMAIL);
     }
 
-    /**
-     * Without a configured secret - the default - a kept row carries no verifier, so nothing can
-     * ever be confirmed against it.
-     */
     @Test
     @DisplayName("erasure stores no verifier when the deployment configured no secret")
     void erasureWithoutASecretStoresNoVerifier() {
@@ -717,6 +707,7 @@ class UserServiceTest {
                         issuedReceipts,
                         consentFactory,
                         verifierWith(null),
+                        PSEUDONYMIZER,
                         limits);
         Participant alpha = participants.put(participant());
         User user = users.put(stored());
@@ -755,7 +746,6 @@ class UserServiceTest {
                 noTerms());
     }
 
-    /** A search naming nothing is refused outright rather than answered with the whole table. */
     @ParameterizedTest(name = "criteria {0} are no criteria at all")
     @MethodSource("emptyCriteria")
     @DisplayName("a search naming no criterion is rejected")
@@ -775,9 +765,6 @@ class UserServiceTest {
                 .containsExactlyElementsOf(expected);
     }
 
-    /**
-     * A participant naming somebody else's participant intersects rather than replaces its scope.
-     */
     @ParameterizedTest(name = "{0} naming beta sees {1}")
     @MethodSource("participantSearches")
     @DisplayName("a participant criterion narrows the caller's scope, never widens it")
@@ -789,12 +776,7 @@ class UserServiceTest {
                 .containsExactlyElementsOf(expected);
     }
 
-    /**
-     * Criteria combine conjunctively, which only a case naming two of them at once can prove.
-     *
-     * <p>{@code identifier} short-circuits the candidate query, so a regression that dropped the
-     * email filter afterwards would still satisfy every single-criterion case.
-     */
+    /** {@code identifier} short-circuits the query; only combined criteria catch a lost filter. */
     @ParameterizedTest(name = "{0} together with {1} finds {2}")
     @MethodSource("conjunctiveSearches")
     @DisplayName("criteria narrow one another rather than being taken in turn")
@@ -822,10 +804,7 @@ class UserServiceTest {
                 .containsExactly(USER_ON_ALPHA, USER_ON_BOTH);
     }
 
-    /**
-     * A participant learns about its own link and no other, so a search cannot be used to discover
-     * which competitors a data subject is also registered with.
-     */
+    /** A search must not reveal which competitors a data subject is also registered with. */
     @ParameterizedTest(name = "{0} reading the shared user sees {1}")
     @MethodSource("disclosedLinks")
     @DisplayName("the participant links a caller is told about are scoped to that caller")
@@ -934,10 +913,7 @@ class UserServiceTest {
     /** The participants a seeded directory holds; the users are addressed by identifier. */
     private record Directory(Participant alpha, Participant beta) {}
 
-    /**
-     * Two participants and three users: one linked to each alone and one linked to both, their
-     * addresses differing in case so a match proves the comparison ignores it.
-     */
+    /** Two participants, three users (one on each, one on both); emails differ only in case. */
     private Directory directory() {
         Participant alpha = participants.put(participant(PARTICIPANT_ALPHA));
         Participant beta = participants.put(participant(PARTICIPANT_BETA));
@@ -1004,10 +980,7 @@ class UserServiceTest {
         return new Participant(identifier, "Alpha GmbH", null, null, Map.of(), null);
     }
 
-    /**
-     * An in-memory {@link UserRepository} that records what it was asked to write and can be told
-     * to fail a save the way the unique constraint does.
-     */
+    /** An in-memory {@link UserRepository} recording writes; can fail a save like the index. */
     private static final class StubUserRepository extends StubRepository<String, User>
             implements UserRepository {
 
@@ -1241,10 +1214,7 @@ class UserServiceTest {
         }
     }
 
-    /**
-     * A {@link ConsentRepository} serving the one query {@code unlink} issues; every other method
-     * is out of reach from here.
-     */
+    /** A {@link ConsentRepository} serving the one query {@code unlink} issues. */
     private static final class StubConsentRepository extends StubRepository<UUID, Consent>
             implements ConsentRepository {
 
@@ -1266,6 +1236,12 @@ class UserServiceTest {
             return rows().values().stream()
                     .filter(c -> c.getUserId().equals(userId) && statuses.contains(c.getStatus()))
                     .toList();
+        }
+
+        @Override
+        public List<Consent> findByUserIdAndStatusInForUpdate(
+                UUID userId, Collection<ConsentStatus> statuses) {
+            return findByUserIdAndStatusIn(userId, statuses);
         }
 
         @Override
@@ -1341,14 +1317,8 @@ class UserServiceTest {
         }
 
         @Override
-        public List<Consent> findByProviderIdAndStatusIn(
-                UUID providerId, Collection<ConsentStatus> statuses) {
-            throw unsupported();
-        }
-
-        @Override
-        public List<Consent> findByConsumerIdAndStatusIn(
-                UUID consumerId, Collection<ConsentStatus> statuses) {
+        public List<Consent> findNamingParticipantForUpdate(
+                UUID participantId, Collection<ConsentStatus> statuses) {
             throw unsupported();
         }
 
@@ -1557,10 +1527,8 @@ class UserServiceTest {
     }
 
     /**
-     * Shared state and the {@code CrudRepository} methods none of these tests reach, so each stub
-     * carries only what it actually answers.
-     *
-     * @param <K> the key rows are held under, which is not always the entity's own primary key
+     * Shared state plus the {@code CrudRepository} methods no test reaches. Rows are keyed by
+     * {@code K}, which is not always the entity's primary key.
      */
     private abstract static class StubRepository<K, E> {
 
@@ -1583,10 +1551,7 @@ class UserServiceTest {
             return rows;
         }
 
-        /**
-         * Makes the next save throw, after committing {@code winner} - {@code null} models a
-         * failure that is not the duplicate-key race.
-         */
+        /** Makes the next save throw after committing {@code winner}; {@code null}: no race. */
         void commitDuringSave(@Nullable E winner, DataAccessException failure) {
             this.committedByTheWinner = winner;
             this.saveFailure = failure;

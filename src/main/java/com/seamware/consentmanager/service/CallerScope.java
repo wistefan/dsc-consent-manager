@@ -11,23 +11,16 @@ import io.micronaut.core.annotation.Nullable;
 
 /**
  * How much of the user population a caller may read: its own linked users, or the dataspace.
- *
- * <p>Derived from the typed principal rather than from anything in the request, so a participant
- * cannot widen its own scope by what it sends.
+ * Derived from the typed principal, never the request, so a participant cannot widen it.
  *
  * @param role the role the caller acts as on this operation
- * @param participant the participant whose links bound the result, {@code null} only for a {@code
- *     CATALOG} caller, which reads dataspace-wide. The constructor enforces that, so {@code null}
- *     never stands for "participant unknown".
+ * @param participant whose links bound the result; {@code null} only for {@code CATALOG}
+ *     (dataspace-wide), never for "participant unknown"
  */
 public record CallerScope(Role role, @Nullable Participant participant) {
 
     /**
-     * Rejects a {@code PARTICIPANT} scope with no row.
-     *
-     * <p>Downstream a {@code null} participant means "read dataspace-wide", so that combination
-     * would widen an unregistered caller rather than bound it. Structural, because the shape is now
-     * constructible: {@link ParticipantPrincipal#participant()} is nullable.
+     * Rejects a {@code PARTICIPANT} scope with no row, which downstream would read dataspace-wide.
      */
     public CallerScope {
         if (role == Role.PARTICIPANT && participant == null) {
@@ -38,16 +31,8 @@ public record CallerScope(Role role, @Nullable Participant participant) {
     }
 
     /**
-     * The scope a resolved principal grants.
-     *
-     * <p>A {@link UserPrincipal} has no user-search scope at all; the {@code USER} role reads its
-     * own record through {@code GET /users/me}. The routes using this are {@code @Secured} against
-     * {@code USER}, so that branch is a defence against a widened route rather than a reachable
-     * path.
-     *
-     * <p>An unregistered participant is refused here rather than scoped: a {@code null} participant
-     * means dataspace-wide downstream, so admitting one would widen the caller instead of stopping
-     * it.
+     * The scope a resolved principal grants. Fails closed: an unregistered participant is refused
+     * rather than widened, as is a {@link UserPrincipal} ({@code @Secured} excludes it).
      */
     public static CallerScope of(ConsentManagerPrincipal principal) {
         return switch (principal) {

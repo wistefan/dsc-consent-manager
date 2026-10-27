@@ -14,6 +14,8 @@ import java.io.InputStream;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,29 +31,17 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * Keeps the served privacy notice, the stored payload and the two generation bodies saying the same
- * thing.
- *
- * <p>A privacy notice is published as a legal document, so a heading the spec serves but the
- * payload cannot carry is a hole a caller only discovers in a rendered notice. Three drifts are
- * cheap to introduce and invisible at runtime, and each costs a build here instead: a spec property
- * with no payload component behind it, a positional shift in the payload record — whose six
- * fixtures pass nine nulls and so compile through any reordering — and an inline {@code items}
- * schema degrading to {@code List<Object>} in the generator.
- *
- * <p>Each comparison runs one level down as well, because every one of those drifts has a nested
- * twin that fails the same way and is quieter: the three records served inside the notice are
- * matched against their subschemas by name, and the nullable scan descends {@code items} and
- * follows the relative {@code $ref}s the resolution block is written as.
+ * Parity of the served notice, stored payload and generation bodies, at top level and one level
+ * down: guards against unbacked spec properties, payload reordering and {@code List<Object>} items.
  */
 @DisplayName("Privacy notice schema parity")
 class PrivacyNoticeSpecParityTest {
 
-    /**
-     * Where the served schemas are copied on the classpath, and the directory every authored {@code
-     * $ref} in them is relative to.
-     */
-    private static final String SCHEMA_DIRECTORY = "static/components/schemas/";
+    /** Root of the authored specification, relative to the module directory. */
+    private static final Path SPEC_ROOT = Path.of("api");
+
+    /** Authored schemas under {@link #SPEC_ROOT}; every {@code $ref} in them is relative to it. */
+    private static final String SCHEMA_DIRECTORY = "components/schemas/";
 
     private static final String NOTICE_RESOURCE = SCHEMA_DIRECTORY + "PrivacyNotice.yaml";
 
@@ -65,16 +55,10 @@ class PrivacyNoticeSpecParityTest {
     /** The one property both generation bodies carry, and the key the notice is held against. */
     private static final String CONTRACT_URI = "contractUri";
 
-    /**
-     * Prose, not validation: the two bodies explain the same constraint in the terms their own flow
-     * needs.
-     */
+    /** Prose, not validation, so the two bodies may word them differently. */
     private static final Set<String> DIVERGENT_KEYWORDS = Set.of("description", "example");
 
-    /**
-     * What the notice serves from its own row rather than from the stored payload: the identity and
-     * the parties assigned at generation, and the three timestamps.
-     */
+    /** Served from the notice's own row, not the payload: identity, parties, timestamps. */
     private static final Set<String> ENTITY_PROPERTIES =
             Set.of(
                     "id",
@@ -96,11 +80,8 @@ class PrivacyNoticeSpecParityTest {
     private static final String REFERENCE_KEY = "$ref";
 
     /**
-     * Every payload component in declaration order, with the type it must keep.
-     *
-     * <p>Order is asserted and not only membership: the fixtures construct the record positionally,
-     * so two components of the same type swapping places would compile and silently publish one
-     * heading's text under the other.
+     * Every payload component in declaration order, with its type; order matters because fixtures
+     * construct the record positionally.
      */
     private static final List<Map.Entry<String, String>> PAYLOAD_COMPONENTS =
             List.of(
@@ -197,9 +178,7 @@ class PrivacyNoticeSpecParityTest {
         return Stream.of(GENERATE_RESOURCE, BY_CONTRACT_RESOURCE);
     }
 
-    /**
-     * The three records served one level inside the notice, with the property each is served as.
-     */
+    /** The three records served one level inside the notice, with their property names. */
     static Stream<Arguments> nestedRecords() {
         return Stream.of(
                 Arguments.of(
@@ -239,10 +218,8 @@ class PrivacyNoticeSpecParityTest {
     }
 
     /**
-     * Every path under {@code resource} whose subschema declares {@code nullable: true}.
-     *
-     * <p>{@code chain} is the resources already open on this path, so a {@code $ref} cycle
-     * terminates instead of recursing.
+     * Every path under {@code resource} declaring {@code nullable: true}; {@code chain} holds the
+     * resources already open, so a {@code $ref} cycle terminates.
      */
     private static List<String> nullableProperties(
             String resource, String path, List<String> chain) {
@@ -254,14 +231,7 @@ class PrivacyNoticeSpecParityTest {
         return nullableIn(load(resource), path, reached);
     }
 
-    /**
-     * The same walk within one document, descending the three ways a notice nests.
-     *
-     * <p>Each is shaped differently and conflating them hides whole subtrees: under {@code
-     * properties} the map is name to subschema, under {@code items} the map <em>is</em> the
-     * subschema, and a {@code $ref} continues in another document altogether — which is the only
-     * way the resolution block says anything at all.
-     */
+    /** The same walk in one document, via {@code properties}, {@code items} and {@code $ref}. */
     private static List<String> nullableIn(
             Map<String, Object> schema, String path, List<String> chain) {
         List<String> nullable = new ArrayList<>();
@@ -283,9 +253,7 @@ class PrivacyNoticeSpecParityTest {
         return nullable;
     }
 
-    /**
-     * A relative {@code $ref} as the classpath resource it names; all of them are same-directory.
-     */
+    /** A relative, same-directory {@code $ref} as the authored document it names. */
     private static String referenced(String reference) {
         return SCHEMA_DIRECTORY + reference.substring(reference.lastIndexOf('/') + 1);
     }
@@ -321,10 +289,7 @@ class PrivacyNoticeSpecParityTest {
         return (List<String>) declared;
     }
 
-    /**
-     * The properties the notice serves under {@code property}, stepping through {@code items} for
-     * an array so an array of objects and a plain object are read the same way.
-     */
+    /** The properties served under {@code property}, stepping through {@code items} for arrays. */
     private static Map<String, Object> nestedProperties(String property) {
         Map<String, Object> schema = asMap(properties(NOTICE_RESOURCE).get(property));
         Object items = schema.get(ITEMS_KEY);
@@ -336,9 +301,7 @@ class PrivacyNoticeSpecParityTest {
     }
 
     private static Map<String, Object> load(String resource) {
-        ClassLoader loader = Thread.currentThread().getContextClassLoader();
-        try (InputStream stream = loader.getResourceAsStream(resource)) {
-            assertThat(stream).as("`%s` is on the classpath", resource).isNotNull();
+        try (InputStream stream = Files.newInputStream(SPEC_ROOT.resolve(resource))) {
             return new Yaml().load(stream);
         } catch (IOException e) {
             throw new IllegalStateException("Unable to read " + resource, e);
