@@ -50,7 +50,9 @@ from `RECEIPTS_SIGNING_KEY` and the retired JWKS from `RECEIPTS_RETIRED_VERIFICA
   - **Path set but missing or unreadable:** startup fails naming the path. The message must not
     quote any content, and the cause must be dropped, as `load` already does on a parse error.
   - **File read:** UTF-8, trimmed, then passed through the existing parse and validation path
-    (private-only check, duplicate-`kid` check, ephemeral fallback when nothing is configured).
+    (private-only check, duplicate-`kid` check, and the existing `MISSING_KEY` / opt-in
+    ephemeral path when nothing is configured). The ephemeral key stays opt-in through
+    `RECEIPTS_EPHEMERAL_SIGNING_KEY=true`: a missing or empty mount must never degrade to it.
   - Keep the read in a small private helper. Define named constants for the new messages.
   - **Messages name the source.** Today `MALFORMED_KEY`, `PUBLIC_KEY_ONLY`, `UNUSABLE_KEY`,
     `MALFORMED_RETIRED_KEYS`, `PRIVATE_RETIRED_KEY` and `DUPLICATE_KEY_ID` hard-code
@@ -61,7 +63,8 @@ from `RECEIPTS_SIGNING_KEY` and the retired JWKS from `RECEIPTS_RETIRED_VERIFICA
     RECEIPTS_SIGNING_KEY_FILE, or RECEIPTS_SIGNING_KEY for local use").
 - `signing/SigningKeyStoreTest.java`: add a parameterized test over (inline, file, both, missing
   file, file holding a public-only key, file holding malformed JSON, retired-keys file holding a
-  private key). Write the files with JUnit `@TempDir`. Each failing case asserts that the
+  private key, and no inline key plus no file with `ephemeral-signing-key=false`, which must
+  still fail with `MISSING_KEY`). Write the files with JUnit `@TempDir`. Each failing case asserts that the
   message names the expected source (variable name or `_FILE` variable plus path) and that it
   contains no key material.
 - `AGENTS.md`: Step 1 is the first step to run, so it brings every deployment claim the plan PR
@@ -80,8 +83,21 @@ from `RECEIPTS_SIGNING_KEY` and the retired JWKS from `RECEIPTS_RETIRED_VERIFICA
 - Docs: in `.env.sample` and `application.yml`, document both `*_FILE` variables as the
   production form and the inline variables as the local or test form. Mention the
   mutual-exclusion rule.
+- **`.env.sample` parity (AC 14):** add `config/EnvSampleParityTest`, a plain unit test.
+  - It collects every upper-snake placeholder name (`${NAME` or `${NAME:default}`) from
+    `src/main/resources/application.yml`. Lower-case dotted property references such as
+    `${consent-manager.contract-service.url}` are not env vars and are skipped.
+  - It asserts each name appears in `.env.sample`. Today that fails for `OTEL_TRACING_ENABLED`,
+    so document it there in the same step.
+  - It asserts that none of the obsolete auth settings appear in `.env.sample`:
+    `JWT_SECRET_KEY`, `OAUTH_SECRET_KEY`, `SESSION_SECRET`, `SALT_ROUNDS` and
+    `X_CATALOG_CONSENT_KEY`, held as a named constant list. Parameterise over that list.
+  - Later steps that add a variable (Step 3 renames, the `*_FILE` pair here) keep the test green
+    by documenting it.
 - Acceptance: `./mvnw verify` is green and `./mvnw spotless:apply` has been run. Existing inline
   behaviour is unchanged.
+
+Covers AC 14 and the application half of AC 10.
 
 ### Step 2: Harden the container image and `.dockerignore`
 Files: `docker/Dockerfile`, `.dockerignore`.
@@ -106,7 +122,9 @@ if it needs no shell (exec-form ENTRYPOINT, so `JAVA_TOOL_OPTIONS` is the overri
 Document it in the Dockerfile header.
 
 **`.dockerignore`:**
-- It must exclude build output (`target/`), keys (`*.pem`, `*.key`, `*.jwk`, `*.jwks`, `keys/`),
+- It must exclude build output (`target/`), keys at any depth (`**/*.pem`, `**/*.key`,
+  `**/*.jwk`, `**/*.jwks`, `**/keys/`; `.dockerignore` patterns anchor at the context root, so a
+  bare `*.jwk` would miss `src/main/resources/x.jwk`, which `COPY src/` would bake into the JAR),
   `.env` and `.env.*` (but keep `!.env.sample` as today), test sources and resources
   (`src/test/`), `charts/`, and `docker/`, `compose.yaml` and the docs it already excludes.
 - Confirm that `./mvnw package -DskipTests` still succeeds without `src/test`.
@@ -121,6 +139,9 @@ Verification (record the output in the PR):
   "grep ' / ' /proc/mounts; touch /tmp/x"` shows `/` mounted `ro` and `/tmp` writable.
 - `docker run --rm --entrypoint id consent-manager:local` shows uid 10001.
 - `docker history --no-trunc` shows no key material.
+- Key exclusion works below the root: create a dummy `src/main/resources/x.jwk` (untracked,
+  deleted afterwards), build, and show that `unzip -l` of the image's JAR (copied out with
+  `docker create` + `docker cp`) does not list `x.jwk`.
 
 Covers AC 1, 2 and 15.
 
@@ -258,7 +279,8 @@ labels, selectorLabels, secret names), `deployment.yaml`, `service.yaml`, `confi
     are mandatory. The refs for `SMTP_USER` and `SMTP_PASSWORD` carry `optional: true`, so an
     `existingSecret` without SMTP keys does not fail the pod with `CreateContainerConfigError`.
 - `checksum/config` and `checksum/secret` pod annotations, so a config or IDP-registry change
-  rolls the pods. Changing the trust list is a deliberate redeploy.
+  rolls the pods. `checksum/config` hashes both ConfigMaps (`configmap.yaml` and
+  `configmap-identity-providers.yaml`), so a change to an additional provider rolls them too. Changing the trust list is a deliberate redeploy.
 
 **`service.yaml`:** two Services. The API Service (`service.type`, port `http`) is the one
 ingress targets. A separate `<fullname>-management` Service is **always `ClusterIP`** and
@@ -289,13 +311,18 @@ Its issuer, discovery-url and audience default to empty and carry `@NotBlank`. S
   `required`, so a missing value fails rendering instead of failing startup. This is the same
   path Compose already uses.
 - Each entry under `identityProviders.additional` is rendered into an `identity-providers.yml`
-  data key under `consent-manager.identity-providers.<name>`. The template maps every
+  data key under `consent-manager.identity-providers.<name>`, in a **separate** ConfigMap
+  `<fullname>-identity-providers` (`templates/configmap-identity-providers.yaml`). It must not
+  sit in the env ConfigMap: `envFrom` has no key filter, so the file would either be skipped
+  with an `InvalidEnvironmentVariableNames` event on every pod start or injected whole as an env
+  var. The template maps every
   setting explicitly to its kebab-case key (`discovery-url`, `allow-insecure-transport`,
   `clock-skew`, `claims.user-identifier`, `role-mapping.user`, ...). It does not `toYaml` the
   camelCase values map, because `IdentityProviderRegistryValidator.rejectUnrecognisedSettingKeys`
   compares against kebab-case `SUPPORTED_SETTING_KEYS`, and whether camelCase normalises there
-  is unproven. The file is mounted read-only and loaded through `MICRONAUT_CONFIG_FILES`. Both the key and the mount are
-  emitted only when `additional` is non-empty. A key named `primary` is refused with `fail`,
+  is unproven. The file is mounted read-only and loaded through `MICRONAUT_CONFIG_FILES`. The
+  ConfigMap, the volume, the mount and the `MICRONAUT_CONFIG_FILES` env entry are emitted only
+  when `additional` is non-empty. A key named `primary` is refused with `fail`,
   because it would silently merge into the env-configured entry.
 - State this in a `values.yaml` comment.
 - Check: `helm template` with `ci/minimal-values.yaml` (primary only) and with
@@ -304,8 +331,8 @@ Its issuer, discovery-url and audience default to empty and carry `@NotBlank`. S
   properties for `primary` plus a `micronaut.config.files` YAML naming a second provider.
   That YAML is the file the chart actually renders, not a hand-written one: check in
   `src/test/resources/helm/identity-providers.yml`, produced by
-  `helm template -f ci/all-enabled-values.yaml --show-only templates/configmap.yaml` (the
-  `identity-providers.yml` key). A header comment gives the regeneration command, and the
+  `helm template -f ci/all-enabled-values.yaml --show-only
+  templates/configmap-identity-providers.yaml` (the `identity-providers.yml` key). A header comment gives the regeneration command, and the
   Step 5 acceptance diffs a fresh render against it. Assert that both
   `IdentityProviderConfiguration` beans bind with the expected issuers, role mapping and claims,
   and that `IdentityProviderRegistryValidator` passes. Discovery is not needed for this, so stub
@@ -348,6 +375,10 @@ Acceptance:
 - Rendering twice with the same values gives byte-identical output, so the checksums are
   stable.
 - grep the rendered ConfigMap and confirm it holds no password or key.
+- With `ci/all-enabled-values.yaml`, the env ConfigMap has no `identity-providers.yml` key, the
+  `<fullname>-identity-providers` ConfigMap holds it, and changing an additional provider's
+  issuer changes `checksum/config`. With `ci/minimal-values.yaml`, that ConfigMap and its mount
+  are not rendered.
 - `helm template --set 'identityProviders.primary.roleMapping.user=other-user'` renders
   `IDP_ROLE_USER: other-user`, and the default `IDP_CLAIM_ROLES` renders as
   `realm_access,roles`.
@@ -488,4 +519,4 @@ Covers AC 16 and the documentation half of AC 13.
      issued with the pinned issuer.
 - Fix any chart or app issue this exposes, within this step.
 - Acceptance: `./mvnw verify` is green, `helm lint --strict` is clean, and the kind transcript
-  is in the PR. Tick the remaining ACs: 1, 6, 9, 10 and 13.
+  is in the PR. Tick the remaining ACs: 1, 6, 9, 10 and 13 (AC 14 is ticked by Step 1).
