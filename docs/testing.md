@@ -51,23 +51,24 @@ survives edits to the cited files. Grep a name before citing it.
 ## Acceptance-criteria traceability
 
 Status is `met`, `partial` or `planned — Step N`, where N is a step of the ticket's
-`IMPLEMENTATION_PLAN.md`. The criterion column paraphrases each criterion as the plan cites it.
+`IMPLEMENTATION_PLAN.md`. Quoted criteria are the ticket's wording. Unquoted ones are short forms
+of it, so check the evidence against the ticket text, not against the short form.
 
 | AC | Criterion | Status | Evidence / plan |
 |---|---|---|---|
 | 1 | Merged JaCoCo coverage report | planned — Step 2 | `pom.xml` pins JaCoCo 0.8.15 with a `0.00` minimum, because 0.8.15 cannot instrument Java 25 class files. |
 | 2 | Real PostgreSQL 16 in containers | met | `PostgresTestResource.POSTGRES_IMAGE` is `postgres:16`. Every database IT runs on it, apart from the two exceptions under Decisions, which use the same constant. |
-| 3 | *Not cited in the plan* | to confirm | The plan names no gap for AC 3. Record its criterion text and evidence here. |
+| 3 | "Integration tests authenticate with real tokens from Testcontainers Keycloak" | met | `KeycloakAndPostgresTestResource` re-enables security and is the base of every authenticated IT, `PrivacyNoticeApiTestSupport` included. `KeycloakTestResource.accessToken(RealmPrincipal…)` obtains each token through a password grant against the imported realm. Per-test evidence: `KeycloakRoleMatrixIT.roleMatrixHolds`, `KeycloakKeyRotationIT`. |
 | 4 | Containers shared across test classes | met | `PostgresTestResource` and `KeycloakTestResource` are static JVM-wide singletons. `FlywayConcurrentMigrationIT` and `DatasourceOutageReadinessIT` are the deliberate per-class exceptions listed under Decisions. |
 | 5 | Database reset between test methods | planned — Step 3 | Today each IT deletes its own rows (`removeCommittedRows` and similar). |
-| 6 | No calls to external hosts | met by inspection | No outbound host is configured outside loopback: WireMock is reached through `localhost`, and the containers through Testcontainers. `NoExternalHostIT` (Step 4) turns this into a test. |
+| 6 | "No test makes a real outbound network call" | partial — Step 4 | The criterion is about runtime traffic. Today it is met by inspection only: every configured outbound target is a WireMock stub on `localhost` or a Testcontainers container. Step 4's `NoExternalHostIT` asserts that over every property source of the test context. That is still a configuration check, standing in for runtime traffic. |
 | 7 | Consent state-machine matrix | met | `ConsentStateMachineTest.everyPairIsPermittedOrRefusedAsTheTableSays`. |
 | 8 | Endpoint × role (× ownership) authorization matrix | partial | Endpoint × role: `EndpointRoleMatrixIT.roleMatrixHolds`, total through `everySpecifiedOperationIsCovered`; `KeycloakRoleMatrixIT.roleMatrixHolds`. The ownership dimension is planned — Step 7 (`OwnershipMatrixIT`). |
-| 9 | Token validation refuses every invalid token | met | The `refusedTokens` and `refusedHeaders` sources of `ConsentManagerTokenValidatorTest`, and `TokenSignatureEnforcementTest`. These run against stubs; Step 8 adds the live-Keycloak counterparts. |
+| 9 | Token failure matrix covered by parameterized tests | met | `ConsentManagerTokenValidatorTest` has `@ParameterizedTest`s fed by the `refusedTokens` and `refusedHeaders` method sources, one case per failure; `TokenSignatureEnforcementTest` covers signature enforcement as well. These run against stubs. Step 8 adds missing cases to both sources, plus the parameterized live-Keycloak `KeycloakTokenTamperIT`. |
 | 10–12 | Concurrency: registration, grant, notice generation | partial | `UserServiceIT.concurrentFirstRequestsProvisionOnce`, `UserServiceIT.concurrentRegistrationsSettleOnOneRow`, `ConsentGrantAtomicityIT`, `PrivacyNoticeConcurrencyIT.concurrentGenerationYieldsExactlyOneActiveNotice`. Step 6 adds HTTP-level registration, re-grant races and raw-SQL final-state assertions. |
-| 13 | *Not cited in the plan* | to confirm | The plan names no gap for AC 13. Record its criterion text and evidence here. |
+| 13 | "All eight security tests pass" | partial | This row is the aggregate of the [Security tests](#security-tests) table and takes its status from that table. #1, #3 and #4 are partial until Step 7. |
 | 14 | Signing-key rotation at the identity provider | met | `KeycloakKeyRotationIT.rotatedSigningKeyIsPickedUpWithoutARestart`. |
-| 15 | Flyway migrations, including concurrent replicas | met | `FlywayConcurrentMigrationIT.concurrentReplicasApplyEachVersionOnce`. Step 3's `SchemaIsolationIT` adds the suite-level migration check. |
+| 15 | Flyway migrations "verified against an empty database once per suite" | partial — Step 3 | Today this rests on the singleton `PostgresTestResource`: its empty container is migrated once, at the first context start, and nothing asserts that. `FlywayConcurrentMigrationIT.concurrentReplicasApplyEachVersionOnce` proves migration on an empty database, but on its own per-class containers, not the suite's. Step 3's `SchemaIsolationIT` asserts that the shared container's `flyway_schema_history` lists every migration as successful. |
 | 16 | No secret or personal data in logs | met | `LogLeakIT`, `KeyMaterialLeakIT`. Step 8 widens the forbidden values and scenarios. |
 | 17 | Branch coverage on security-critical classes | planned — Step 11 | |
 | 18 | Responses validated against the spec | planned — Step 5 | Nothing validates responses against the spec today. |
@@ -82,7 +83,7 @@ Status is `met`, `partial` or `planned — Step N`, where N is a step of the tic
 |---|---|---|
 | 1 | partial | Ownership is pinned only for participant records (`EndpointRoleMatrixIT.aParticipantTokenNeverReachesAnotherRecord`). Planned — Step 7 (`OwnershipMatrixIT`). |
 | 2 | met | `UserDirectoryIT`. |
-| 3 | met | `ConsentLifecycleSurfaceIT`. |
+| 3 | partial | "Cannot read or act on another user's consent." Act: `ConsentLifecycleSurfaceIT.refusesAConsentBelongingToAnotherSubject` (HTTP). Read: `ConsentQueryServiceIT.hidesAnotherSubjectsConsent`, at service level only. The HTTP read path is planned — Step 7 (`OwnershipMatrixIT`). |
 | 4 | partial | `EndpointRoleMatrixIT.noWriteRouteLetsTheCallerNameTheRecord`. Planned — Step 7 (`IdentitySubstitutionIT`). |
 | 5 | met | The "a key genuinely valid at another trusted issuer" case of `ConsentManagerTokenValidatorTest`'s `refusedTokens` source. Step 8 adds `CrossIssuerKeycloakIT`. |
 | 6 | met | `KeycloakKeyRotationIT`. |
