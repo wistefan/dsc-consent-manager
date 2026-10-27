@@ -29,7 +29,8 @@ Where the ticket text conflicts with the codebase, these decisions apply (from t
   Secret and two stable secrets that a chart must not invent (Step 4). With an input missing,
   the chart fails at render time through `required` and names that input. The required set is
   checked in as `charts/consent-manager/ci/minimal-values.yaml` (`identityProviders.primary`,
-  `config.database.url`, `secrets.*` or `secrets.existingSecret`), and lint and template run
+  `config.database.url`, and either `secrets.existingSecret` or the four mandatory
+  `secrets.{dbUser,dbPassword,logPseudonymKey,erasureVerificationSecret}`), and lint and template run
   against it. "Pods Ready" additionally needs a reachable database and IdP and the out-of-band
   signing-key Secret. Step 7 shows that.
 
@@ -63,9 +64,19 @@ from `RECEIPTS_SIGNING_KEY` and the retired JWKS from `RECEIPTS_RETIRED_VERIFICA
   private key). Write the files with JUnit `@TempDir`. Each failing case asserts that the
   message names the expected source (variable name or `_FILE` variable plus path) and that it
   contains no key material.
-- `AGENTS.md`: reword the Receipts bullet and the "receipt signing keys are mounted as files"
-  clause of the Deployment bullet together, so both say the `*_FILE` form is production and the
-  inline form is local/test only.
+- `AGENTS.md`: Step 1 is the first step to run, so it brings every deployment claim the plan PR
+  added into line before Steps 2–7 read them:
+  - Reword the Receipts bullet and the "receipt signing keys are mounted as files" clause of the
+    Deployment bullet together, so both say the `*_FILE` form is production and the inline form
+    is local/test only.
+  - Write the final lint command now:
+    `helm lint --strict -f charts/consent-manager/ci/minimal-values.yaml charts/consent-manager`.
+    Note that a default-values failure is the `required` guard working, not a bug.
+  - Mark the `charts/consent-manager/` structure entry as "added in Step 4" until Step 6
+    replaces it.
+  - Restore the sentence the Management-routes rewrite dropped: tests (`application-test.yml`)
+    serve management on the main port (`endpoints.all.port: ~`) with
+    `details-visible: ANONYMOUS`, so an IT sees health components without a token.
 - Docs: in `.env.sample` and `application.yml`, document both `*_FILE` variables as the
   production form and the inline variables as the local or test form. Mention the
   mutual-exclusion rule.
@@ -104,6 +115,10 @@ Verification (record the output in the PR):
 - `docker build -f docker/Dockerfile -t consent-manager:local .`
 - `docker run --rm --read-only --tmpfs /tmp -e MICRONAUT_ENVIRONMENTS=dev ... consent-manager:local`
   reaches the point of DB connection, and nothing fails on a read-only path.
+- The read-only check must be able to fail, so it does not rely on `touch /x` as UID 10001
+  (`/` is root-owned and refuses that even when writable). Instead,
+  `docker run --rm --read-only --tmpfs /tmp --entrypoint sh consent-manager:local -c
+  "grep ' / ' /proc/mounts; touch /tmp/x"` shows `/` mounted `ro` and `/tmp` writable.
 - `docker run --rm --entrypoint id consent-manager:local` shows uid 10001.
 - `docker history --no-trunc` shows no key material.
 
@@ -147,14 +162,30 @@ to `DOWN` (HTTP 503) while `/health/liveness` stays `UP` and the container is no
 `docker compose start postgres` recovers it. First check whether Micronaut's JDBC indicator
 already contributes to readiness. `ManagementEndpointSecurityIT` and `ApplicationSmokeIT` are
 the places to look. If it does not, fix it, for example with a `@Readiness` datasource indicator.
-In either case, add or extend an IT asserting readiness is `DOWN` and liveness `UP` when the
-datasource is unreachable. Document the manual compose check in `docker/README.md`.
+In either case, add `DatasourceOutageReadinessIT`, asserting readiness reports the datasource
+`DOWN` and liveness stays `UP` when the database becomes unreachable. Document the manual
+compose check in `docker/README.md`.
 
-`endpoints.health.details-visible` is `AUTHENTICATED`, so an anonymous call sees only the
-top-level status and HTTP code, never the components. The manual compose check therefore
-asserts top-level status and HTTP code only (503 `DOWN` / 200 `UP`). The IT asserts the same
-anonymously, and if it also asserts the `jdbc` component it runs under
-`KeycloakAndPostgresTestResource` and sends a bearer token.
+**How the IT takes the database down.** It must not touch `PostgresTestResource`: that holds one
+`static` container shared by every IT in the JVM, and stopping it would break whichever IT
+Failsafe runs next. So the IT does not extend it. It implements `TestPropertyProvider` itself
+over its **own** `PostgreSQLContainer` (class-scoped, started in `getProperties()`), so Flyway
+migrates normally at context startup. The test asserts the `jdbc` component `UP`, stops its own
+container, then asserts the outage. It also sets a short
+`datasources.default.connection-timeout` (named constant, a few seconds) for its context, so a
+readiness call during the outage answers before the HTTP client's read timeout instead of
+waiting out Hikari's 30 s default.
+
+**What the IT asserts.** In tests, `application-test.yml` serves management on the main port
+(`endpoints.all.port: ~`) with `details-visible: ANONYMOUS` and security disabled, so a plain
+anonymous `@MicronautTest` client sees the components; no Keycloak container is needed. The
+test profile's dummy IdP (`localhost:1`) fails discovery, so top-level readiness can already be
+`DOWN` before the outage. The IT therefore asserts the **`jdbc` component**: `UP` before the
+stop, `DOWN` after, with readiness HTTP 503 and liveness HTTP 200 `UP` throughout.
+
+**Deployed environments differ.** In compose and kind, `details-visible` is `AUTHENTICATED`, so
+an anonymous call sees only the top-level status and HTTP code. The manual compose check
+asserts top-level status and HTTP code only (503 `DOWN` / 200 `UP`).
 
 **Realm:** confirm the realm still provides the three roles, test users and clients. Change it
 only if the smoke script proves something is missing.
@@ -185,7 +216,8 @@ labels, selectorLabels, secret names), `deployment.yaml`, `service.yaml`, `confi
   (`[sub]`, `[participant_id]`, `[realm_access, roles]`; `consent-user`,
   `consent-participant`, `consent-catalog`).
 - `secrets.{dbUser,dbPassword,smtpUser,smtpPassword,logPseudonymKey,erasureVerificationSecret}`
-  and `secrets.existingSecret`.
+  and `secrets.existingSecret`. Which keys are mandatory is set out under `secret.yaml` below.
+- `probes.{liveness,readiness,startup}.timeoutSeconds`, explicit (see `deployment.yaml`).
 - `signingKeys.{secretName (default "<release>-signing-keys"), signingKeyFile: signing-key.jwk,
   retiredVerificationKeys.enabled: false, retiredVerificationKeysFile:
   retired-verification-keys.jwks}`.
@@ -198,6 +230,11 @@ labels, selectorLabels, secret names), `deployment.yaml`, `service.yaml`, `confi
   - liveness `/health/liveness`: 30/30/3
   - readiness `/health/readiness`: 10/10/3
   - startup `/health/liveness`: period 5, failureThreshold 30
+  - `timeoutSeconds` set explicitly from values (default 5 for each probe) rather than the
+    Kubernetes default of 1 s. With 1 s, a GC pause under a tight CPU limit would fail liveness
+    three times and restart a healthy pod. During a database outage a readiness call can still
+    outlast the timeout, because Hikari's `connection-timeout` is 30 s. The pod goes NotReady
+    either way; Step 7 accepts a timeout as an outcome of the outage check.
 - RollingUpdate with `maxUnavailable: 0`, `maxSurge: 1`.
 - Pod security context: `runAsNonRoot: true`, `runAsUser`/`runAsGroup`/`fsGroup: 10001`,
   `seccompProfile: RuntimeDefault`.
@@ -216,7 +253,10 @@ labels, selectorLabels, secret names), `deployment.yaml`, `service.yaml`, `confi
   - `RECEIPTS_SIGNING_KEY_FILE` always.
   - `RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE` only when enabled.
   - `envFrom` the ConfigMap.
-  - The secret values via `secretKeyRef`.
+  - The secret values via `secretKeyRef`, against the chart's Secret or `existingSecret`. The
+    refs for `DB_USER`, `DB_PASSWORD`, `LOG_PSEUDONYM_KEY` and `ERASURE_VERIFICATION_SECRET`
+    are mandatory. The refs for `SMTP_USER` and `SMTP_PASSWORD` carry `optional: true`, so an
+    `existingSecret` without SMTP keys does not fail the pod with `CreateContainerConfigError`.
 - `checksum/config` and `checksum/secret` pod annotations, so a config or IDP-registry change
   rolls the pods. Changing the trust list is a deliberate redeploy.
 
@@ -248,9 +288,13 @@ Its issuer, discovery-url and audience default to empty and carry `@NotBlank`. S
   ConfigMap from `identityProviders.primary`. Wrap `issuer`, `discoveryUrl` and `audience` in
   `required`, so a missing value fails rendering instead of failing startup. This is the same
   path Compose already uses.
-- Each entry under `identityProviders.additional` is rendered with `toYaml` into an
-  `identity-providers.yml` data key under `consent-manager.identity-providers.<name>`. It is
-  mounted read-only and loaded through `MICRONAUT_CONFIG_FILES`. Both the key and the mount are
+- Each entry under `identityProviders.additional` is rendered into an `identity-providers.yml`
+  data key under `consent-manager.identity-providers.<name>`. The template maps every
+  setting explicitly to its kebab-case key (`discovery-url`, `allow-insecure-transport`,
+  `clock-skew`, `claims.user-identifier`, `role-mapping.user`, ...). It does not `toYaml` the
+  camelCase values map, because `IdentityProviderRegistryValidator.rejectUnrecognisedSettingKeys`
+  compares against kebab-case `SUPPORTED_SETTING_KEYS`, and whether camelCase normalises there
+  is unproven. The file is mounted read-only and loaded through `MICRONAUT_CONFIG_FILES`. Both the key and the mount are
   emitted only when `additional` is non-empty. A key named `primary` is refused with `fail`,
   because it would silently merge into the env-configured entry.
 - State this in a `values.yaml` comment.
@@ -258,8 +302,14 @@ Its issuer, discovery-url and audience default to empty and carry `@NotBlank`. S
   `ci/all-enabled-values.yaml` (primary plus one additional). Add
   `IdentityProviderConfigFileTest`, which starts an `ApplicationContext` with `IDP_*`-style
   properties for `primary` plus a `micronaut.config.files` YAML naming a second provider.
-  Assert that both `IdentityProviderConfiguration` beans bind with the expected issuers and
-  that validation passes. Discovery is not needed for this, so stub or skip the registry.
+  That YAML is the file the chart actually renders, not a hand-written one: check in
+  `src/test/resources/helm/identity-providers.yml`, produced by
+  `helm template -f ci/all-enabled-values.yaml --show-only templates/configmap.yaml` (the
+  `identity-providers.yml` key). A header comment gives the regeneration command, and the
+  Step 5 acceptance diffs a fresh render against it. Assert that both
+  `IdentityProviderConfiguration` beans bind with the expected issuers, role mapping and claims,
+  and that `IdentityProviderRegistryValidator` passes. Discovery is not needed for this, so stub
+  or skip the registry.
 
 **`secret.yaml`:** rendered only when `secrets.existingSecret` is empty. It holds `DB_USER`,
 `DB_PASSWORD`, `SMTP_USER`, `SMTP_PASSWORD`, `LOG_PSEUDONYM_KEY` and
@@ -272,6 +322,21 @@ renderers (Argo CD), so a generated fallback would rotate both on every sync and
 gives the generation command (`openssl rand -base64 32`) and recommends `existingSecret` for
 production. No credential may appear in the ConfigMap. The chart never creates the signing-key
 Secret: keys are created out of band (`kubectl create secret generic`) and never live in values.
+
+Key set, decided:
+- **Mandatory:** `DB_USER`, `DB_PASSWORD`, `LOG_PSEUDONYM_KEY`, `ERASURE_VERIFICATION_SECRET`.
+  When the chart renders the Secret, `dbUser` and `dbPassword` also go through `required`. An
+  empty `DB_USER: ""` would reach the container as an empty env var and override
+  `application.yml`'s `${DB_USER:consent_manager}` default, so the chart never renders one.
+- **Optional:** `SMTP_USER`, `SMTP_PASSWORD`. The chart omits each key when its value is empty,
+  and the deployment's refs are `optional: true`. SMTP stays off unless `config.smtp.host` is
+  set.
+- With `existingSecret`, the operator's Secret must hold the four mandatory keys; the chart
+  README lists them.
+- `ERASURE_VERIFICATION_SECRET` is mandatory by **chart policy**. The app treats it as optional
+  ("unset means no verifier"), but a production deployment without a verifier cannot prove an
+  erasure later, and adding one afterwards does not cover records already erased. The chart
+  README states this policy.
 
 Acceptance:
 - `helm lint --strict -f charts/consent-manager/ci/minimal-values.yaml charts/consent-manager`
@@ -287,10 +352,11 @@ Acceptance:
   `IDP_ROLE_USER: other-user`, and the default `IDP_CLAIM_ROLES` renders as
   `realm_access,roles`.
 - With `--set service.type=LoadBalancer`, the management Service is still `ClusterIP`.
+- With `--set secrets.smtpUser=` (empty), the rendered Secret has no `SMTP_USER` key and the
+  deployment's SMTP refs are `optional: true`. Without `secrets.dbUser`, rendering fails naming
+  it.
 - `./mvnw verify` is green, including `IdentityProviderConfigFileTest`.
-- `AGENTS.md`: the Deployment bullet's lint command becomes
-  `helm lint --strict -f charts/consent-manager/ci/minimal-values.yaml charts/consent-manager`.
-  Add a note that a default-values failure is the `required` guard working, not a bug.
+- `AGENTS.md`: confirm the lint command Step 1 wrote still matches the chart.
 
 Covers AC 6, 7, 8, 10, 11 and 12.
 
@@ -316,7 +382,9 @@ It includes the `ci/minimal-values.yaml` inputs and one `identityProviders.addit
 
 Acceptance: `helm lint --strict` and `helm template` are clean for both
 `ci/minimal-values.yaml` and `ci/all-enabled-values.yaml`. The rendered ServiceMonitor holds no
-secret reference, and the rendered Ingress has no backend on the management port.
+secret reference, and the rendered Ingress has no backend on the management port. The rendered
+`identity-providers.yml` is byte-identical to the
+`src/test/resources/helm/identity-providers.yml` fixture (Step 4).
 
 ### Step 6: Chart README and deployment documentation
 Create `charts/consent-manager/README.md` and add a short `docs/deployment.md` that links the
@@ -325,8 +393,10 @@ chart README, `docker/README.md` and `.env.sample`. Content:
 - **Install:** prerequisites (PostgreSQL 16, a trusted IDP), creating the signing-key Secret
   (`kubectl create secret generic <release>-signing-keys --from-file=signing-key.jwk=...`), the
   required inputs from `ci/minimal-values.yaml` (the AC 6 interpretation), `existingSecret` as
-  the production form for the two stable secrets, `primary` (env) versus `additional` (file)
-  identity providers, and a values table.
+  the production form for the two stable secrets, the exact key set an `existingSecret` must
+  hold (mandatory and optional, from Step 4), the policy that makes
+  `ERASURE_VERIFICATION_SECRET` mandatory although the app accepts it unset, `primary` (env)
+  versus `additional` (file) identity providers, and a values table.
 - **Signing-key file mode:** `defaultMode: 0400` appears in the pod as 0440 `root:<fsGroup>`.
   Explain why.
 - **Metrics:** authentication is off. `/prometheus` is reachable only inside the cluster
@@ -385,8 +455,9 @@ Covers AC 16 and the documentation half of AC 13.
      `identityProviders.primary.issuer=http://keycloak.<ns>.svc:8080/realms/consent-manager`,
      the matching `discoveryUrl`, the realm's audience and `allowInsecureTransport=true`. Plain
      http is for this throwaway check only, and the transcript should say so.
-  4. Create the signing-key Secret. Supply `secrets.logPseudonymKey` and
-     `secrets.erasureVerificationSecret` with `--set`, generated once by `openssl rand`.
+  4. Create the signing-key Secret. Supply `secrets.dbUser` and `secrets.dbPassword` (matching
+     the throwaway PostgreSQL), and `secrets.logPseudonymKey` and
+     `secrets.erasureVerificationSecret` generated once by `openssl rand`, all with `--set`.
   5. Run `helm install --wait` with `replicaCount=2`.
   6. Confirm. Health detail is `AUTHENTICATED`, so every component-level check below sends
      `Authorization: Bearer <token>`. The token comes from the in-cluster Keycloak through the
@@ -398,14 +469,20 @@ Covers AC 16 and the documentation half of AC 13.
      - `GET /prometheus` on the management Service answers `200` with no token, from inside the
        cluster;
      - migrations were applied once;
-     - `stat -c '%a %U:%G'` on the key file prints `440 root:10001` (the AC 10 decision in
-       Step 4), and the app read the key (startup log; `GET /.well-known/jwks.json` shows the
-       configured `kid`);
-     - `kubectl exec ... -- touch /x` fails because the filesystem is read-only.
+     - `stat -L -c '%a %U:%G'` on the key file prints `440 root:10001` (the AC 10 decision in
+       Step 4). `-L` is required: a projected secret file is a symlink into `..data/`, and
+       without it `stat` reports the link (`777`). The app read the key (startup log;
+       `GET /.well-known/jwks.json` shows the configured `kid`);
+     - the root filesystem is read-only: `kubectl exec ... -- grep ' / ' /proc/mounts` shows
+       `ro`, the pod spec carries `readOnlyRootFilesystem: true`, and
+       `kubectl exec ... -- touch /tmp/x` succeeds. A `touch /x` is not used, because UID 10001
+       cannot write the root-owned `/` even on a writable filesystem, so it could not fail.
   7. Only after readiness has been shown `UP`, scale PostgreSQL to 0. Confirm the pods go
-     NotReady and that `kubectl get pods` shows no new restarts. Anonymous readiness should
-     answer 503 `DOWN`, and liveness 200 `UP`. The token, fetched while readiness was still
-     `UP`, shows the `jdbc` component `DOWN` and the identity-provider component still `UP`.
+     NotReady and that `kubectl get pods` shows no new restarts. Anonymous readiness answers
+     503 `DOWN` or, while Hikari waits out its 30 s connection timeout, times out; either is
+     accepted, and the transcript records which. Liveness answers 200 `UP`. The token, fetched
+     while readiness was still `UP`, shows the `jdbc` component `DOWN` and the
+     identity-provider component still `UP` (use a client timeout above 30 s for that call).
      Scale PostgreSQL back up and confirm the pods return to Ready.
   8. Optionally, port-forward and run `docker/smoke-test.sh` against the cluster. Tokens are
      issued with the pinned issuer.
