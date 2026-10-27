@@ -29,9 +29,9 @@ Seed it from the audit:
 
 | AC | Status | Evidence / plan |
 |---|---|---|
-| 2, 4 | met | `PostgresTestResource` and `KeycloakTestResource` are static singletons, and the image is `postgres:16`. |
+| 2, 4 | met | `PostgresTestResource` and `KeycloakTestResource` are static singletons, and the image is `postgres:16`. Two deliberate per-class exceptions start their own `PostgreSQLContainer`: `FlywayConcurrentMigrationIT` (each replica count must migrate an empty database) and `DatasourceOutageReadinessIT` (it stops its database, which would break every other IT). |
 | 6 | met by inspection | No outbound host is configured outside loopback. `NoExternalHostIT` (Step 4) turns this into a test. |
-| 7 | met | `ConsentStateMachineTest.everyPair`. |
+| 7 | met | `ConsentStateMachineTest.everyPairIsPermittedOrRefusedAsTheTableSays`. |
 | 9 | met | `ConsentManagerTokenValidatorTest.refusedTokens` / `refusedHeaders`, `TokenSignatureEnforcementTest`. |
 | 14 | met | `KeycloakKeyRotationIT`. |
 | 15 | met | `FlywayConcurrentMigrationIT`. |
@@ -42,7 +42,10 @@ Seed it from the audit:
 | Security #2, #3, #5, #6, #7, #8 | met | `UserDirectoryIT`, `ConsentLifecycleSurfaceIT`, the "a key genuinely valid at another trusted issuer" case of `ConsentManagerTokenValidatorTest.refusedTokens`, `KeycloakKeyRotationIT`, `IssuerSignatureVerifierTest.unknownKeyIdentifiersTriggerNoRefetch`, `LogLeakIT`. |
 
 Cite evidence by test class, method or case name, never by line number: Steps 8 and 11 add cases to these
-files and line numbers would drift.
+files and line numbers would drift. Grep each cited name before writing it down.
+
+Name the AC 4 exceptions in the row so that a later grep for `new PostgreSQLContainer` does not read as a
+regression.
 
 Also add:
 - The conventions a contributor needs:
@@ -158,14 +161,28 @@ Nothing validates responses against the spec today (AC 18).
 - **Surfacing violations.** Record them in a per-context collector that an `@AfterEach` in
   `PostgresTestResource` asserts empty. Throwing inside a client filter gets wrapped into an
   `HttpClientException` and is too easy to swallow.
-- **Unmatched paths.** Among requests to the embedded server, test-only probe routes (`KeycloakRoleMatrixIT`,
-  `ProblemResponseIT`) are skipped through an explicit allow-list constant. Any other unmatched path on the
-  embedded server is a violation. The proof test also shows a response from a foreign host is not validated.
-- **Coverage gap.** ITs that use `java.net.http` directly are not validated. Note that in `docs/testing.md`.
+- **Unmatched paths.** In tests, `endpoints.all.port: ~` and `api-prefix: ""` put the management endpoints and
+  static resources on the same origin as the API, so the embedded server answers non-spec paths of its own. Two
+  named allow-list constants skip them:
+  - test-only probe routes (`KeycloakRoleMatrixIT`, `ProblemResponseIT`);
+  - the service's own non-spec origin routes: the management endpoints (`/health/**`, `/metrics/**`,
+    `/prometheus`), the spec document (`/openapi.yaml` and the bundled component `*.yaml`), and `/swagger-ui/**`.
+    Derive this list from `application.yml`'s `static-resources` mappings and the enabled management endpoints,
+    not from guesses; `ManagementEndpointSecurityIT.routingMatrix` is the reference.
+
+  Any other unmatched path on the embedded server is a violation. `/.well-known/jwks.json` is a spec operation
+  and is validated, not allow-listed.
+- **Coverage gap.** Two kinds of IT are not validated; list both in `docs/testing.md`:
+  - ITs that use `java.net.http` directly;
+  - ITs that do not extend `PostgresTestResource` and so never run the collector check (today
+    `ContractCacheIT`, `SelfDescriptionCacheIT`, `SmtpUserNotificationServiceIT`,
+    `ManagementEndpointSecurityIT`, `DatasourceOutageReadinessIT`; re-grep when writing the doc).
 - **Drift.** Fix any drift the filter reveals with the spec as the source of truth. A code-side fix is preferred;
   a spec fix must stay non-breaking (`SpecCompatibilityIT`).
-- **Proof test.** Add `support/OpenApiResponseValidationFilterTest`, a unit test showing a non-conforming body
-  and an undeclared status are each reported.
+- **Proof test.** Add `support/OpenApiResponseValidationFilterTest`, a unit test showing that:
+  - a non-conforming body and an undeclared status are each reported;
+  - a path on either allow-list is skipped, and a path on neither list is still reported;
+  - a response from a foreign host is not validated.
 
 **Acceptance:** AC 18; full suite green with the filter on.
 
