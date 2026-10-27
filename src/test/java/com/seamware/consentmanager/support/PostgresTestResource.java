@@ -52,15 +52,16 @@ public abstract class PostgresTestResource implements TestPropertyProvider {
                 "datasources.default.driver-class-name", "org.postgresql.Driver");
     }
 
-    /** Filled by {@link OpenApiResponseValidationFilter}; null outside a Micronaut test. */
+    /** Filled by {@link OpenApiResponseValidationFilter}; every subclass is a Micronaut test. */
     @Inject protected ResponseViolations responseViolations;
 
     /** Fails a test whose responses broke the spec; final so no subclass can switch it off. */
     @AfterEach
     protected final void assertResponsesMatchSpec() {
-        if (responseViolations != null) {
-            assertThat(responseViolations.drain()).as("responses violating the spec").isEmpty();
-        }
+        assertThat(responseViolations)
+                .as("response collector; is the subclass missing @MicronautTest?")
+                .isNotNull();
+        assertThat(responseViolations.drain()).as("responses violating the spec").isEmpty();
     }
 
     /** Empties the schema after every test method; final so no subclass can switch it off. */

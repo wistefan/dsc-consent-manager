@@ -25,8 +25,10 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.parser.core.models.ParseOptions;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +43,10 @@ import java.util.Optional;
  * with a 4xx, which tests probing such routes expect; any other answer there is a violation.
  * Requests are not validated, since many tests send invalid ones on purpose. A violation is
  * recorded in {@link ResponseViolations}, never thrown, because the client would wrap it.
+ *
+ * <p>Only exchanges with the embedded server are judged: same scheme and port, and either the host
+ * the server reports (often the machine name) or a loopback name, since the server binds every
+ * interface. Any other target passes through unvalidated.
  */
 // Singleton so the startup listener and the filter are one instance.
 @Singleton
@@ -55,6 +61,11 @@ public final class OpenApiResponseValidationFilter
 
     /** System property the pom sets for Surefire and Failsafe from {@code openapi.bundle.file}. */
     static final String BUNDLE_FILE_PROPERTY = "openapi.bundle.file";
+
+    /** The pom's bundle location, for a test run outside Maven (e.g. from an IDE). */
+    static final Path DEFAULT_BUNDLE_FILE = Path.of("target", "openapi-bundle", "openapi.yaml");
+
+    private static final String LOCALHOST = "localhost";
 
     /** Test-only controllers some ITs mount beside the API; the spec describes none of them. */
     static final List<String> TEST_PROBE_ROUTES =
@@ -119,19 +130,23 @@ public final class OpenApiResponseValidationFilter
         this.origin = origin;
     }
 
-    /** Parses the spec file named by {@link #BUNDLE_FILE_PROPERTY}. */
+    /** Parses the spec file named by {@link #BUNDLE_FILE_PROPERTY}, else the pom's default path. */
     static OpenAPI bundledSpec() {
-        String bundle = System.getProperty(BUNDLE_FILE_PROPERTY);
-        if (bundle == null) {
+        Path bundle =
+                Optional.ofNullable(System.getProperty(BUNDLE_FILE_PROPERTY))
+                        .map(Path::of)
+                        .orElse(DEFAULT_BUNDLE_FILE);
+        if (!Files.isRegularFile(bundle)) {
             throw new IllegalStateException(
-                    BUNDLE_FILE_PROPERTY + " is unset; run the tests through Maven");
+                    "No bundled spec at "
+                            + bundle.toAbsolutePath()
+                            + "; run ./mvnw generate-resources first");
         }
         ParseOptions options = new ParseOptions();
         options.setResolve(true);
         options.setResolveFully(true);
         return new OpenApiLoader()
-                .loadApi(
-                        SpecSource.specUrl(Path.of(bundle).toUri().toString()), List.of(), options);
+                .loadApi(SpecSource.specUrl(bundle.toUri().toString()), List.of(), options);
     }
 
     @Override
@@ -157,6 +172,7 @@ public final class OpenApiResponseValidationFilter
         if (matchesAny(TEST_PROBE_ROUTES, path) || matchesAny(SERVICE_ORIGIN_ROUTES, path)) {
             return;
         }
+        violations.recordJudged();
         Request.Method method = Request.Method.valueOf(request.getMethodName());
         ApiOperationMatch match = operations.findApiOperation(path, method);
         if (!publishes(match) && isClientError(received.code())) {
@@ -205,8 +221,28 @@ public final class OpenApiResponseValidationFilter
         return own != null
                 && target.getHost() != null
                 && own.getScheme().equalsIgnoreCase(target.getScheme())
-                && own.getHost().equalsIgnoreCase(target.getHost())
+                && sameHost(own.getHost(), target.getHost())
                 && effectivePort(own) == effectivePort(target);
+    }
+
+    private static boolean sameHost(String own, String target) {
+        return own.equalsIgnoreCase(target) || isLoopback(target);
+    }
+
+    /** Recognises {@code localhost} and loopback literals without a DNS lookup. */
+    private static boolean isLoopback(String host) {
+        if (LOCALHOST.equalsIgnoreCase(host)) {
+            return true;
+        }
+        String literal =
+                host.startsWith("[") && host.endsWith("]")
+                        ? host.substring(1, host.length() - 1)
+                        : host;
+        try {
+            return InetAddress.ofLiteral(literal).isLoopbackAddress();
+        } catch (IllegalArgumentException notALiteral) {
+            return false;
+        }
     }
 
     private static int effectivePort(URI uri) {

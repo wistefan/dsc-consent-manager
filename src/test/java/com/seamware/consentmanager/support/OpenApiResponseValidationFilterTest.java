@@ -12,16 +12,24 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /** Proves the response check reports drift, skips the allow-lists and ignores foreign hosts. */
 class OpenApiResponseValidationFilterTest {
 
-    private static final String OWN_ORIGIN = "http://localhost:8080";
+    /** The embedded server reports the machine name, not a loopback one. */
+    private static final String OWN_ORIGIN = "http://consent-manager.test:8080";
+
+    private static final String LOCALHOST_ORIGIN = "http://localhost:8080";
 
     private static final String FOREIGN_ORIGIN = "http://contracts.example:8080";
 
     private static final String OTHER_PORT_ORIGIN = "http://localhost:9999";
+
+    private static final String IPV4_LOOPBACK_ORIGIN = "http://127.0.0.1:8080";
+
+    private static final String IPV6_LOOPBACK_ORIGIN = "http://[::1]:8080";
 
     private static final String CONFORMING_STATUS = "{\"status\":\"ok\"}";
 
@@ -102,6 +110,22 @@ class OpenApiResponseValidationFilterTest {
                         200,
                         json("{}"),
                         true),
+                Arguments.of(
+                        "localhost alias", LOCALHOST_ORIGIN, "/api-status", 200, json("{}"), true),
+                Arguments.of(
+                        "IPv4 loopback alias",
+                        IPV4_LOOPBACK_ORIGIN,
+                        "/api-status",
+                        200,
+                        json("{}"),
+                        true),
+                Arguments.of(
+                        "IPv6 loopback alias",
+                        IPV6_LOOPBACK_ORIGIN,
+                        "/api-status",
+                        200,
+                        json("{}"),
+                        true),
                 Arguments.of("foreign host", FOREIGN_ORIGIN, "/api-status", 200, json("{}"), false),
                 Arguments.of(
                         "foreign port", OTHER_PORT_ORIGIN, "/api-status", 200, json("{}"), false));
@@ -124,6 +148,19 @@ class OpenApiResponseValidationFilterTest {
         filter.validate(HttpRequest.GET(origin + path), received, null);
 
         assertThat(violations.drain()).as(scenario).hasSize(reported ? 1 : 0);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "own service, " + OWN_ORIGIN + "/api-status, 1",
+        "loopback alias, " + IPV4_LOOPBACK_ORIGIN + "/api-status, 1",
+        "allow-listed route, " + OWN_ORIGIN + "/health/liveness, 0",
+        "foreign host, " + FOREIGN_ORIGIN + "/api-status, 0"
+    })
+    void countsOnlyTheExchangesItJudges(String scenario, String target, long judged) {
+        filter.validate(HttpRequest.GET(target), json(CONFORMING_STATUS), null);
+
+        assertThat(violations.judgedCount()).as(scenario).isEqualTo(judged);
     }
 
     @Test
