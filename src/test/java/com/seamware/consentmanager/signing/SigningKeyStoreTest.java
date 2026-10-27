@@ -35,6 +35,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -59,6 +60,9 @@ class SigningKeyStoreTest {
 
     private static final String RETIRED_KEYS_FILE_VARIABLE =
             "RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE";
+
+    /** How a message blames a mounted file: {@code <VARIABLE>_FILE (<path>)}. */
+    private static final String FILE_SOURCE_MARKER = "_FILE (";
 
     private static final String SIGNING_KEY_PROPERTY = "consent-manager.receipts.signing-key";
 
@@ -179,7 +183,8 @@ class SigningKeyStoreTest {
 
         assertThat(failure)
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(configured.variable());
+                .hasMessageFindingMatch(naming(configured.variable()).pattern())
+                .hasMessageNotContaining(FILE_SOURCE_MARKER);
         assertQuotesNoSecret(failure, configured.secrets());
     }
 
@@ -220,7 +225,9 @@ class SigningKeyStoreTest {
                         cause ->
                                 assertThat(cause)
                                         .isInstanceOf(IllegalStateException.class)
-                                        .hasMessageContaining(configured.variable()));
+                                        .hasMessageFindingMatch(
+                                                naming(configured.variable()).pattern())
+                                        .hasMessageNotContaining(FILE_SOURCE_MARKER));
         assertQuotesNoSecret(failure, configured.secrets());
     }
 
@@ -261,14 +268,20 @@ class SigningKeyStoreTest {
         RETIRED_KEYS_FILE
     }
 
-    /** A key source arrangement, what its failure must name and the secrets it holds. */
+    /** A key source arrangement, whether it allows an ephemeral key, what a failure must name. */
     private record SourceCase(
             Placement signingKey,
             String signingKeyValue,
             Placement retiredKeys,
             String retiredKeysValue,
+            boolean ephemeral,
             Blame blame,
             List<JWK> secrets) {}
+
+    /** File-failure rows allow the ephemeral key, so a silent fallback to it would fail them. */
+    private static final boolean EPHEMERAL_ALLOWED = true;
+
+    private static final boolean EPHEMERAL_REFUSED = false;
 
     static Stream<Arguments> keySources() throws JOSEException {
         ECKey active = new ECKeyGenerator(Curve.P_256).keyID(KEY_ID).generate();
@@ -285,6 +298,7 @@ class SigningKeyStoreTest {
                         activeJson,
                         Placement.NONE,
                         null,
+                        EPHEMERAL_REFUSED,
                         Blame.NOTHING,
                         held),
                 sourceCase(
@@ -293,6 +307,7 @@ class SigningKeyStoreTest {
                         activeJson,
                         Placement.FILE,
                         retiredJwks,
+                        EPHEMERAL_REFUSED,
                         Blame.NOTHING,
                         held),
                 sourceCase(
@@ -301,6 +316,7 @@ class SigningKeyStoreTest {
                         activeJson,
                         Placement.NONE,
                         null,
+                        EPHEMERAL_REFUSED,
                         Blame.SIGNING_KEY_SETTINGS,
                         held),
                 sourceCase(
@@ -309,6 +325,7 @@ class SigningKeyStoreTest {
                         activeJson,
                         Placement.BOTH,
                         retiredJwks,
+                        EPHEMERAL_REFUSED,
                         Blame.RETIRED_KEYS_SETTINGS,
                         held),
                 sourceCase(
@@ -317,6 +334,7 @@ class SigningKeyStoreTest {
                         null,
                         Placement.NONE,
                         null,
+                        EPHEMERAL_ALLOWED,
                         Blame.SIGNING_KEY_FILE,
                         List.of()),
                 sourceCase(
@@ -325,6 +343,7 @@ class SigningKeyStoreTest {
                         null,
                         Placement.NONE,
                         null,
+                        EPHEMERAL_ALLOWED,
                         Blame.SIGNING_KEY_FILE,
                         List.of()),
                 sourceCase(
@@ -333,6 +352,7 @@ class SigningKeyStoreTest {
                         activeJson,
                         Placement.MISSING_FILE,
                         null,
+                        EPHEMERAL_REFUSED,
                         Blame.RETIRED_KEYS_FILE,
                         held),
                 sourceCase(
@@ -341,6 +361,7 @@ class SigningKeyStoreTest {
                         active.toPublicJWK().toJSONString(),
                         Placement.NONE,
                         null,
+                        EPHEMERAL_REFUSED,
                         Blame.SIGNING_KEY_FILE,
                         List.of()),
                 sourceCase(
@@ -349,6 +370,7 @@ class SigningKeyStoreTest {
                         malformed,
                         Placement.NONE,
                         null,
+                        EPHEMERAL_REFUSED,
                         Blame.SIGNING_KEY_FILE,
                         held),
                 sourceCase(
@@ -357,6 +379,7 @@ class SigningKeyStoreTest {
                         activeJson,
                         Placement.FILE,
                         new JWKSet(privateRetired).toString(false),
+                        EPHEMERAL_REFUSED,
                         Blame.RETIRED_KEYS_FILE,
                         List.of(active, privateRetired)),
                 sourceCase(
@@ -365,6 +388,7 @@ class SigningKeyStoreTest {
                         null,
                         Placement.NONE,
                         null,
+                        EPHEMERAL_REFUSED,
                         Blame.SIGNING_KEY_SETTINGS,
                         List.of()));
     }
@@ -375,6 +399,7 @@ class SigningKeyStoreTest {
     void resolvesKeySources(String name, SourceCase arranged, @TempDir Path directory)
             throws IOException {
         ConsentManagerConfiguration.Receipts settings = new ConsentManagerConfiguration.Receipts();
+        settings.setEphemeralSigningKey(arranged.ephemeral());
         Path signingKeyFile = directory.resolve("signing-key.jwk");
         Path retiredKeysFile = directory.resolve("retired-verification-keys.jwks");
         place(
@@ -390,26 +415,38 @@ class SigningKeyStoreTest {
                 settings::setRetiredVerificationKeys,
                 settings::setRetiredVerificationKeysFile);
 
-        Throwable failure = catchThrowable(() -> new SigningKeyStore(settings));
-
         if (arranged.blame() == Blame.NOTHING) {
-            assertThat(failure).isNull();
+            SigningKeyStore keys = new SigningKeyStore(settings);
+            assertThat(keys.keyId()).isEqualTo(KEY_ID);
+            if (arranged.retiredKeys() != Placement.NONE) {
+                assertThat(keys.verificationKey(RETIRED_KEY_ID)).isPresent();
+            }
             return;
         }
-        List<String> named =
+        Throwable failure = catchThrowable(() -> new SigningKeyStore(settings));
+
+        List<Pattern> named =
                 switch (arranged.blame()) {
                     case SIGNING_KEY_SETTINGS ->
-                            List.of(SIGNING_KEY_FILE_VARIABLE, SIGNING_KEY_VARIABLE);
+                            List.of(
+                                    naming(SIGNING_KEY_FILE_VARIABLE),
+                                    naming(SIGNING_KEY_VARIABLE));
                     case RETIRED_KEYS_SETTINGS ->
-                            List.of(RETIRED_KEYS_FILE_VARIABLE, RETIRED_KEYS_VARIABLE);
+                            List.of(
+                                    naming(RETIRED_KEYS_FILE_VARIABLE),
+                                    naming(RETIRED_KEYS_VARIABLE));
                     case SIGNING_KEY_FILE ->
-                            List.of(fileSource(SIGNING_KEY_FILE_VARIABLE, signingKeyFile));
+                            List.of(literal(fileSource(SIGNING_KEY_FILE_VARIABLE, signingKeyFile)));
                     case RETIRED_KEYS_FILE ->
-                            List.of(fileSource(RETIRED_KEYS_FILE_VARIABLE, retiredKeysFile));
+                            List.of(
+                                    literal(
+                                            fileSource(
+                                                    RETIRED_KEYS_FILE_VARIABLE, retiredKeysFile)));
                     case NOTHING -> List.of();
                 };
         assertThat(failure).isInstanceOf(IllegalStateException.class);
-        assertThat(failure.getMessage()).contains(named);
+        assertThat(named)
+                .allSatisfy(source -> assertThat(failure.getMessage()).containsPattern(source));
         assertQuotesNoSecret(failure, arranged.secrets());
     }
 
@@ -431,6 +468,15 @@ class SigningKeyStoreTest {
 
     private static String fileSource(String variable, Path file) {
         return variable + " (" + file + ")";
+    }
+
+    /** Matches the variable as a whole word, so {@code X} is not found inside {@code X_FILE}. */
+    private static Pattern naming(String variable) {
+        return Pattern.compile("\\b" + Pattern.quote(variable) + "\\b");
+    }
+
+    private static Pattern literal(String text) {
+        return Pattern.compile(Pattern.quote(text));
     }
 
     private static void place(
@@ -466,6 +512,7 @@ class SigningKeyStoreTest {
             String signingKeyValue,
             Placement retiredKeys,
             String retiredKeysValue,
+            boolean ephemeral,
             Blame blame,
             List<JWK> secrets) {
         return Arguments.of(
@@ -475,6 +522,7 @@ class SigningKeyStoreTest {
                         signingKeyValue,
                         retiredKeys,
                         retiredKeysValue,
+                        ephemeral,
                         blame,
                         secrets));
     }

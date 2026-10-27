@@ -313,8 +313,9 @@ public class ConsentManagerConfiguration {
         @Nullable private String signingKeyFile;
 
         /**
-         * Whether startup may generate a throwaway key when {@link #signingKey} is unset, bound to
-         * {@code RECEIPTS_EPHEMERAL_SIGNING_KEY}; receipts it signed stop verifying on restart.
+         * Whether startup may generate a throwaway key when neither {@link #signingKey} nor {@link
+         * #signingKeyFile} is set, bound to {@code RECEIPTS_EPHEMERAL_SIGNING_KEY}; receipts it
+         * signed stop verifying on restart.
          */
         private boolean ephemeralSigningKey;
 
