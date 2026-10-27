@@ -79,6 +79,7 @@ config:
     consentsDefaultSize: 20
     consentsMaxSize: 100
   # Any other non-sensitive variable from .env.sample, e.g. SELF_DESCRIPTION_ALLOWED_HOSTS.
+  # Credentials and the variables the deployment sets are refused.
   extraEnv: {}
 
 # The trust list.
@@ -91,7 +92,9 @@ config:
 # `additional` maps further provider names to entries of the same shape. They are rendered into
 # identity-providers.yml in a separate ConfigMap, mounted read-only and loaded through
 # MICRONAUT_CONFIG_FILES. An entry may not be named `primary`. claims fall back per key to the
-# defaults below; roleMapping, when given, replaces the default mapping whole.
+# defaults below; roleMapping, when given, replaces the default mapping whole, so an additional
+# provider can leave a role unmapped. primary cannot: each of its three roles must be non-empty,
+# and rendering fails on a null or empty one rather than fall back to the application default.
 # Changing either rolls the pods.
 identityProviders:
   primary:

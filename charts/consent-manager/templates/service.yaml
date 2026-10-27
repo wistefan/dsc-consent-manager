@@ -18,7 +18,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "consent-manager.fullname" . }}-management
+  name: {{ include "consent-manager.managementServiceName" . }}
   labels:
     {{- include "consent-manager.labels" . | nindent 4 }}
     app.kubernetes.io/component: management

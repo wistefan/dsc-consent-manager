@@ -46,6 +46,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default (printf "%s-signing-keys" .Release.Name) .Values.signingKeys.secretName }}
 {{- end }}
 
+{{/* Cluster-internal Service for health and metrics; Step 5's ServiceMonitor selects it too. */}}
+{{- define "consent-manager.managementServiceName" -}}
+{{- printf "%s-management" (include "consent-manager.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/* Secret keys every pod requires, space-separated; read with splitList. */}}
+{{- define "consent-manager.mandatorySecretKeys" -}}
+DB_USER DB_PASSWORD LOG_PSEUDONYM_KEY ERASURE_VERIFICATION_SECRET
+{{- end }}
+
+{{/* Secret keys a pod may lack, space-separated; read with splitList. */}}
+{{- define "consent-manager.optionalSecretKeys" -}}
+SMTP_USER SMTP_PASSWORD
+{{- end }}
+
 {{/* ConfigMap holding identity-providers.yml for the additional providers. */}}
 {{- define "consent-manager.identityProvidersConfigMapName" -}}
 {{- printf "%s-identity-providers" (include "consent-manager.fullname" .) | trunc 63 | trimSuffix "-" }}

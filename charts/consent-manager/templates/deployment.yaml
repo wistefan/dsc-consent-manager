@@ -66,7 +66,7 @@ spec:
             - name: MICRONAUT_CONFIG_FILES
               value: {{ printf "%s/%s" (include "consent-manager.identityProvidersDir" .) (include "consent-manager.identityProvidersFile" .) | quote }}
             {{- end }}
-            {{- range $key := list "DB_USER" "DB_PASSWORD" "LOG_PSEUDONYM_KEY" "ERASURE_VERIFICATION_SECRET" }}
+            {{- range $key := splitList " " (include "consent-manager.mandatorySecretKeys" .) }}
             - name: {{ $key }}
               valueFrom:
                 secretKeyRef:
@@ -74,7 +74,7 @@ spec:
                   key: {{ $key }}
             {{- end }}
             {{- /* Optional, so an existingSecret without SMTP keys still starts the pod. */}}
-            {{- range $key := list "SMTP_USER" "SMTP_PASSWORD" }}
+            {{- range $key := splitList " " (include "consent-manager.optionalSecretKeys" .) }}
             - name: {{ $key }}
               valueFrom:
                 secretKeyRef:

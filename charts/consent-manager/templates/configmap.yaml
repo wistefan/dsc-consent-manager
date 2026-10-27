@@ -17,10 +17,16 @@
   "CONSENTS_PAGE_DEFAULT_SIZE" $cfg.pagination.consentsDefaultSize
   "CONSENTS_PAGE_MAX_SIZE" $cfg.pagination.consentsMaxSize
   "IDP_CLOCK_SKEW" $idp.clockSkew
-  "IDP_ROLE_USER" ($idp.roleMapping | default dict).user
-  "IDP_ROLE_PARTICIPANT" ($idp.roleMapping | default dict).participant
-  "IDP_ROLE_CATALOG" ($idp.roleMapping | default dict).catalog
 }}
+{{- /* An omitted role would fall back to application.yml's default, and a blank one fails startup,
+  so the primary provider cannot unmap a role; refuse rather than map it implicitly. */}}
+{{- range $role := list "user" "participant" "catalog" }}
+{{- $value := get ($idp.roleMapping | default dict) $role }}
+{{- if empty $value }}
+{{- fail (printf "identityProviders.primary.roleMapping.%s is required: the primary provider cannot unmap a role, and an empty value would silently fall back to the application default" $role) }}
+{{- end }}
+{{- $_ := set $optional (printf "IDP_ROLE_%s" (upper $role)) $value }}
+{{- end }}
 {{- with $idp.claims }}
 {{- $_ := set $optional "IDP_CLAIM_USER_IDENTIFIER" (join "," (.userIdentifier | default list)) }}
 {{- $_ := set $optional "IDP_CLAIM_PARTICIPANT_IDENTIFIER" (join "," (.participantIdentifier | default list)) }}
@@ -59,9 +65,17 @@ data:
   {{- end }}
   {{- end }}
   {{- $rendered := concat (keys $optional) (list "PORT" "MANAGEMENT_PORT" "DB_URL" "METRICS_AUTHENTICATION_ENABLED" "IDP_ISSUER" "IDP_DISCOVERY_URL" "IDP_AUDIENCE" "IDP_ALLOW_INSECURE_TRANSPORT" "SMTP_STARTTLS") }}
+  {{- $credentials := concat (splitList " " (include "consent-manager.mandatorySecretKeys" .)) (splitList " " (include "consent-manager.optionalSecretKeys" .)) (list "RECEIPTS_SIGNING_KEY" "RECEIPTS_RETIRED_VERIFICATION_KEYS") }}
+  {{- $deploymentOwned := list "RECEIPTS_SIGNING_KEY_FILE" "RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE" "MICRONAUT_CONFIG_FILES" }}
   {{- range $key, $value := $cfg.extraEnv }}
   {{- if has $key $rendered }}
   {{- fail (printf "config.extraEnv.%s is set by a dedicated chart value; set that value instead" $key) }}
+  {{- end }}
+  {{- if has $key $credentials }}
+  {{- fail (printf "config.extraEnv.%s is a credential and must never reach a ConfigMap; set it through secrets.* (or secrets.existingSecret), and mount signing keys through signingKeys" $key) }}
+  {{- end }}
+  {{- if has $key $deploymentOwned }}
+  {{- fail (printf "config.extraEnv.%s is set by the deployment; configure signingKeys or identityProviders.additional instead" $key) }}
   {{- end }}
   {{ $key }}: {{ include "consent-manager.envValue" $value }}
   {{- end }}
