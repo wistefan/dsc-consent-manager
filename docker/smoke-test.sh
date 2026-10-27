@@ -36,6 +36,9 @@ CONTRACT_URI="${CONTRACT_URI:-http://wiremock:8080/contracts/66d0e2f7a1b2c3d4e5f
 
 READINESS_TIMEOUT_SECONDS="${READINESS_TIMEOUT_SECONDS:-180}"
 READINESS_POLL_SECONDS=3
+# Bounds every single call, so a hung peer fails the run instead of blocking it.
+CONNECT_TIMEOUT_SECONDS="${CONNECT_TIMEOUT_SECONDS:-5}"
+REQUEST_TIMEOUT_SECONDS="${REQUEST_TIMEOUT_SECONDS:-60}"
 EXPECTED_STATUS="GRANTED"
 
 HTTP_OK=200
@@ -52,9 +55,13 @@ done
 RESPONSE_BODY="$(mktemp)"
 trap 'rm -f "$RESPONSE_BODY"' EXIT
 
+CURL_TIMEOUTS=(--connect-timeout "$CONNECT_TIMEOUT_SECONDS" --max-time "$REQUEST_TIMEOUT_SECONDS")
+
 # Sends a request; prints the HTTP status and leaves the body in $RESPONSE_BODY.
+# A transport failure (refused, timed out) prints 000, which expect_status reports.
 request() {
-    curl -sS -o "$RESPONSE_BODY" -w '%{http_code}' "$@"
+    : >"$RESPONSE_BODY"
+    curl -sS "${CURL_TIMEOUTS[@]}" -o "$RESPONSE_BODY" -w '%{http_code}' "$@" || true
 }
 
 # Fails with the response body unless the status is one of the accepted ones.
@@ -79,7 +86,7 @@ token() {
 
 log "1. waiting for $READINESS_URL to report UP"
 deadline=$((SECONDS + READINESS_TIMEOUT_SECONDS))
-until [[ "$(curl -s "$READINESS_URL" | jq -r .status 2>/dev/null)" == "UP" ]]; do
+until [[ "$(curl -s "${CURL_TIMEOUTS[@]}" "$READINESS_URL" | jq -r .status 2>/dev/null)" == "UP" ]]; do
     ((SECONDS < deadline)) || fail "readiness not UP after ${READINESS_TIMEOUT_SECONDS}s"
     sleep "$READINESS_POLL_SECONDS"
 done

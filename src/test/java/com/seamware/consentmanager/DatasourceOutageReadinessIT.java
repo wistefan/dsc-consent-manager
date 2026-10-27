@@ -3,6 +3,7 @@ package com.seamware.consentmanager;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.support.Await;
+import com.seamware.consentmanager.support.PostgresTestResource;
 import io.micronaut.core.type.Argument;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
@@ -29,12 +30,10 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * stops the database. Asserts the {@code jdbc} component rather than the top-level readiness, which
  * the test profile's unreachable identity provider already holds {@code DOWN}.
  */
-@MicronautTest
+@MicronautTest(transactional = false)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @DisplayName("Datasource outage flips readiness, not liveness")
 class DatasourceOutageReadinessIT implements TestPropertyProvider {
-
-    private static final String POSTGRES_IMAGE = "postgres:16";
 
     private static final String READINESS_PATH = "/health/readiness";
 
@@ -56,7 +55,8 @@ class DatasourceOutageReadinessIT implements TestPropertyProvider {
             Argument.mapOf(String.class, Object.class);
 
     @SuppressWarnings("resource") // closed in stopDatabase()
-    private final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(POSTGRES_IMAGE);
+    private final PostgreSQLContainer<?> postgres =
+            new PostgreSQLContainer<>(PostgresTestResource.POSTGRES_IMAGE);
 
     @Inject
     @Client("/")
