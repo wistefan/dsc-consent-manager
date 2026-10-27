@@ -413,7 +413,7 @@ class TokenSignatureEnforcementTest {
 
         assertThat(response.getBody(String.class).orElse(""))
                 .as(
-                        "US-ID-008: the rejection must not tell the caller which issuers are"
+                        "the rejection must not tell the caller which issuers are"
                                 + " registered, not even by repeating the one it submitted")
                 .doesNotContain(UNTRUSTED_ISSUER_HOST);
         for (String name : response.getHeaders().names()) {
@@ -521,7 +521,7 @@ class TokenSignatureEnforcementTest {
                                 + " micronaut.security.oauth2.protected-resource-metadata block in"
                                 + " application.yml. Serving it would advertise this service's base"
                                 + " URL anonymously and, once authorization servers are listed,"
-                                + " the very issuers the trust list does not disclose (US-ID-008)",
+                                + " the very issuers the trust list does not disclose",
                         path)
                 .isNotEqualTo(HttpStatus.OK.getCode());
     }

@@ -459,7 +459,7 @@ class ConsentManagerTokenValidatorTest {
 
         assertThat(authentication)
                 .as(
-                        "AC 9: %s is a valid token held by somebody without the role. That is a"
+                        "%s is a valid token held by somebody without the role. That is a"
                                 + " 403 at the @Secured check, never a 401 here",
                         description)
                 .isPresent();

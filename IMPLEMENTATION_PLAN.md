@@ -504,7 +504,8 @@ blocks, including code added by Steps 1-9. About 18,000 Javadoc lines in `src/ma
 - **Order of work.** Work package by package, heaviest first: `security/`, `config/`,
   `service/`, `domain/`, `repository/`, then the rest.
 - **Guard.** Add `SourceHygieneTest`, which fails when a Java source or `application*.yml` under
-  `src/` references a ticket (`TICKET-\d+`, `ticket #\d+`, `step \d+ of this ticket`).
+  `src/` references a ticket (`TICKET-\d+`, `ticket #\d+`, a user-story id `US-X-\d+`, `AC \d+`,
+  `step \d+`).
   Parameterize it over the matched files.
 - **AGENTS.md.** Replace the "Actual density" note under "Doc comments are terse" with the new
   rule, and drop the statement that service classes carry multi-paragraph Javadoc.

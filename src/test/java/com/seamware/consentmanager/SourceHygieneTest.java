@@ -35,10 +35,11 @@ class SourceHygieneTest {
     private static final Pattern SCANNED_FILE =
             Pattern.compile("(.*\\.java|application[^/]*\\.yml)$");
 
-    /** A tracker id, a hash-numbered ticket or a plan step of this ticket, in any case. */
+    /** A tracker id, a hash-numbered ticket, a user-story id, an AC or a plan step, in any case. */
     private static final Pattern TICKET_REFERENCE =
             Pattern.compile(
-                    "TICKET-\\d+|ticket #\\d+|step \\d+ of this ticket", Pattern.CASE_INSENSITIVE);
+                    "TICKET-\\d+|ticket #\\d+|\\bUS-[A-Z]+-\\d+|\\bAC \\d+\\b|\\bstep \\d+\\b",
+                    Pattern.CASE_INSENSITIVE);
 
     /** Every scanned file, sorted so the report order is stable. */
     static List<Path> scannedFiles() throws IOException {

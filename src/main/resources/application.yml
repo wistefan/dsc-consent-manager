@@ -138,6 +138,7 @@ endpoints:
     # Management endpoints on a dedicated, cluster-internal port at the origin root.
     # ManagementEndpointSecurityIT pins these paths.
     port: ${MANAGEMENT_PORT:9090}
+    # Keeps endpoints out of API_PREFIX even if the URI naming strategy changes.
     context-path: /
   health:
     enabled: true
