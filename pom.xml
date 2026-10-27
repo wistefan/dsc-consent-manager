@@ -51,9 +51,10 @@
 
         <!-- Code coverage -->
         <jacoco.version>0.8.16</jacoco.version>
-        <!-- Merged (unit + integration) BUNDLE ratios: the measured value rounded down to 0.05 -->
-        <jacoco.minimum.line-coverage>0.00</jacoco.minimum.line-coverage>
-        <jacoco.minimum.branch-coverage>0.00</jacoco.minimum.branch-coverage>
+        <!-- Merged (unit + integration) BUNDLE ratios, each the measured value rounded down to 0.05
+             (measured 2026-10-27: LINE 0.627, BRANCH 0.454) -->
+        <jacoco.minimum.line-coverage>0.60</jacoco.minimum.line-coverage>
+        <jacoco.minimum.branch-coverage>0.45</jacoco.minimum.branch-coverage>
 
         <!-- Code formatting -->
         <spotless.version>3.10.3</spotless.version>
@@ -660,7 +661,8 @@
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>${jacoco.version}</version>
-                <!-- Plugin-level so report and check measure the same classes -->
+                <!-- Plugin-level so report and check measure the same classes; the agent
+                     executions override it so no `$`/`*` pattern reaches the forked argLine -->
                 <configuration>
                     <excludes>
                         <exclude>com/seamware/consentmanager/api/generated/**</exclude>
@@ -677,6 +679,9 @@
                         <goals>
                             <goal>prepare-agent</goal>
                         </goals>
+                        <configuration>
+                            <excludes combine.self="override"/>
+                        </configuration>
                     </execution>
                     <!-- Prepare the JaCoCo agent for integration tests (Failsafe) -->
                     <execution>
@@ -684,6 +689,9 @@
                         <goals>
                             <goal>prepare-agent-integration</goal>
                         </goals>
+                        <configuration>
+                            <excludes combine.self="override"/>
+                        </configuration>
                     </execution>
                     <!-- Merge unit and integration test execution data -->
                     <execution>
