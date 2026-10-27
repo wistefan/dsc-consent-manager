@@ -89,6 +89,12 @@ from `RECEIPTS_SIGNING_KEY` and the retired JWKS from `RECEIPTS_RETIRED_VERIFICA
     `${consent-manager.contract-service.url}` are not env vars and are skipped.
   - It asserts each name appears in `.env.sample`. Today that fails for `OTEL_TRACING_ENABLED`,
     so document it there in the same step.
+  - Some variables are bound straight from the environment and never appear as placeholders:
+    `SMTP_HOST`, `SMTP_PORT` and `SMTP_STARTTLS` (`application.yml` "read only from the
+    environment"; defaults in `NotificationConfiguration`, names in
+    `SmtpConfigurationValidator`). The test also asserts a named constant list of these
+    environment-only variables, so they cannot drift out of `.env.sample` either. A later change
+    that adds such a variable extends the list.
   - It asserts that none of the obsolete auth settings appear in `.env.sample`:
     `JWT_SECRET_KEY`, `OAUTH_SECRET_KEY`, `SESSION_SECRET`, `SALT_ROUNDS` and
     `X_CATALOG_CONSENT_KEY`, held as a named constant list. Parameterise over that list.
@@ -109,7 +115,10 @@ Files: `docker/Dockerfile`, `.dockerignore`.
 - Switch to `eclipse-temurin:25-jre-alpine`. Busybox `wget` keeps the `HEALTHCHECK` working
   without an `apt-get install` layer.
 - Verify the tag exists with `docker pull`. If it does not, use `eclipse-temurin:25-jre` and
-  drop the apt `wget` install in favour of a `HEALTHCHECK` that needs no extra package. Record
+  drop the apt `wget` install in favour of a `HEALTHCHECK` that needs no extra package. The
+  compose healthcheck (`compose.yaml`, `wget -qO- .../health/readiness`) also runs inside the
+  image, so in that case change it in the same commit to the bash `/dev/tcp` probe the
+  `keycloak` service already uses; otherwise `consent-manager` stays `unhealthy` forever. Record
   the choice in the commit message.
 - Create the user and group with a fixed **numeric** UID/GID (`APP_UID=10001`, declared as an
   `ARG` rather than a magic literal) and write `USER 10001:10001`. Kubernetes `runAsNonRoot` can
@@ -154,6 +163,12 @@ Files: `compose.yaml`, a new `docker/smoke-test.sh`, `docker/README.md` (new, sh
 `docker/wiremock/README.md` (`grep -rn "\bapp\b\|\bdb\b"` across those files).
 
 **`postgres`:** use `image: postgres:16-alpine`. It needs no init script.
+- The switch moves from Debian/glibc to musl, so collation behaviour changes. An existing
+  `postgres-data` volume was initialised under glibc, and opening it under musl risks silently
+  wrong text-index and unique lookups. Rename the volume (`postgres-data` becomes
+  `postgres16-alpine-data`) so every stack reinitialises, and say in `docker/README.md` and the
+  commit message that the old volume can be removed with `docker volume rm` (or
+  `docker compose down -v` once before upgrading).
 
 **`consent-manager`:**
 - Add `read_only: true`, `tmpfs: [/tmp]`, `cap_drop: [ALL]` and
@@ -448,8 +463,10 @@ chart README, `docker/README.md` and `.env.sample`. Content:
      `retiredVerificationKeys`, and roll. The new key is now published.
   2. Wait **at least one hour**, the `Cache-Control` max-age of `/.well-known/jwks.json`
      (`application.yml`, `retired-verification-keys` comment), so every verifier has re-fetched.
-     Then swap: the new private JWK becomes `signing-key.jwk`, and the old public JWK moves into
-     the retired JWKS (a `kid` in both fails startup). Roll again.
+     Then swap, in **one** Secret edit: the new private JWK becomes `signing-key.jwk`, the new
+     key's public entry is **removed** from the retired JWKS, and the old key's public entry is
+     added to it. A `kid` in both places fails startup with `DUPLICATE_KEY_ID`, and with
+     `maxUnavailable: 0` the rollout would stall on the first new pod. Roll again.
   3. Remove the old public key only once no receipt signed with it is still in circulation.
      Roll once more.
 
