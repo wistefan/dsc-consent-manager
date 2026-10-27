@@ -51,9 +51,21 @@ from `RECEIPTS_SIGNING_KEY` and the retired JWKS from `RECEIPTS_RETIRED_VERIFICA
   - **File read:** UTF-8, trimmed, then passed through the existing parse and validation path
     (private-only check, duplicate-`kid` check, ephemeral fallback when nothing is configured).
   - Keep the read in a small private helper. Define named constants for the new messages.
+  - **Messages name the source.** Today `MALFORMED_KEY`, `PUBLIC_KEY_ONLY`, `UNUSABLE_KEY`,
+    `MALFORMED_RETIRED_KEYS`, `PRIVATE_RETIRED_KEY` and `DUPLICATE_KEY_ID` hard-code
+    `RECEIPTS_SIGNING_KEY` / `RECEIPTS_RETIRED_VERIFICATION_KEYS`. Turn them into `%s` formats
+    and pass the source that supplied the value: the variable name for inline, or
+    `RECEIPTS_SIGNING_KEY_FILE (<path>)` for a file. A bad mounted file is then never blamed on
+    the inline variable. `MISSING_KEY` and `EPHEMERAL_KEY` name both forms ("set
+    RECEIPTS_SIGNING_KEY_FILE, or RECEIPTS_SIGNING_KEY for local use").
 - `signing/SigningKeyStoreTest.java`: add a parameterized test over (inline, file, both, missing
-  file, file holding a public-only key, file holding malformed JSON). Write the files with JUnit
-  `@TempDir`. Assert that no failure message contains key material.
+  file, file holding a public-only key, file holding malformed JSON, retired-keys file holding a
+  private key). Write the files with JUnit `@TempDir`. Each failing case asserts that the
+  message names the expected source (variable name or `_FILE` variable plus path) and that it
+  contains no key material.
+- `AGENTS.md`: reword the Receipts bullet and the "receipt signing keys are mounted as files"
+  clause of the Deployment bullet together, so both say the `*_FILE` form is production and the
+  inline form is local/test only.
 - Docs: in `.env.sample` and `application.yml`, document both `*_FILE` variables as the
   production form and the inline variables as the local or test form. Mention the
   mutual-exclusion rule.
@@ -138,6 +150,12 @@ the places to look. If it does not, fix it, for example with a `@Readiness` data
 In either case, add or extend an IT asserting readiness is `DOWN` and liveness `UP` when the
 datasource is unreachable. Document the manual compose check in `docker/README.md`.
 
+`endpoints.health.details-visible` is `AUTHENTICATED`, so an anonymous call sees only the
+top-level status and HTTP code, never the components. The manual compose check therefore
+asserts top-level status and HTTP code only (503 `DOWN` / 200 `UP`). The IT asserts the same
+anonymously, and if it also asserts the `jdbc` component it runs under
+`KeycloakAndPostgresTestResource` and sends a bearer token.
+
 **Realm:** confirm the realm still provides the three roles, test users and clients. Change it
 only if the smoke script proves something is missing.
 
@@ -154,12 +172,18 @@ labels, selectorLabels, secret names), `deployment.yaml`, `service.yaml`, `confi
 **`values.yaml`:**
 - `replicaCount: 2`, `image.{repository,tag,pullPolicy}`, `resources` (requests and limits;
   the heap follows the limit).
-- `service.{type: ClusterIP, port: 8080, managementPort: 9090}`.
+- `service.{type: ClusterIP, port: 8080}` and `managementService.port: 9090`. See
+  `service.yaml` below.
 - `config` for non-sensitive env: `consentManagerUrl`, `contractServiceUrl`, `apiPrefix`,
-  `database.url`, smtp host/port/from, cache and page settings, `metricsAuthenticationEnabled`.
+  `database.url`, smtp host/port/from, cache and page settings. There is no
+  `metricsAuthenticationEnabled` value; see "Metrics" below.
 - `identityProviders.primary.{issuer,discoveryUrl,audience,allowInsecureTransport,clockSkew,
-  claims}`, which is required, and `identityProviders.additional` (a map keyed by provider
-  name, empty by default). See the ConfigMap section for why `primary` is special.
+  claims,roleMapping}`, which is required, and `identityProviders.additional` (a map keyed by
+  provider name, empty by default). See the ConfigMap section for why `primary` is special.
+  `claims.{userIdentifier,participantIdentifier,roles}` and
+  `roleMapping.{user,participant,catalog}` default to what `application.yml` defaults to
+  (`[sub]`, `[participant_id]`, `[realm_access, roles]`; `consent-user`,
+  `consent-participant`, `consent-catalog`).
 - `secrets.{dbUser,dbPassword,smtpUser,smtpPassword,logPseudonymKey,erasureVerificationSecret}`
   and `secrets.existingSecret`.
 - `signingKeys.{secretName (default "<release>-signing-keys"), signingKeyFile: signing-key.jwk,
@@ -196,8 +220,26 @@ labels, selectorLabels, secret names), `deployment.yaml`, `service.yaml`, `confi
 - `checksum/config` and `checksum/secret` pod annotations, so a config or IDP-registry change
   rolls the pods. Changing the trust list is a deliberate redeploy.
 
+**`service.yaml`:** two Services. The API Service (`service.type`, port `http`) is the one
+ingress targets. A separate `<fullname>-management` Service is **always `ClusterIP`** and
+exposes only the `management` port. The management port therefore stays inside the cluster
+even when `service.type` is set to `LoadBalancer` or `NodePort`.
+
 **`configmap.yaml`:** plain env keys (`PORT`, `MANAGEMENT_PORT`, `API_PREFIX`,
-`CONSENT_MANAGER_URL`, `CONTRACT_SERVICE_URL`, `DB_URL`, `SMTP_HOST`, ...).
+`CONSENT_MANAGER_URL`, `CONTRACT_SERVICE_URL`, `DB_URL`, `SMTP_HOST`, ...), plus:
+- `METRICS_AUTHENTICATION_ENABLED: "false"`, fixed, as decided by the reviewer. The chart
+  holds no static metrics credential. Metrics are reachable without a token, but only inside the
+  cluster through the management Service (see `service.yaml`). That management Service is never
+  routed by ingress and never exposed externally. Health detail stays `AUTHENTICATED`, because
+  that is a separate setting.
+- The `primary` IdP keys, listed in full: `IDP_ISSUER`, `IDP_DISCOVERY_URL`, `IDP_AUDIENCE`,
+  `IDP_ALLOW_INSECURE_TRANSPORT`, `IDP_CLOCK_SKEW`, `IDP_CLAIM_USER_IDENTIFIER`,
+  `IDP_CLAIM_PARTICIPANT_IDENTIFIER`, `IDP_CLAIM_ROLES`, `IDP_ROLE_USER`,
+  `IDP_ROLE_PARTICIPANT` and `IDP_ROLE_CATALOG`. Every claim is a list of segments in values
+  and renders comma-joined (`join ","`), which is the form the binder splits. For example,
+  `roles: [realm_access, roles]` becomes `IDP_CLAIM_ROLES: "realm_access,roles"`. These keys
+  together are the IdP registry that AC 12 puts in the ConfigMap: issuer URLs, claim names and
+  role mappings.
 
 **Identity providers, decided:** Micronaut merges maps across property sources, so no layered
 file can remove the `consent-manager.identity-providers.primary` entry from `application.yml`.
@@ -241,7 +283,14 @@ Acceptance:
 - Rendering twice with the same values gives byte-identical output, so the checksums are
   stable.
 - grep the rendered ConfigMap and confirm it holds no password or key.
+- `helm template --set 'identityProviders.primary.roleMapping.user=other-user'` renders
+  `IDP_ROLE_USER: other-user`, and the default `IDP_CLAIM_ROLES` renders as
+  `realm_access,roles`.
+- With `--set service.type=LoadBalancer`, the management Service is still `ClusterIP`.
 - `./mvnw verify` is green, including `IdentityProviderConfigFileTest`.
+- `AGENTS.md`: the Deployment bullet's lint command becomes
+  `helm lint --strict -f charts/consent-manager/ci/minimal-values.yaml charts/consent-manager`.
+  Add a note that a default-values failure is the `required` guard working, not a bug.
 
 Covers AC 6, 7, 8, 10, 11 and 12.
 
@@ -253,9 +302,10 @@ Add `templates/ingress.yaml`, `templates/hpa.yaml`, `templates/servicemonitor.ya
   the management port is never exposed.
 - **HPA:** `autoscaling/v2`, with `min`/`max` replicas and CPU and memory targets. When enabled,
   `deployment.yaml` omits `replicas`.
-- **ServiceMonitor:** `monitoring.coreos.com/v1`, scraping `/prometheus` on the `management`
-  port. Add an optional `bearerTokenSecret` because `METRICS_AUTHENTICATION_ENABLED` defaults
-  to true, and an `interval`. Guard it with
+- **ServiceMonitor:** `monitoring.coreos.com/v1`. It selects the management Service and scrapes
+  `/prometheus` on the `management` port at a configurable `interval`. It sets **no
+  credentials**: no `bearerTokenSecret`, no `oauth2`, no `basicAuth`. Metrics authentication is
+  off in the chart (Step 4 ConfigMap), and the scrape stays inside the cluster. Guard it with
   `.Capabilities.APIVersions.Has "monitoring.coreos.com/v1"` or document that the CRD is
   required.
 - **NOTES.txt:** how to reach the service, and a reminder to create the signing-key Secret.
@@ -265,7 +315,8 @@ Add `charts/consent-manager/ci/all-enabled-values.yaml`, which turns everything 
 It includes the `ci/minimal-values.yaml` inputs and one `identityProviders.additional` entry.
 
 Acceptance: `helm lint --strict` and `helm template` are clean for both
-`ci/minimal-values.yaml` and `ci/all-enabled-values.yaml`.
+`ci/minimal-values.yaml` and `ci/all-enabled-values.yaml`. The rendered ServiceMonitor holds no
+secret reference, and the rendered Ingress has no backend on the management port.
 
 ### Step 6: Chart README and deployment documentation
 Create `charts/consent-manager/README.md` and add a short `docs/deployment.md` that links the
@@ -278,16 +329,28 @@ chart README, `docker/README.md` and `.env.sample`. Content:
   identity providers, and a values table.
 - **Signing-key file mode:** `defaultMode: 0400` appears in the pod as 0440 `root:<fsGroup>`.
   Explain why.
-- **Configuration and secret matrix:** what is in the ConfigMap, what is in the Secret, and the
-  signing keys as mounted files. Note that the IDP registry is security-relevant and immutable at
+- **Metrics:** authentication is off. `/prometheus` is reachable only inside the cluster
+  through the ClusterIP management Service. Clusters that need more can add a NetworkPolicy on
+  the management port (documented as an option, not templated).
+- **Configuration and secret matrix:** what is in the ConfigMap (including the full `IDP_*`
+  key list and the comma-joined claim form), what is in the Secret, and the signing keys as
+  mounted files. Note that the IDP registry is security-relevant and immutable at
   runtime, so changing it is a deliberate redeploy.
 - **Key rotation procedure,** mapped onto the active key plus retired JWKS model:
+  The signing-key Secret is created out of band, so editing it changes neither
+  `checksum/config` nor `checksum/secret`. A `helm upgrade` with unchanged values does **not**
+  roll the pods. Every "roll" below is an explicit
+  `kubectl rollout restart deployment/<fullname>` followed by
+  `kubectl rollout status`. The one exception is enabling `retiredVerificationKeys`, which is a
+  values change, so `helm upgrade` rolls the pods for it.
   1. Add the new key's public JWK to the retired/upcoming JWKS in the Secret, enable
      `retiredVerificationKeys`, and roll. The new key is now published.
-  2. Wait at least one verifier JWKS cache period, then swap: the new private JWK becomes
-     `signing-key.jwk`, the old public JWK moves into the retired JWKS (a `kid` in both fails
-     startup), and roll.
+  2. Wait **at least one hour**, the `Cache-Control` max-age of `/.well-known/jwks.json`
+     (`application.yml`, `retired-verification-keys` comment), so every verifier has re-fetched.
+     Then swap: the new private JWK becomes `signing-key.jwk`, and the old public JWK moves into
+     the retired JWKS (a `kid` in both fails startup). Roll again.
   3. Remove the old public key only once no receipt signed with it is still in circulation.
+     Roll once more.
 
   Reuse the generation commands from `.env.sample`.
 - **Probes:** why liveness never points at readiness, and why the startup probe exists.
@@ -325,17 +388,25 @@ Covers AC 16 and the documentation half of AC 13.
   4. Create the signing-key Secret. Supply `secrets.logPseudonymKey` and
      `secrets.erasureVerificationSecret` with `--set`, generated once by `openssl rand`.
   5. Run `helm install --wait` with `replicaCount=2`.
-  6. Confirm:
-     - both pods become Ready, and `/health/readiness` reports `UP` with the identity-provider
-       and datasource components each `UP`;
+  6. Confirm. Health detail is `AUTHENTICATED`, so every component-level check below sends
+     `Authorization: Bearer <token>`. The token comes from the in-cluster Keycloak through the
+     password grant (`test-catalog` through `consent-manager-catalog-client`, run from a
+     `kubectl run curlimages/curl` pod so its `iss` matches the pinned hostname). Any valid
+     token reveals detail, whatever its role. Anonymous calls are used only for top-level status.
+     - both pods become Ready, and the authenticated `/health/readiness` reports `UP` with the
+       identity-provider and `jdbc` components each `UP`;
+     - `GET /prometheus` on the management Service answers `200` with no token, from inside the
+       cluster;
      - migrations were applied once;
      - `stat -c '%a %U:%G'` on the key file prints `440 root:10001` (the AC 10 decision in
        Step 4), and the app read the key (startup log; `GET /.well-known/jwks.json` shows the
        configured `kid`);
      - `kubectl exec ... -- touch /x` fails because the filesystem is read-only.
   7. Only after readiness has been shown `UP`, scale PostgreSQL to 0. Confirm the pods go
-     NotReady with readiness `DOWN` on the datasource component and no restarts. Scale it back
-     and confirm they return to Ready.
+     NotReady and that `kubectl get pods` shows no new restarts. Anonymous readiness should
+     answer 503 `DOWN`, and liveness 200 `UP`. The token, fetched while readiness was still
+     `UP`, shows the `jdbc` component `DOWN` and the identity-provider component still `UP`.
+     Scale PostgreSQL back up and confirm the pods return to Ready.
   8. Optionally, port-forward and run `docker/smoke-test.sh` against the cluster. Tokens are
      issued with the pinned issuer.
 - Fix any chart or app issue this exposes, within this step.
