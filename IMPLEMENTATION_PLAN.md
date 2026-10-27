@@ -30,7 +30,7 @@ Seed it from the audit:
 | AC | Status | Evidence / plan |
 |---|---|---|
 | 2, 4 | met | `PostgresTestResource` and `KeycloakTestResource` are static singletons, and the image is `postgres:16`. |
-| 6 | met | No outbound host is configured outside loopback. |
+| 6 | met by inspection | No outbound host is configured outside loopback. `NoExternalHostIT` (Step 4) turns this into a test. |
 | 7 | met | `ConsentStateMachineTest.everyPair`. |
 | 9 | met | `ConsentManagerTokenValidatorTest.refusedTokens` / `refusedHeaders`, `TokenSignatureEnforcementTest`. |
 | 14 | met | `KeycloakKeyRotationIT`. |
@@ -39,7 +39,10 @@ Seed it from the audit:
 | 19 | met | `OpenApiServingIT`, which compares the served document with `target/openapi-bundle/openapi.yaml`, the bundle of the authored spec. |
 | 20 | partial | `SpecLintIT` and `SpecCompatibilityIT` exist. There is no CI workflow yet. |
 | 21 | met | `SpecSecurityConsistencyTest`. |
-| Security #2, #3, #5, #6, #7, #8 | met | `UserDirectoryIT`, `ConsentLifecycleSurfaceIT`, `ConsentManagerTokenValidatorTest:239`, `KeycloakKeyRotationIT`, `IssuerSignatureVerifierTest:226`, `LogLeakIT`. |
+| Security #2, #3, #5, #6, #7, #8 | met | `UserDirectoryIT`, `ConsentLifecycleSurfaceIT`, the "a key genuinely valid at another trusted issuer" case of `ConsentManagerTokenValidatorTest.refusedTokens`, `KeycloakKeyRotationIT`, `IssuerSignatureVerifierTest.unknownKeyIdentifiersTriggerNoRefetch`, `LogLeakIT`. |
+
+Cite evidence by test class, method or case name, never by line number: Steps 8 and 11 add cases to these
+files and line numbers would drift.
 
 Also add:
 - The conventions a contributor needs:
@@ -94,14 +97,22 @@ There is no shared reset today. ITs hand-delete rows: `removeCommittedRows` in a
   the audit (`ConsentReceiptIT`, `ConsentLifecycleSurfaceIT`, `ConsentLineageIT`, `ConsentValidityIT`,
   `ConsentRequestSurfaceIT`, `ConsentGrantIT`, `ConsentMetricsIT`, `PrivacyNoticeConcurrencyIT`,
   `PrivacyNoticeApiTestSupport`, `KeyMaterialLeakIT`).
-- **Transactional ITs.** The few ITs on `@MicronautTest` default `transactional = true` (`ProblemResponseIT`,
-  `ApiStatusControllerIT`, `ApplicationSmokeIT`) must still pass.
+- **Transactional ITs.** `ProblemResponseIT`, `ApiStatusControllerIT` and `ApplicationSmokeIT` run on the
+  `@MicronautTest` default `transactional = true` and extend `PostgresTestResource`. Micronaut Test rolls the test
+  transaction back only *after* `@AfterEach`, so a `TRUNCATE` (ACCESS EXCLUSIVE) on the reset's separate
+  connection would wait on that transaction's locks forever; Postgres cannot see the JVM side of the wait.
+  Convert these three to `transactional = false`: they act through HTTP, whose writes commit on the server's
+  own connections, so rollback never isolated them anyway.
+- **Fail loudly, never hang.** The reset connection runs `SET lock_timeout` (a named constant, a few seconds)
+  before the `TRUNCATE`. Any remaining lock holder, such as a still-open async post-commit task from the
+  previous test or a future transactional IT, then fails the test with a lock-timeout error naming the reset.
 - **Canary: `support/SchemaIsolationIT`.** With `@TestMethodOrder`, method 1 writes a user, participant, notice
   and consent; method 2 asserts every table is empty. A second method asserts that `flyway_schema_history` lists
   every file in `db/migration/` as successful, which shows the suite's migration ran once on the empty
   container (AC 15).
 
-**Acceptance:** AC 5 met; full `./mvnw verify` green. Document the reset in `docs/testing.md`.
+**Acceptance:** AC 5 met; full `./mvnw verify` green, with no IT left on `transactional = true` that extends
+`PostgresTestResource`. Document the reset and the lock timeout in `docs/testing.md`.
 
 ### Step 4: WireMock isolation and contract-fixture completeness
 Stubs are never reset today. `PrivacyNoticeApiTestSupport` keeps one `ContractServiceStub` per class, and
@@ -111,6 +122,11 @@ traffic.
 - Add `ContractServiceStub.reset()`, which wraps `resetAll()`, and the same on `CatalogStub` and
   `OidcDiscoveryStub` where they are per-class. Call it from `@AfterEach` in every holder. Any per-class
   baseline stub (e.g. a discovery document) must be re-registered in `@BeforeEach`.
+- **No external hosts (AC 6): `support/NoExternalHostIT`.** Extends `KeycloakAndPostgresTestResource` so every
+  test property provider contributes. It walks the context's `Environment` property sources and asserts every
+  property value that parses as an absolute `http(s)`/`jdbc` URL names a loopback host or the Testcontainers
+  Docker host (`DockerClientFactory.instance().dockerHostIpAddress()`, which is not loopback when the daemon is
+  a sidecar). Update row 6 of `docs/testing.md` to cite it.
 - `serveSlowly` only delays the ecosystem path. Add a bilateral timeout variant and cover it, alongside the six
   ticket fixtures (well-formed bilateral, well-formed ecosystem, missing optional sections, unresolvable offering,
   500, timeout).
@@ -119,8 +135,8 @@ traffic.
   - Do **not** duplicate assertions that existing ITs already pin; the matrix asserts status and resolution state
     only.
 
-**Acceptance:** stubs reset after every test, and all six fixture cases are in one parameterized source. Update
-the External Service Stubbing row in `docs/testing.md`.
+**Acceptance:** stubs reset after every test, all six fixture cases are in one parameterized source, and
+`NoExternalHostIT` passes (AC 6). Update the External Service Stubbing row and row 6 in `docs/testing.md`.
 
 ### Step 5: Response-schema validation in integration tests
 Nothing validates responses against the spec today (AC 18).
@@ -129,6 +145,11 @@ Nothing validates responses against the spec today (AC 18).
   It must support OAS 3.0.3.
 - **Filter: `support/OpenApiResponseValidationFilter`.** A `@ClientFilter` with `@ResponseFilter`, under
   `@Requires(env = "test")`, plus `@Requires` on a property that defaults to enabled in `application-test.yml`.
+  - **Scope it to this service.** A bare `@ClientFilter` matches every Micronaut `HttpClient` in the context,
+    including the application's own outbound clients (`ContractServiceClient`, `SelfDescriptionClient`,
+    `IdentityProviderRegistry`'s discovery and JWKS fetches). The filter validates a response only when the
+    request's scheme, host and port equal `EmbeddedServer.getURL()`; every other exchange passes through
+    untouched and is never a violation.
   - It loads the bundled spec from the `openapi.bundle.file` system property. That property is already passed to
     Failsafe; hoist it to a shared property if needed.
   - It validates **responses only**: status declared, body matches the declared schema, content type including
@@ -137,8 +158,9 @@ Nothing validates responses against the spec today (AC 18).
 - **Surfacing violations.** Record them in a per-context collector that an `@AfterEach` in
   `PostgresTestResource` asserts empty. Throwing inside a client filter gets wrapped into an
   `HttpClientException` and is too easy to swallow.
-- **Unmatched paths.** Test-only probe routes (`KeycloakRoleMatrixIT`, `ProblemResponseIT`) are skipped through
-  an explicit allow-list constant. Any other unmatched path is a violation.
+- **Unmatched paths.** Among requests to the embedded server, test-only probe routes (`KeycloakRoleMatrixIT`,
+  `ProblemResponseIT`) are skipped through an explicit allow-list constant. Any other unmatched path on the
+  embedded server is a violation. The proof test also shows a response from a foreign host is not validated.
 - **Coverage gap.** ITs that use `java.net.http` directly are not validated. Note that in `docs/testing.md`.
 - **Drift.** Fix any drift the filter reveals with the spec as the source of truth. A code-side fix is preferred;
   a spec fix must stay non-breaking (`SpecCompatibilityIT`).
@@ -149,7 +171,8 @@ Nothing validates responses against the spec today (AC 18).
 
 ### Step 6: Complete the concurrency suites
 Existing tests:
-- `UserServiceIT:311` races JIT provisioning, and `:395` races `registerForParticipant` at service level.
+- `UserServiceIT.concurrentFirstRequestsProvisionOnce` races JIT provisioning, and
+  `UserServiceIT.concurrentRegistrationsSettleOnOneRow` races `registerForParticipant` at service level.
 - `ConsentGrantAtomicityIT` races two grants.
 - `PrivacyNoticeConcurrencyIT` races notice generation.
 
@@ -189,9 +212,11 @@ tests #1 and #4 are partial.
   participant probing an unlinked user must get a 404 body identical to the absent case.
 - **Totality.** The test asserts every operation with an id-bearing path parameter has an ownership row, so a new
   route cannot skip the matrix.
-- **The 403/404 asymmetry.** The audit found that terminating a non-party consent returns 403 while reading it
-  returns 404. If the spec documents 404, fix the code to 404. Otherwise record the asymmetry and its reason in
-  `docs/security.md`. Do not change documented behaviour silently.
+- **The 403/404 asymmetry is documented and stays.** Terminating a consent that names the calling participant
+  on neither side returns `403`, while a foreign *user* reading it gets `404`. The `terminateConsent`
+  description in `api/openapi.yaml` specifies the `403` deliberately, with its rationale, and
+  `ConsentLifecycleService.requireParty` implements it. `OwnershipMatrixIT` expects `403` for the FOREIGN
+  terminate row. Do **not** change the code; add a short note to `docs/security.md` that points at the spec text.
 - **`api/IdentitySubstitutionIT` (security #4).**
   - For every secured operation, inject a foreign user or participant identifier into the query string, and into
     the request body as an extra member (`userId`, `participantId`, `identifier`, `subject`).
