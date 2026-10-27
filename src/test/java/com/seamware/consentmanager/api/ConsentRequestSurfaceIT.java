@@ -42,7 +42,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -141,34 +140,10 @@ class ConsentRequestSurfaceIT extends KeycloakAndPostgresTestResource {
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
         Participant caller = register(CALLER);
         notice = seedNotice(CONTRACT_URI, caller, register(COUNTERPARTY), null);
         link(users.save(new User(LINKED_USER, null, null, null)), caller);
         link(users.save(new User(FOREIGN_USER, null, null, null)), register(COUNTERPARTY));
-    }
-
-    /** Removes committed rows: consents first, then affiliations, then the users they name. */
-    @AfterEach
-    void removeCommittedRows() {
-        consents.deleteAll();
-        notices.deleteAll();
-        Stream.of(LINKED_USER, FOREIGN_USER)
-                .forEach(
-                        identifier ->
-                                users.findByIdentifier(identifier)
-                                        .ifPresent(
-                                                user -> {
-                                                    links.findByIdUserId(user.getId())
-                                                            .forEach(links::delete);
-                                                    users.delete(user);
-                                                }));
-        Stream.of(CALLER, COUNTERPARTY, STRANGER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @Test

@@ -21,7 +21,6 @@ import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Property;
 import io.micronaut.context.annotation.Replaces;
 import io.micronaut.context.annotation.Requires;
-import io.micronaut.data.model.Pageable;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
@@ -29,7 +28,6 @@ import java.lang.reflect.Proxy;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -76,29 +74,6 @@ class ParticipantDeregistrationAtomicityIT extends PostgresTestResource {
     @Inject ConsentEventRepository events;
 
     @Inject PrivacyNoticeRepository notices;
-
-    /** Rows committed by this test outlive its transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        participant(SUBJECT_PARTICIPANT)
-                .ifPresent(
-                        subject -> {
-                            consents.findByProviderId(subject.getId(), Pageable.UNPAGED)
-                                    .getContent()
-                                    .forEach(
-                                            consent -> {
-                                                events.findByConsentIdOrderByOccurredAtAsc(
-                                                                consent.getId())
-                                                        .forEach(events::delete);
-                                                consents.delete(consent);
-                                            });
-                            notices.findByProviderIdAndArchivedAtIsNull(subject.getId())
-                                    .forEach(notices::delete);
-                        });
-        users.findByIdentifier(USER_IDENTIFIER).ifPresent(users::delete);
-        participant(SUBJECT_PARTICIPANT).ifPresent(participants::delete);
-        participant(COUNTERPARTY_PARTICIPANT).ifPresent(participants::delete);
-    }
 
     @Test
     @DisplayName("a failure after the consents are terminated rolls the whole cascade back")

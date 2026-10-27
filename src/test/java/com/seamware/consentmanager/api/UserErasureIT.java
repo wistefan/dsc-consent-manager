@@ -45,9 +45,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -127,26 +125,7 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
         identifier = KeycloakTestResource.subject(userToken());
-        // The realm has one dataspace-user, so each case re-establishes "not erased".
-        removeCommittedRows();
         SEEDED_PARTICIPANTS.forEach(this::participant);
-    }
-
-    /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        users.findAll().forEach(user -> removeIfSeeded(user));
-        List<Participant> seeded =
-                SEEDED_PARTICIPANTS.stream()
-                        .map(participants::findByIdentifier)
-                        .flatMap(Optional::stream)
-                        .toList();
-        // Notices name participants on both sides, so all notices go before any participant.
-        seeded.forEach(
-                stored ->
-                        notices.findByProviderIdAndArchivedAtIsNull(stored.getId())
-                                .forEach(notices::delete));
-        seeded.forEach(participants::delete);
     }
 
     @Test
@@ -477,18 +456,6 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
 
     private UUID participantId(String identifier) {
         return participants.findByIdentifier(identifier).orElseThrow().getId();
-    }
-
-    /** Removes a user this test created, consents first because the row they name is retained. */
-    private void removeIfSeeded(User user) {
-        if (!identifier.equals(user.getIdentifier())
-                && !BYSTANDER_IDENTIFIER.equals(user.getIdentifier())
-                && !user.getIdentifier().startsWith(ERASED_PREFIX)) {
-            return;
-        }
-        consents.findByUserId(user.getId(), Pageable.UNPAGED).forEach(consents::delete);
-        links.findByIdUserId(user.getId()).forEach(links::delete);
-        users.delete(user);
     }
 
     private static String userToken() {

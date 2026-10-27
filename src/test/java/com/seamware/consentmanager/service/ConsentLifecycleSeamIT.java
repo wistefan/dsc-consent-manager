@@ -14,7 +14,6 @@ import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.observability.ConsentMetrics;
-import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
@@ -28,12 +27,9 @@ import io.micronaut.core.annotation.NonNull;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -60,15 +56,11 @@ class ConsentLifecycleSeamIT extends PostgresTestResource {
 
     private static final String ISSUER = "https://issuer.test/realms/seam";
 
-    private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
-
     @Inject ConsentLifecycleService lifecycle;
 
     @Inject CapturingChangeLog changeLog;
 
     @Inject ConsentRepository consents;
-
-    @Inject ConsentEventRepository events;
 
     @Inject PrivacyNoticeRepository notices;
 
@@ -76,41 +68,9 @@ class ConsentLifecycleSeamIT extends PostgresTestResource {
 
     @Inject UserRepository users;
 
-    private final List<User> seededUsers = new ArrayList<>();
-
-    private final List<UUID> seededNotices = new ArrayList<>();
-
     @BeforeEach
     void clearCaptures() {
         changeLog.reset();
-    }
-
-    @AfterEach
-    void removeCommittedRows() {
-        seededUsers.forEach(
-                user -> {
-                    consents.findByUserIdAndStatusIn(user.getId(), ALL_STATUSES)
-                            .forEach(
-                                    consent -> {
-                                        events.findByConsentIdOrderByOccurredAtAsc(consent.getId())
-                                                .forEach(events::delete);
-                                        consents.delete(consent);
-                                    });
-                    users.delete(user);
-                });
-        seededUsers.clear();
-        seededNotices.forEach(notices::deleteById);
-        seededNotices.clear();
-    }
-
-    @AfterAll
-    void removeParticipants() {
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -207,7 +167,6 @@ class ConsentLifecycleSeamIT extends PostgresTestResource {
     private User user() {
         User subject =
                 users.save(new User("urn:test:user:seam:" + UUID.randomUUID(), null, null, null));
-        seededUsers.add(subject);
         return subject;
     }
 
@@ -220,7 +179,6 @@ class ConsentLifecycleSeamIT extends PostgresTestResource {
                                 participant(participants, PROVIDER).getId(),
                                 participant(participants, CONSUMER).getId(),
                                 PrivacyNoticeFixtures.emptyPayload()));
-        seededNotices.add(notice.getId());
         return notice;
     }
 

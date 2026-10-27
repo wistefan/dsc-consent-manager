@@ -28,11 +28,8 @@ import com.seamware.consentmanager.support.PrivacyNoticeFixtures;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -83,8 +80,6 @@ class ConsentLifecycleIT extends PostgresTestResource {
     /** How a relaying catalog names itself, which is the one thing a relayed grant reads by. */
     private static final String CATALOG_ACTOR = "catalog:" + ISSUER + ":" + CATALOG_SUBJECT;
 
-    private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
-
     @Inject ConsentLifecycleService lifecycle;
 
     @Inject ConsentRepository consents;
@@ -96,39 +91,6 @@ class ConsentLifecycleIT extends PostgresTestResource {
     @Inject ParticipantRepository participants;
 
     @Inject UserRepository users;
-
-    private final List<User> seededUsers = new ArrayList<>();
-
-    private final List<UUID> seededNotices = new ArrayList<>();
-
-    /** Rows these cases commit outlive their transaction, and a notice holds its parties. */
-    @AfterEach
-    void removeCommittedRows() {
-        seededUsers.forEach(
-                user -> {
-                    consents.findByUserIdAndStatusIn(user.getId(), ALL_STATUSES)
-                            .forEach(
-                                    consent -> {
-                                        events.findByConsentIdOrderByOccurredAtAsc(consent.getId())
-                                                .forEach(events::delete);
-                                        consents.delete(consent);
-                                    });
-                    users.delete(user);
-                });
-        seededUsers.clear();
-        seededNotices.forEach(notices::deleteById);
-        seededNotices.clear();
-    }
-
-    @AfterAll
-    void removeParticipants() {
-        List.of(PROVIDER, CONSUMER, STRANGER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
-    }
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Move.class)
@@ -538,7 +500,6 @@ class ConsentLifecycleIT extends PostgresTestResource {
             notice.setArchivedAt(Instant.now());
         }
         PrivacyNotice saved = notices.save(notice);
-        seededNotices.add(saved.getId());
         return saved;
     }
 
@@ -582,7 +543,6 @@ class ConsentLifecycleIT extends PostgresTestResource {
                                 null,
                                 null,
                                 null));
-        seededUsers.add(subject);
         return subject;
     }
 
@@ -595,7 +555,6 @@ class ConsentLifecycleIT extends PostgresTestResource {
                                 participant(participants, PROVIDER).getId(),
                                 participant(participants, CONSUMER).getId(),
                                 PrivacyNoticeFixtures.emptyPayload()));
-        seededNotices.add(notice.getId());
         return notice;
     }
 

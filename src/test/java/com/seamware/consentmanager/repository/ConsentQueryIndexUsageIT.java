@@ -18,11 +18,11 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -65,6 +65,8 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
     private static final String GRANT_INDEX = "uq_consents_granted_per_user_notice";
 
     private static final String PRIMARY_KEY = "consents_pkey";
+
+    private static final String GRANTED = "'GRANTED'";
 
     /** A lineage entry point no seeded row has, so the walk starts from the probe's consent. */
     private static final String DETACHED_START = "'00000000-0000-0000-0000-000000000000'::uuid";
@@ -118,16 +120,6 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
             """
                     .formatted(PREFIX, PARTICIPANTS, USERS, CONSENTS);
 
-    private static final String UNSEED =
-            """
-            DELETE FROM consents WHERE user_id IN
-                (SELECT id FROM users WHERE identifier LIKE '%1$s%%');
-            DELETE FROM privacy_notices WHERE contract_uri LIKE '%1$s%%';
-            DELETE FROM users WHERE identifier LIKE '%1$s%%';
-            DELETE FROM participants WHERE identifier LIKE '%1$s%%';
-            """
-                    .formatted(PREFIX);
-
     @Inject DataSource dataSource;
 
     @Inject DataSourceResolver dataSources;
@@ -136,123 +128,178 @@ class ConsentQueryIndexUsageIT extends PostgresTestResource {
 
     private Probe probe;
 
-    @BeforeAll
+    /** Seeds per method, since {@code DatabaseReset} empties the schema after each one. */
+    @BeforeEach
     void seed() throws SQLException {
-        execute(UNSEED);
         execute(SEED);
         probe = probe();
     }
 
-    @AfterAll
-    void unseed() throws SQLException {
-        execute(UNSEED);
-    }
-
-    /** Each query a consent read issues; its plan must name one index of every listed set. */
+    /**
+     * Each query a consent read issues; its plan must name one index of every listed set. The SQL
+     * is bound to the seeded probe per method, because the arguments are built before any seed.
+     */
     List<Arguments> queries() {
-        String subject = uuid(probe.userId());
-        String participant = uuid(probe.participantId());
-        String notice = uuid(probe.noticeId());
-        String consent = uuid(probe.consentId());
-        String granted = "'GRANTED'";
         return List.of(
-                Arguments.of(
+                plan(
                         "subject listing",
-                        positional(query("findByUserId"), subject) + NEWEST_FIRST_PAGE,
+                        bound ->
+                                positional(query("findByUserId"), bound.subject())
+                                        + NEWEST_FIRST_PAGE,
                         List.of(Set.of(USER_INDEX))),
-                Arguments.of(
+                plan(
                         "subject listing count",
-                        positional(countQuery("findByUserId"), subject),
+                        bound -> positional(countQuery("findByUserId"), bound.subject()),
                         List.of(Set.of(USER_INDEX))),
-                Arguments.of(
+                plan(
                         "subject listing by status",
-                        positional(query("findByUserIdAndStatusIn"), subject, granted)
-                                + NEWEST_FIRST_PAGE,
+                        bound ->
+                                positional(
+                                                query("findByUserIdAndStatusIn"),
+                                                bound.subject(),
+                                                GRANTED)
+                                        + NEWEST_FIRST_PAGE,
                         List.of(BY_SUBJECT)),
-                Arguments.of(
+                plan(
                         "subject listing by notice",
-                        positional(query("findByUserIdAndPrivacyNoticeId"), subject, notice)
-                                + NEWEST_FIRST_PAGE,
+                        bound ->
+                                positional(
+                                                query("findByUserIdAndPrivacyNoticeId"),
+                                                bound.subject(),
+                                                bound.notice())
+                                        + NEWEST_FIRST_PAGE,
                         List.of(BY_SUBJECT)),
-                Arguments.of(
+                plan(
                         "subject listing by notice count",
-                        positional(countQuery("findByUserIdAndPrivacyNoticeId"), subject, notice),
+                        bound ->
+                                positional(
+                                        countQuery("findByUserIdAndPrivacyNoticeId"),
+                                        bound.subject(),
+                                        bound.notice()),
                         List.of(BY_SUBJECT)),
-                Arguments.of(
+                plan(
                         "subject listing by status and notice",
-                        positional(
-                                        query("findByUserIdAndStatusInAndPrivacyNoticeId"),
-                                        subject,
-                                        granted,
-                                        notice)
-                                + NEWEST_FIRST_PAGE,
+                        bound ->
+                                positional(
+                                                query("findByUserIdAndStatusInAndPrivacyNoticeId"),
+                                                bound.subject(),
+                                                GRANTED,
+                                                bound.notice())
+                                        + NEWEST_FIRST_PAGE,
                         List.of(BY_SUBJECT)),
-                Arguments.of(
+                plan(
                         "subject listing by status and notice count",
-                        positional(
-                                countQuery("findByUserIdAndStatusInAndPrivacyNoticeId"),
-                                subject,
-                                granted,
-                                notice),
+                        bound ->
+                                positional(
+                                        countQuery("findByUserIdAndStatusInAndPrivacyNoticeId"),
+                                        bound.subject(),
+                                        GRANTED,
+                                        bound.notice()),
                         List.of(BY_SUBJECT)),
-                Arguments.of(
+                plan(
                         "subject lineage",
-                        named(
-                                query("findLineageForUser"),
-                                Map.of(
-                                        "startId", DETACHED_START,
-                                        "parentId", consent,
-                                        "userId", subject,
-                                        "maxDepth", LINEAGE_DEPTH)),
+                        bound ->
+                                named(
+                                        query("findLineageForUser"),
+                                        Map.of(
+                                                "startId",
+                                                DETACHED_START,
+                                                "parentId",
+                                                bound.consent(),
+                                                "userId",
+                                                bound.subject(),
+                                                "maxDepth",
+                                                LINEAGE_DEPTH)),
                         List.of(Set.of(PRIMARY_KEY))),
-                Arguments.of(
+                plan(
                         "participant lineage",
-                        named(
-                                query("findLineageForParticipant"),
-                                Map.of(
-                                        "startId", DETACHED_START,
-                                        "parentId", consent,
-                                        "participantId", participant,
-                                        "maxDepth", LINEAGE_DEPTH)),
+                        bound ->
+                                named(
+                                        query("findLineageForParticipant"),
+                                        Map.of(
+                                                "startId",
+                                                DETACHED_START,
+                                                "parentId",
+                                                bound.consent(),
+                                                "participantId",
+                                                bound.participant(),
+                                                "maxDepth",
+                                                LINEAGE_DEPTH)),
                         List.of(Set.of(PRIMARY_KEY))),
-                Arguments.of(
+                plan(
                         "participant listing",
-                        named(query("findForParticipant"), participantFilters(participant, "NULL"))
-                                + NEWEST_FIRST_PAGE,
+                        bound ->
+                                named(
+                                                query("findForParticipant"),
+                                                participantFilters(bound.participant(), "NULL"))
+                                        + NEWEST_FIRST_PAGE,
                         List.of(Set.of(PROVIDER_INDEX), Set.of(CONSUMER_INDEX))),
-                Arguments.of(
+                plan(
                         "participant listing count",
-                        named(
-                                countQuery("findForParticipant"),
-                                participantFilters(participant, "NULL")),
+                        bound ->
+                                named(
+                                        countQuery("findForParticipant"),
+                                        participantFilters(bound.participant(), "NULL")),
                         List.of(Set.of(PROVIDER_INDEX), Set.of(CONSUMER_INDEX))),
-                Arguments.of(
+                plan(
                         "participant listing for one subject",
-                        named(query("findForParticipant"), participantFilters(participant, subject))
-                                + NEWEST_FIRST_PAGE,
+                        bound ->
+                                named(
+                                                query("findForParticipant"),
+                                                participantFilters(
+                                                        bound.participant(), bound.subject()))
+                                        + NEWEST_FIRST_PAGE,
                         List.of(BY_SUBJECT)),
-                Arguments.of(
+                plan(
                         "validity check",
-                        named(
-                                query("findForParticipantBySubjectAndNoticeAndStatus"),
-                                Map.of(
-                                        "userIdentifier", "'" + probe.userIdentifier() + "'",
-                                        "privacyNoticeId", notice,
-                                        "status", granted,
-                                        "participantId", participant)),
+                        bound ->
+                                named(
+                                        query("findForParticipantBySubjectAndNoticeAndStatus"),
+                                        Map.of(
+                                                "userIdentifier",
+                                                "'" + bound.userIdentifier() + "'",
+                                                "privacyNoticeId",
+                                                bound.notice(),
+                                                "status",
+                                                GRANTED,
+                                                "participantId",
+                                                bound.participant())),
                         List.of(Set.of(USER_IDENTIFIER_INDEX), BY_SUBJECT)));
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("queries")
     @DisplayName("is served by an index scan")
-    void usesAnIndex(String name, String sql, List<Set<String>> indexes) throws SQLException {
-        String plan = explain(sql);
+    void usesAnIndex(String name, Function<Bound, String> sql, List<Set<String>> indexes)
+            throws SQLException {
+        String plan = explain(sql.apply(bound(probe)));
 
         assertThat(plan).doesNotContain(SEQ_SCAN_ON_CONSENTS, SEQ_SCAN_ON_USERS);
         indexes.forEach(
                 alternatives ->
                         assertThat(plan).containsAnyOf(alternatives.toArray(String[]::new)));
+    }
+
+    private static Arguments plan(
+            String name, Function<Bound, String> sql, List<Set<String>> indexes) {
+        return Arguments.of(name, sql, indexes);
+    }
+
+    /** The probe's values as SQL literals, ready to splice into a query. */
+    private record Bound(
+            String subject,
+            String participant,
+            String notice,
+            String consent,
+            String userIdentifier) {}
+
+    private static Bound bound(Probe probe) {
+        return new Bound(
+                uuid(probe.userId()),
+                uuid(probe.participantId()),
+                uuid(probe.noticeId()),
+                uuid(probe.consentId()),
+                probe.userIdentifier());
     }
 
     private static Map<String, String> participantFilters(String participant, String userId) {

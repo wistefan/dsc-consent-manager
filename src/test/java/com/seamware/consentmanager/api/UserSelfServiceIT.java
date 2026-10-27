@@ -32,7 +32,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -137,8 +136,6 @@ class UserSelfServiceIT extends KeycloakAndPostgresTestResource {
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
         identifier = KeycloakTestResource.subject(userToken());
-        // The realm has one dataspace-user, so each case re-establishes "not registered".
-        removeCommittedRows();
         if (!participants.existsByIdentifier(LINKED_PARTICIPANT)) {
             participants.save(
                     new Participant(
@@ -149,18 +146,6 @@ class UserSelfServiceIT extends KeycloakAndPostgresTestResource {
                             Map.of(),
                             null));
         }
-    }
-
-    /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        storedUser()
-                .ifPresent(
-                        user -> {
-                            links.findByIdUserId(user.getId()).forEach(links::delete);
-                            users.delete(user);
-                        });
-        participants.findByIdentifier(LINKED_PARTICIPANT).ifPresent(participants::delete);
     }
 
     @Test

@@ -24,10 +24,8 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -75,18 +73,6 @@ class PrivacyNoticeConcurrencyIT extends PostgresTestResource {
     @AfterAll
     static void stopContractService() {
         CONTRACTS.close();
-    }
-
-    /** A leftover notice would block later suites' participant cleanup via the RESTRICT key. */
-    @AfterEach
-    void removeCommittedRows() {
-        notices.deleteAll();
-        Stream.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @Test

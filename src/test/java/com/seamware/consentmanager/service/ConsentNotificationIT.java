@@ -50,7 +50,6 @@ import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -143,10 +142,6 @@ class ConsentNotificationIT extends KeycloakAndPostgresTestResource {
     @Client("/")
     HttpClient client;
 
-    private final List<UUID> seededUsers = new ArrayList<>();
-
-    private final List<UUID> seededNotices = new ArrayList<>();
-
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
 
     private Participant caller;
@@ -222,7 +217,6 @@ class ConsentNotificationIT extends KeycloakAndPostgresTestResource {
     @BeforeEach
     void seedTheNoticeAndCaptureTheCallSites() {
         notifier.reset();
-        removeCommittedRows();
         caller = participant(participants, CALLER);
         notice = notice(CONTRACT_URI, caller, participant(participants, COUNTERPARTY));
         logged.list.clear();
@@ -230,31 +224,10 @@ class ConsentNotificationIT extends KeycloakAndPostgresTestResource {
         CALL_SITES.forEach(callSite -> logger(callSite).addAppender(logged));
     }
 
-    /** Rows these cases commit outlive the transaction; consents go first, holding the rest. */
+    /** Detaches the log capture the seeding attached. */
     @AfterEach
-    void removeCommittedRows() {
+    void detachLogCapture() {
         CALL_SITES.forEach(callSite -> logger(callSite).detachAppender(logged));
-        seededUsers.forEach(
-                userId -> {
-                    consents.findByUserIdAndStatusIn(userId, ALL_STATUSES)
-                            .forEach(
-                                    consent -> {
-                                        events.findByConsentIdOrderByOccurredAtAsc(consent.getId())
-                                                .forEach(events::delete);
-                                        consents.delete(consent);
-                                    });
-                    links.deleteByIdUserId(userId);
-                    users.deleteById(userId);
-                });
-        seededUsers.clear();
-        seededNotices.forEach(notices::deleteById);
-        seededNotices.clear();
-        Stream.of(CALLER, COUNTERPARTY, STRANGER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest(name = "{0}, email {1}")
@@ -428,7 +401,6 @@ class ConsentNotificationIT extends KeycloakAndPostgresTestResource {
                                 email,
                                 null,
                                 null));
-        seededUsers.add(subject.getId());
         links.save(new UserParticipant(subject.getId(), caller.getId(), LOCAL_IDENTIFIER));
         return subject;
     }
@@ -456,7 +428,6 @@ class ConsentNotificationIT extends KeycloakAndPostgresTestResource {
                                 provider.getId(),
                                 consumer.getId(),
                                 PrivacyNoticeFixtures.emptyPayload()));
-        seededNotices.add(saved.getId());
         return saved;
     }
 

@@ -22,12 +22,25 @@ survives edits to the cited files. Grep a name before citing it.
 
   | The IT needs | Extend | Annotate |
   |---|---|---|
-  | A database, security off (`application-test.yml` default) | `PostgresTestResource` | `@MicronautTest` |
+  | A database, security off (`application-test.yml` default) | `PostgresTestResource` | `@MicronautTest(transactional = false)` |
   | A database and real tokens | `KeycloakAndPostgresTestResource`, which re-enables `micronaut.security.enabled` | `@MicronautTest(transactional = false)` |
   | The privacy-notice API with a Contract Service stub | `PrivacyNoticeApiTestSupport` | `@MicronautTest(transactional = false)` |
 
-  An authenticated IT must be `transactional = false`. Its writes go through HTTP and commit on the
-  server's own connections, so a test transaction would isolate nothing.
+  Every IT on these bases must be `transactional = false`. An HTTP write commits on the server's own
+  connections, so a test transaction would isolate nothing. Worse, Micronaut Test rolls it back
+  only after `@AfterEach`, so its locks would block the schema reset below. Read the database
+  outside a transaction through `DataSourceResolver.resolve(dataSource)`, because the injected
+  proxy refuses a connection outside one.
+- **Schema reset after every method.** `PostgresTestResource.resetSharedSchema` is a `final`
+  `@AfterEach`. It calls `support/DatabaseReset`, which issues one
+  `TRUNCATE … RESTART IDENTITY` over every `public` table except `flyway_schema_history`. It runs
+  on its own JDBC connection, outside the Micronaut context. A subclass's own `@AfterEach` runs
+  first. Seed in `@BeforeEach`, never in `@BeforeAll` or a per-class cache: rows from method 1 are
+  gone by method 2. An in-memory result computed once per class may be kept, as `LogLeakIT` does.
+  Never delete rows by hand. The reset sets `lock_timeout` (`DatabaseReset.LOCK_TIMEOUT`, 5 s)
+  before truncating. A test that still holds a lock, such as an open transaction or a post-commit
+  task still running, therefore fails with a lock-timeout error from `DatabaseReset` instead of
+  hanging the suite. `support/SchemaIsolationIT` is the canary.
 - **A token per role.** `KeycloakTestResource.accessToken(RealmPrincipal.USER | PARTICIPANT |
   CATALOG | OUTSIDER)` issues a real token for the matching imported realm user. A `PARTICIPANT`
   token carries `KeycloakTestResource.PARTICIPANT_IDENTIFIER`. Commit a `participants` row with
@@ -65,7 +78,7 @@ of it, so check the evidence against the ticket text, not against the short form
 | 2 | Real PostgreSQL 16 in containers | met | `PostgresTestResource.POSTGRES_IMAGE` is `postgres:16`. Every database IT runs on it, apart from the two exceptions under Decisions, which use the same constant. |
 | 3 | "Integration tests authenticate with real tokens from Testcontainers Keycloak" | met | `KeycloakAndPostgresTestResource` re-enables security and is the base of every authenticated IT, `PrivacyNoticeApiTestSupport` included. `KeycloakTestResource.accessToken(RealmPrincipal…)` obtains each token through a password grant against the imported realm. Per-test evidence: `KeycloakRoleMatrixIT.roleMatrixHolds`, `KeycloakKeyRotationIT`. |
 | 4 | Containers shared across test classes | met | `PostgresTestResource` and `KeycloakTestResource` are static JVM-wide singletons. `FlywayConcurrentMigrationIT` and `DatasourceOutageReadinessIT` are the deliberate per-class exceptions listed under Decisions. |
-| 5 | Database reset between test methods | planned — Step 3 | Today each IT deletes its own rows (`removeCommittedRows` and similar). |
+| 5 | Database reset between test methods | met | `PostgresTestResource.resetSharedSchema` (`@AfterEach`, `final`) truncates every application table through `DatabaseReset`. `SchemaIsolationIT.nextMethodStartsEmpty` asserts that rows committed by one method are gone in the next. No IT on the shared bases runs `transactional = true`, and none seeds in `@BeforeAll`. |
 | 6 | "No test makes a real outbound network call" | partial — Step 4 | The criterion is about runtime traffic. Today it is met by inspection only: every configured outbound target is a WireMock stub on `localhost` or a Testcontainers container. Step 4's `NoExternalHostIT` asserts that over every property source of the test context. That is still a configuration check, standing in for runtime traffic. |
 | 7 | Consent state-machine matrix | met | `ConsentStateMachineTest.everyPairIsPermittedOrRefusedAsTheTableSays`. |
 | 8 | Endpoint × role (× ownership) authorization matrix | partial | Endpoint × role: `EndpointRoleMatrixIT.roleMatrixHolds`, total through `everySpecifiedOperationIsCovered`; `KeycloakRoleMatrixIT.roleMatrixHolds`. The ownership dimension is planned — Step 7 (`OwnershipMatrixIT`). |
@@ -73,7 +86,7 @@ of it, so check the evidence against the ticket text, not against the short form
 | 10–12 | Concurrency: registration, grant, notice generation | partial | `UserServiceIT.concurrentFirstRequestsProvisionOnce`, `UserServiceIT.concurrentRegistrationsSettleOnOneRow`, `ConsentGrantAtomicityIT`, `PrivacyNoticeConcurrencyIT.concurrentGenerationYieldsExactlyOneActiveNotice`. Step 6 adds HTTP-level registration, re-grant races and raw-SQL final-state assertions. |
 | 13 | "All eight security tests pass" | partial | This row is the aggregate of the [Security tests](#security-tests) table and takes its status from that table. #1, #3 and #4 are partial until Step 7. |
 | 14 | Signing-key rotation at the identity provider | met | `KeycloakKeyRotationIT.rotatedSigningKeyIsPickedUpWithoutARestart`. |
-| 15 | Flyway migrations "verified against an empty database once per suite" | partial — Step 3 | Today this rests on the singleton `PostgresTestResource`: its empty container is migrated once, at the first context start, and nothing asserts that. `FlywayConcurrentMigrationIT.concurrentReplicasApplyEachVersionOnce` proves migration on an empty database, but on its own per-class containers, not the suite's. Step 3's `SchemaIsolationIT` asserts that the shared container's `flyway_schema_history` lists every migration as successful. |
+| 15 | Flyway migrations "verified against an empty database once per suite" | met | The singleton `PostgresTestResource` container starts empty and is migrated at the first context start. `SchemaIsolationIT.everyMigrationAppliedOnce` asserts that its `flyway_schema_history` lists every file in `db/migration/` exactly once, and as successful. `DatabaseReset` never truncates that table. `FlywayConcurrentMigrationIT.concurrentReplicasApplyEachVersionOnce` additionally proves concurrent migration of an empty database, on its own containers. |
 | 16 | No secret or personal data in logs | met | `LogLeakIT`, `KeyMaterialLeakIT`. Step 8 widens the forbidden values and scenarios. |
 | 17 | Branch coverage on security-critical classes | planned — Step 11 | |
 | 18 | Responses validated against the spec | planned — Step 5 | Nothing validates responses against the spec today. |

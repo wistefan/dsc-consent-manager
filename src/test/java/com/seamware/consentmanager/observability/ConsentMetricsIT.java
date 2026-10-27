@@ -7,7 +7,6 @@ import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentStatus;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
-import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
@@ -34,7 +33,6 @@ import io.micronaut.http.client.exceptions.HttpClientResponseException;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -51,7 +49,6 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -139,9 +136,6 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
 
     /** The subject's global identifier, resolved once because reading it costs a token request. */
     private String identifier;
-
-    /** Every row the subject was provisioned as, erased ones included, so each can be removed. */
-    private final List<UUID> provisioned = new ArrayList<>();
 
     /** The notice every consent of a case is recorded against. */
     private PrivacyNotice notice;
@@ -288,7 +282,6 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
         identifier = KeycloakTestResource.subject(userToken());
-        removeCommittedRows();
         Participant caller = ConsentFixtures.participant(participants, CALLER_PARTICIPANT);
         Participant counterparty = ConsentFixtures.participant(participants, COUNTERPARTY);
         notice =
@@ -301,29 +294,6 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
                                 PrivacyNoticeFixtures.emptyPayload()));
         subject = provisionTheSubject();
         links.save(new UserParticipant(subject, caller.getId(), LOCAL_IDENTIFIER));
-    }
-
-    /**
-     * Removes committed rows: consents first ({@code ON DELETE RESTRICT}), and an erased subject,
-     * surviving under its pseudonym, by id.
-     */
-    @AfterEach
-    void removeCommittedRows() {
-        consents.deleteAll();
-        notices.deleteAll();
-        users.findByIdentifier(identifier).map(User::getId).ifPresent(provisioned::add);
-        provisioned.forEach(
-                id -> {
-                    links.findByIdUserId(id).forEach(links::delete);
-                    users.deleteById(id);
-                });
-        provisioned.clear();
-        Stream.of(CALLER_PARTICIPANT, COUNTERPARTY)
-                .forEach(
-                        party ->
-                                participants
-                                        .findByIdentifier(party)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -526,9 +496,7 @@ class ConsentMetricsIT extends KeycloakAndPostgresTestResource {
     /** Provisions the subject from its token and returns the row it was given. */
     private UUID provisionTheSubject() {
         expectCode(exchange(HttpRequest.GET(PATH_USERS_ME), userToken()), HttpStatus.OK);
-        UUID id = users.findByIdentifier(identifier).orElseThrow().getId();
-        provisioned.add(id);
-        return id;
+        return users.findByIdentifier(identifier).orElseThrow().getId();
     }
 
     private void expectCode(HttpResponse<String> response, HttpStatus expected) {

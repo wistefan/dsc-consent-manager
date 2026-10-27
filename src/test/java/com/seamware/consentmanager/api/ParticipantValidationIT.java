@@ -26,7 +26,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -141,13 +140,6 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
-    }
-
-    /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        participants.findByIdentifier(CALLER_PARTICIPANT).ifPresent(participants::delete);
     }
 
     @ParameterizedTest(name = "{0} refuses {1}")
@@ -338,7 +330,6 @@ class ParticipantValidationIT extends KeycloakAndPostgresTestResource {
 
     /** Puts the caller in the state the route needs: unregistered or registered. */
     private void prepare(Route route) {
-        removeCommittedRows();
         if (route == Route.UPDATE) {
             participants.save(
                     new Participant(

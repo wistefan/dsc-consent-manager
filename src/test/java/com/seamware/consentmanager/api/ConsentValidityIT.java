@@ -42,7 +42,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -146,7 +145,6 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
         notice =
                 notices.save(
                         new PrivacyNotice(
@@ -156,20 +154,6 @@ class ConsentValidityIT extends KeycloakAndPostgresTestResource {
                                 register(COUNTERPARTY).getId(),
                                 PrivacyNoticeFixtures.emptyPayload()));
         subject = users.save(new User(SUBJECT, null, null, null));
-    }
-
-    /** Removes committed rows; consents go first because they restrict their user and parties. */
-    @AfterEach
-    void removeCommittedRows() {
-        consents.deleteAll();
-        notices.deleteAll();
-        users.findByIdentifier(SUBJECT).ifPresent(users::delete);
-        List.of(CALLER, COUNTERPARTY, OUTSIDER_PROVIDER, OUTSIDER_CONSUMER)
-                .forEach(
-                        party ->
-                                participants
-                                        .findByIdentifier(party)
-                                        .ifPresent(participants::delete));
     }
 
     /** The side of a notice the caller is party to; both halves of the scoping predicate. */

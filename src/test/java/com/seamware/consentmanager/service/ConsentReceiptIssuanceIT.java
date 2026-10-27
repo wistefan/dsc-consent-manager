@@ -35,7 +35,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -127,21 +126,6 @@ class ConsentReceiptIssuanceIT extends PostgresTestResource {
                                         null,
                                         null,
                                         null)));
-    }
-
-    /** Deleting a consent cascades its events and its receipt. */
-    @AfterEach
-    void removeCommittedRows() {
-        consents.findByUserIdAndStatusIn(subject.getId(), List.of(ConsentStatus.values()))
-                .forEach(consents::delete);
-        users.delete(subject);
-        notices.deleteById(notice.getId());
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest

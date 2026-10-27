@@ -23,12 +23,9 @@ import com.seamware.consentmanager.support.PostgresTestResource;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -59,8 +56,6 @@ class ConsentServiceIT extends PostgresTestResource {
     /** Outside both notice lists, so an election naming it can only be refused. */
     private static final String UNDECLARED = "marketing";
 
-    private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
-
     /** What {@code consent_events.event_type} reads for a move no actor asked for. */
     private static final String SYSTEM_EVENT_TYPE = "system";
 
@@ -76,44 +71,11 @@ class ConsentServiceIT extends PostgresTestResource {
 
     @Inject UserRepository users;
 
-    private final List<User> seededUsers = new ArrayList<>();
-
-    private final List<UUID> seededNotices = new ArrayList<>();
-
     /** Decisions a subject can reach this service with, and the trail each leaves. */
     static List<Arguments> decisions() {
         return List.of(
                 Arguments.of(ConsentStatus.GRANTED, true, ConsentEventState.CONSENT_GIVEN),
                 Arguments.of(ConsentStatus.REFUSED, false, ConsentEventState.CONSENT_REFUSED));
-    }
-
-    /** Rows this suite commits outlive its transaction, and a notice holds its parties. */
-    @AfterEach
-    void removeCommittedRows() {
-        seededUsers.forEach(
-                user -> {
-                    consents.findByUserIdAndStatusIn(user.getId(), ALL_STATUSES)
-                            .forEach(
-                                    consent -> {
-                                        events.findByConsentIdOrderByOccurredAtAsc(consent.getId())
-                                                .forEach(events::delete);
-                                        consents.delete(consent);
-                                    });
-                    users.delete(user);
-                });
-        seededUsers.clear();
-        seededNotices.forEach(notices::deleteById);
-        seededNotices.clear();
-    }
-
-    @AfterAll
-    void removeParticipants() {
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest(name = "{0} is stored with consented={1} and one {2} event")
@@ -494,7 +456,6 @@ class ConsentServiceIT extends PostgresTestResource {
                                 null,
                                 null,
                                 null));
-        seededUsers.add(subject);
         return subject;
     }
 
@@ -511,7 +472,6 @@ class ConsentServiceIT extends PostgresTestResource {
                                 participant(PROVIDER).getId(),
                                 consumerId,
                                 payload));
-        seededNotices.add(notice.getId());
         return notice;
     }
 

@@ -30,7 +30,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -79,16 +78,6 @@ class ContractDiscoveryIT extends PrivacyNoticeApiTestSupport {
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
         subject =
                 KeycloakTestResource.subject(KeycloakTestResource.accessToken(RealmPrincipal.USER));
-    }
-
-    @AfterEach
-    void removeTheSubject() {
-        users.findByIdentifier(subject)
-                .ifPresent(
-                        user -> {
-                            links.findByIdUserId(user.getId()).forEach(links::delete);
-                            users.delete(user);
-                        });
     }
 
     @Test

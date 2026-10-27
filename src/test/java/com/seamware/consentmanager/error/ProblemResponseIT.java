@@ -44,7 +44,7 @@ import org.slf4j.LoggerFactory;
  * Drives every problem-detail rendering over a real server, through probe routes that exist only
  * for this test, catching an unselected handler or a body rendered as {@code application/json}.
  */
-@MicronautTest
+@MicronautTest(transactional = false)
 @Property(name = ProblemResponseIT.PROBE_ENABLED, value = "true")
 @DisplayName("problem details over HTTP")
 class ProblemResponseIT extends PostgresTestResource {
