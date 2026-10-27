@@ -1,7 +1,7 @@
 # Contract Service stub (local development)
 
-`compose.yaml` runs `wiremock/wiremock` with this directory as its root, and points the app's
-`CONTRACT_SERVICE_URL` at it. It answers the two endpoints `ContractServiceClient` calls:
+`compose.yaml` runs `wiremock/wiremock` with this directory as its root, and points the
+`consent-manager` service's `CONTRACT_SERVICE_URL` at it. It answers the two endpoints `ContractServiceClient` calls:
 
 | Request | Answer |
 | --- | --- |
