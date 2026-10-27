@@ -90,11 +90,25 @@ of it, so check the evidence against the ticket text, not against the short form
 | 15 | Flyway migrations "verified against an empty database once per suite" | met | The singleton `PostgresTestResource` container starts empty and is migrated at the first context start. `SchemaIsolationIT.everyMigrationAppliedOnce` asserts that its `flyway_schema_history` lists every file in `db/migration/` exactly once, and as successful. `DatabaseReset` never truncates that table. `FlywayConcurrentMigrationIT.concurrentReplicasApplyEachVersionOnce` additionally proves concurrent migration of an empty database, on its own containers. |
 | 16 | No secret or personal data in logs | met | `LogLeakIT`, `KeyMaterialLeakIT`. Step 8 widens the forbidden values and scenarios. |
 | 17 | Branch coverage on security-critical classes | planned — Step 11 | |
-| 18 | Responses validated against the spec | planned — Step 5 | Nothing validates responses against the spec today. |
+| 18 | Responses validated against the spec | met | `support/OpenApiResponseValidationFilter` checks every response the embedded server returns to a Micronaut test client against `target/openapi-bundle/openapi.yaml`: declared status, body schema and content type, `application/problem+json` included. Every operation declares a `default` error response, so a status below 400 must be named explicitly. A route or method the spec does not publish may only be refused with a 4xx, which the role-matrix and principal-resolution probes of unpublished routes rely on. Violations are collected in `ResponseViolations` and `PostgresTestResource.assertResponsesMatchSpec` (`@AfterEach`, `final`) fails the test. Requests are not validated. Exchanges with other hosts or ports, the test probe routes, and the service's non-spec origin routes (management endpoints, `*.yaml`, `/swagger-ui/**`) are skipped; `/.well-known/jwks.json` is validated. `OpenApiResponseValidationFilterTest` proves each rule. See [Response validation coverage](#response-validation-coverage) for what is not covered. |
 | 19 | Served spec equals the authored spec | met | `OpenApiServingIT.servesTheBundleUnchanged` compares the served document with `target/openapi-bundle/openapi.yaml`, the bundle of the authored spec. |
 | 20 | Spec lint and breaking-change check as build steps | partial | `SpecLintIT` and `SpecCompatibilityIT` run inside `./mvnw verify`. There is no CI workflow yet; planned — Step 12. |
 | 21 | Spec and code agree on security | met | `SpecSecurityConsistencyTest`. |
 | 22 | Deterministic suite | planned — Step 12 | Repeated `./mvnw clean verify` runs, with the run count and outcome recorded here. Compare the merged BRANCH ratio across runs as well as the test summaries: the gate's margin is 0.004 (0.454 against 0.45), so a run-to-run branch swing would make the gate itself flaky. |
+
+### Response validation coverage
+
+The response check reaches only Micronaut `HttpClient` exchanges with the embedded server's API
+port, and only a test on `PostgresTestResource` asserts the collector. Not covered:
+
+- Tests that call the service through `java.net.http`. None does today;
+  `KeycloakTestResource` uses it only to fetch tokens from Keycloak.
+- ITs that do not extend `PostgresTestResource`: `ContractCacheIT`, `SelfDescriptionCacheIT`,
+  `SmtpUserNotificationServiceIT`, `ManagementEndpointSecurityIT`, `DatasourceOutageReadinessIT`,
+  `FlywayConcurrentMigrationIT`, `SpecLintIT` and `SpecCompatibilityIT`. Of these, only
+  `ManagementEndpointSecurityIT` and `DatasourceOutageReadinessIT` call the service over HTTP, and
+  only its management routes, which are outside the spec. `TokenSignatureEnforcementTest` starts
+  its own servers and is likewise unchecked.
 
 ### Security tests
 
