@@ -15,6 +15,9 @@ import java.text.ParseException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
+import java.util.function.Supplier;
+import java.util.stream.IntStream;
 
 /**
  * Testcontainers Keycloak fixture issuing real tokens, and the trust-list properties naming it. A
@@ -92,21 +95,23 @@ public final class KeycloakTestResource {
      */
     public enum RealmPrincipal {
         /** Holds {@code dataspace-user}, mapped to this service's {@code USER} role. */
-        USER("user-principal"),
+        USER("user-principal", RAW_USER_ROLE),
 
         /** Holds {@code dataspace-participant}, and carries a {@code participant_id} claim. */
-        PARTICIPANT("participant-principal"),
+        PARTICIPANT("participant-principal", RAW_PARTICIPANT_ROLE),
 
         /** Holds {@code dataspace-catalog}, mapped to this service's {@code CATALOG} role. */
-        CATALOG("catalog-principal"),
+        CATALOG("catalog-principal", RAW_CATALOG_ROLE),
 
         /** Holds {@code dataspace-outsider}, which the trust list maps to no role at all. */
-        OUTSIDER("outsider-principal");
+        OUTSIDER("outsider-principal", RAW_OUTSIDER_ROLE);
 
         private final String username;
+        private final String rawRole;
 
-        RealmPrincipal(String username) {
+        RealmPrincipal(String username, String rawRole) {
             this.username = username;
+            this.rawRole = rawRole;
         }
 
         /** The {@code username} as declared in the realm import file. */
@@ -121,6 +126,16 @@ public final class KeycloakTestResource {
     private static final String RAW_PARTICIPANT_ROLE = "dataspace-participant";
 
     private static final String RAW_CATALOG_ROLE = "dataspace-catalog";
+
+    private static final String RAW_OUTSIDER_ROLE = "dataspace-outsider";
+
+    /** User attribute the realm's protocol mapper copies into the {@code participant_id} claim. */
+    private static final String PARTICIPANT_ATTRIBUTE = "participant_id";
+
+    /** Mail domain reserved by RFC 2606, so a created user's address can never be delivered. */
+    private static final String CREATED_EMAIL_DOMAIN = "@test.invalid";
+
+    private static final int HTTP_NO_CONTENT = 204;
 
     /** The realm's issuer identifier, which is also what its tokens carry in {@code iss}. */
     public static String issuer() {
@@ -155,18 +170,109 @@ public final class KeycloakTestResource {
 
     /** A freshly issued access token for {@code principal}, signed by the realm's active key. */
     public static String accessToken(RealmPrincipal principal) {
+        return passwordGrant(principal.username);
+    }
+
+    /**
+     * Creates a uniquely named realm user holding {@code role}'s raw role, its {@code
+     * participant_id} attribute set to {@code identifier} when non-null; the imported users are
+     * never touched. The supplier issues a fresh token per call. A user's identifier is its {@code
+     * sub}, which Keycloak assigns, so read it with {@link #subject(String)}.
+     */
+    public static Supplier<String> createPrincipal(RealmPrincipal role, String identifier) {
+        String username = role.username + "-" + UUID.randomUUID();
+        String attributes =
+                identifier == null
+                        ? "{}"
+                        : "{\"%s\":[\"%s\"]}".formatted(PARTICIPANT_ATTRIBUTE, identifier);
+        String body =
+                """
+                {"username":"%s","enabled":true,"emailVerified":true,"email":"%s",\
+                "firstName":"Created","lastName":"Principal","requiredActions":[],\
+                "attributes":%s,\
+                "credentials":[{"type":"password","value":"%s","temporary":false}]}"""
+                        .formatted(
+                                username,
+                                username + CREATED_EMAIL_DOMAIN,
+                                attributes,
+                                TEST_PASSWORD);
+        HttpResponse<String> created =
+                sendAdmin("POST", "/users", body, "Creating user " + username, HTTP_CREATED);
+        String userId = createdComponentId(created);
+        String roleRepresentation =
+                sendAdmin("GET", "/roles/" + role.rawRole, null, "Reading role " + role.rawRole)
+                        .body();
+        sendAdmin(
+                "POST",
+                "/users/" + userId + "/role-mappings/realm",
+                "[" + roleRepresentation + "]",
+                "Granting " + role.rawRole + " to " + username,
+                HTTP_NO_CONTENT);
+        Supplier<String> tokens = () -> passwordGrant(username);
+        requireParticipantClaim(tokens.get(), identifier);
+        return tokens;
+    }
+
+    /** Fails fast when Keycloak dropped the attribute, rather than letting a case get 403. */
+    private static void requireParticipantClaim(String token, String identifier) {
+        if (identifier == null) {
+            return;
+        }
+        try {
+            Object claim = SignedJWT.parse(token).getJWTClaimsSet().getClaim(PARTICIPANT_ATTRIBUTE);
+            if (!identifier.equals(claim)) {
+                throw new IllegalStateException(
+                        "Created principal's token carries participant_id " + claim);
+            }
+        } catch (ParseException e) {
+            throw new IllegalArgumentException("Not a parseable signed JWT", e);
+        }
+    }
+
+    /**
+     * Sends an admin request under this realm and returns the response; fails unless the status is
+     * one of {@code accepted}, or below 400 when none is given.
+     */
+    private static HttpResponse<String> sendAdmin(
+            String method, String realmPath, String body, String action, int... accepted) {
+        HttpRequest.Builder builder =
+                HttpRequest.newBuilder(
+                                URI.create(adminBaseUrl() + "/admin/realms/" + REALM + realmPath))
+                        .timeout(HTTP_TIMEOUT)
+                        .header("Authorization", "Bearer " + adminToken());
+        if (body == null) {
+            builder.method(method, HttpRequest.BodyPublishers.noBody());
+        } else {
+            builder.header("Content-Type", "application/json")
+                    .method(
+                            method,
+                            HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+        }
+        HttpResponse<String> response = send(builder.build());
+        boolean ok =
+                accepted.length == 0
+                        ? response.statusCode() < HTTP_BAD_REQUEST
+                        : IntStream.of(accepted).anyMatch(code -> code == response.statusCode());
+        if (!ok) {
+            throw new IllegalStateException(
+                    action + " failed with " + response.statusCode() + ": " + response.body());
+        }
+        return response;
+    }
+
+    /** A password-grant token for a realm user, via the test client. */
+    private static String passwordGrant(String username) {
         Map<String, String> form =
                 Map.of(
                         "grant_type", "password",
                         "client_id", TEST_CLIENT_ID,
                         "client_secret", TEST_CLIENT_SECRET,
-                        "username", principal.username,
+                        "username", username,
                         "password", TEST_PASSWORD);
         Map<String, Object> response = postForm(URI.create(issuer() + TOKEN_PATH), form);
         Object token = response.get("access_token");
         if (!(token instanceof String accessToken)) {
-            throw new IllegalStateException(
-                    "Keycloak returned no access_token for " + principal.username);
+            throw new IllegalStateException("Keycloak returned no access_token for " + username);
         }
         return accessToken;
     }
