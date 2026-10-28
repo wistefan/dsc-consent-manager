@@ -12,20 +12,30 @@ import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.MediaType;
 import io.micronaut.http.server.exceptions.response.ErrorContext;
+import io.micronaut.security.authentication.Authentication;
+import io.micronaut.security.authentication.AuthorizationException;
+import io.micronaut.security.authentication.WwwAuthenticateChallengeProvider;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.ElementKind;
 import jakarta.validation.Path;
 import jakarta.validation.metadata.ConstraintDescriptor;
+import java.io.IOException;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Files;
 import java.sql.SQLException;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -55,6 +65,9 @@ class ProblemMappingTest {
     /** Message of the upstream failure, asserted absent from the rendered body. */
     private static final String UPSTREAM_MESSAGE =
             "contract-service at 10.0.0.7 refused the TCP connection";
+
+    /** Extension of every compiled class file, stripped to recover the class name. */
+    private static final String CLASS_SUFFIX = ".class";
 
     private final ApiExceptionHandler handler = new ApiExceptionHandler(serverErrorDetail(false));
 
@@ -378,6 +391,209 @@ class ProblemMappingTest {
             assertThat(((ProblemDetail) response.body()).getDetail())
                     .doesNotContain("register")
                     .doesNotContain("userRegistration");
+        }
+    }
+
+    /** Every site that renders a problem, each pinned to the status and type it documents. */
+    @Nested
+    @DisplayName("handler matrix")
+    class HandlerMatrix {
+
+        /** Challenge the 401 carries, standing in for the bearer provider the context binds. */
+        private static final String BEARER_CHALLENGE = "Bearer";
+
+        /** One rendering site, driven through the real handler that owns it. */
+        enum Producer {
+            BAD_REQUEST_EXCEPTION(BadRequestException.class) {
+                @Override
+                HttpResponse<?> render(HttpRequest<?> request) {
+                    return apiHandler().handle(request, new BadRequestException("refused"));
+                }
+            },
+            FORBIDDEN_EXCEPTION(ForbiddenException.class) {
+                @Override
+                HttpResponse<?> render(HttpRequest<?> request) {
+                    return apiHandler().handle(request, new ForbiddenException("refused"));
+                }
+            },
+            NOT_FOUND_EXCEPTION(NotFoundException.class) {
+                @Override
+                HttpResponse<?> render(HttpRequest<?> request) {
+                    return apiHandler().handle(request, new NotFoundException("refused"));
+                }
+            },
+            CONFLICT_EXCEPTION(ConflictException.class) {
+                @Override
+                HttpResponse<?> render(HttpRequest<?> request) {
+                    return apiHandler().handle(request, new ConflictException("refused"));
+                }
+            },
+            UPSTREAM_SERVICE_EXCEPTION(UpstreamServiceException.class) {
+                @Override
+                HttpResponse<?> render(HttpRequest<?> request) {
+                    return apiHandler()
+                            .handle(request, new UpstreamServiceException(UPSTREAM_MESSAGE));
+                }
+            },
+            AUTHORIZATION_UNAUTHENTICATED(null) {
+                @Override
+                HttpResponse<?> render(HttpRequest<?> request) {
+                    return authorizationHandler()
+                            .httpResponseWithStatus(request, new AuthorizationException(null));
+                }
+            },
+            AUTHORIZATION_FORBIDDEN(null) {
+                @Override
+                HttpResponse<?> render(HttpRequest<?> request) {
+                    return authorizationHandler()
+                            .httpResponseWithStatus(
+                                    request,
+                                    new AuthorizationException(Authentication.build("alice")));
+                }
+            },
+            CONSTRAINT_VIOLATION(null) {
+                @Override
+                HttpResponse<?> render(HttpRequest<?> request) {
+                    return new ConstraintViolationProblemHandler()
+                            .handle(
+                                    request,
+                                    violationException(
+                                            violation(
+                                                    "register.body.identifier",
+                                                    "must not be blank")));
+                }
+            },
+            UNHANDLED_EXCEPTION(null) {
+                @Override
+                HttpResponse<?> render(HttpRequest<?> request) {
+                    return new GlobalExceptionHandler(serverErrorDetail(false))
+                            .handle(request, new IllegalStateException(UPSTREAM_MESSAGE));
+                }
+            };
+
+            /** The {@link ApiException} this site renders, or null for a non-domain site. */
+            private final Class<? extends ApiException> exceptionType;
+
+            Producer(Class<? extends ApiException> exceptionType) {
+                this.exceptionType = exceptionType;
+            }
+
+            abstract HttpResponse<?> render(HttpRequest<?> request);
+        }
+
+        static Stream<Arguments> rows() {
+            return Stream.of(
+                    Arguments.of(Producer.BAD_REQUEST_EXCEPTION, 400, ProblemType.BAD_REQUEST),
+                    Arguments.of(Producer.FORBIDDEN_EXCEPTION, 403, ProblemType.FORBIDDEN),
+                    Arguments.of(Producer.NOT_FOUND_EXCEPTION, 404, ProblemType.NOT_FOUND),
+                    Arguments.of(Producer.CONFLICT_EXCEPTION, 409, ProblemType.CONFLICT),
+                    Arguments.of(
+                            Producer.UPSTREAM_SERVICE_EXCEPTION, 502, ProblemType.UPSTREAM_SERVICE),
+                    Arguments.of(
+                            Producer.AUTHORIZATION_UNAUTHENTICATED, 401, ProblemType.UNAUTHORIZED),
+                    Arguments.of(Producer.AUTHORIZATION_FORBIDDEN, 403, ProblemType.FORBIDDEN),
+                    Arguments.of(Producer.CONSTRAINT_VIOLATION, 400, ProblemType.BAD_REQUEST),
+                    Arguments.of(
+                            Producer.UNHANDLED_EXCEPTION, 500, ProblemType.INTERNAL_SERVER_ERROR));
+        }
+
+        @ParameterizedTest(name = "{0} -> {1} {2}")
+        @MethodSource("rows")
+        void rendersTheDocumentedProblem(Producer producer, int status, ProblemType type) {
+            HttpResponse<?> response = producer.render(HttpRequest.GET(REQUEST_PATH));
+
+            assertThat(response.status().getCode()).isEqualTo(status);
+            assertThat(type.status().getCode()).isEqualTo(status);
+            assertThat(response.getContentType()).hasValue(MediaType.of(ProblemType.MEDIA_TYPE));
+            assertThat(response.body())
+                    .isInstanceOfSatisfying(
+                            ProblemDetail.class,
+                            problem -> {
+                                assertThat(problem.getType()).isEqualTo(type.type());
+                                assertThat(problem.getTitle()).isEqualTo(type.title());
+                                assertThat(problem.getStatus()).isEqualTo(status);
+                                assertThat(problem.getInstance())
+                                        .isEqualTo(URI.create(REQUEST_PATH));
+                            });
+        }
+
+        @Test
+        @DisplayName("every problem type is produced by some row")
+        void everyProblemTypeIsProduced() {
+            Set<ProblemType> produced =
+                    rows().map(row -> (ProblemType) row.get()[2])
+                            .collect(
+                                    Collectors.toCollection(
+                                            () -> EnumSet.noneOf(ProblemType.class)));
+
+            assertThat(produced).containsExactlyInAnyOrder(ProblemType.values());
+        }
+
+        @Test
+        @DisplayName("every producer has a row")
+        void everyProducerHasARow() {
+            assertThat(rows().map(row -> (Producer) row.get()[0]))
+                    .containsExactlyInAnyOrder(Producer.values());
+        }
+
+        @Test
+        @DisplayName("every concrete ApiException subclass is a row of its own")
+        void everyApiExceptionHasARow() throws IOException, URISyntaxException {
+            Set<Class<?>> covered =
+                    Arrays.stream(Producer.values())
+                            .map(producer -> producer.exceptionType)
+                            .filter(Objects::nonNull)
+                            .collect(Collectors.toSet());
+
+            assertThat(concreteApiExceptions()).isNotEmpty().isEqualTo(covered);
+        }
+
+        /** Every concrete {@link ApiException} compiled into the service's main classes. */
+        private static Set<Class<?>> concreteApiExceptions()
+                throws IOException, URISyntaxException {
+            java.nio.file.Path root =
+                    java.nio.file.Path.of(
+                            ApiException.class
+                                    .getProtectionDomain()
+                                    .getCodeSource()
+                                    .getLocation()
+                                    .toURI());
+            try (Stream<java.nio.file.Path> files = Files.walk(root)) {
+                return files.map(root::relativize)
+                        .map(java.nio.file.Path::toString)
+                        .filter(name -> name.endsWith(CLASS_SUFFIX))
+                        .map(
+                                name ->
+                                        name.substring(0, name.length() - CLASS_SUFFIX.length())
+                                                .replace(root.getFileSystem().getSeparator(), "."))
+                        .map(HandlerMatrix::load)
+                        .filter(ApiException.class::isAssignableFrom)
+                        .filter(type -> !Modifier.isAbstract(type.getModifiers()))
+                        .collect(Collectors.toSet());
+            }
+        }
+
+        private static Class<?> load(String name) {
+            try {
+                return Class.forName(name, false, ApiException.class.getClassLoader());
+            } catch (ClassNotFoundException | LinkageError e) {
+                throw new IllegalStateException("Could not load " + name, e);
+            }
+        }
+
+        private static ApiExceptionHandler apiHandler() {
+            return new ApiExceptionHandler(serverErrorDetail(false));
+        }
+
+        /** Built bare: the 401/403 path reads the challenge providers and the processor only. */
+        private static AuthorizationProblemHandler authorizationHandler() {
+            WwwAuthenticateChallengeProvider<HttpRequest<?>> bearer = request -> BEARER_CHALLENGE;
+            return new AuthorizationProblemHandler(
+                    new ProblemErrorResponseProcessor(serverErrorDetail(false)),
+                    null,
+                    null,
+                    List.of(bearer),
+                    null);
         }
     }
 

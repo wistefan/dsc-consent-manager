@@ -7,8 +7,10 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.seamware.consentmanager.observability.CorrelationIdFilter;
 import com.seamware.consentmanager.support.PostgresTestResource;
+import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Property;
 import io.micronaut.context.annotation.Requires;
+import io.micronaut.context.env.Environment;
 import io.micronaut.core.type.Argument;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
@@ -23,6 +25,9 @@ import io.micronaut.http.client.HttpClient;
 import io.micronaut.http.client.annotation.Client;
 import io.micronaut.http.client.exceptions.HttpClientResponseException;
 import io.micronaut.json.JsonMapper;
+import io.micronaut.runtime.server.EmbeddedServer;
+import io.micronaut.security.annotation.Secured;
+import io.micronaut.security.rules.SecurityRule;
 import io.micronaut.serde.annotation.Serdeable;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import io.micronaut.validation.Validated;
@@ -30,6 +35,7 @@ import jakarta.inject.Inject;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -69,6 +75,15 @@ class ProblemResponseIT extends PostgresTestResource {
 
     /** Message of the deliberate defect below; asserted absent from the 500 it produces. */
     private static final String DEFECT_MESSAGE = "jdbc:postgresql://db:5432 credentials rejected";
+
+    /** Probe route raising an upstream failure. */
+    private static final String UPSTREAM_ROUTE = "/refuse/upstream";
+
+    /** Probe route only an authenticated caller may reach. */
+    private static final String SECURED_ROUTE = "/secured";
+
+    /** Switches security on for the one context that exercises the 401. */
+    private static final String SECURITY_ENABLED = "micronaut.security.enabled";
 
     /** A caller-supplied correlation ID in the accepted shape. */
     private static final String INBOUND_ID = "client-trace-0001";
@@ -118,6 +133,48 @@ class ProblemResponseIT extends PostgresTestResource {
                         "detail", detail -> assertThat(detail.toString()).contains("identifier"))
                 .doesNotContainKey("_embedded")
                 .doesNotContainKey("_links");
+    }
+
+    @Test
+    @DisplayName("a failed upstream is a 502 that withholds what failed")
+    void rendersAnUpstreamFailureAsBadGateway() throws IOException {
+        HttpResponse<String> response = get(PROBE_PATH + UPSTREAM_ROUTE);
+
+        assertThat(response.status().getCode()).isEqualTo(502);
+        assertThat(response.getContentType().orElseThrow().toString()).isEqualTo(PROBLEM_JSON);
+        assertThat(bodyOf(response))
+                .containsEntry("type", TYPE_PREFIX + "upstream-service")
+                .containsEntry("title", "Bad Gateway")
+                .containsEntry("status", 502)
+                .containsEntry("detail", ProblemType.SERVER_ERROR_DETAIL)
+                .containsEntry("instance", PROBE_PATH + UPSTREAM_ROUTE);
+        assertThat(response.body()).doesNotContain(DEFECT_MESSAGE);
+    }
+
+    /** Runs on a server of its own, as every other case here runs with security disabled. */
+    @Test
+    @DisplayName("a request without a bearer token is a 401 that names no check")
+    void rendersAMissingTokenAsUnauthorized() throws IOException {
+        Map<String, Object> properties = new LinkedHashMap<>(getProperties());
+        properties.put(PROBE_ENABLED, "true");
+        properties.put(SECURITY_ENABLED, "true");
+
+        try (EmbeddedServer server =
+                        ApplicationContext.run(EmbeddedServer.class, properties, Environment.TEST);
+                HttpClient securedClient = HttpClient.create(server.getURL())) {
+            HttpResponse<String> response =
+                    exchange(securedClient, HttpRequest.GET(PROBE_PATH + SECURED_ROUTE));
+
+            assertThat(response.status().getCode()).isEqualTo(401);
+            assertThat(response.getContentType().orElseThrow().toString()).isEqualTo(PROBLEM_JSON);
+            assertThat(bodyOf(response))
+                    .containsEntry("type", TYPE_PREFIX + "unauthorized")
+                    .containsEntry("title", "Unauthorized")
+                    .containsEntry("status", 401)
+                    .containsEntry("instance", PROBE_PATH + SECURED_ROUTE)
+                    .doesNotContainKey("_embedded")
+                    .doesNotContainKey("_links");
+        }
     }
 
     /** One case per refusal the framework produces before any handler of this service runs. */
@@ -297,8 +354,13 @@ class ProblemResponseIT extends PostgresTestResource {
 
     /** Exchanges a request, turning the error response back into an ordinary one. */
     private HttpResponse<String> exchange(HttpRequest<?> request) {
+        return exchange(client, request);
+    }
+
+    /** Exchanges a request on the given client, turning the error response back into one. */
+    private static HttpResponse<String> exchange(HttpClient httpClient, HttpRequest<?> request) {
         try {
-            return client.toBlocking().exchange(request, String.class);
+            return httpClient.toBlocking().exchange(request, String.class);
         } catch (HttpClientResponseException e) {
             HttpResponse<?> response = e.getResponse();
             String body = response.getBody(String.class).orElse("");
@@ -348,6 +410,13 @@ class ProblemResponseIT extends PostgresTestResource {
         @Post("/validate-pair")
         String validatePair(@Body @Valid PairPayload payload) {
             return payload.identifier();
+        }
+
+        /** Exists for the 401 a token-less request earns once security is enabled. */
+        @Get(SECURED_ROUTE)
+        @Secured(SecurityRule.IS_AUTHENTICATED)
+        String secured() {
+            return SECURED_ROUTE;
         }
 
         /** Fails the way a defect does: an exception no handler was written for. */
