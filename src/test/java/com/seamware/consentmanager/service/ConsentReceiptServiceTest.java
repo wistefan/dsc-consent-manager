@@ -3,7 +3,13 @@ package com.seamware.consentmanager.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.util.Base64URL;
+import com.seamware.consentmanager.api.ConsentFormat;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantara;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraPiiControllersInner;
 import com.seamware.consentmanager.api.generated.model.ConsentReceiptKantaraServicesInnerPurposesInner;
@@ -19,17 +25,20 @@ import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.repository.IssuedReceiptRepository;
 import com.seamware.consentmanager.repository.UserRepository;
-import com.seamware.consentmanager.signing.CanonicalJsonSerializer;
 import com.seamware.consentmanager.signing.ConsentSigningService;
-import com.seamware.consentmanager.signing.JwsConsentSigningService;
 import com.seamware.consentmanager.signing.SignedReceipt;
+import com.seamware.consentmanager.signing.SigningFixtures;
+import com.seamware.consentmanager.signing.SigningFixtures.Tamper;
 import com.seamware.consentmanager.signing.SigningKeyStore;
 import com.seamware.consentmanager.support.ReceiptSignatures;
 import com.seamware.consentmanager.support.TestJson;
 import io.micronaut.core.type.Argument;
 import java.io.IOException;
 import java.lang.reflect.Proxy;
+import java.text.ParseException;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +47,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Test;
@@ -112,25 +122,106 @@ class ConsentReceiptServiceTest {
                     "termination",
                     "thirdPartyDisclosure");
 
-    private final Map<UUID, IssuedReceipt> stored = new HashMap<>();
+    /** Members of a served {@code {receipt, jws}} body. */
+    private static final String RECEIPT = "receipt";
 
-    private final SigningKeyStore keys = keys();
+    private static final String JWS = "jws";
 
-    private final ConsentSigningService signing =
-            new JwsConsentSigningService(keys, new CanonicalJsonSerializer(TestJson.mapper()));
+    /** Splits a compact JWS into its parts. */
+    private static final String JWS_PART_SEPARATOR = "\\.";
 
-    private final ConsentReceiptService receipts =
-            new ConsentReceiptService(
-                    users(new User(SUBJECT, null, null, null)),
-                    issued(stored),
-                    new ConsentManagerConfiguration.Receipts(),
+    private static final int HEADER_PART = 0;
+
+    /** The formats a receipt is served in, crossed with every algorithm and tamper. */
+    private static final Set<ConsentFormat> RECEIPT_FORMATS =
+            EnumSet.of(ConsentFormat.RECEIPT, ConsentFormat.RECEIPT_KANTARA);
+
+    private static final String CURRENT_KEY_ID = "receipts-current";
+
+    private static final String RETIRED_KEY_ID = "receipts-retired";
+
+    /** Per algorithm, an issuer that also publishes a retired key of that algorithm. */
+    private static final Map<JWSAlgorithm, Issuer> ISSUERS = new HashMap<>();
+
+    private final Issuer ephemeral = Issuer.over(SigningFixtures.store(null));
+
+    private final SigningKeyStore keys = ephemeral.keys();
+
+    private final ConsentSigningService signing = ephemeral.signing();
+
+    private final ConsentReceiptService receipts = ephemeral.receipts();
+
+    /** A receipt service signing with {@code keys}, reading back the receipts it issued. */
+    private record Issuer(
+            SigningKeyStore keys,
+            ConsentSigningService signing,
+            Map<UUID, IssuedReceipt> stored,
+            ConsentReceiptService receipts) {
+
+        static Issuer over(SigningKeyStore keys) {
+            ConsentSigningService signing = SigningFixtures.signing(keys);
+            Map<UUID, IssuedReceipt> stored = new HashMap<>();
+            return new Issuer(
+                    keys,
                     signing,
-                    TestJson.mapper());
+                    stored,
+                    new ConsentReceiptService(
+                            users(new User(SUBJECT, null, null, null)),
+                            issued(stored),
+                            new ConsentManagerConfiguration.Receipts(),
+                            signing,
+                            TestJson.mapper()));
+        }
 
-    private static SigningKeyStore keys() {
-        ConsentManagerConfiguration.Receipts settings = new ConsentManagerConfiguration.Receipts();
-        settings.setEphemeralSigningKey(true);
-        return new SigningKeyStore(settings);
+        /**
+         * Signs and stores the Kantara receipt of {@code details}, as issuance at the grant does.
+         */
+        IssuedReceipt issue(ConsentDetails details) {
+            SignedReceipt<ConsentReceiptKantara> signed =
+                    signing.sign(receipts.toKantara(details, GRANTED_AT));
+            IssuedReceipt receipt =
+                    new IssuedReceipt(
+                            details.consent().getId(),
+                            UUID.randomUUID(),
+                            signed.canonicalJson(),
+                            signed.jws(),
+                            signed.keyId(),
+                            GRANTED_AT);
+            stored.put(receipt.consentId(), receipt);
+            return receipt;
+        }
+
+        /**
+         * The body served for {@code details} in {@code format}, as an outside verifier reads it.
+         */
+        Map<String, Object> serve(ConsentFormat format, ConsentDetails details) throws IOException {
+            Object served =
+                    switch (format) {
+                        case RECEIPT -> receipts.toIso29184(details);
+                        case RECEIPT_KANTARA -> {
+                            issue(details);
+                            yield receipts.toKantara(details);
+                        }
+                        case FULL -> throw new IllegalArgumentException(format.name());
+                    };
+            return TestJson.mapper()
+                    .readValue(
+                            TestJson.mapper().writeValueAsString(served),
+                            Argument.mapOf(String.class, Object.class));
+        }
+    }
+
+    @BeforeAll
+    static void issuePerAlgorithm() throws JOSEException {
+        for (JWSAlgorithm algorithm : SigningFixtures.RECEIPT_ALGORITHMS) {
+            JWK retired = SigningFixtures.key(algorithm, RETIRED_KEY_ID);
+            ISSUERS.put(
+                    algorithm,
+                    Issuer.over(
+                            SigningFixtures.store(
+                                    SigningFixtures.key(algorithm, CURRENT_KEY_ID),
+                                    new JWKSet(retired.toPublicJWK()).toString())));
+        }
     }
 
     /** A snapshot naming one purpose and nothing else: the sparsest a receipt is drawn from. */
@@ -351,6 +442,64 @@ class ConsentReceiptServiceTest {
         assertThat(ReceiptSignatures.verifies(json, new JWKSet(keys.verificationKeys()))).isTrue();
     }
 
+    static Stream<Arguments> formatsAlgorithmsAndTampers() {
+        return RECEIPT_FORMATS.stream()
+                .flatMap(
+                        format ->
+                                SigningFixtures.RECEIPT_ALGORITHMS.stream()
+                                        .flatMap(
+                                                algorithm ->
+                                                        Arrays.stream(Tamper.values())
+                                                                .map(
+                                                                        tamper ->
+                                                                                Arguments.of(
+                                                                                        format,
+                                                                                        algorithm,
+                                                                                        tamper))));
+    }
+
+    @ParameterizedTest(name = "{0} signed {1}: {2}")
+    @MethodSource("formatsAlgorithmsAndTampers")
+    @DisplayName("verifies each receipt format under each algorithm, and refuses every tampering")
+    @SuppressWarnings("unchecked")
+    void refusesTamperingInEveryFormatAndAlgorithm(
+            ConsentFormat format, JWSAlgorithm algorithm, Tamper tamper) throws Exception {
+        Issuer issuer = ISSUERS.get(algorithm);
+        JWKSet published = new JWKSet(issuer.keys().verificationKeys());
+        Map<String, Object> served = issuer.serve(format, details(bare(), CONTRACT_URI));
+        Map<String, Object> receipt = (Map<String, Object>) served.get(RECEIPT);
+        String jws = (String) served.get(JWS);
+
+        assertThat(
+                        JWSHeader.parse(Base64URL.from(jws.split(JWS_PART_SEPARATOR)[HEADER_PART]))
+                                .getAlgorithm())
+                .isEqualTo(algorithm);
+        assertThat(ReceiptSignatures.verifies(receipt, jws, published)).isTrue();
+        assertThat(issuer.signing().verify(receipt, jws)).isTrue();
+
+        Map<String, Object> presented = tamper.receipt(receipt);
+        String presentedJws = tamper.jws(jws, receipt, issuer.keys());
+        if (tamper.resigned(issuer.keys())) {
+            JWK active = issuer.keys().verificationKey(issuer.keys().keyId()).orElseThrow();
+            assertThat(ReceiptSignatures.signedBy(receipt, presentedJws, active))
+                    .as("a genuine signature, so only the kid or alg binding refuses it")
+                    .isTrue();
+        }
+
+        assertThat(issuer.signing().verify(presented, presentedJws)).isFalse();
+        assertThat(outsiderAccepts(presented, presentedJws, published)).isFalse();
+    }
+
+    /** Whether an outside verifier accepts; a JWS it cannot even parse or check is refused. */
+    private static boolean outsiderAccepts(Object receipt, String jws, JWKSet published)
+            throws IOException {
+        try {
+            return ReceiptSignatures.verifies(receipt, jws, published);
+        } catch (ParseException | JOSEException e) {
+            return false;
+        }
+    }
+
     private ConsentDetails details(ConsentSnapshot snapshot, String contractUri) {
         return details(ConsentStatus.GRANTED, snapshot, contractUri);
     }
@@ -374,20 +523,8 @@ class ConsentReceiptServiceTest {
         return new ConsentDetails(consent, PROVIDER, CONSUMER, false);
     }
 
-    /** Signs and stores the Kantara receipt of {@code details}, as issuance at the grant does. */
     private IssuedReceipt issue(ConsentDetails details) {
-        SignedReceipt<ConsentReceiptKantara> signed =
-                signing.sign(receipts.toKantara(details, GRANTED_AT));
-        IssuedReceipt receipt =
-                new IssuedReceipt(
-                        details.consent().getId(),
-                        UUID.randomUUID(),
-                        signed.canonicalJson(),
-                        signed.jws(),
-                        signed.keyId(),
-                        GRANTED_AT);
-        stored.put(receipt.consentId(), receipt);
-        return receipt;
+        return ephemeral.issue(details);
     }
 
     /** An {@link IssuedReceiptRepository} whose {@code findById} reads {@code stored}. */

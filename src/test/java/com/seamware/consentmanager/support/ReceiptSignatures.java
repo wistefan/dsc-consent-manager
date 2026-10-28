@@ -34,17 +34,38 @@ public final class ReceiptSignatures {
         return verifies(body.get(RECEIPT), (String) body.get(JWS), published);
     }
 
-    /** Whether {@code signature} verifies over {@code receipt} with the key its kid names. */
+    /**
+     * Whether {@code signature} verifies over {@code receipt} with the key its kid names, which
+     * must publish the header's alg.
+     */
     public static boolean verifies(Object receipt, String signature, JWKSet published)
             throws IOException, ParseException, JOSEException {
+        JWSObject jws = parse(receipt, signature);
+        JWK key = published.getKeyByKeyId(jws.getHeader().getKeyID());
+        if (key == null || !jws.getHeader().getAlgorithm().equals(key.getAlgorithm())) {
+            return false;
+        }
+        return signedBy(jws, key);
+    }
+
+    /**
+     * Whether {@code signature} verifies over {@code receipt} with {@code key} under the header's
+     * alg, whatever kid it names: all a lax verifier would check.
+     */
+    public static boolean signedBy(Object receipt, String signature, JWK key)
+            throws IOException, ParseException, JOSEException {
+        return signedBy(parse(receipt, signature), key);
+    }
+
+    private static JWSObject parse(Object receipt, String signature)
+            throws IOException, ParseException {
         byte[] payload =
                 new JsonCanonicalizer(TestJson.mapper().writeValueAsBytes(receipt))
                         .getEncodedUTF8();
-        JWSObject jws = JWSObject.parse(signature, new Payload(payload));
-        JWK key = published.getKeyByKeyId(jws.getHeader().getKeyID());
-        if (key == null) {
-            return false;
-        }
+        return JWSObject.parse(signature, new Payload(payload));
+    }
+
+    private static boolean signedBy(JWSObject jws, JWK key) throws JOSEException {
         return jws.verify(
                 new DefaultJWSVerifierFactory()
                         .createJWSVerifier(jws.getHeader(), ((AsymmetricJWK) key).toPublicKey()));
