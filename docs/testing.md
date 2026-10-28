@@ -72,8 +72,7 @@ survives edits to the cited files. Grep a name before citing it.
 
 ## Acceptance-criteria traceability
 
-Status is `met`, `partial` or `planned — Step N`, where N is a step of the ticket's
-`IMPLEMENTATION_PLAN.md`. Quoted criteria are the ticket's wording. Unquoted ones are short forms
+Every criterion is `met`. Quoted criteria are the ticket's wording. Unquoted ones are short forms
 of it, so check the evidence against the ticket text, not against the short form.
 
 | AC | Criterion | Status | Evidence / plan |
@@ -97,7 +96,7 @@ of it, so check the evidence against the ticket text, not against the short form
 | 19 | Served spec equals the authored spec | met | `OpenApiServingIT.servesTheBundleUnchanged` compares the served document with `target/openapi-bundle/openapi.yaml`, the bundle of the authored spec. |
 | 20 | Spec lint and breaking-change check as build steps | met | `SpecLintIT` (Spectral) and `SpecCompatibilityIT` (oasdiff) run inside `./mvnw verify`, which the `verify` job of `.github/workflows/build.yml` runs on every push to `main` and every pull request; a lint or breaking-change failure fails the job. Both start their tool as a pinned Docker image through Testcontainers and have no skip path, and the job's "Require the spec checks to have run" step additionally fails when either Failsafe report is missing or records a skipped case. The job uploads `target/site/jacoco/` as the `jacoco-report` artifact. |
 | 21 | Spec and code agree on security | met | `SpecSecurityConsistencyTest`. |
-| 22 | Deterministic suite | planned — Step 12 | Repeated `./mvnw clean verify` runs, with the run count and outcome recorded here. Compare the merged BRANCH ratio across runs as well as the test summaries: the gate's margin is 0.009 (0.459 against 0.45), so a run-to-run branch swing would make the gate itself flaky. |
+| 22 | Deterministic suite | met | Ten consecutive `./mvnw -B clean verify` runs on one host (JDK 25, 2026-10-28) all passed with identical summaries: 2140 Surefire and 1263 Failsafe tests, no failures, errors or skips, and the same 3403 test-case names. Merged coverage was LINE 4920/7817 (0.629) and BRANCH 1350/2938 (0.4595) in nine runs. In one run, one more branch was covered (0.4598): the `closed` guard in `IdentityProviderRegistry.scheduleAttempt`, reached only when a discovery retry fires after the context closes. The swing is upward and one branch is worth 0.0003, so it cannot trip the 0.45 gate. The zero-miss classes did not vary. An earlier run of this step failed once on `ManagementEndpointSecurityIT` with `Address already in use`, because the probed management port was taken before Micronaut bound it. `Deployment.start` now re-probes a fresh port on a `BindException`, up to `MANAGEMENT_BIND_ATTEMPTS`, and the ten runs above include that fix. |
 
 ### Response validation coverage
 
