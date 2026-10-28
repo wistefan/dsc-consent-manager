@@ -123,12 +123,16 @@ public final class OpenApiResponseValidationFilter
         this.origin = origin;
     }
 
+    /** The bundled spec named by {@link #BUNDLE_FILE_PROPERTY}, else the pom's default path. */
+    public static Path bundleFile() {
+        return Optional.ofNullable(System.getProperty(BUNDLE_FILE_PROPERTY))
+                .map(Path::of)
+                .orElse(DEFAULT_BUNDLE_FILE);
+    }
+
     /** Parses the spec file named by {@link #BUNDLE_FILE_PROPERTY}, else the pom's default path. */
     static OpenAPI bundledSpec() {
-        Path bundle =
-                Optional.ofNullable(System.getProperty(BUNDLE_FILE_PROPERTY))
-                        .map(Path::of)
-                        .orElse(DEFAULT_BUNDLE_FILE);
+        Path bundle = bundleFile();
         if (!Files.isRegularFile(bundle)) {
             throw new IllegalStateException(
                     "No bundled spec at "
