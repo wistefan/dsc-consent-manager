@@ -274,11 +274,16 @@ missing cases.
     - the same key and `kid` with B's `iss` gets `200`;
     - repeating the cross-issuer token M times (a named constant) leaves B's JWKS endpoint request count bounded
       (security #5 and #7 against a live IdP).
+      *(Plan change in review:* the verifier only consults the claimed issuer's keys, and B's count is bounded by
+      its warm cache, so B's count alone cannot fail. Realm A's key set is fronted by a counting proxy too, and
+      the #7 assertion is that A's count is unchanged; B's stays as a secondary check.)
 
   If importing a key into Keycloak proves infeasible, document why in `docs/testing.md` and keep the stub-based
   coverage.
-- **`LogLeakIT`.** Add the participant identifier to the forbidden values, and add the bad-signature and
-  unknown-issuer rejection paths to the exercised scenarios.
+- **`LogLeakIT`.** Add the bad-signature and unknown-issuer rejection paths to the exercised scenarios.
+  *(Plan change during implementation:* the participant identifier is **not** added to the forbidden
+  values. `docs/security.md` ("Allowed as is") permits it, since it names an organisation, and
+  `ConsentStateChangeLog`, the ADR-0015 notification seam, logs provider and consumer at INFO by design.)
 
 **Acceptance:** AC 9 against both stubs and live Keycloak; security #5, #7 and #8 strengthened.
 

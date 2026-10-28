@@ -394,8 +394,8 @@ class PrincipalResolutionIT extends PostgresTestResource {
     }
 
     /**
-     * The ways a request can fail to authenticate; the last, a {@code PARTICIPANT} token naming no
-     * participant, is rejected during validation rather than as an authorization failure.
+     * The ways a request can fail to authenticate; the last two, a role whose identifier claim is
+     * absent, are rejected during validation rather than as an authorization failure.
      */
     static Stream<Arguments> unauthenticated() {
         return Stream.of(
@@ -412,7 +412,13 @@ class PrincipalResolutionIT extends PostgresTestResource {
                 Arguments.of("an expired token", token(expired())),
                 Arguments.of(
                         "a participant token carrying no participant identifier",
-                        token(claims(PARTICIPANT_ROLE, null))));
+                        token(claims(PARTICIPANT_ROLE, null))),
+                Arguments.of(
+                        "a user token carrying no user identifier",
+                        token(
+                                new JWTClaimsSet.Builder(claims(USER_ROLE, null))
+                                        .subject(null)
+                                        .build())));
     }
 
     /** 401 anonymously and 403 with a token, never 200: access is explicit or it is not access. */

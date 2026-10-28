@@ -1,5 +1,9 @@
 package com.seamware.consentmanager.support;
 
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.util.Base64;
 import com.nimbusds.jose.util.JSONObjectUtils;
 import com.nimbusds.jwt.SignedJWT;
 import com.seamware.consentmanager.security.IdentityProviderConfiguration;
@@ -62,6 +66,8 @@ public final class KeycloakTestResource {
 
     private static final String TOKEN_PATH = "/protocol/openid-connect/token";
 
+    private static final String JWKS_PATH = "/protocol/openid-connect/certs";
+
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(30);
 
     private static final int HTTP_CREATED = 201;
@@ -118,6 +124,11 @@ public final class KeycloakTestResource {
         public String username() {
             return username;
         }
+
+        /** The realm role string the token carries, before the trust list maps it. */
+        public String rawRole() {
+            return rawRole;
+        }
     }
 
     /** Raw provider role mapped to {@code USER}, as declared in the realm import file. */
@@ -139,12 +150,101 @@ public final class KeycloakTestResource {
 
     /** The realm's issuer identifier, which is also what its tokens carry in {@code iss}. */
     public static String issuer() {
-        String authServerUrl = KEYCLOAK.getAuthServerUrl();
-        String base =
-                authServerUrl.endsWith("/")
-                        ? authServerUrl.substring(0, authServerUrl.length() - 1)
-                        : authServerUrl;
-        return base + REALMS_PATH + REALM;
+        return issuer(REALM);
+    }
+
+    /** The issuer identifier of any realm on this container. */
+    public static String issuer(String realm) {
+        return adminBaseUrl() + REALMS_PATH + realm;
+    }
+
+    /** URL of any realm's OpenID Connect discovery document. */
+    public static String discoveryUrl(String realm) {
+        return issuer(realm) + DISCOVERY_PATH;
+    }
+
+    /**
+     * Creates an empty, enabled realm whose highest-priority RS256 signing key is {@code
+     * signingKey}, so the caller holds the private half Keycloak signs with. Keycloak's default
+     * generated RSA key stays active and published beside it. Returns the {@code kid} Keycloak
+     * publishes for the imported key, which it derives from the key and does not take from the
+     * caller.
+     */
+    public static String createRealmSigningWith(String realm, RSAKey signingKey) {
+        sendAdminTo(
+                URI.create(adminBaseUrl() + "/admin/realms"),
+                "POST",
+                "{\"realm\":\"%s\",\"enabled\":true}".formatted(realm),
+                "Creating realm " + realm,
+                HTTP_CREATED);
+        String realmId = realmId(realm);
+        String privateKey;
+        try {
+            privateKey = Base64.encode(signingKey.toPrivateKey().getEncoded()).toString();
+        } catch (JOSEException e) {
+            throw new IllegalArgumentException("Not an RSA private key", e);
+        }
+        String body =
+                """
+                {"name":"imported-rsa-key","providerId":"rsa",\
+                "providerType":"org.keycloak.keys.KeyProvider","parentId":"%s",\
+                "config":{"priority":["%s"],"algorithm":["RS256"],"keyUse":["sig"],\
+                "enabled":["true"],"active":["true"],"privateKey":["%s"]}}"""
+                        .formatted(realmId, ROTATED_KEY_PRIORITY, privateKey);
+        sendAdminTo(
+                URI.create(adminBaseUrl() + "/admin/realms/" + realm + "/components"),
+                "POST",
+                body,
+                "Importing a signing key into realm " + realm,
+                HTTP_CREATED);
+        return publishedKeyId(realm, signingKey);
+    }
+
+    /**
+     * Deletes a test-created realm; tolerates one already gone, so cleanup never masks a failure.
+     */
+    public static void deleteRealm(String realm) {
+        sendAdminTo(
+                URI.create(adminBaseUrl() + "/admin/realms/" + realm),
+                "DELETE",
+                null,
+                "Deleting realm " + realm,
+                HTTP_NO_CONTENT,
+                HTTP_NOT_FOUND);
+    }
+
+    /** The {@code kid} under which {@code realm}'s public JWK Set carries {@code key}. */
+    private static String publishedKeyId(String realm, RSAKey key) {
+        return publishedKeys(realm).getKeys().stream()
+                .filter(published -> published instanceof RSAKey)
+                .map(RSAKey.class::cast)
+                .filter(published -> published.getModulus().equals(key.getModulus()))
+                .map(RSAKey::getKeyID)
+                .findFirst()
+                .orElseThrow(
+                        () ->
+                                new IllegalStateException(
+                                        "Realm " + realm + " does not publish the imported key"));
+    }
+
+    /** URL of {@code realm}'s public JWK Set. */
+    public static String jwksUrl(String realm) {
+        return issuer(realm) + JWKS_PATH;
+    }
+
+    /** {@code realm}'s public JWK Set, as any relying party would fetch it. */
+    public static JWKSet publishedKeys(String realm) {
+        HttpResponse<String> response =
+                sendAdminTo(
+                        URI.create(jwksUrl(realm)),
+                        "GET",
+                        null,
+                        "Reading the key set of realm " + realm);
+        try {
+            return JWKSet.parse(response.body());
+        } catch (ParseException e) {
+            throw new IllegalStateException("Keycloak returned an unparseable key set", e);
+        }
     }
 
     /** URL of the realm's OpenID Connect discovery document. */
@@ -235,9 +335,19 @@ public final class KeycloakTestResource {
      */
     private static HttpResponse<String> sendAdmin(
             String method, String realmPath, String body, String action, int... accepted) {
+        return sendAdminTo(
+                URI.create(adminBaseUrl() + "/admin/realms/" + REALM + realmPath),
+                method,
+                body,
+                action,
+                accepted);
+    }
+
+    /** {@link #sendAdmin} against any admin URL, so a test-created realm can be managed too. */
+    private static HttpResponse<String> sendAdminTo(
+            URI target, String method, String body, String action, int... accepted) {
         HttpRequest.Builder builder =
-                HttpRequest.newBuilder(
-                                URI.create(adminBaseUrl() + "/admin/realms/" + REALM + realmPath))
+                HttpRequest.newBuilder(target)
                         .timeout(HTTP_TIMEOUT)
                         .header("Authorization", "Bearer " + adminToken());
         if (body == null) {
@@ -369,7 +479,12 @@ public final class KeycloakTestResource {
      * wrong {@code parentId} with 201 and attaches the key to nothing.
      */
     private static String realmId() {
-        URI realm = URI.create(adminBaseUrl() + "/admin/realms/" + REALM);
+        return realmId(REALM);
+    }
+
+    /** {@link #realmId()} for any realm on this container. */
+    private static String realmId(String name) {
+        URI realm = URI.create(adminBaseUrl() + "/admin/realms/" + name);
         HttpRequest request =
                 HttpRequest.newBuilder(realm)
                         .timeout(HTTP_TIMEOUT)
@@ -379,12 +494,12 @@ public final class KeycloakTestResource {
         HttpResponse<String> response = send(request);
         if (response.statusCode() >= HTTP_BAD_REQUEST) {
             throw new IllegalStateException(
-                    "Reading realm " + REALM + " failed with " + response.statusCode());
+                    "Reading realm " + name + " failed with " + response.statusCode());
         }
         try {
             Object id = JSONObjectUtils.parse(response.body()).get("id");
             if (!(id instanceof String realmId)) {
-                throw new IllegalStateException("Keycloak returned no realm id for " + REALM);
+                throw new IllegalStateException("Keycloak returned no realm id for " + name);
             }
             return realmId;
         } catch (ParseException e) {
