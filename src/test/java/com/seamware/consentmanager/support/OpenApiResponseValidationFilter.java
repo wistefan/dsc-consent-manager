@@ -36,17 +36,10 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * Validates every response the embedded server returns to a test client against the bundled spec:
- * the status must be declared and the body and content type must match it. Every operation declares
- * a {@code default} error response, so a status below 400 counts as declared only when the
- * operation names it explicitly. A route or method the spec does not publish may only be refused
- * with a 4xx, which tests probing such routes expect; any other answer there is a violation.
- * Requests are not validated, since many tests send invalid ones on purpose. A violation is
- * recorded in {@link ResponseViolations}, never thrown, because the client would wrap it.
- *
- * <p>Only exchanges with the embedded server are judged: same scheme and port, and either the host
- * the server reports (often the machine name) or a loopback name, since the server binds every
- * interface. Any other target passes through unvalidated.
+ * Validates every response the embedded server returns to a test client against the bundled spec.
+ * Violations are recorded in {@link ResponseViolations}, never thrown, since the client would wrap
+ * them. Only own-origin exchanges are judged (a loopback host on the server's port counts); the
+ * full rule set is in {@code docs/testing.md}, row 18.
  */
 // Singleton so the startup listener and the filter are one instance.
 @Singleton
