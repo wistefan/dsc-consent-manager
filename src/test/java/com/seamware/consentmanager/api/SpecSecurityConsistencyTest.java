@@ -683,6 +683,16 @@ class SpecSecurityConsistencyTest {
         return Set.copyOf(asMap(asMap(pathItem.get(httpMethod)).get("responses")).keySet());
     }
 
+    /** The top-level members of an operation's JSON request body; empty when it declares none. */
+    static Set<String> requestBodyMembers(String httpMethod, String path) {
+        Map<String, Object> pathItem = asMap(asMap(loadYaml(SPEC_RESOURCE).get("paths")).get(path));
+        Map<String, Object> body = asMap(asMap(pathItem.get(httpMethod)).get("requestBody"));
+        Object schema =
+                asMap(asMap(asMap(body.get("content")).get("application/json")).get("schema"));
+        Map<String, Object> resolved = resolve(schema, SPEC_RESOURCE);
+        return resolved == null ? Set.of() : Set.copyOf(asMap(resolved.get("properties")).keySet());
+    }
+
     /** Parses a document of the authored specification. */
     private static Map<String, Object> loadYaml(String resource) {
         try (InputStream stream = Files.newInputStream(SPEC_ROOT.resolve(resource))) {

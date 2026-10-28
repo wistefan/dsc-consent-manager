@@ -185,6 +185,10 @@ a notice it is not on — a uniform `404` would collapse those two into one unac
 caller is additionally resolved through `ParticipantPrincipal.requireActive()`, so a deregistered
 participant is refused before the consent is read at all.
 
+This `403`/`404` asymmetry is intended and stays: the `terminateConsent` description in
+`api/openapi.yaml` specifies the `403` and its rationale, `ConsentLifecycleService.requireParty`
+implements it, and `OwnershipMatrixIT` pins it as the FOREIGN row of `terminate`.
+
 A `CATALOG` relay on `resume` is held to the `USER` shape rather than the participant one: an
 unknown consent and a consent whose subject is not the one the body names are the same `404`, so a
 catalog cannot learn whose consent an identifier addresses — see
