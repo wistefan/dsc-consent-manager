@@ -3,6 +3,8 @@ package com.seamware.consentmanager.api;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.seamware.consentmanager.api.SpecSecurityConsistencyTest.SpecOperation;
+import com.seamware.consentmanager.client.ContractGateway;
+import com.seamware.consentmanager.client.SelfDescriptionClient;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentSnapshot;
 import com.seamware.consentmanager.domain.ConsentStatus;
@@ -18,12 +20,15 @@ import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.IdentityProviderRegistry;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.ConsentFixtures;
+import com.seamware.consentmanager.support.ContractFixtures;
+import com.seamware.consentmanager.support.ContractServiceStub;
 import com.seamware.consentmanager.support.DatabaseReset;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
 import com.seamware.consentmanager.support.PrivacyNoticeFixtures;
 import com.seamware.consentmanager.support.RawSql;
+import io.micronaut.cache.CacheManager;
 import io.micronaut.http.HttpMethod;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
@@ -47,6 +52,8 @@ import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -69,8 +76,11 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
     /** The participant a request tries to act as. */
     private static final String FOREIGN_PARTICIPANT = "urn:test:participant:substitution-foreign";
 
-    /** The other side of every seeded notice, never a caller. */
-    private static final String COUNTERPARTY = "urn:test:participant:substitution-counterparty";
+    /** The other side of every seeded notice, never a caller; the served contract's consumer. */
+    private static final String COUNTERPARTY = "did:web:consumer.example.org";
+
+    /** The served contract's provider, which the caller stands in for so it is a party. */
+    private static final String FIXTURE_PROVIDER = "did:web:provider.example.org";
 
     /** A user the caller participant registers, so the registration routes create a link. */
     private static final String NEW_USER = "urn:test:user:substitution-new";
@@ -79,17 +89,23 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
 
     private static final String LOCAL_IDENTIFIER = "substitution-relabelled";
 
-    private static final String CONTRACT_URI =
-            "https://contracts.example.org/contracts/substitution";
+    private static final String CONTRACT_URI_PREFIX = "https://contract.example.org/v1/contracts/";
+
+    /** The contract every seeded notice is held under. */
+    private static final String SEEDED_CONTRACT = "substitution-seeded";
+
+    /** A contract with no notice yet, so a generation creates one. */
+    private static final String GENERATED_CONTRACT = "substitution-generated";
+
+    private static final String CONTRACT_URI = CONTRACT_URI_PREFIX + SEEDED_CONTRACT;
+
+    private static final String GENERATED_CONTRACT_URI = CONTRACT_URI_PREFIX + GENERATED_CONTRACT;
 
     private static final String NOTICE_TITLE = "Privacy notice identity substitution addresses";
 
     private static final String GRANTED_DECISION = "GRANTED";
 
     private static final String PROVIDER_ROLE = "provider";
-
-    /** Contract Service URL on a reserved port, so an upstream call fails at once and alike. */
-    private static final String UNREACHABLE_CONTRACT_SERVICE = "http://localhost:1";
 
     private static final String SINGLE_RETRY = "1";
 
@@ -144,11 +160,15 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
 
     @Inject ConsentRepository consents;
 
-    /** Points the Contract Service at a closed port, as the role matrix does. */
+    @Inject CacheManager<?> caches;
+
+    /** Serves both contracts, so the generation and discovery rows reach their success path. */
+    private final ContractServiceStub contracts = new ContractServiceStub();
+
     @Override
     public Map<String, String> getProperties() {
         Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
-        properties.put("consent-manager.contract-service.url", UNREACHABLE_CONTRACT_SERVICE);
+        properties.put("consent-manager.contract-service.url", contracts.url());
         properties.put("consent-manager.contract-service.retry-attempts", SINGLE_RETRY);
         properties.put("consent-manager.contract-service.retry-delay", RETRY_DELAY);
         return properties;
@@ -228,15 +248,20 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
     }
 
     /**
-     * A valid request per secured operation, aimed at the caller's own records, with the status its
-     * consent is seeded in ({@code null} when none is) and whether the caller is registered.
+     * A valid request per secured operation, aimed at the caller's own records, with the status it
+     * must answer unsubstituted, the status its consent is seeded in ({@code null} when none is)
+     * and whether the caller is registered.
      */
     enum Endpoint {
-        REGISTER_USER("post /users/register", s -> Call.of(HttpMethod.POST, "/users/register")),
-        CURRENT_USER("get /users/me", s -> Call.of(HttpMethod.GET, "/users/me")),
-        ERASE_USER("delete /users/me", s -> Call.of(HttpMethod.DELETE, "/users/me")),
+        REGISTER_USER(
+                "post /users/register",
+                HttpStatus.OK,
+                s -> Call.of(HttpMethod.POST, "/users/register")),
+        CURRENT_USER("get /users/me", HttpStatus.OK, s -> Call.of(HttpMethod.GET, "/users/me")),
+        ERASE_USER("delete /users/me", HttpStatus.OK, s -> Call.of(HttpMethod.DELETE, "/users/me")),
         SEARCH_USERS(
                 "post /users/search",
+                HttpStatus.OK,
                 s ->
                         new Call(
                                 HttpMethod.POST,
@@ -244,22 +269,33 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
                                 Map.of("identifier", s.callerUser()))),
         LOOKUP_USER(
                 "get /users/{identifier}",
+                HttpStatus.OK,
                 s -> Call.of(HttpMethod.GET, "/users/" + s.callerUser())),
-        LIST_PARTICIPANTS("get /participants", s -> Call.of(HttpMethod.GET, "/participants")),
+        LIST_PARTICIPANTS(
+                "get /participants", HttpStatus.OK, s -> Call.of(HttpMethod.GET, "/participants")),
         SELF_REGISTER_PARTICIPANT(
                 "post /participants",
+                HttpStatus.CREATED,
                 null,
                 false,
                 s -> new Call(HttpMethod.POST, "/participants", Map.of("legalName", LEGAL_NAME))),
         CURRENT_PARTICIPANT(
-                "get /participants/me", s -> Call.of(HttpMethod.GET, "/participants/me")),
+                "get /participants/me",
+                HttpStatus.OK,
+                s -> Call.of(HttpMethod.GET, "/participants/me")),
         UPDATE_CURRENT_PARTICIPANT(
                 "put /participants/me",
+                HttpStatus.OK,
                 s -> new Call(HttpMethod.PUT, "/participants/me", Map.of("legalName", LEGAL_NAME))),
         DEREGISTER_CURRENT_PARTICIPANT(
-                "delete /participants/me", s -> Call.of(HttpMethod.DELETE, "/participants/me")),
+                "delete /participants/me",
+                HttpStatus.OK,
+                ConsentStatus.REVOKED,
+                true,
+                s -> Call.of(HttpMethod.DELETE, "/participants/me")),
         BULK_REGISTER_PARTICIPANT_USERS(
                 "post /participants/me/users/bulk",
+                HttpStatus.MULTI_STATUS,
                 s ->
                         new Call(
                                 HttpMethod.POST,
@@ -267,6 +303,7 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
                                 Map.of("users", List.of(Map.of("identifier", NEW_USER))))),
         REGISTER_PARTICIPANT_USER(
                 "post /participants/me/users",
+                HttpStatus.CREATED,
                 s ->
                         new Call(
                                 HttpMethod.POST,
@@ -274,6 +311,7 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
                                 Map.of("identifier", NEW_USER))),
         UPDATE_LINK(
                 "patch /participants/me/users/{identifier}",
+                HttpStatus.OK,
                 s ->
                         new Call(
                                 HttpMethod.PATCH,
@@ -281,35 +319,43 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
                                 Map.of("localIdentifier", LOCAL_IDENTIFIER))),
         UNLINK(
                 "delete /participants/me/users/{identifier}",
+                HttpStatus.NO_CONTENT,
+                ConsentStatus.REVOKED,
+                true,
                 s -> Call.of(HttpMethod.DELETE, "/participants/me/users/" + s.callerUser())),
         LOOKUP_PARTICIPANT(
                 "get /participants/{identifier}",
+                HttpStatus.OK,
                 s -> Call.of(HttpMethod.GET, "/participants/" + CALLER_PARTICIPANT)),
         GENERATE_PRIVACY_NOTICE(
                 "post /privacy-notices",
+                HttpStatus.CREATED,
                 s ->
                         new Call(
                                 HttpMethod.POST,
                                 "/privacy-notices",
                                 Map.of(
-                                        "contractUri", CONTRACT_URI,
+                                        "contractUri", GENERATED_CONTRACT_URI,
                                         "dataProvider", CALLER_PARTICIPANT,
                                         "dataConsumer", COUNTERPARTY))),
         GENERATE_PRIVACY_NOTICE_BY_CONTRACT(
                 "post /privacy-notices/by-contract",
+                HttpStatus.CREATED,
                 s ->
                         new Call(
                                 HttpMethod.POST,
                                 "/privacy-notices/by-contract",
-                                Map.of("contractUri", CONTRACT_URI))),
+                                Map.of("contractUri", GENERATED_CONTRACT_URI))),
         RETRIEVE_PRIVACY_NOTICE(
                 "get /privacy-notices/{id}",
+                HttpStatus.OK,
                 s ->
                         Call.of(
                                 HttpMethod.GET,
                                 "/privacy-notices/" + s.noticeId() + "?resolve=false")),
         GRANT_CONSENT(
                 "post /consents",
+                HttpStatus.CREATED,
                 null,
                 true,
                 s ->
@@ -321,9 +367,10 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
                                         s.noticeId(),
                                         "decision",
                                         GRANTED_DECISION))),
-        LIST_CONSENTS("get /consents", s -> Call.of(HttpMethod.GET, "/consents")),
+        LIST_CONSENTS("get /consents", HttpStatus.OK, s -> Call.of(HttpMethod.GET, "/consents")),
         REQUEST_CONSENT(
                 "post /consents/requests",
+                HttpStatus.CREATED,
                 null,
                 true,
                 s ->
@@ -335,6 +382,7 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
                                         "userIdentifier", s.callerUser()))),
         CHECK_CONSENT(
                 "get /consents/check",
+                HttpStatus.OK,
                 s ->
                         Call.of(
                                 HttpMethod.GET,
@@ -343,23 +391,30 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
                                         + "&privacyNoticeId="
                                         + s.noticeId())),
         GET_CONSENT(
-                "get /consents/{id}", s -> Call.of(HttpMethod.GET, "/consents/" + s.consentId())),
+                "get /consents/{id}",
+                HttpStatus.OK,
+                s -> Call.of(HttpMethod.GET, "/consents/" + s.consentId())),
         REVOKE_CONSENT(
                 "post /consents/{id}/revoke",
+                HttpStatus.OK,
                 s -> Call.of(HttpMethod.POST, "/consents/" + s.consentId() + "/revoke")),
         REFUSE_CONSENT(
                 "post /consents/{id}/refuse",
+                HttpStatus.OK,
                 ConsentStatus.PENDING,
                 true,
                 s -> Call.of(HttpMethod.POST, "/consents/" + s.consentId() + "/refuse")),
         TERMINATE_CONSENT(
                 "post /consents/{id}/terminate",
+                HttpStatus.OK,
                 s -> Call.of(HttpMethod.POST, "/consents/" + s.consentId() + "/terminate")),
         RE_CONFIRM_CONSENT(
                 "post /consents/{id}/re-confirm",
+                HttpStatus.OK,
                 s -> Call.of(HttpMethod.POST, "/consents/" + s.consentId() + "/re-confirm")),
         RESUME_CONSENT(
                 "post /consents/{id}/resume",
+                HttpStatus.OK,
                 ConsentStatus.PENDING,
                 true,
                 s ->
@@ -367,31 +422,39 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
                                 HttpMethod.POST,
                                 "/consents/" + s.consentId() + "/resume",
                                 Map.of("userIdentifier", s.callerUser()))),
-        LIST_MY_CONSENTS("get /consents/me", s -> Call.of(HttpMethod.GET, "/consents/me")),
+        LIST_MY_CONSENTS(
+                "get /consents/me", HttpStatus.OK, s -> Call.of(HttpMethod.GET, "/consents/me")),
         GET_MY_CONSENT(
                 "get /consents/me/{id}",
+                HttpStatus.OK,
                 s -> Call.of(HttpMethod.GET, "/consents/me/" + s.consentId())),
         LIST_MY_AVAILABLE_CONTRACTS(
-                "get /contracts/available", s -> Call.of(HttpMethod.GET, "/contracts/available")),
+                "get /contracts/available",
+                HttpStatus.OK,
+                s -> Call.of(HttpMethod.GET, "/contracts/available")),
         LIST_AVAILABLE_CONTRACTS(
                 "get /contracts/available/{role}",
+                HttpStatus.OK,
                 s -> Call.of(HttpMethod.GET, "/contracts/available/" + PROVIDER_ROLE));
 
         private final String specification;
+        private final HttpStatus expected;
         private final ConsentStatus seeded;
         private final boolean callerRegistered;
         private final Function<Seeded, Call> factory;
 
-        Endpoint(String specification, Function<Seeded, Call> factory) {
-            this(specification, ConsentStatus.GRANTED, true, factory);
+        Endpoint(String specification, HttpStatus expected, Function<Seeded, Call> factory) {
+            this(specification, expected, ConsentStatus.GRANTED, true, factory);
         }
 
         Endpoint(
                 String specification,
+                HttpStatus expected,
                 ConsentStatus seeded,
                 boolean callerRegistered,
                 Function<Seeded, Call> factory) {
             this.specification = specification;
+            this.expected = expected;
             this.seeded = seeded;
             this.callerRegistered = callerRegistered;
             this.factory = factory;
@@ -444,6 +507,29 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
     }
 
+    /** The caller stands in as both contracts' provider, so it is a party to each. */
+    @BeforeEach
+    void serveContracts() {
+        String contract =
+                ContractFixtures.body(ContractFixtures.ECOSYSTEM)
+                        .replace(FIXTURE_PROVIDER, CALLER_PARTICIPANT);
+        contracts.serveEcosystemContract(SEEDED_CONTRACT, contract);
+        contracts.serveEcosystemContract(GENERATED_CONTRACT, contract);
+    }
+
+    /** Forgets the stubs and whatever they fed the caches, so no answer outlives the case. */
+    @AfterEach
+    void resetContractService() {
+        contracts.reset();
+        caches.getCache(ContractGateway.CACHE_NAME).invalidateAll();
+        caches.getCache(SelfDescriptionClient.CACHE_NAME).invalidateAll();
+    }
+
+    @AfterAll
+    void stopContractService() {
+        contracts.close();
+    }
+
     @ParameterizedTest(name = "{1} on {0}, foreign identity in the {2}")
     @MethodSource("substitutions")
     @DisplayName("a foreign identity in the request is refused or changes nothing")
@@ -454,6 +540,11 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
         Seeded baselineSeed = seed(endpoint);
         HttpResponse<String> baseline =
                 exchange(endpoint, baselineSeed, caller, Map.of(), Map.of());
+        assertThat(baseline.code())
+                .as(
+                        "%s %s without a substitution, so the comparison is not vacuous: %s",
+                        caller, operation, bodyOf(baseline))
+                .isEqualTo(endpoint.expected.getCode());
         List<String> baselineState = storedState();
 
         DatabaseReset.reset();

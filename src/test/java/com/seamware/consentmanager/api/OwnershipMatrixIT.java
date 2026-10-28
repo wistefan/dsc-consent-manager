@@ -599,6 +599,10 @@ class OwnershipMatrixIT extends KeycloakAndPostgresTestResource {
                 foreignSubject.getIdentifier());
     }
 
+    /**
+     * The foreign record as a caller could change it: status, audit events and links. The events
+     * count because re-confirm leaves the consent row as it was and only appends one.
+     */
     private String stateOf(String consentId, User subject) {
         String status =
                 consentId == null
@@ -607,12 +611,27 @@ class OwnershipMatrixIT extends KeycloakAndPostgresTestResource {
                                 .map(Consent::getStatus)
                                 .map(String::valueOf)
                                 .orElse("deleted");
+        String audited =
+                consentId == null
+                        ? ""
+                        : events
+                                .findByConsentIdOrderByOccurredAtAsc(UUID.fromString(consentId))
+                                .stream()
+                                .map(
+                                        event ->
+                                                event.getEventState()
+                                                        + "/"
+                                                        + event.getEventType()
+                                                        + " by "
+                                                        + event.getActor())
+                                .sorted()
+                                .collect(Collectors.joining(","));
         String linked =
                 links.findByIdUserId(subject.getId()).stream()
                         .map(link -> link.getParticipantId() + "=" + link.getLocalIdentifier())
                         .sorted()
                         .collect(Collectors.joining(","));
-        return status + "; links " + linked;
+        return status + "; events " + audited + "; links " + linked;
     }
 
     /** Provisions the token's {@code users} row through one authenticated call, as JIT does. */

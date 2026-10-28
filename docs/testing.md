@@ -45,7 +45,10 @@ survives edits to the cited files. Grep a name before citing it.
   CATALOG | OUTSIDER)` issues a real token for the matching imported realm user. A `PARTICIPANT`
   token carries `KeycloakTestResource.PARTICIPANT_IDENTIFIER`. Commit a `participants` row with
   that identifier first, or every participant-scoped route answers `403`. `OUTSIDER` maps to no
-  role.
+  role. A test that needs another principal calls `KeycloakTestResource.createPrincipal`, which
+  adds a uniquely named realm user. The realm is otherwise read-only at runtime, so its import
+  already sets the user profile's `unmanagedAttributePolicy` to `ADMIN_EDIT`. Without that,
+  Keycloak would drop a created user's `participant_id`.
 - **Stubs and fixtures.** `ContractServiceStub`, `CatalogStub` and `OidcDiscoveryStub` wrap
   WireMock on a dynamic port, reached through `localhost`. Each holder calls `reset()` in
   `@AfterEach` and re-registers any baseline stub in `@BeforeEach`. Contract bodies live in
@@ -117,7 +120,7 @@ port, and only a test on `PostgresTestResource` asserts the collector. Not cover
 | 1 | met | `OwnershipMatrixIT.ownershipDecidesTheAnswer` over consents, receipts, lineage, lifecycle moves, listings, user lookup and participant-user links; a foreign record stays untouched and, where hidden, answers a body identical to the absent one. `EndpointRoleMatrixIT.aParticipantTokenNeverReachesAnotherRecord` for participant records. |
 | 2 | met | `UserDirectoryIT`. |
 | 3 | met | "Cannot read or act on another user's consent." Act: `ConsentLifecycleSurfaceIT.refusesAConsentBelongingToAnotherSubject`; `OwnershipMatrixIT` FOREIGN rows of revoke/refuse/re-confirm/resume. Read: `OwnershipMatrixIT` FOREIGN rows of `GET /consents/me/{id}` in every format; `ConsentQueryServiceIT.hidesAnotherSubjectsConsent` at service level. |
-| 4 | met | `IdentitySubstitutionIT.substitutedIdentityIsRefusedOrIgnored`: every secured operation × admitted role, a foreign identity in the query or as an extra body member is refused or leaves the answer and the stored rows as without it; total through `everySecuredOperationHasARequest`. `EndpointRoleMatrixIT.noWriteRouteLetsTheCallerNameTheRecord`. |
+| 4 | met | `IdentitySubstitutionIT.substitutedIdentityIsRefusedOrIgnored`: every secured operation × admitted role, a foreign identity in the query or as an extra body member is refused or leaves the answer and the stored rows as without it. Each request without the substitution must first answer its pinned success status, the generation and contract-discovery rows included (a stubbed Contract Service serves their contracts), so no case passes on two matching failures; total through `everySecuredOperationHasARequest`. `EndpointRoleMatrixIT.noWriteRouteLetsTheCallerNameTheRecord`. |
 | 5 | met | The "a key genuinely valid at another trusted issuer" case of `ConsentManagerTokenValidatorTest`'s `refusedTokens` source. Step 8 adds `CrossIssuerKeycloakIT`. |
 | 6 | met | `KeycloakKeyRotationIT`. |
 | 7 | met | `IssuerSignatureVerifierTest.unknownKeyIdentifiersTriggerNoRefetch`. Step 8 adds the live-IdP check. |

@@ -132,16 +132,10 @@ public final class KeycloakTestResource {
     /** User attribute the realm's protocol mapper copies into the {@code participant_id} claim. */
     private static final String PARTICIPANT_ATTRIBUTE = "participant_id";
 
-    /** Lets the admin API store {@link #PARTICIPANT_ATTRIBUTE}, which the user profile omits. */
-    private static final String UNMANAGED_ATTRIBUTES_ADMIN_EDIT = "ADMIN_EDIT";
-
     /** Mail domain reserved by RFC 2606, so a created user's address can never be delivered. */
     private static final String CREATED_EMAIL_DOMAIN = "@test.invalid";
 
     private static final int HTTP_NO_CONTENT = 204;
-
-    /** Whether the realm already admits unmanaged attributes; set once per JVM. */
-    private static volatile boolean unmanagedAttributesEnabled;
 
     /** The realm's issuer identifier, which is also what its tokens carry in {@code iss}. */
     public static String issuer() {
@@ -186,9 +180,6 @@ public final class KeycloakTestResource {
      * sub}, which Keycloak assigns, so read it with {@link #subject(String)}.
      */
     public static Supplier<String> createPrincipal(RealmPrincipal role, String identifier) {
-        if (identifier != null) {
-            admitUnmanagedAttributes();
-        }
         String username = role.username + "-" + UUID.randomUUID();
         String attributes =
                 identifier == null
@@ -236,30 +227,6 @@ public final class KeycloakTestResource {
         } catch (ParseException e) {
             throw new IllegalArgumentException("Not a parseable signed JWT", e);
         }
-    }
-
-    /**
-     * Sets the realm user profile's unmanaged-attribute policy, without which Keycloak 26 silently
-     * drops an attribute the admin API is sent. Idempotent; realm config only, no user changes.
-     */
-    private static synchronized void admitUnmanagedAttributes() {
-        if (unmanagedAttributesEnabled) {
-            return;
-        }
-        String profile =
-                sendAdmin("GET", "/users/profile", null, "Reading the user profile").body();
-        try {
-            Map<String, Object> parsed = JSONObjectUtils.parse(profile);
-            parsed.put("unmanagedAttributePolicy", UNMANAGED_ATTRIBUTES_ADMIN_EDIT);
-            sendAdmin(
-                    "PUT",
-                    "/users/profile",
-                    JSONObjectUtils.toJSONString(parsed),
-                    "Updating the user profile");
-        } catch (ParseException e) {
-            throw new IllegalStateException("Keycloak returned a non-JSON user profile", e);
-        }
-        unmanagedAttributesEnabled = true;
     }
 
     /**
