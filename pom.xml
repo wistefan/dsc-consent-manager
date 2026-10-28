@@ -45,6 +45,7 @@
         <openapi.generator.version>7.12.0</openapi.generator.version>
         <swagger-annotations.version>2.2.28</swagger-annotations.version>
         <swagger-parser.version>2.1.38</swagger-parser.version>
+        <swagger-request-validator.version>2.46.1</swagger-request-validator.version>
         <openapi.bundle.directory>${project.build.directory}/openapi-bundle</openapi.bundle.directory>
         <openapi.bundle.file>${openapi.bundle.directory}/openapi.yaml</openapi.bundle.file>
         <jackson-databind-nullable.version>0.2.6</jackson-databind-nullable.version>
@@ -63,6 +64,17 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Keeps swagger-request-validator's parser modules on the project's parser version -->
+            <dependency>
+                <groupId>io.swagger.parser.v3</groupId>
+                <artifactId>swagger-parser</artifactId>
+                <version>${swagger-parser.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.swagger.parser.v3</groupId>
+                <artifactId>swagger-parser-v2-converter</artifactId>
+                <version>${swagger-parser.version}</version>
+            </dependency>
             <!-- Testcontainers BOM for consistent version management -->
             <dependency>
                 <groupId>org.testcontainers</groupId>
@@ -426,6 +438,14 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Validates every IT response against the bundled spec (OpenApiResponseValidationFilter) -->
+        <dependency>
+            <groupId>com.atlassian.oai</groupId>
+            <artifactId>swagger-request-validator-core</artifactId>
+            <version>${swagger-request-validator.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- In-process SMTP server for the notification ITs -->
         <dependency>
             <groupId>com.icegreen</groupId>
@@ -567,6 +587,12 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- OpenApiResponseValidationFilter validates responses against this file. -->
+                    <systemPropertyVariables>
+                        <openapi.bundle.file>${openapi.bundle.file}</openapi.bundle.file>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
 
             <!-- Integration Tests (Failsafe) -->
@@ -574,7 +600,8 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <configuration>
-                    <!-- OpenApiServingIT compares the served spec against this file. -->
+                    <!-- OpenApiServingIT compares the served spec against this file, and
+                         OpenApiResponseValidationFilter validates responses against it. -->
                     <systemPropertyVariables>
                         <openapi.bundle.file>${openapi.bundle.file}</openapi.bundle.file>
                     </systemPropertyVariables>

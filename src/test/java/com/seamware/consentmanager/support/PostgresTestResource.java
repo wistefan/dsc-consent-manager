@@ -1,6 +1,9 @@
 package com.seamware.consentmanager.support;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import io.micronaut.test.support.TestPropertyProvider;
+import jakarta.inject.Inject;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -12,7 +15,8 @@ import org.testcontainers.containers.PostgreSQLContainer;
 /**
  * Shared Testcontainers PostgreSQL 16 fixture supplying the datasource to {@code @MicronautTest}
  * subclasses, which inherit the {@code PER_CLASS} lifecycle {@link TestPropertyProvider} needs.
- * Every subclass test method ends with {@link DatabaseReset}, so no row outlives the method.
+ * Every subclass test method ends with {@link DatabaseReset}, so no row outlives the method, and
+ * with a check that every response it received conformed to the spec.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public abstract class PostgresTestResource implements TestPropertyProvider {
@@ -46,6 +50,18 @@ public abstract class PostgresTestResource implements TestPropertyProvider {
                 "datasources.default.username", POSTGRES.getUsername(),
                 "datasources.default.password", POSTGRES.getPassword(),
                 "datasources.default.driver-class-name", "org.postgresql.Driver");
+    }
+
+    /** Filled by {@link OpenApiResponseValidationFilter}; every subclass is a Micronaut test. */
+    @Inject protected ResponseViolations responseViolations;
+
+    /** Fails a test whose responses broke the spec; final so no subclass can switch it off. */
+    @AfterEach
+    protected final void assertResponsesMatchSpec() {
+        assertThat(responseViolations)
+                .as("response collector; is the subclass missing @MicronautTest?")
+                .isNotNull();
+        assertThat(responseViolations.drain()).as("responses violating the spec").isEmpty();
     }
 
     /** Empties the schema after every test method; final so no subclass can switch it off. */

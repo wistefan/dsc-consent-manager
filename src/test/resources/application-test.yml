@@ -25,6 +25,12 @@ endpoints:
     sensitive: false
     details-visible: ANONYMOUS
 
+# Every response a test client receives from the service is checked against the bundled
+# spec by OpenApiResponseValidationFilter; a test may set this false to opt out.
+test:
+  response-validation:
+    enabled: true
+
 tracing:
   opentelemetry:
     enabled: false
