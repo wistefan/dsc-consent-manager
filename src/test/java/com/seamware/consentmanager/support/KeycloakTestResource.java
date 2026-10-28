@@ -164,9 +164,11 @@ public final class KeycloakTestResource {
     }
 
     /**
-     * Creates an empty, enabled realm whose only active RS256 signing key is {@code signingKey}, so
-     * the caller holds the private half Keycloak signs with. Returns the {@code kid} Keycloak
-     * publishes for it, which it derives from the key and does not take from the caller.
+     * Creates an empty, enabled realm whose highest-priority RS256 signing key is {@code
+     * signingKey}, so the caller holds the private half Keycloak signs with. Keycloak's default
+     * generated RSA key stays active and published beside it. Returns the {@code kid} Keycloak
+     * publishes for the imported key, which it derives from the key and does not take from the
+     * caller.
      */
     public static String createRealmSigningWith(String realm, RSAKey signingKey) {
         sendAdminTo(

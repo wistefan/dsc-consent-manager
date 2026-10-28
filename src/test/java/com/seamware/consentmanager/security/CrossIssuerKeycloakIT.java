@@ -46,8 +46,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Cross-issuer key confusion against two live Keycloak realms, both trusted: a key genuinely valid
- * at realm B must not verify a token claiming realm A, nor make A's refusals dial B's key set.
- * Realm B signs with a key this test generated and imported, so the test can mint its tokens.
+ * at realm B must not verify a token claiming realm A, nor make A's refusals refetch any key set.
+ * Realm B signs with a key this test generated and imported, so the test can mint its tokens. Both
+ * realms' key sets are proxied through counting WireMock fronts.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Cross-issuer key confusion against live Keycloak")
@@ -58,7 +59,10 @@ class CrossIssuerKeycloakIT extends KeycloakAndPostgresTestResource {
 
     private static final String PROBLEM_JSON = "application/problem+json";
 
-    /** Trust-list entry for realm B; realm A is {@code primary}. */
+    /** Trust-list entry for realm A, as {@link KeycloakTestResource} configures it. */
+    private static final String PRIMARY_PROVIDER = "primary";
+
+    /** Trust-list entry for realm B. */
     private static final String SECOND_PROVIDER = "realm-b";
 
     /** Unique per run, since the Keycloak container outlives the test class. */
@@ -66,8 +70,16 @@ class CrossIssuerKeycloakIT extends KeycloakAndPostgresTestResource {
 
     private static final int RSA_KEY_SIZE = 2048;
 
-    /** Cross-issuer tokens presented while realm B's key-set fetches are counted. */
+    /** Cross-issuer tokens presented while key-set fetches are counted. */
     private static final int CROSS_ISSUER_ATTEMPTS = 20;
+
+    private static final String JWKS_CACHE_TTL = "micronaut.caches.jwks.expire-after-write";
+
+    /**
+     * Outlives the class, so a counted window never straddles a cache expiry and every fetch it
+     * sees is one the verifier asked for.
+     */
+    private static final String PINNED_JWKS_CACHE_TTL = "1h";
 
     private static final Duration TOKEN_LIFETIME = Duration.ofMinutes(5);
 
@@ -93,16 +105,18 @@ class CrossIssuerKeycloakIT extends KeycloakAndPostgresTestResource {
 
     private static final String SUBJECT = "cross-issuer-catalog";
 
-    /** Realm B's signing key, private half included; Keycloak signs with it as well. */
+    /**
+     * Realm B's highest-priority signing key, private half included, so the test mints B's tokens.
+     */
     private RSAKey realmBKey;
 
     /** The {@code kid} realm B publishes {@link #realmBKey} under. */
     private String realmBKeyId;
 
-    /**
-     * Fronts realm B's discovery and key set, so each fetch of B's keys is counted; the key set is
-     * proxied from Keycloak unchanged.
-     */
+    /** Fronts realm A's discovery and key set, so each fetch of A's keys is counted. */
+    private WireMockServer realmAFront;
+
+    /** Fronts realm B's discovery and key set, so each fetch of B's keys is counted. */
     private WireMockServer realmBFront;
 
     @Inject
@@ -111,13 +125,21 @@ class CrossIssuerKeycloakIT extends KeycloakAndPostgresTestResource {
 
     @Inject IdentityProviderRegistry registry;
 
-    /** Creates realm B before the context starts and trusts it as a second issuer. */
+    /**
+     * Creates realm B before the context starts, trusts it as a second issuer, and routes both
+     * realms' discovery through the counting fronts.
+     */
     @Override
     public Map<String, String> getProperties() {
         Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
         if (realmBFront == null) {
             startRealmB();
+            realmAFront = frontRealm(KeycloakTestResource.REALM);
         }
+        properties.put(JWKS_CACHE_TTL, PINNED_JWKS_CACHE_TTL);
+        properties.put(
+                IdentityProviderConfiguration.PREFIX + "." + PRIMARY_PROVIDER + ".discovery-url",
+                realmAFront.baseUrl() + DISCOVERY_PATH);
         String prefix = IdentityProviderConfiguration.PREFIX + "." + SECOND_PROVIDER + ".";
         properties.put(prefix + "issuer", KeycloakTestResource.issuer(REALM_B));
         properties.put(prefix + "discovery-url", realmBFront.baseUrl() + DISCOVERY_PATH);
@@ -131,6 +153,9 @@ class CrossIssuerKeycloakIT extends KeycloakAndPostgresTestResource {
 
     @AfterAll
     void removeRealmB() {
+        if (realmAFront != null) {
+            realmAFront.stop();
+        }
         if (realmBFront != null) {
             realmBFront.stop();
         }
@@ -172,23 +197,38 @@ class CrossIssuerKeycloakIT extends KeycloakAndPostgresTestResource {
                                                 "\"status\":" + HttpStatus.UNAUTHORIZED.getCode()));
     }
 
-    /** Security #7: an unknown {@code kid} at A must not send the service to another issuer. */
+    /**
+     * Security #7: B's {@code kid} is unknown at A, the issuer these tokens claim, so a refetch on
+     * an unknown {@code kid} would show as a fetch of A's key set.
+     */
     @Test
-    @DisplayName("repeated cross-issuer tokens never fetch realm B's key set")
-    void crossIssuerTokensLeaveRealmBKeySetUntouched() {
+    @DisplayName("repeated cross-issuer tokens never refetch the claimed issuer's key set")
+    void crossIssuerTokensTriggerNoRefetch() {
+        assertThat(exchange(KeycloakTestResource.accessToken(RealmPrincipal.CATALOG)).code())
+                .as("realm A's key set is cached before counting starts")
+                .isEqualTo(HttpStatus.OK.getCode());
         assertThat(exchange(signedByRealmB(KeycloakTestResource.issuer(REALM_B))).code())
                 .as("realm B's key set is cached before counting starts")
                 .isEqualTo(HttpStatus.OK.getCode());
-        int fetchesBefore = realmBJwksRequestCount();
+        int realmAFetchesBefore = jwksRequestCount(realmAFront, KeycloakTestResource.REALM);
+        int realmBFetchesBefore = jwksRequestCount(realmBFront, REALM_B);
+        assertThat(List.of(realmAFetchesBefore, realmBFetchesBefore))
+                .as("both realms' key sets are served through their counting fronts")
+                .allMatch(fetches -> fetches > 0);
 
         for (int attempt = 0; attempt < CROSS_ISSUER_ATTEMPTS; attempt++) {
             assertThat(exchange(signedByRealmB(KeycloakTestResource.issuer())).code())
                     .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
         }
 
-        assertThat(realmBJwksRequestCount())
-                .as("a token is verified only against the keys of the issuer it claims")
-                .isEqualTo(fetchesBefore);
+        assertThat(jwksRequestCount(realmAFront, KeycloakTestResource.REALM))
+                .as("an unknown kid at the claimed issuer must not refetch its key set")
+                .isEqualTo(realmAFetchesBefore);
+        assertThat(jwksRequestCount(realmBFront, REALM_B))
+                .as(
+                        "realm B's key set is never fetched; bounded by its warm cache, so this"
+                                + " cannot by itself show B's keys were never consulted")
+                .isEqualTo(realmBFetchesBefore);
     }
 
     /** Creates realm B with a generated key and fronts it with a counting WireMock server. */
@@ -199,28 +239,38 @@ class CrossIssuerKeycloakIT extends KeycloakAndPostgresTestResource {
             throw new IllegalStateException("Could not generate realm B's key", e);
         }
         realmBKeyId = KeycloakTestResource.createRealmSigningWith(REALM_B, realmBKey);
-        realmBFront = new WireMockServer(options().dynamicPort());
-        realmBFront.start();
-        URI keycloakJwks = URI.create(KeycloakTestResource.jwksUrl(REALM_B));
-        realmBFront.stubFor(
+        realmBFront = frontRealm(REALM_B);
+    }
+
+    /**
+     * A started WireMock server serving {@code realm}'s discovery document and proxying its key set
+     * from Keycloak unchanged; the caller stops it.
+     */
+    private static WireMockServer frontRealm(String realm) {
+        WireMockServer front = new WireMockServer(options().dynamicPort());
+        front.start();
+        URI keycloakJwks = URI.create(KeycloakTestResource.jwksUrl(realm));
+        front.stubFor(
                 WireMock.get(urlEqualTo(keycloakJwks.getPath()))
                         .willReturn(aResponse().proxiedFrom(origin(keycloakJwks))));
-        realmBFront.stubFor(
+        front.stubFor(
                 WireMock.get(urlEqualTo(DISCOVERY_PATH))
                         .willReturn(
                                 aResponse()
                                         .withHeader(CONTENT_TYPE, JSON)
                                         .withBody(
                                                 discoveryPointingJwksAt(
-                                                        realmBFront.baseUrl()
+                                                        realm,
+                                                        front.baseUrl()
                                                                 + keycloakJwks.getPath()))));
+        return front;
     }
 
-    /** Realm B's genuine discovery document, its {@code jwks_uri} rewritten to the front. */
-    private static String discoveryPointingJwksAt(String jwksUri) {
+    /** {@code realm}'s genuine discovery document, its {@code jwks_uri} rewritten to the front. */
+    private static String discoveryPointingJwksAt(String realm, String jwksUri) {
         java.net.http.HttpRequest request =
                 java.net.http.HttpRequest.newBuilder(
-                                URI.create(KeycloakTestResource.discoveryUrl(REALM_B)))
+                                URI.create(KeycloakTestResource.discoveryUrl(realm)))
                         .timeout(HTTP_TIMEOUT)
                         .GET()
                         .build();
@@ -231,10 +281,11 @@ class CrossIssuerKeycloakIT extends KeycloakAndPostgresTestResource {
             document.put(JWKS_URI_MEMBER, jwksUri);
             return JSONObjectUtils.toJSONString(document);
         } catch (IOException | ParseException e) {
-            throw new IllegalStateException("Could not read realm B's discovery document", e);
+            throw new IllegalStateException("Could not read " + realm + "'s discovery document", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted reading realm B's discovery document", e);
+            throw new IllegalStateException(
+                    "Interrupted reading " + realm + "'s discovery document", e);
         }
     }
 
@@ -269,11 +320,9 @@ class CrossIssuerKeycloakIT extends KeycloakAndPostgresTestResource {
         return token.serialize();
     }
 
-    private int realmBJwksRequestCount() {
-        String path = URI.create(KeycloakTestResource.jwksUrl(REALM_B)).getPath();
-        return realmBFront
-                .countRequestsMatching(getRequestedFor(urlEqualTo(path)).build())
-                .getCount();
+    private static int jwksRequestCount(WireMockServer front, String realm) {
+        String path = URI.create(KeycloakTestResource.jwksUrl(realm)).getPath();
+        return front.countRequestsMatching(getRequestedFor(urlEqualTo(path)).build()).getCount();
     }
 
     /** Presents {@code token} to {@link #ROUTE}; a refusal is returned rather than thrown. */

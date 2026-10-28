@@ -445,8 +445,8 @@ class ConsentManagerTokenValidatorTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("refusedHeaders")
-    @DisplayName("refuses a token the signature-algorithm allow-list excludes")
-    void refusesDisallowedAlgorithms(String description, Supplier<String> token) {
+    @DisplayName("refuses a token its header alone disqualifies")
+    void refusesDisqualifyingHeaders(String description, Supplier<String> token) {
         assertThat(authenticate(token.get()))
                 .as(
                         "%s must be refused for what its header says, not for which key material"
