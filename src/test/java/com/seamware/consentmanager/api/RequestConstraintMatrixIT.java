@@ -30,6 +30,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
@@ -54,9 +55,9 @@ class RequestConstraintMatrixIT extends PrivacyNoticeApiTestSupport {
      * Constrained request properties another matrix already crosses, keyed by that matrix. Together
      * with {@link Constraint} they must equal the spec's constrained request properties.
      */
-    static final Map<String, Set<String>> COVERED_ELSEWHERE =
+    static final Map<Class<?>, Set<String>> COVERED_ELSEWHERE =
             Map.of(
-                    "ParticipantValidationIT",
+                    ParticipantValidationIT.class,
                     Set.of(
                             "ParticipantRegistration.legalName",
                             "ParticipantRegistration.selfDescriptionUri",
@@ -70,7 +71,7 @@ class RequestConstraintMatrixIT extends PrivacyNoticeApiTestSupport {
                             "ParticipantLegalPerson.parentOrganization",
                             "ParticipantLegalPerson.subOrganization",
                             "ParticipantEndpoints.consentNotification"),
-                    "ParticipantUserRegistrationIT",
+                    ParticipantUserRegistrationIT.class,
                     Set.of(
                             "UserRegistration.identifier",
                             "UserRegistration.localIdentifier",
@@ -110,6 +111,12 @@ class RequestConstraintMatrixIT extends PrivacyNoticeApiTestSupport {
     private static final String FORMAT_UUID = "uuid";
 
     private static final String FORMAT_EMAIL = "email";
+
+    /** Schema whose constraints {@code UserService} enforces on each bulk entry. */
+    private static final String BULK_ENTRY_ENFORCED_SCHEMA = "UserRegistration";
+
+    /** Outcome of a bulk entry the service refused inside a {@code 207}. */
+    private static final String REJECTED_OUTCOME = "REJECTED";
 
     /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
@@ -194,6 +201,24 @@ class RequestConstraintMatrixIT extends PrivacyNoticeApiTestSupport {
                 return HttpRequest.POST(
                         "/participants/me/users/bulk", Map.of("users", List.of(entry)));
             }
+
+            /**
+             * The entry schema drops {@code UserRegistration}'s meaning constraints so one bad
+             * entry cannot fail the batch; the service enforces them per entry instead.
+             */
+            @Override
+            Schema<?> enforced(Constraint constraint) {
+                return component(BULK_ENTRY_ENFORCED_SCHEMA)
+                        .getProperties()
+                        .get(constraint.property);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            Optional<Map<String, Object>> entryResult(Map<String, Object> response) {
+                return Optional.of(
+                        ((List<Map<String, Object>>) response.get("results")).getFirst());
+            }
         },
         GRANT_CONSENT(HttpStatus.CREATED) {
             @Override
@@ -237,6 +262,19 @@ class RequestConstraintMatrixIT extends PrivacyNoticeApiTestSupport {
 
         RealmPrincipal caller() {
             return RealmPrincipal.PARTICIPANT;
+        }
+
+        /** The property's schema as the service enforces it once the request is accepted. */
+        Schema<?> enforced(Constraint constraint) {
+            return constraint.declared();
+        }
+
+        /**
+         * The per-entry result of a partial-success route, whose success status alone does not say
+         * whether the value was applied; empty for every other route.
+         */
+        Optional<Map<String, Object>> entryResult(Map<String, Object> response) {
+            return Optional.empty();
         }
     }
 
@@ -319,12 +357,29 @@ class RequestConstraintMatrixIT extends PrivacyNoticeApiTestSupport {
                 exchange(route.request(body), KeycloakTestResource.accessToken(route.caller()));
 
         assertThat(response.code()).as(response.body()).isEqualTo(expected.getCode());
+        if (expected == route.accepted) {
+            boolean applied = kind == Kind.VALID || admitsEmpty(route.enforced(constraint));
+            route.entryResult(body(response))
+                    .ifPresent(entry -> assertEntry(entry, constraint.property, applied));
+        }
         if (expected == HttpStatus.BAD_REQUEST) {
             assertThat(response.getContentType().orElseThrow().toString()).isEqualTo(PROBLEM_JSON);
             assertThat(namedFields(body(response)))
                     .as("the refusal names the property it refused")
                     .contains(constraint.property);
         }
+    }
+
+    /** An applied entry carries a non-rejected outcome; a refused one names the property. */
+    private static void assertEntry(Map<String, Object> entry, String property, boolean applied) {
+        if (applied) {
+            assertThat(entry.get("outcome")).as(entry.toString()).isNotEqualTo(REJECTED_OUTCOME);
+            return;
+        }
+        assertThat(entry.get("outcome")).as(entry.toString()).isEqualTo(REJECTED_OUTCOME);
+        assertThat(namesWord(String.valueOf(entry.get("reason")), property))
+                .as("the entry's refusal names the property it refused: %s", entry)
+                .isTrue();
     }
 
     @Test
@@ -441,12 +496,12 @@ class RequestConstraintMatrixIT extends PrivacyNoticeApiTestSupport {
         String detail = String.valueOf(problem.get("detail"));
         return Arrays.stream(Constraint.values())
                 .map(constraint -> constraint.property)
-                .filter(
-                        property ->
-                                Pattern.compile("\\b" + Pattern.quote(property) + "\\b")
-                                        .matcher(detail)
-                                        .find())
+                .filter(property -> namesWord(detail, property))
                 .collect(Collectors.toSet());
+    }
+
+    private static boolean namesWord(String text, String word) {
+        return Pattern.compile("\\b" + Pattern.quote(word) + "\\b").matcher(text).find();
     }
 
     /** {@code Schema.property} for every constrained property of every request-body schema. */

@@ -71,60 +71,53 @@ class ProblemMappingTest {
 
     private final ApiExceptionHandler handler = new ApiExceptionHandler(serverErrorDetail(false));
 
-    /** One case per exception, with the status, type and title it is contractually rendered as. */
+    /**
+     * One case per exception, with the wire type and title it is rendered as and the detail it
+     * publishes; status and {@link ProblemType} are pinned once, in {@link HandlerMatrix}.
+     */
     static Stream<Arguments> refusals() {
         return Stream.of(
                 Arguments.of(
                         new BadRequestException("identifier: must not be blank"),
-                        400,
                         "bad-request",
                         "Bad Request",
                         "identifier: must not be blank"),
                 Arguments.of(
                         new ForbiddenException("Only the data subject may erase this record."),
-                        403,
                         "forbidden",
                         "Forbidden",
                         "Only the data subject may erase this record."),
                 Arguments.of(
                         new NotFoundException(
                                 "No user is registered under the supplied identifier."),
-                        404,
                         "not-found",
                         "Not Found",
                         "No user is registered under the supplied identifier."),
                 Arguments.of(
                         new ConflictException("The user is already linked to this participant."),
-                        409,
                         "conflict",
                         "Conflict",
                         "The user is already linked to this participant."),
                 Arguments.of(
                         new UpstreamServiceException(UPSTREAM_MESSAGE),
-                        502,
                         "upstream-service",
                         "Bad Gateway",
                         SERVER_ERROR_DETAIL));
     }
 
-    @ParameterizedTest(name = "{2} -> {1}")
+    @ParameterizedTest(name = "{1}")
     @MethodSource("refusals")
-    void rendersDeclaredProblem(
-            ApiException exception, int status, String slug, String title, String detail) {
+    void rendersDeclaredProblem(ApiException exception, String slug, String title, String detail) {
         HttpResponse<ProblemDetail> response =
                 handler.handle(HttpRequest.GET(REQUEST_PATH), exception);
 
-        assertThat(response.status().getCode()).isEqualTo(status);
-        assertThat(response.getContentType()).hasValue(MediaType.of(ProblemType.MEDIA_TYPE));
         assertThat(response.body())
                 .isNotNull()
                 .satisfies(
                         problem -> {
                             assertThat(problem.getType()).isEqualTo(URI.create(TYPE_PREFIX + slug));
                             assertThat(problem.getTitle()).isEqualTo(title);
-                            assertThat(problem.getStatus()).isEqualTo(status);
                             assertThat(problem.getDetail()).isEqualTo(detail);
-                            assertThat(problem.getInstance()).isEqualTo(URI.create(REQUEST_PATH));
                         });
     }
 
@@ -402,47 +395,51 @@ class ProblemMappingTest {
         /** Challenge the 401 carries, standing in for the bearer provider the context binds. */
         private static final String BEARER_CHALLENGE = "Bearer";
 
+        /** Simple-name prefix of the classes Micronaut's annotation processors generate. */
+        private static final String GENERATED_CLASS_PREFIX = "$";
+
         /** One rendering site, driven through the real handler that owns it. */
         enum Producer {
-            BAD_REQUEST_EXCEPTION(BadRequestException.class) {
+            BAD_REQUEST_EXCEPTION(BadRequestException.class, 400, ProblemType.BAD_REQUEST) {
                 @Override
                 HttpResponse<?> render(HttpRequest<?> request) {
                     return apiHandler().handle(request, new BadRequestException("refused"));
                 }
             },
-            FORBIDDEN_EXCEPTION(ForbiddenException.class) {
+            FORBIDDEN_EXCEPTION(ForbiddenException.class, 403, ProblemType.FORBIDDEN) {
                 @Override
                 HttpResponse<?> render(HttpRequest<?> request) {
                     return apiHandler().handle(request, new ForbiddenException("refused"));
                 }
             },
-            NOT_FOUND_EXCEPTION(NotFoundException.class) {
+            NOT_FOUND_EXCEPTION(NotFoundException.class, 404, ProblemType.NOT_FOUND) {
                 @Override
                 HttpResponse<?> render(HttpRequest<?> request) {
                     return apiHandler().handle(request, new NotFoundException("refused"));
                 }
             },
-            CONFLICT_EXCEPTION(ConflictException.class) {
+            CONFLICT_EXCEPTION(ConflictException.class, 409, ProblemType.CONFLICT) {
                 @Override
                 HttpResponse<?> render(HttpRequest<?> request) {
                     return apiHandler().handle(request, new ConflictException("refused"));
                 }
             },
-            UPSTREAM_SERVICE_EXCEPTION(UpstreamServiceException.class) {
+            UPSTREAM_SERVICE_EXCEPTION(
+                    UpstreamServiceException.class, 502, ProblemType.UPSTREAM_SERVICE) {
                 @Override
                 HttpResponse<?> render(HttpRequest<?> request) {
                     return apiHandler()
                             .handle(request, new UpstreamServiceException(UPSTREAM_MESSAGE));
                 }
             },
-            AUTHORIZATION_UNAUTHENTICATED(null) {
+            AUTHORIZATION_UNAUTHENTICATED(null, 401, ProblemType.UNAUTHORIZED) {
                 @Override
                 HttpResponse<?> render(HttpRequest<?> request) {
                     return authorizationHandler()
                             .httpResponseWithStatus(request, new AuthorizationException(null));
                 }
             },
-            AUTHORIZATION_FORBIDDEN(null) {
+            AUTHORIZATION_FORBIDDEN(null, 403, ProblemType.FORBIDDEN) {
                 @Override
                 HttpResponse<?> render(HttpRequest<?> request) {
                     return authorizationHandler()
@@ -451,7 +448,7 @@ class ProblemMappingTest {
                                     new AuthorizationException(Authentication.build("alice")));
                 }
             },
-            CONSTRAINT_VIOLATION(null) {
+            CONSTRAINT_VIOLATION(null, 400, ProblemType.BAD_REQUEST) {
                 @Override
                 HttpResponse<?> render(HttpRequest<?> request) {
                     return new ConstraintViolationProblemHandler()
@@ -463,7 +460,7 @@ class ProblemMappingTest {
                                                     "must not be blank")));
                 }
             },
-            UNHANDLED_EXCEPTION(null) {
+            UNHANDLED_EXCEPTION(null, 500, ProblemType.INTERNAL_SERVER_ERROR) {
                 @Override
                 HttpResponse<?> render(HttpRequest<?> request) {
                     return new GlobalExceptionHandler(serverErrorDetail(false))
@@ -474,32 +471,23 @@ class ProblemMappingTest {
             /** The {@link ApiException} this site renders, or null for a non-domain site. */
             private final Class<? extends ApiException> exceptionType;
 
-            Producer(Class<? extends ApiException> exceptionType) {
+            private final int status;
+            private final ProblemType type;
+
+            Producer(Class<? extends ApiException> exceptionType, int status, ProblemType type) {
                 this.exceptionType = exceptionType;
+                this.status = status;
+                this.type = type;
             }
 
             abstract HttpResponse<?> render(HttpRequest<?> request);
         }
 
-        static Stream<Arguments> rows() {
-            return Stream.of(
-                    Arguments.of(Producer.BAD_REQUEST_EXCEPTION, 400, ProblemType.BAD_REQUEST),
-                    Arguments.of(Producer.FORBIDDEN_EXCEPTION, 403, ProblemType.FORBIDDEN),
-                    Arguments.of(Producer.NOT_FOUND_EXCEPTION, 404, ProblemType.NOT_FOUND),
-                    Arguments.of(Producer.CONFLICT_EXCEPTION, 409, ProblemType.CONFLICT),
-                    Arguments.of(
-                            Producer.UPSTREAM_SERVICE_EXCEPTION, 502, ProblemType.UPSTREAM_SERVICE),
-                    Arguments.of(
-                            Producer.AUTHORIZATION_UNAUTHENTICATED, 401, ProblemType.UNAUTHORIZED),
-                    Arguments.of(Producer.AUTHORIZATION_FORBIDDEN, 403, ProblemType.FORBIDDEN),
-                    Arguments.of(Producer.CONSTRAINT_VIOLATION, 400, ProblemType.BAD_REQUEST),
-                    Arguments.of(
-                            Producer.UNHANDLED_EXCEPTION, 500, ProblemType.INTERNAL_SERVER_ERROR));
-        }
-
-        @ParameterizedTest(name = "{0} -> {1} {2}")
-        @MethodSource("rows")
-        void rendersTheDocumentedProblem(Producer producer, int status, ProblemType type) {
+        @ParameterizedTest
+        @EnumSource(Producer.class)
+        void rendersTheDocumentedProblem(Producer producer) {
+            int status = producer.status;
+            ProblemType type = producer.type;
             HttpResponse<?> response = producer.render(HttpRequest.GET(REQUEST_PATH));
 
             assertThat(response.status().getCode()).isEqualTo(status);
@@ -521,19 +509,13 @@ class ProblemMappingTest {
         @DisplayName("every problem type is produced by some row")
         void everyProblemTypeIsProduced() {
             Set<ProblemType> produced =
-                    rows().map(row -> (ProblemType) row.get()[2])
+                    Arrays.stream(Producer.values())
+                            .map(producer -> producer.type)
                             .collect(
                                     Collectors.toCollection(
                                             () -> EnumSet.noneOf(ProblemType.class)));
 
             assertThat(produced).containsExactlyInAnyOrder(ProblemType.values());
-        }
-
-        @Test
-        @DisplayName("every producer has a row")
-        void everyProducerHasARow() {
-            assertThat(rows().map(row -> (Producer) row.get()[0]))
-                    .containsExactlyInAnyOrder(Producer.values());
         }
 
         @Test
@@ -562,6 +544,7 @@ class ProblemMappingTest {
                 return files.map(root::relativize)
                         .map(java.nio.file.Path::toString)
                         .filter(name -> name.endsWith(CLASS_SUFFIX))
+                        .filter(name -> !isGenerated(name))
                         .map(
                                 name ->
                                         name.substring(0, name.length() - CLASS_SUFFIX.length())
@@ -571,6 +554,11 @@ class ProblemMappingTest {
                         .filter(type -> !Modifier.isAbstract(type.getModifiers()))
                         .collect(Collectors.toSet());
             }
+        }
+
+        /** Micronaut's {@code $Definition}/{@code $Introspection} classes, never an exception. */
+        private static boolean isGenerated(String name) {
+            return name.substring(name.lastIndexOf('.') + 1).startsWith(GENERATED_CLASS_PREFIX);
         }
 
         private static Class<?> load(String name) {
