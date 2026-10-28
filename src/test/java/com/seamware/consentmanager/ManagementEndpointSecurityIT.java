@@ -10,10 +10,12 @@ import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
 import io.micronaut.http.client.HttpClient;
 import io.micronaut.http.client.exceptions.HttpClientResponseException;
+import io.micronaut.http.server.exceptions.ServerStartupException;
 import io.micronaut.runtime.server.EmbeddedServer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.net.BindException;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.util.LinkedHashMap;
@@ -109,6 +111,9 @@ class ManagementEndpointSecurityIT {
     /** Audience the unreachable provider's entry declares; never used, but must not be blank. */
     private static final String UNREACHABLE_PROVIDER_AUDIENCE = "consent-manager";
 
+    /** Management ports probed before giving up; each lost only to a concurrent bind. */
+    private static final int MANAGEMENT_BIND_ATTEMPTS = 5;
+
     /** The port a probe is sent to. */
     private enum Port {
         MANAGEMENT,
@@ -123,10 +128,32 @@ class ManagementEndpointSecurityIT {
             HttpClient apiClient)
             implements AutoCloseable {
 
+        /**
+         * Starts on a probed management port, re-probing when the bind loses the port to another
+         * socket in between: Micronaut binds an exposed port only as given, never at random.
+         */
         static Deployment start(Map<String, Object> overrides) throws MalformedURLException {
-            int managementPort = SocketUtils.findAvailableTcpPort();
-            ApplicationContext context = startContext(overrides, managementPort);
-            EmbeddedServer server = context.getBean(EmbeddedServer.class).start();
+            for (int attempt = 1; ; attempt++) {
+                int managementPort = SocketUtils.findAvailableTcpPort();
+                ApplicationContext context = startContext(overrides, managementPort);
+                EmbeddedServer server;
+                try {
+                    server = context.getBean(EmbeddedServer.class).start();
+                } catch (ServerStartupException e) {
+                    closeQuietly(context);
+                    if (!(e.getCause() instanceof BindException)
+                            || attempt == MANAGEMENT_BIND_ATTEMPTS) {
+                        throw e;
+                    }
+                    continue;
+                }
+                return connect(context, server, managementPort);
+            }
+        }
+
+        private static Deployment connect(
+                ApplicationContext context, EmbeddedServer server, int managementPort)
+                throws MalformedURLException {
             return new Deployment(
                     context,
                     server,
