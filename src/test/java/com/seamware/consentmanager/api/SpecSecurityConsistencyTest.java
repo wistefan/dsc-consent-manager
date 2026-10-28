@@ -677,6 +677,12 @@ class SpecSecurityConsistencyTest {
         return resolve(current, target);
     }
 
+    /** The status codes an operation's {@code responses} declare, {@code default} included. */
+    static Set<String> documentedStatuses(String httpMethod, String path) {
+        Map<String, Object> pathItem = asMap(asMap(loadYaml(SPEC_RESOURCE).get("paths")).get(path));
+        return Set.copyOf(asMap(asMap(pathItem.get(httpMethod)).get("responses")).keySet());
+    }
+
     /** Parses a document of the authored specification. */
     private static Map<String, Object> loadYaml(String resource) {
         try (InputStream stream = Files.newInputStream(SPEC_ROOT.resolve(resource))) {
