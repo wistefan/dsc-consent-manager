@@ -28,11 +28,12 @@ import io.micronaut.serde.ObjectMapper;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
@@ -81,6 +82,13 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
 
     /** The outcome, and the only one answered {@code 201}, of a registration that made the user. */
     private static final String CREATED_OUTCOME = "CREATED";
+
+    /**
+     * Every outcome a registration may report. A racer can adopt the user before its creator links
+     * it, so a loser may say {@code LINKED} as well as {@code ALREADY_LINKED}.
+     */
+    private static final Set<String> REGISTRATION_OUTCOMES =
+            Set.of(CREATED_OUTCOME, "LINKED", "ALREADY_LINKED");
 
     /** Every scenario but the race sends exactly one registration. */
     private static final int SINGLE_CALLER = 1;
@@ -208,27 +216,31 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     void eachStartingStateReachesItsOwnOutcome(Scenario scenario) throws IOException {
         scenario.prime(this);
 
+        // Issued before the barrier, so Keycloak's latency cannot stagger the racers' POSTs.
+        String token = KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT);
         List<Race.Outcome<HttpResponse<String>>> raced =
-                Race.run(scenario.callers, () -> post(Map.of("identifier", scenario.identifier)));
+                Race.run(
+                        scenario.callers,
+                        () -> post(Map.of("identifier", scenario.identifier), token));
 
         assertThat(raced).as("no caller's request threw").allMatch(Race.Outcome::succeeded);
         List<HttpResponse<String>> responses = raced.stream().map(Race.Outcome::value).toList();
-        List<String> outcomes = new ArrayList<>(responses.size());
         for (HttpResponse<String> response : responses) {
-            String outcome = (String) body(response).get("outcome");
-            outcomes.add(outcome);
+            String outcome = outcomeOf(response);
+            assertThat(outcome)
+                    .as("every caller reports a registration outcome")
+                    .isIn(REGISTRATION_OUTCOMES);
             assertThat(response.code())
                     .as("every caller succeeds, and only the creator is told 201")
                     .isEqualTo(statusOf(outcome).getCode());
             assertThat(userOf(response)).containsEntry("identifier", scenario.identifier);
             assertThat(participantsOf(userOf(response))).containsExactly(CALLER_PARTICIPANT);
         }
-        assertThat(outcomes)
-                .as("exactly one caller reaches the scenario's outcome")
-                .filteredOn(scenario.expectedOutcome::equals)
-                .hasSize(1);
-        assertThat(statusOf(scenario.expectedOutcome).getCode())
-                .as("the scenario's status agrees with the route's rule")
+        assertThat(responses)
+                .as("exactly one caller reaches the scenario's outcome, with its status")
+                .filteredOn(response -> scenario.expectedOutcome.equals(outcomeOf(response)))
+                .singleElement()
+                .extracting(HttpResponse::code)
                 .isEqualTo(scenario.expectedStatus.getCode());
         assertThat(RawSql.count(COUNT_USERS, scenario.identifier))
                 .as("PostgreSQL holds one user however many callers raced")
@@ -373,9 +385,20 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     }
 
     private HttpResponse<String> post(Map<String, Object> body) {
-        return exchange(
-                HttpRequest.POST(PATH, body),
-                KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
+        return post(body, KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
+    }
+
+    private HttpResponse<String> post(Map<String, Object> body, String token) {
+        return exchange(HttpRequest.POST(PATH, body), token);
+    }
+
+    /** The {@code outcome} member of a registration result. */
+    private String outcomeOf(HttpResponse<String> response) {
+        try {
+            return (String) body(response).get("outcome");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     /** The {@code user} member of a registration result. */

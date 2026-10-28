@@ -22,6 +22,9 @@ public final class Race {
     /** Longest a whole race may take before the test fails instead of hanging the suite. */
     public static final Duration TIMEOUT = Duration.ofSeconds(60);
 
+    /** Longest a finished or timed-out race waits for its threads before abandoning them. */
+    private static final Duration SHUTDOWN_GRACE = Duration.ofSeconds(5);
+
     private Race() {}
 
     /** How one racer ended: exactly one of {@code value} and {@code failure} is meaningful. */
@@ -41,7 +44,10 @@ public final class Race {
                     start.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
                     return racer.call();
                 };
-        try (ExecutorService pool = Executors.newFixedThreadPool(racers)) {
+        // Not try-with-resources: close() waits unboundedly, and a racer blocked in a socket read
+        // ignores the interrupt, so the pool is abandoned after SHUTDOWN_GRACE instead.
+        ExecutorService pool = Executors.newFixedThreadPool(racers);
+        try {
             List<Future<T>> futures =
                     pool.invokeAll(
                             Collections.nCopies(racers, released),
@@ -55,6 +61,17 @@ public final class Race {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while racing", e);
+        } finally {
+            shutDown(pool);
+        }
+    }
+
+    private static void shutDown(ExecutorService pool) {
+        pool.shutdownNow();
+        try {
+            pool.awaitTermination(SHUTDOWN_GRACE.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
