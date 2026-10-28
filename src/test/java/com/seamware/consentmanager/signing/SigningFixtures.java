@@ -4,6 +4,8 @@ import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSObject;
+import com.nimbusds.jose.Payload;
 import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
@@ -30,8 +32,8 @@ public final class SigningFixtures {
                     JWSAlgorithm.PS256);
 
     /**
-     * For each algorithm, another that a lax verifier might try with the same key: the next curve
-     * for EC, the other padding for RSA.
+     * For each algorithm, another the named key does not publish. An RSA key can genuinely sign
+     * under its sibling padding; an EC key cannot sign for another curve, so EC only relabels.
      */
     private static final Map<JWSAlgorithm, JWSAlgorithm> SIBLING_ALGORITHM =
             Map.of(
@@ -120,16 +122,21 @@ public final class SigningFixtures {
         KID_SWAPPED(
                 "the kid swapped for another published key's",
                 UnaryOperator.identity(),
-                (jws, receipt, keys) -> withHeader(jws, keys.algorithm(), retiredKeyId(keys))),
+                (jws, receipt, keys) ->
+                        resign(receipt, keys, keys.algorithm(), retiredKeyId(keys))),
         KID_UNPUBLISHED(
                 "a kid no key is published under",
                 UnaryOperator.identity(),
-                (jws, receipt, keys) -> withHeader(jws, keys.algorithm(), TAMPERED)),
+                (jws, receipt, keys) -> resign(receipt, keys, keys.algorithm(), TAMPERED)),
         ALG_UNPUBLISHED(
                 "an alg the named key does not publish",
                 UnaryOperator.identity(),
-                (jws, receipt, keys) ->
-                        withHeader(jws, SIBLING_ALGORITHM.get(keys.algorithm()), keys.keyId())),
+                (jws, receipt, keys) -> {
+                    JWSAlgorithm sibling = SIBLING_ALGORITHM.get(keys.algorithm());
+                    return signsAs(keys, sibling)
+                            ? resign(receipt, keys, sibling, keys.keyId())
+                            : relabelled(jws, sibling, keys.keyId());
+                }),
         PAYLOAD_ATTACHED(
                 "an attached payload",
                 UnaryOperator.identity(),
@@ -168,6 +175,18 @@ public final class SigningFixtures {
          */
         public String jws(String jws, Map<String, Object> receipt, SigningKeyStore keys) {
             return jwsTamper.apply(jws, receipt, keys);
+        }
+
+        /**
+         * Whether {@link #jws} yields a genuine signature by the active key over the signed
+         * receipt, so only the verifier's kid or alg binding can refuse it.
+         */
+        public boolean resigned(SigningKeyStore keys) {
+            return switch (this) {
+                case KID_SWAPPED, KID_UNPUBLISHED -> true;
+                case ALG_UNPUBLISHED -> signsAs(keys, SIBLING_ALGORITHM.get(keys.algorithm()));
+                default -> false;
+            };
         }
 
         @Override
@@ -228,10 +247,35 @@ public final class SigningFixtures {
                         () -> new IllegalStateException("The store publishes no retired key."));
     }
 
-    private static String withHeader(String jws, JWSAlgorithm algorithm, String keyId) {
-        JWSHeader header =
-                new JWSHeader.Builder(algorithm).type(JOSEObjectType.JOSE).keyID(keyId).build();
-        return header.toBase64URL() + DOT + DOT + parts(jws)[SIGNATURE_PART];
+    private static JWSHeader header(JWSAlgorithm algorithm, String keyId) {
+        return new JWSHeader.Builder(algorithm).type(JOSEObjectType.JOSE).keyID(keyId).build();
+    }
+
+    private static boolean signsAs(SigningKeyStore keys, JWSAlgorithm algorithm) {
+        return keys.signer().supportedJWSAlgorithms().contains(algorithm);
+    }
+
+    /** A fresh detached JWS by the active key over {@code receipt}, under the given header. */
+    private static String resign(
+            Map<String, Object> receipt,
+            SigningKeyStore keys,
+            JWSAlgorithm algorithm,
+            String keyId) {
+        JWSObject jws =
+                new JWSObject(
+                        header(algorithm, keyId),
+                        new Payload(canonical().toJson(receipt).getBytes(StandardCharsets.UTF_8)));
+        try {
+            jws.sign(keys.signer());
+        } catch (JOSEException e) {
+            throw new IllegalStateException("Could not re-sign the tampered header.", e);
+        }
+        return jws.serialize(true);
+    }
+
+    /** The original signature under a new header, which no longer signs it. */
+    private static String relabelled(String jws, JWSAlgorithm algorithm, String keyId) {
+        return header(algorithm, keyId).toBase64URL() + DOT + DOT + parts(jws)[SIGNATURE_PART];
     }
 
     private static String flipped(String jws) {

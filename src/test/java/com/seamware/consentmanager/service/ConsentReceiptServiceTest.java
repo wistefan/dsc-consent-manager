@@ -475,9 +475,16 @@ class ConsentReceiptServiceTest {
                                 .getAlgorithm())
                 .isEqualTo(algorithm);
         assertThat(ReceiptSignatures.verifies(receipt, jws, published)).isTrue();
+        assertThat(issuer.signing().verify(receipt, jws)).isTrue();
 
         Map<String, Object> presented = tamper.receipt(receipt);
         String presentedJws = tamper.jws(jws, receipt, issuer.keys());
+        if (tamper.resigned(issuer.keys())) {
+            JWK active = issuer.keys().verificationKey(issuer.keys().keyId()).orElseThrow();
+            assertThat(ReceiptSignatures.signedBy(receipt, presentedJws, active))
+                    .as("a genuine signature, so only the kid or alg binding refuses it")
+                    .isTrue();
+        }
 
         assertThat(issuer.signing().verify(presented, presentedJws)).isFalse();
         assertThat(outsiderAccepts(presented, presentedJws, published)).isFalse();
