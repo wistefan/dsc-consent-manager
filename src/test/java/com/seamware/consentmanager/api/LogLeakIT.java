@@ -30,6 +30,7 @@ import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
 import com.seamware.consentmanager.support.LogCapture;
+import com.seamware.consentmanager.support.TokenTampering;
 import io.micronaut.context.annotation.Property;
 import io.micronaut.context.annotation.Replaces;
 import io.micronaut.context.annotation.Requires;
@@ -71,7 +72,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 
 /**
  * Proves no event at INFO or above quotes a bearer token, a private key member, the pseudonym key
- * or a personal identifier, across an authenticated end-to-end run and two forced server failures.
+ * or a personal identifier, across an authenticated end-to-end run, the token rejection paths and
+ * two forced server failures. Participant identifiers name organisations and are logged by design.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Log hygiene above DEBUG")
@@ -100,6 +102,11 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
             "malformed-log-leak-token.c2VudGluZWwtcGF5bG9hZC1sb2ctbGVhaw.not-a-signature";
 
     private static final String QUERY_TOKEN_PARAMETER = "access_token";
+
+    /** Issuer no trust-list entry names; {@code .invalid}, so nothing could ever answer for it. */
+    private static final String UNKNOWN_ISSUER = "https://log-leak-issuer.invalid/realms/other";
+
+    private static final String ISSUER_CLAIM = "iss";
 
     private static final String PATH_REGISTER = "/users/register";
 
@@ -246,6 +253,28 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
                                         null)
                                 .code())
                 .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+        assertThat(
+                        exchange(
+                                        HttpRequest.GET(PATH_ME),
+                                        sent(
+                                                TokenTampering.withFlippedSignatureBit(
+                                                        mint(RealmPrincipal.USER))))
+                                .code())
+                .as("a bad signature")
+                .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+        assertThat(
+                        exchange(
+                                        HttpRequest.GET(PATH_ME),
+                                        sent(
+                                                TokenTampering.withClaims(
+                                                        mint(RealmPrincipal.USER),
+                                                        claims ->
+                                                                claims.put(
+                                                                        ISSUER_CLAIM,
+                                                                        UNKNOWN_ISSUER))))
+                                .code())
+                .as("an issuer not on the trust list")
+                .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
         for (ForcedFailure failure : ForcedFailure.values()) {
             discovery.failure = failure::raise;
             assertThat(exchange(HttpRequest.GET(PATH_DISCOVERY), mint(RealmPrincipal.USER)).code())
@@ -373,6 +402,12 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
     /** Issues a token for {@code principal} and records it as one the scan must not find. */
     private String mint(RealmPrincipal principal) {
         String token = KeycloakTestResource.accessToken(principal);
+        sentTokens.add(token);
+        return token;
+    }
+
+    /** Records a token derived from a minted one, so the scan searches for it as well. */
+    private String sent(String token) {
         sentTokens.add(token);
         return token;
     }

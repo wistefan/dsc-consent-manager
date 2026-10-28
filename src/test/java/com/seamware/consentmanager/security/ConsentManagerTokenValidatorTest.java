@@ -15,6 +15,7 @@ import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.OidcDiscoveryStub;
+import com.seamware.consentmanager.support.TokenTampering;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micronaut.context.ApplicationContext;
@@ -31,6 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
@@ -146,6 +148,13 @@ class ConsentManagerTokenValidatorTest {
     /** A string that is a bearer token in position only. */
     private static final String MALFORMED_TOKEN = "not.a.jwt";
 
+    /** Where a forged {@code x5u} header points; {@code .invalid} so nothing could answer. */
+    private static final URI ATTACKER_CERTIFICATE_URL =
+            URI.create("https://attacker.invalid/certificate.pem");
+
+    /** A {@code crit} member no implementation of this service understands. */
+    private static final String UNRECOGNISED_CRITICAL_PARAMETER = "urn:test:unrecognised";
+
     private static OidcDiscoveryStub primary;
     private static OidcDiscoveryStub secondary;
     private static ApplicationContext context;
@@ -242,6 +251,57 @@ class ConsentManagerTokenValidatorTest {
                                 () ->
                                         signWithForeignKey(
                                                 UNPUBLISHED_KEY_ID, claims(primary.issuer())))),
+                Arguments.of(
+                        "no kid, signed by a key the issuer does not publish",
+                        token(() -> signWithForeignKey(null, claims(primary.issuer())))),
+                Arguments.of(
+                        "an embedded jwk header carrying the key that signed it",
+                        token(
+                                () ->
+                                        TokenTampering.resigned(
+                                                sign(primary, claims(primary.issuer())),
+                                                foreignKey,
+                                                new JWSHeader.Builder(JWSAlgorithm.RS256)
+                                                        .keyID(primary.initialKeyId())
+                                                        .jwk(foreignKey.toPublicJWK())))),
+                Arguments.of(
+                        "a jku header naming another trusted issuer's key set, signed by its key",
+                        token(
+                                () ->
+                                        secondary
+                                                .signToken(
+                                                        secondary.initialKeyId(),
+                                                        new JWSHeader.Builder(JWSAlgorithm.RS256)
+                                                                .keyID(secondary.initialKeyId())
+                                                                .jwkURL(
+                                                                        URI.create(
+                                                                                secondary
+                                                                                        .jwksUri())),
+                                                        claims(primary.issuer()))
+                                                .serialize())),
+                Arguments.of(
+                        "an x5u header naming a certificate the attacker serves",
+                        token(
+                                () ->
+                                        TokenTampering.resigned(
+                                                sign(primary, claims(primary.issuer())),
+                                                foreignKey,
+                                                new JWSHeader.Builder(JWSAlgorithm.RS256)
+                                                        .keyID(UNPUBLISHED_KEY_ID)
+                                                        .x509CertURL(ATTACKER_CERTIFICATE_URL)))),
+                Arguments.of(
+                        "an RS256 header over the issuer's EC key and its genuine ES256 signature",
+                        token(
+                                () ->
+                                        TokenTampering.withHeader(
+                                                primary.signToken(
+                                                                primary.initialEcKeyId(),
+                                                                claims(primary.issuer()))
+                                                        .serialize(),
+                                                header ->
+                                                        header.put(
+                                                                TokenTampering.ALG,
+                                                                JWSAlgorithm.RS256.getName())))),
                 Arguments.of(
                         "a key genuinely valid at another trusted issuer",
                         token(
@@ -351,9 +411,25 @@ class ConsentManagerTokenValidatorTest {
                 .isEmpty();
     }
 
-    /** Tokens whose header alone disqualifies them, before any key is looked up. */
+    /** Tokens whose header alone disqualifies them, whichever key signed them. */
     private static Stream<Arguments> refusedHeaders() {
         return Stream.of(
+                Arguments.of(
+                        "a genuine signature under a crit parameter nobody understands",
+                        token(
+                                () ->
+                                        primary.signToken(
+                                                        primary.initialKeyId(),
+                                                        new JWSHeader.Builder(JWSAlgorithm.RS256)
+                                                                .keyID(primary.initialKeyId())
+                                                                .criticalParams(
+                                                                        Set.of(
+                                                                                UNRECOGNISED_CRITICAL_PARAMETER))
+                                                                .customParam(
+                                                                        UNRECOGNISED_CRITICAL_PARAMETER,
+                                                                        Boolean.TRUE),
+                                                        claims(primary.issuer()))
+                                                .serialize())),
                 Arguments.of(
                         "alg: none over otherwise impeccable claims",
                         token(() -> new PlainJWT(claims(primary.issuer())).serialize())),
@@ -437,6 +513,22 @@ class ConsentManagerTokenValidatorTest {
                                 + " through the key-selection layer as well as past the header check")
                 .isPresent();
         assertThat(authentication.get().getRoles()).containsExactly(Role.USER.name());
+    }
+
+    /** Pins that the no-kid refusal above is about the foreign key, not the absent kid. */
+    @Test
+    @DisplayName("authenticates a genuinely signed token whose header names no kid")
+    void authenticatesGenuineTokenWithoutKeyId() {
+        String token =
+                primary.signToken(
+                                primary.initialKeyId(),
+                                new JWSHeader.Builder(JWSAlgorithm.RS256),
+                                roles(builder(primary.issuer()), USER_ROLE_VALUE).build())
+                        .serialize();
+
+        assertThat(authenticate(token))
+                .as("RFC 7515 makes kid optional, so every published key of the issuer is tried")
+                .isPresent();
     }
 
     /** Roles claims that grant nothing, each of which must still authenticate. */

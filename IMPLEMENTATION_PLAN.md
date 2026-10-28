@@ -277,8 +277,10 @@ missing cases.
 
   If importing a key into Keycloak proves infeasible, document why in `docs/testing.md` and keep the stub-based
   coverage.
-- **`LogLeakIT`.** Add the participant identifier to the forbidden values, and add the bad-signature and
-  unknown-issuer rejection paths to the exercised scenarios.
+- **`LogLeakIT`.** Add the bad-signature and unknown-issuer rejection paths to the exercised scenarios.
+  *(Plan change during implementation:* the participant identifier is **not** added to the forbidden
+  values. `docs/security.md` ("Allowed as is") permits it, since it names an organisation, and
+  `ConsentStateChangeLog`, the ADR-0015 notification seam, logs provider and consumer at INFO by design.)
 
 **Acceptance:** AC 9 against both stubs and live Keycloak; security #5, #7 and #8 strengthened.
 
