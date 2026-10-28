@@ -8,8 +8,10 @@ import com.nimbusds.jwt.SignedJWT;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.OidcDiscoveryStub;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micronaut.context.ApplicationContext;
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.core.type.Argument;
 import io.micronaut.security.token.jwt.nimbus.ReactiveJwksSignature;
 import io.micronaut.security.token.jwt.signature.ReactiveSignatureConfiguration;
@@ -29,6 +31,7 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import reactor.core.publisher.Mono;
 
@@ -142,6 +145,25 @@ class IssuerSignatureVerifierTest {
         }
     }
 
+    @Test
+    @DisplayName("verifies without a meter registry, as when metrics are switched off")
+    void verifiesWithoutAMeterRegistry() {
+        try (OidcDiscoveryStub provider = new OidcDiscoveryStub();
+                ApplicationContext context = startContext(provider, Map.of())) {
+            awaitResolved(context, provider);
+            IssuerSignatureVerifier unmetered = verifierWith(context, null);
+
+            assertThat(
+                            verify(
+                                    unmetered,
+                                    provider.issuer(),
+                                    provider.signToken(
+                                            provider.initialKeyId(), claims(provider.issuer()))))
+                    .as("the outcome must not depend on whether a meter registry is bound")
+                    .isTrue();
+        }
+    }
+
     @ParameterizedTest(name = "{0} verifications")
     @ValueSource(ints = {2, 5, 20})
     @DisplayName("the key set is fetched once and served from cache within its lifetime")
@@ -187,8 +209,9 @@ class IssuerSignatureVerifierTest {
     }
 
     @ParameterizedTest(name = "issuer: {0}")
+    @NullSource
     @ValueSource(strings = {UNREGISTERED_ISSUER, UNREACHABLE_ISSUER})
-    @DisplayName("an issuer that is not usable costs no outbound request")
+    @DisplayName("an absent or unusable issuer costs no outbound request")
     void makesNoRequestForAnUnusableIssuer(String issuer) {
         Map<String, Object> unresolvable = new LinkedHashMap<>();
         unresolvable.put(PROVIDER_PREFIX + UNREACHABLE + ".issuer", UNREACHABLE_ISSUER);
@@ -548,6 +571,12 @@ class IssuerSignatureVerifierTest {
      */
     private static IssuerSignatureVerifier meteredVerifier(
             ApplicationContext context, SimpleMeterRegistry metrics) {
+        return verifierWith(context, metrics);
+    }
+
+    /** Builds a verifier on the context's real collaborators; {@code null} binds no registry. */
+    private static IssuerSignatureVerifier verifierWith(
+            ApplicationContext context, @Nullable MeterRegistry metrics) {
         return new IssuerSignatureVerifier(
                 context.getBean(IdentityProviderRegistry.class),
                 context.getBean(JwkValidator.class),

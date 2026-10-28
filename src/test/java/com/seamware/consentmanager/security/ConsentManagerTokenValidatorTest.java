@@ -10,6 +10,7 @@ import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
+import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
@@ -34,6 +35,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -147,6 +149,18 @@ class ConsentManagerTokenValidatorTest {
 
     /** A string that is a bearer token in position only. */
     private static final String MALFORMED_TOKEN = "not.a.jwt";
+
+    /** A JWS payload that is well-formed base64url but not a JSON claim set. */
+    private static final String NON_CLAIM_SET_PAYLOAD = "not a claim set";
+
+    /** A subject claim present in form but naming nobody. */
+    private static final String BLANK_SUBJECT = "   ";
+
+    /** Separates the header, payload and signature segments of a compact JWS. */
+    private static final String SEGMENT_SEPARATOR = ".";
+
+    /** Index of the payload among a compact JWS's segments. */
+    private static final int PAYLOAD_SEGMENT = 1;
 
     /** Where a forged {@code x5u} header points; {@code .invalid} so nothing could answer. */
     private static final URI ATTACKER_CERTIFICATE_URL =
@@ -381,6 +395,22 @@ class ConsentManagerTokenValidatorTest {
                                                 primary,
                                                 builder(primary.issuer()).subject(null).build()))),
                 Arguments.of(
+                        "a blank subject",
+                        token(
+                                () ->
+                                        sign(
+                                                primary,
+                                                builder(primary.issuer())
+                                                        .subject(BLANK_SUBJECT)
+                                                        .build()))),
+                Arguments.of(
+                        "a genuine header over a payload that is not a claim set",
+                        token(
+                                () ->
+                                        withPayload(
+                                                sign(primary, claims(primary.issuer())),
+                                                NON_CLAIM_SET_PAYLOAD))),
+                Arguments.of(
                         "a USER token with no user identifier claim",
                         token(
                                 () ->
@@ -440,7 +470,8 @@ class ConsentManagerTokenValidatorTest {
                                         symmetricallySigned(
                                                 primary.initialKeyId(), claims(primary.issuer())))),
                 Arguments.of("a string that is not a JWT", token(() -> MALFORMED_TOKEN)),
-                Arguments.of("an empty token", token(() -> "")));
+                Arguments.of("an empty token", token(() -> "")),
+                Arguments.of("no token at all", token(() -> null)));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -711,6 +742,29 @@ class ConsentManagerTokenValidatorTest {
     }
 
     @Test
+    @DisplayName("refuses and authenticates without a meter registry, as when metrics are off")
+    void validatesWithoutAMeterRegistry() {
+        ConsentManagerTokenValidator unmetered =
+                new ConsentManagerTokenValidator(
+                        context.getBean(IdentityProviderRegistry.class),
+                        context.getBean(IssuerSignatureVerifier.class),
+                        context.getBean(ClaimMapper.class),
+                        null);
+        String subjectless = sign(primary, builder(primary.issuer()).subject(null).build());
+        String valid = sign(primary, roles(builder(primary.issuer()), USER_ROLE_VALUE).build());
+
+        assertThat(
+                        Mono.from(unmetered.validateToken(subjectless, null))
+                                .blockOptional(VALIDATION_TIMEOUT))
+                .as("a counted refusal must not need a bound meter registry")
+                .isEmpty();
+        assertThat(
+                        Mono.from(unmetered.validateToken(valid, null))
+                                .blockOptional(VALIDATION_TIMEOUT))
+                .isPresent();
+    }
+
+    @Test
     @DisplayName("counts no claim refusal for a token that authenticates")
     void countsNothingForAValidToken() {
         double totalBefore = allClaimRejections();
@@ -753,6 +807,13 @@ class ConsentManagerTokenValidatorTest {
     /** Runs a raw compact token through the validator under test. */
     private static Optional<Authentication> authenticate(String token) {
         return Mono.from(validator.validateToken(token, null)).blockOptional(VALIDATION_TIMEOUT);
+    }
+
+    /** Replaces a compact token's payload segment, keeping its header and signature. */
+    private static String withPayload(String token, String payload) {
+        String[] segments = token.split(Pattern.quote(SEGMENT_SEPARATOR));
+        segments[PAYLOAD_SEGMENT] = Base64URL.encode(payload).toString();
+        return String.join(SEGMENT_SEPARATOR, segments);
     }
 
     /** Types a token-minting lambda so a case needs no cast. */

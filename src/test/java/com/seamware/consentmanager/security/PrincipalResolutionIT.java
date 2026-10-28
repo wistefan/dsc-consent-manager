@@ -19,9 +19,12 @@ import io.micronaut.http.client.HttpClient;
 import io.micronaut.http.client.annotation.Client;
 import io.micronaut.http.client.exceptions.HttpClientResponseException;
 import io.micronaut.security.annotation.Secured;
+import io.micronaut.security.authentication.Authentication;
 import io.micronaut.security.rules.SecurityRule;
+import io.micronaut.security.token.validator.TokenValidator;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
+import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
@@ -38,6 +41,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.reactivestreams.Publisher;
+import reactor.core.publisher.Mono;
 
 /**
  * Tests the authorization model end to end: which requests are refused with which status, and the
@@ -71,6 +76,18 @@ class PrincipalResolutionIT extends PostgresTestResource {
 
     /** Probe carrying no {@code @Secured} annotation at all. */
     private static final String UNSECURED_ROUTE = PROBE_PATH + "/unsecured";
+
+    /** Probe that admits anonymous callers yet declares a principal it cannot then be given. */
+    private static final String ANONYMOUS_PRINCIPAL_ROUTE = PROBE_PATH + "/anonymous-principal";
+
+    /** A static resource, served by no route and so carrying no route match. */
+    private static final String STATIC_RESOURCE = "/openapi.yaml";
+
+    /** The one bearer value {@link ForeignTokenValidator} accepts. */
+    private static final String FOREIGN_TOKEN = "foreign-validator-token";
+
+    /** Claim the secondary provider identifies users by, so {@code sub} alone does not do it. */
+    private static final String SECONDARY_USER_IDENTIFIER_CLAIM = "user_id";
 
     /** A path no route is mapped to. */
     private static final String UNMAPPED_ROUTE = "/no-such-route";
@@ -156,6 +173,9 @@ class PrincipalResolutionIT extends PostgresTestResource {
 
     private static final OidcDiscoveryStub IDENTITY_PROVIDER = new OidcDiscoveryStub();
 
+    /** A second trusted provider whose users are identified by a claim other than {@code sub}. */
+    private static final OidcDiscoveryStub SECONDARY_PROVIDER = new OidcDiscoveryStub();
+
     @Inject
     @Client("/")
     HttpClient client;
@@ -176,27 +196,42 @@ class PrincipalResolutionIT extends PostgresTestResource {
         properties.put(
                 IdentityProviderConfiguration.PREFIX + ".primary.discovery-url",
                 IDENTITY_PROVIDER.discoveryUrl());
+        String secondary = IdentityProviderConfiguration.PREFIX + ".secondary.";
+        properties.put(secondary + "issuer", SECONDARY_PROVIDER.issuer());
+        properties.put(secondary + "discovery-url", SECONDARY_PROVIDER.discoveryUrl());
+        properties.put(secondary + "audience", AUDIENCE);
+        properties.put(secondary + "allow-insecure-transport", "true");
+        properties.put(secondary + "claims.user-identifier", SECONDARY_USER_IDENTIFIER_CLAIM);
+        properties.put(secondary + "claims.participant-identifier", PARTICIPANT_IDENTIFIER_CLAIM);
+        properties.put(secondary + "claims.roles", REALM_ACCESS_CLAIM + "," + ROLES_SEGMENT);
+        properties.put(secondary + "role-mapping.user", USER_ROLE);
+        properties.put(secondary + "role-mapping.participant", PARTICIPANT_ROLE);
+        properties.put(secondary + "role-mapping.catalog", CATALOG_ROLE);
         return properties;
     }
 
     @AfterEach
     void resetIdentityProvider() {
         IDENTITY_PROVIDER.reset();
+        SECONDARY_PROVIDER.reset();
     }
 
     /** Stops the stub provider once every test has run. */
     @AfterAll
     static void stopIdentityProvider() {
         IDENTITY_PROVIDER.close();
+        SECONDARY_PROVIDER.close();
     }
 
-    /** Waits for discovery to resolve and makes sure the registered participant exists. */
+    /** Waits for both providers to resolve and makes sure the registered participant exists. */
     @BeforeEach
     void prepare() {
         Await.until(
                 "the stub identity provider to resolve",
                 RESOLUTION_TIMEOUT,
-                () -> registry.findByIssuer(IDENTITY_PROVIDER.issuer()).isPresent());
+                () ->
+                        registry.findByIssuer(IDENTITY_PROVIDER.issuer()).isPresent()
+                                && registry.findByIssuer(SECONDARY_PROVIDER.issuer()).isPresent());
         if (!participants.existsByIdentifier(REGISTERED_PARTICIPANT)) {
             participants.save(
                     new Participant(
@@ -463,6 +498,65 @@ class PrincipalResolutionIT extends PostgresTestResource {
         assertThatIsProblem(get(UNMAPPED_ROUTE, null), HttpStatus.UNAUTHORIZED);
     }
 
+    /** The validator admits any role's identifier; the acting role's own is enforced here. */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("actingRoleWithoutItsIdentifier")
+    @DisplayName("a token lacking the identifier of the role it acts as is refused with 403")
+    void actingRoleWithoutItsIdentifierIsForbidden(String description, String route, String token) {
+        assertThatIsProblem(get(route, token), HttpStatus.FORBIDDEN);
+    }
+
+    /** USER+PARTICIPANT tokens carrying only the identifier of the role the route does not take. */
+    static Stream<Arguments> actingRoleWithoutItsIdentifier() {
+        String[] userAndParticipant = {USER_ROLE, PARTICIPANT_ROLE};
+        return Stream.of(
+                Arguments.of(
+                        "acting as USER with only a participant identifier",
+                        USER_SCOPED_ROUTE,
+                        SECONDARY_PROVIDER
+                                .signToken(
+                                        SECONDARY_PROVIDER.initialKeyId(),
+                                        new JWTClaimsSet.Builder(
+                                                        claims(
+                                                                userAndParticipant,
+                                                                REGISTERED_PARTICIPANT))
+                                                .issuer(SECONDARY_PROVIDER.issuer())
+                                                .build())
+                                .serialize()),
+                Arguments.of(
+                        "acting as PARTICIPANT with only a user identifier",
+                        PARTICIPANT_SCOPED_ROUTE,
+                        token(claims(userAndParticipant, null))));
+    }
+
+    /**
+     * Only this service's validator names a trusted issuer; any other Authentication is refused.
+     */
+    @Test
+    @DisplayName("an authentication no trusted provider issued is refused with 403")
+    void foreignAuthenticationIsForbidden() {
+        assertThatIsProblem(get(ANY_ROUTE, FOREIGN_TOKEN), HttpStatus.FORBIDDEN);
+    }
+
+    /** A principal parameter is never satisfied by default, even where the rule admits anyone. */
+    @Test
+    @DisplayName("a principal parameter on an anonymous route refuses the caller with 401")
+    void anonymousCallerIsNeverBoundAsAPrincipal() {
+        assertThatIsProblem(get(ANONYMOUS_PRINCIPAL_ROUTE, null), HttpStatus.UNAUTHORIZED);
+    }
+
+    /** A request no route matches has no principal parameter for a token to be resolved into. */
+    @Test
+    @DisplayName("a token on a static resource is not resolved into a principal")
+    void staticResourceIgnoresAValidToken() {
+        assertThat(
+                        get(
+                                        STATIC_RESOURCE,
+                                        token(claims(PARTICIPANT_ROLE, UNREGISTERED_PARTICIPANT)))
+                                .code())
+                .isEqualTo(HttpStatus.OK.getCode());
+    }
+
     /** Asserts a refusal: expected status, RFC 7807 body, and nothing said about the issuer. */
     private static void assertThatIsProblem(HttpResponse<String> response, HttpStatus expected) {
         assertThat(response.code()).isEqualTo(expected.getCode());
@@ -613,10 +707,30 @@ class PrincipalResolutionIT extends PostgresTestResource {
                     String.valueOf(user.familyName()));
         }
 
+        /** Admits anyone yet needs a principal, the misconfiguration the binder must refuse. */
+        @Get("/anonymous-principal")
+        @Secured(SecurityRule.IS_ANONYMOUS)
+        String anonymousPrincipal(UserPrincipal user) {
+            return user.identifier();
+        }
+
         /** Carries no access rule on purpose, to assert that forgetting one is a refusal. */
         @Get("/unsecured")
         String unsecured() {
             return "reachable";
+        }
+    }
+
+    /** Authenticates {@link #FOREIGN_TOKEN} as no trusted provider would, naming no issuer. */
+    @Requires(property = PROBE_ENABLED, value = "true")
+    @Singleton
+    static class ForeignTokenValidator implements TokenValidator<HttpRequest<?>> {
+
+        @Override
+        public Publisher<Authentication> validateToken(String token, HttpRequest<?> request) {
+            return FOREIGN_TOKEN.equals(token)
+                    ? Mono.just(Authentication.build(SUBJECT, List.of(USER_ROLE)))
+                    : Mono.empty();
         }
     }
 }

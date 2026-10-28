@@ -53,7 +53,7 @@
         <!-- Code coverage -->
         <jacoco.version>0.8.16</jacoco.version>
         <!-- Merged (unit + integration) BUNDLE ratios, each the measured value rounded down to 0.05
-             (measured 2026-10-27: LINE 0.627, BRANCH 0.454) -->
+             (re-measured 2026-10-28 after Step 11: LINE 0.629, BRANCH 0.459) -->
         <jacoco.minimum.line-coverage>0.60</jacoco.minimum.line-coverage>
         <jacoco.minimum.branch-coverage>0.45</jacoco.minimum.branch-coverage>
 
@@ -773,6 +773,35 @@
                                             <counter>BRANCH</counter>
                                             <value>COVEREDRATIO</value>
                                             <minimum>${jacoco.minimum.branch-coverage}</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                                <!-- Security-critical classes miss no branch, whatever the bundle
+                                     ratio; the trailing `*` takes in their nested types -->
+                                <rule>
+                                    <element>CLASS</element>
+                                    <includes>
+                                        <include>com.seamware.consentmanager.service.ConsentStateMachine*</include>
+                                        <include>com.seamware.consentmanager.domain.ConsentStatus*</include>
+                                        <include>com.seamware.consentmanager.security.ClaimMapper*</include>
+                                        <include>com.seamware.consentmanager.security.PrincipalResolutionFilter*</include>
+                                        <include>com.seamware.consentmanager.security.PrincipalArgumentBinder*</include>
+                                        <include>com.seamware.consentmanager.security.ParticipantPrincipal*</include>
+                                        <include>com.seamware.consentmanager.security.UserPrincipal*</include>
+                                        <include>com.seamware.consentmanager.security.CatalogPrincipal*</include>
+                                        <include>com.seamware.consentmanager.security.ConsentManagerTokenValidator*</include>
+                                        <include>com.seamware.consentmanager.security.IssuerSignatureVerifier*</include>
+                                        <include>com.seamware.consentmanager.security.UnsignedTokenRejector*</include>
+                                        <include>com.seamware.consentmanager.service.CallerScope*</include>
+                                        <include>com.seamware.consentmanager.signing.CanonicalJsonSerializer*</include>
+                                        <include>com.seamware.consentmanager.signing.JwsConsentSigningService*</include>
+                                        <include>com.seamware.consentmanager.signing.SigningKeyStore*</include>
+                                    </includes>
+                                    <limits>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>MISSEDCOUNT</value>
+                                            <maximum>0</maximum>
                                         </limit>
                                     </limits>
                                 </rule>
