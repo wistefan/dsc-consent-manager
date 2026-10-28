@@ -14,6 +14,8 @@ import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
+import com.seamware.consentmanager.support.Race;
+import com.seamware.consentmanager.support.RawSql;
 import io.micronaut.core.type.Argument;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
@@ -27,6 +29,7 @@ import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,8 +44,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * {@code POST /participants/me/users} end to end: guards the outcome and status per starting state,
- * an adoption rewriting attributes, and the body naming a participant other than the token's.
+ * {@code POST /participants/me/users} end to end: guards the outcome and status per starting state
+ * (including a race), an adoption rewriting attributes, and the body naming a foreign participant.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant user registration")
@@ -70,6 +73,27 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     private static final String SMUGGLED_USER = "urn:test:user:registration-smuggled";
 
     private static final String MAPPED_USER = "urn:test:user:registration-mapped";
+
+    private static final String RACED_USER = "urn:test:user:registration-raced";
+
+    /** Parallel registrations of one identifier; enough to make losing the insert routine. */
+    private static final int CONCURRENT_CALLERS = 8;
+
+    /** The outcome, and the only one answered {@code 201}, of a registration that made the user. */
+    private static final String CREATED_OUTCOME = "CREATED";
+
+    /** Every scenario but the race sends exactly one registration. */
+    private static final int SINGLE_CALLER = 1;
+
+    /** Rows {@code users} holds for one identifier, which its unique key bounds at one. */
+    private static final String COUNT_USERS = "SELECT count(*) FROM users WHERE identifier = ?";
+
+    /** The caller's links to one identifier, which the composite key bounds at one. */
+    private static final String COUNT_CALLER_LINKS =
+            "SELECT count(*) FROM user_participants l"
+                    + " JOIN users u ON u.id = l.user_id"
+                    + " JOIN participants p ON p.id = l.participant_id"
+                    + " WHERE u.identifier = ? AND p.identifier = ?";
 
     /** Attributes an earlier registrant recorded, which a later one must not be able to rewrite. */
     private static final Map<String, Object> ORIGINAL_ATTRIBUTES =
@@ -114,7 +138,7 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     private enum Scenario {
 
         /** Nobody carries the identifier: the user is created by this very request. */
-        UNKNOWN_USER(NEW_USER, HttpStatus.CREATED, "CREATED") {
+        UNKNOWN_USER(NEW_USER, HttpStatus.CREATED, CREATED_OUTCOME, SINGLE_CALLER) {
             @Override
             void prime(ParticipantUserRegistrationIT it) {
                 // Deliberately empty: the unprimed directory is the starting state.
@@ -122,7 +146,7 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
         },
 
         /** The user exists but belongs to nobody the caller knows: this request adopts it. */
-        EXISTING_UNLINKED_USER(ADOPTED_USER, HttpStatus.OK, "LINKED") {
+        EXISTING_UNLINKED_USER(ADOPTED_USER, HttpStatus.OK, "LINKED", SINGLE_CALLER) {
             @Override
             void prime(ParticipantUserRegistrationIT it) {
                 it.users.save(new User(ADOPTED_USER, null, null, null));
@@ -130,10 +154,18 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
         },
 
         /** The caller registered the user already, so a repeat changes nothing published. */
-        ALREADY_LINKED_USER(REPEATED_USER, HttpStatus.OK, "ALREADY_LINKED") {
+        ALREADY_LINKED_USER(REPEATED_USER, HttpStatus.OK, "ALREADY_LINKED", SINGLE_CALLER) {
             @Override
             void prime(ParticipantUserRegistrationIT it) {
                 it.post(Map.of("identifier", REPEATED_USER));
+            }
+        },
+
+        /** Nobody carries the identifier and many register it at once: one creates, none fails. */
+        CONCURRENT(RACED_USER, HttpStatus.CREATED, CREATED_OUTCOME, CONCURRENT_CALLERS) {
+            @Override
+            void prime(ParticipantUserRegistrationIT it) {
+                // Deliberately empty: the race itself is the starting state.
             }
         };
 
@@ -143,10 +175,14 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
 
         private final String expectedOutcome;
 
-        Scenario(String identifier, HttpStatus expectedStatus, String expectedOutcome) {
+        private final int callers;
+
+        Scenario(
+                String identifier, HttpStatus expectedStatus, String expectedOutcome, int callers) {
             this.identifier = identifier;
             this.expectedStatus = expectedStatus;
             this.expectedOutcome = expectedOutcome;
+            this.callers = callers;
         }
 
         abstract void prime(ParticipantUserRegistrationIT it);
@@ -172,12 +208,39 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     void eachStartingStateReachesItsOwnOutcome(Scenario scenario) throws IOException {
         scenario.prime(this);
 
-        HttpResponse<String> response = post(Map.of("identifier", scenario.identifier));
+        List<Race.Outcome<HttpResponse<String>>> raced =
+                Race.run(scenario.callers, () -> post(Map.of("identifier", scenario.identifier)));
 
-        assertThat(response.code()).isEqualTo(scenario.expectedStatus.getCode());
-        assertThat(body(response)).containsEntry("outcome", scenario.expectedOutcome);
-        assertThat(userOf(response)).containsEntry("identifier", scenario.identifier);
-        assertThat(participantsOf(userOf(response))).containsExactly(CALLER_PARTICIPANT);
+        assertThat(raced).as("no caller's request threw").allMatch(Race.Outcome::succeeded);
+        List<HttpResponse<String>> responses = raced.stream().map(Race.Outcome::value).toList();
+        List<String> outcomes = new ArrayList<>(responses.size());
+        for (HttpResponse<String> response : responses) {
+            String outcome = (String) body(response).get("outcome");
+            outcomes.add(outcome);
+            assertThat(response.code())
+                    .as("every caller succeeds, and only the creator is told 201")
+                    .isEqualTo(statusOf(outcome).getCode());
+            assertThat(userOf(response)).containsEntry("identifier", scenario.identifier);
+            assertThat(participantsOf(userOf(response))).containsExactly(CALLER_PARTICIPANT);
+        }
+        assertThat(outcomes)
+                .as("exactly one caller reaches the scenario's outcome")
+                .filteredOn(scenario.expectedOutcome::equals)
+                .hasSize(1);
+        assertThat(statusOf(scenario.expectedOutcome).getCode())
+                .as("the scenario's status agrees with the route's rule")
+                .isEqualTo(scenario.expectedStatus.getCode());
+        assertThat(RawSql.count(COUNT_USERS, scenario.identifier))
+                .as("PostgreSQL holds one user however many callers raced")
+                .isOne();
+        assertThat(RawSql.count(COUNT_CALLER_LINKS, scenario.identifier, CALLER_PARTICIPANT))
+                .as("and one link from the caller to it")
+                .isOne();
+    }
+
+    /** The status the route answers an outcome with: only a creation is {@code 201}. */
+    private static HttpStatus statusOf(String outcome) {
+        return CREATED_OUTCOME.equals(outcome) ? HttpStatus.CREATED : HttpStatus.OK;
     }
 
     @Test
