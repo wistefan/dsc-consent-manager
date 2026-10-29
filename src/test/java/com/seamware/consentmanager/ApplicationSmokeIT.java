@@ -12,13 +12,17 @@ import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
 import io.micronaut.http.client.HttpClient;
 import io.micronaut.http.client.annotation.Client;
+import io.micronaut.jdbc.DataSourceResolver;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -26,7 +30,7 @@ import org.junit.jupiter.api.Test;
  * Smoke test: the context starts against real PostgreSQL, Flyway has run, and {@code /health}
  * reports {@code UP} once discovery has resolved the configured identity provider.
  */
-@MicronautTest
+@MicronautTest(transactional = false)
 @DisplayName("Application Smoke Test")
 class ApplicationSmokeIT extends PostgresTestResource {
 
@@ -48,6 +52,11 @@ class ApplicationSmokeIT extends PostgresTestResource {
         return properties;
     }
 
+    @AfterEach
+    void resetIdentityProvider() {
+        IDENTITY_PROVIDER.reset();
+    }
+
     @AfterAll
     static void stopIdentityProvider() {
         IDENTITY_PROVIDER.close();
@@ -60,6 +69,8 @@ class ApplicationSmokeIT extends PostgresTestResource {
     @Inject ApplicationContext applicationContext;
 
     @Inject DataSource dataSource;
+
+    @Inject DataSourceResolver dataSources;
 
     @Test
     @DisplayName("Application context starts successfully")
@@ -74,9 +85,14 @@ class ApplicationSmokeIT extends PostgresTestResource {
     void dataSourceIsAvailable() throws Exception {
         assertThat(dataSource).as("DataSource bean should be injectable").isNotNull();
 
-        try (var connection = dataSource.getConnection()) {
+        try (var connection = connect()) {
             assertThat(connection.isValid(5)).as("DataSource connection should be valid").isTrue();
         }
+    }
+
+    /** A pooled connection; the transaction-aware proxy refuses one outside a transaction. */
+    private Connection connect() throws SQLException {
+        return dataSources.resolve(dataSource).getConnection();
     }
 
     private static final Argument<Map<String, Object>> MAP_TYPE =
@@ -149,7 +165,7 @@ class ApplicationSmokeIT extends PostgresTestResource {
     @Test
     @DisplayName("Flyway has executed and created the schema history table")
     void flywaySchemaHistoryTableExists() throws Exception {
-        try (var connection = dataSource.getConnection();
+        try (var connection = connect();
                 var statement = connection.createStatement();
                 var resultSet =
                         statement.executeQuery(

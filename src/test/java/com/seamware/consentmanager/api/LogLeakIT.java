@@ -15,7 +15,6 @@ import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.UpstreamServiceException;
-import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserParticipantRepository;
@@ -31,6 +30,7 @@ import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
 import com.seamware.consentmanager.support.LogCapture;
+import com.seamware.consentmanager.support.TokenTampering;
 import io.micronaut.context.annotation.Property;
 import io.micronaut.context.annotation.Replaces;
 import io.micronaut.context.annotation.Requires;
@@ -72,7 +72,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 
 /**
  * Proves no event at INFO or above quotes a bearer token, a private key member, the pseudonym key
- * or a personal identifier, across an authenticated end-to-end run and two forced server failures.
+ * or a personal identifier, across an authenticated end-to-end run, the token rejection paths and
+ * two forced server failures. Participant identifiers name organisations and are logged by design.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Log hygiene above DEBUG")
@@ -101,6 +102,11 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
             "malformed-log-leak-token.c2VudGluZWwtcGF5bG9hZC1sb2ctbGVhaw.not-a-signature";
 
     private static final String QUERY_TOKEN_PARAMETER = "access_token";
+
+    /** Issuer no trust-list entry names; {@code .invalid}, so nothing could ever answer for it. */
+    private static final String UNKNOWN_ISSUER = "https://log-leak-issuer.invalid/realms/other";
+
+    private static final String ISSUER_CLAIM = "iss";
 
     private static final String PATH_REGISTER = "/users/register";
 
@@ -183,8 +189,6 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
 
     @Inject PrivacyNoticeRepository notices;
 
-    @Inject ConsentRepository consents;
-
     @Inject FailingDiscoveryService discovery;
 
     @Property(name = PSEUDONYM_KEY_PROPERTY)
@@ -194,8 +198,6 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
 
     /** Every bearer token the run sends, so each is searched for, not only {@link #userToken}. */
     private final Set<String> sentTokens = new LinkedHashSet<>();
-
-    private UUID subjectId;
 
     /** The token user's row as provisioned, read before erasure clears it. */
     private User subject;
@@ -232,7 +234,6 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
         assertThat(exchange(HttpRequest.POST(PATH_REGISTER, ""), userToken).code())
                 .isIn(HttpStatus.OK.getCode(), HttpStatus.CREATED.getCode());
         subject = users.findByIdentifier(KeycloakTestResource.subject(userToken)).orElseThrow();
-        subjectId = subject.getId();
         registerSentinel();
         UUID consent = grant();
         assertThat(exchange(HttpRequest.POST(revokePath(consent), ""), userToken).code())
@@ -251,6 +252,28 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
                                                         .build()),
                                         null)
                                 .code())
+                .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+        assertThat(
+                        exchange(
+                                        HttpRequest.GET(PATH_ME),
+                                        sent(
+                                                TokenTampering.withFlippedSignatureBit(
+                                                        mint(RealmPrincipal.USER))))
+                                .code())
+                .as("a bad signature")
+                .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
+        assertThat(
+                        exchange(
+                                        HttpRequest.GET(PATH_ME),
+                                        sent(
+                                                TokenTampering.withClaims(
+                                                        mint(RealmPrincipal.USER),
+                                                        claims ->
+                                                                claims.put(
+                                                                        ISSUER_CLAIM,
+                                                                        UNKNOWN_ISSUER))))
+                                .code())
+                .as("an issuer not on the trust list")
                 .isEqualTo(HttpStatus.UNAUTHORIZED.getCode());
         for (ForcedFailure failure : ForcedFailure.values()) {
             discovery.failure = failure::raise;
@@ -272,30 +295,9 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
                         .toList();
     }
 
-    /** Deleting a consent cascades its events and receipts; consents restrict everything else. */
     @AfterAll
-    void removeCommittedRowsAndDetach() {
+    void detach() {
         captured.close();
-        if (subjectId != null) {
-            consents.findByUserIdAndStatusIn(subjectId, List.of(ConsentStatus.values()))
-                    .forEach(consents::delete);
-            users.findById(subjectId).ifPresent(users::delete);
-        }
-        // Erasure unlinks the subject, so the discovery requests provisioned a fresh row.
-        if (userToken != null) {
-            users.findByIdentifier(KeycloakTestResource.subject(userToken))
-                    .ifPresent(users::delete);
-        }
-        users.findByIdentifier(SENTINEL_IDENTIFIER).ifPresent(users::delete);
-        if (notice != null) {
-            notices.deleteById(notice.getId());
-        }
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest
@@ -400,6 +402,12 @@ class LogLeakIT extends KeycloakAndPostgresTestResource {
     /** Issues a token for {@code principal} and records it as one the scan must not find. */
     private String mint(RealmPrincipal principal) {
         String token = KeycloakTestResource.accessToken(principal);
+        sentTokens.add(token);
+        return token;
+    }
+
+    /** Records a token derived from a minted one, so the scan searches for it as well. */
+    private String sent(String token) {
         sentTokens.add(token);
         return token;
     }

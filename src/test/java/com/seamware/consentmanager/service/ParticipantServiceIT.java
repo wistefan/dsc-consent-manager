@@ -14,7 +14,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -69,11 +68,6 @@ class ParticipantServiceIT extends PostgresTestResource {
     @Inject ParticipantService participants;
 
     @Inject ParticipantRepository repository;
-
-    @AfterEach
-    void removeCommittedRows() {
-        repository.findByIdentifier(IDENTIFIER).ifPresent(repository::delete);
-    }
 
     @Test
     @DisplayName("writes every mutable field and leaves the identifier alone")

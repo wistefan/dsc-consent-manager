@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.support;
 
 import com.seamware.consentmanager.client.ContractGateway;
+import com.seamware.consentmanager.client.SelfDescriptionClient;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
@@ -59,10 +60,7 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
 
     private static final String RETRY_DELAY = "10ms";
 
-    /**
-     * Participants registered before each case and removed after it. Notices restrict their
-     * parties' deletion, so a leftover row breaks later suites' cleanup.
-     */
+    /** Participants registered before each case; {@link DatabaseReset} removes them after it. */
     private static final List<String> PARTIES =
             List.of(CALLER, FIXTURE_PROVIDER, CONSUMER, OTHER_CONSUMER);
 
@@ -95,17 +93,17 @@ public abstract class PrivacyNoticeApiTestSupport extends KeycloakAndPostgresTes
         contracts.close();
     }
 
+    /** Forgets this test's stubs and whatever they fed the caches, so no answer outlives it. */
+    @AfterEach
+    void resetContractService() {
+        contracts.reset();
+        caches.getCache(ContractGateway.CACHE_NAME).invalidateAll();
+        caches.getCache(SelfDescriptionClient.CACHE_NAME).invalidateAll();
+    }
+
     @BeforeEach
     void registerParties() {
         PARTIES.forEach(this::register);
-    }
-
-    @AfterEach
-    void removeCommittedRows() {
-        notices.deleteAll();
-        PARTIES.forEach(
-                identifier ->
-                        participants.findByIdentifier(identifier).ifPresent(participants::delete));
     }
 
     /** Issues a request with the realm's participant token, returning a refusal as a response. */

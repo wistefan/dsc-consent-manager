@@ -10,6 +10,7 @@ import com.seamware.consentmanager.security.ParticipantPrincipal;
 import com.seamware.consentmanager.support.ContractFixtures;
 import com.seamware.consentmanager.support.ContractServiceStub;
 import com.seamware.consentmanager.support.PostgresTestResource;
+import com.seamware.consentmanager.support.RawSql;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
@@ -24,7 +25,6 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -57,6 +57,11 @@ class PrivacyNoticeConcurrencyIT extends PostgresTestResource {
 
     private static final String SUBJECT = "concurrency-it-subject";
 
+    /** The predicate of {@code uq_privacy_notices_active_contract}, counted at the database. */
+    private static final String COUNT_ACTIVE =
+            "SELECT count(*) FROM privacy_notices"
+                    + " WHERE contract_uri = ? AND provider_id = ? AND archived_at IS NULL";
+
     private static final ContractServiceStub CONTRACTS = new ContractServiceStub();
 
     @Inject ParticipantRepository participants;
@@ -72,21 +77,14 @@ class PrivacyNoticeConcurrencyIT extends PostgresTestResource {
         return properties;
     }
 
+    @AfterEach
+    void resetContractService() {
+        CONTRACTS.reset();
+    }
+
     @AfterAll
     static void stopContractService() {
         CONTRACTS.close();
-    }
-
-    /** A leftover notice would block later suites' participant cleanup via the RESTRICT key. */
-    @AfterEach
-    void removeCommittedRows() {
-        notices.deleteAll();
-        Stream.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @Test
@@ -108,6 +106,9 @@ class PrivacyNoticeConcurrencyIT extends PostgresTestResource {
         assertThat(active)
                 .as("the partial unique index admits one active notice per contract and provider")
                 .hasSize(1);
+        assertThat(RawSql.count(COUNT_ACTIVE, CONTRACT_URI, provider.getId()))
+                .as("and PostgreSQL itself holds exactly one active row, not just the repository")
+                .isOne();
         assertThat(served)
                 .as("every caller succeeded, and all of them were served the surviving notice")
                 .hasSize(RACERS)

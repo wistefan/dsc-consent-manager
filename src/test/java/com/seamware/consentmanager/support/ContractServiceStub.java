@@ -12,8 +12,8 @@ import com.github.tomakehurst.wiremock.http.Fault;
 import java.time.Duration;
 
 /**
- * Stubbed Contract Service, serving or refusing a contract on either endpoint. Owned per test; each
- * method re-stubs its endpoint, so a test can change the answer mid-test.
+ * Stubbed Contract Service, serving or refusing a contract on either endpoint. A per-class holder
+ * calls {@link #reset()} after each test; each method re-stubs, so a test can change the answer.
  */
 public final class ContractServiceStub implements AutoCloseable {
 
@@ -85,6 +85,22 @@ public final class ContractServiceStub implements AutoCloseable {
     }
 
     /**
+     * Misses on the ecosystem endpoint, then holds the bilateral one open like {@link
+     * #serveSlowly}.
+     */
+    public void serveBilateralSlowly(String contractId, Duration delay) {
+        stubStatus(ECOSYSTEM_PATH + contractId, NOT_FOUND);
+        server.stubFor(
+                get(urlEqualTo(BILATERAL_PATH + contractId))
+                        .willReturn(
+                                aResponse()
+                                        .withStatus(OK)
+                                        .withHeader(CONTENT_TYPE, JSON)
+                                        .withFixedDelay((int) delay.toMillis())
+                                        .withBody("{}")));
+    }
+
+    /**
      * Answers the ecosystem endpoint with a failure once, then with the contract. Shows a retry
      * budget spent rather than exhausted.
      */
@@ -135,6 +151,11 @@ public final class ContractServiceStub implements AutoCloseable {
     /** Requests the bilateral endpoint has received for that id. */
     public int bilateralRequestCount(String contractId) {
         return requestCount(BILATERAL_PATH + contractId);
+    }
+
+    /** Drops every stub, scenario and recorded request, so the next test starts unstubbed. */
+    public void reset() {
+        server.resetAll();
     }
 
     @Override

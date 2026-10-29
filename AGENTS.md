@@ -125,6 +125,11 @@ compose.yaml, .env.sample, .dockerignore
 There is **no integration-only flag.** Surefire and Failsafe are declared with no
 `<configuration>` and share the `skipTests` property, and no property separating them is wired
 in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the whole suite.
+Run a single IT with `./mvnw verify -Dit.test=FooIT -Dtest=NoSuchTest -Dsurefire.failIfNoSpecifiedTests=false`.
+
+**Container environment.** The image ships JDK 21 but the build needs JDK 25: install Temurin 25
+and point `JAVA_HOME` at it. The Docker socket is `root:2375`, so the agent user needs
+`sudo chmod 666 /var/run/docker.sock` (or the group) before Testcontainers can start.
 
 ## Key Conventions
 - **API-first.** `api/openapi.yaml` is the source of truth. Never hand-write API interfaces or
@@ -234,6 +239,10 @@ in `pom.xml`. `-DskipUTs` is undefined; Maven ignores it silently and runs the w
   `smtp.host` unset the logging implementation is bound, so tests never reach a mail server.
 - **Config** is externalized to env vars; document every new one in `.env.sample` **and**
   `application.yml`.
+- **Testing (ticket #83).** `docs/testing.md` maps each testing acceptance criterion to its
+  tests; update the row when adding one. Containers are JVM-wide singletons in `support/`
+  (static init, not Micronaut test-resources). Tests deliberately run under the production
+  `logback.xml` (no `logback-test.xml`) so `LogLeakIT` scans the shipped configuration.
 - **Testing.** Testcontainers for real PostgreSQL and Keycloak; WireMock for external stubs;
   parameterized tests where applicable. `*IT` runs under Failsafe. `application-test.yml`
   disables `micronaut.security.enabled`; an authenticated IT uses

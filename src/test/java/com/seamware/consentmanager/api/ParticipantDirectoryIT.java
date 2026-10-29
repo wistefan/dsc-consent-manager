@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.repository.ParticipantRepository;
-import com.seamware.consentmanager.repository.UserParticipantRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.IdentityProviderRegistry;
 import com.seamware.consentmanager.support.Await;
@@ -31,7 +30,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -72,10 +70,6 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
     /** Named by nobody, so a lookup for it is the 404 case. */
     private static final String UNKNOWN = "urn:test:participant:directory-absent";
 
-    /** Every identifier this suite seeds, and the only rows it may remove. */
-    private static final List<String> SEEDED =
-            Stream.concat(ACTIVE.stream(), Stream.of(DEREGISTERED)).toList();
-
     private static final String LEGAL_NAME_PREFIX = "Directory Clinic ";
 
     private static final String SELF_DESCRIPTION_URI_PREFIX = "https://directory.example.org/sd/";
@@ -108,8 +102,6 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
 
     @Inject UserRepository users;
 
-    @Inject UserParticipantRepository links;
-
     @Inject ConsentManagerConfiguration.Participants paging;
 
     /** The identifier of the realm's user, resolved once because reading it costs a token. */
@@ -122,32 +114,16 @@ class ParticipantDirectoryIT extends KeycloakAndPostgresTestResource {
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
         userIdentifier = KeycloakTestResource.subject(token(RealmPrincipal.USER));
-        removeCommittedRows();
         assertThat(participants.count())
                 .as(
                         "this suite asserts page boundaries and totals over the whole directory, so"
-                                + " it needs the table to itself; a row another suite left behind has to"
-                                + " be removed there, since consents and privacy notices restrict the"
-                                + " deletion of a participant they name")
+                                + " it needs the table to itself; DatabaseReset empties it after"
+                                + " every method")
                 .isZero();
         ACTIVE.forEach(identifier -> participants.save(participant(identifier)));
         Participant deregistered = participant(DEREGISTERED);
         deregistered.setDeregisteredAt(Instant.now());
         participants.save(deregistered);
-    }
-
-    /** Removes only the rows seeded here; another suite's may be held by restricting FKs. */
-    @AfterAll
-    void removeCommittedRows() {
-        users.findByIdentifier(userIdentifier)
-                .ifPresent(
-                        user -> {
-                            links.findByIdUserId(user.getId()).forEach(links::delete);
-                            users.delete(user);
-                        });
-        SEEDED.forEach(
-                identifier ->
-                        participants.findByIdentifier(identifier).ifPresent(participants::delete));
     }
 
     @Test

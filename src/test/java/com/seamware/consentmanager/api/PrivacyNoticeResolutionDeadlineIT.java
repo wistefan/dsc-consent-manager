@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -52,6 +53,11 @@ class PrivacyNoticeResolutionDeadlineIT extends PrivacyNoticeApiTestSupport {
         Map<String, String> properties = new LinkedHashMap<>(super.getProperties());
         properties.put("consent-manager.self-description.max-duration", MAX_DURATION.toString());
         return properties;
+    }
+
+    @AfterEach
+    void resetCatalog() {
+        catalog.reset();
     }
 
     @AfterAll

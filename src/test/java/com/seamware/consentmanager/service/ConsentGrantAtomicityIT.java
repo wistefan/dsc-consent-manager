@@ -31,7 +31,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -71,32 +70,6 @@ class ConsentGrantAtomicityIT extends PostgresTestResource {
 
     /** What the racers left behind: the consents recorded, and the refusals the losers got. */
     private record Outcomes(List<UUID> recorded, List<Throwable> refused) {}
-
-    /** Rows these cases commit outlive their transactions, and a notice holds its parties. */
-    @AfterEach
-    void removeCommittedRows() {
-        if (subject != null) {
-            consents.findByUserIdAndStatusIn(subject.getId(), List.of(ConsentStatus.values()))
-                    .forEach(
-                            consent -> {
-                                events.findByConsentIdOrderByOccurredAtAsc(consent.getId())
-                                        .forEach(events::delete);
-                                consents.delete(consent);
-                            });
-            users.delete(subject);
-            subject = null;
-        }
-        if (notice != null) {
-            notices.deleteById(notice.getId());
-            notice = null;
-        }
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
-    }
 
     @Test
     @DisplayName("two first grants leave one consent and answer the loser with a conflict")

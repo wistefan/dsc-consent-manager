@@ -30,7 +30,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -64,8 +63,6 @@ class ConsentRequestIT extends PostgresTestResource {
 
     private static final List<String> NOTICE_CATEGORIES = List.of("contact", "clinical");
 
-    private static final List<String> PARTICIPANTS = List.of(PROVIDER, CONSUMER, BYSTANDER);
-
     private static final List<ConsentStatus> ALL_STATUSES = List.of(ConsentStatus.values());
 
     @Inject ConsentService service;
@@ -84,8 +81,6 @@ class ConsentRequestIT extends PostgresTestResource {
 
     private final List<User> seededUsers = new ArrayList<>();
 
-    private final List<UUID> seededNotices = new ArrayList<>();
-
     /** The ways an ask is turned away, and what each is answered with. */
     private enum Refusal {
         UNKNOWN_NOTICE(NotFoundException.class),
@@ -102,31 +97,10 @@ class ConsentRequestIT extends PostgresTestResource {
         }
     }
 
-    /** Rows this suite commits outlive its transaction, and a notice holds its parties. */
+    /** Forgets this case's users, which {@link #heldByAnyone} reads, as the instance is shared. */
     @AfterEach
-    void removeCommittedRows() {
-        seededUsers.forEach(
-                user -> {
-                    consents.findByUserIdAndStatusIn(user.getId(), ALL_STATUSES)
-                            .forEach(
-                                    consent -> {
-                                        events.findByConsentIdOrderByOccurredAtAsc(consent.getId())
-                                                .forEach(events::delete);
-                                        consents.delete(consent);
-                                    });
-                    links.deleteByIdUserId(user.getId());
-                    users.delete(user);
-                });
+    void forgetSeededUsers() {
         seededUsers.clear();
-        seededNotices.forEach(notices::deleteById);
-        seededNotices.clear();
-    }
-
-    @AfterAll
-    void removeParticipants() {
-        PARTICIPANTS.forEach(
-                identifier ->
-                        participants.findByIdentifier(identifier).ifPresent(participants::delete));
     }
 
     @ParameterizedTest(name = "{0} is refused and writes nothing")
@@ -312,7 +286,6 @@ class ConsentRequestIT extends PostgresTestResource {
                                 participant(PROVIDER).getId(),
                                 consumerId,
                                 payload));
-        seededNotices.add(notice.getId());
         return notice;
     }
 

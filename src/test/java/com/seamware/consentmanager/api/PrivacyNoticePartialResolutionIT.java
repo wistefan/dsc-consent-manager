@@ -20,6 +20,7 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -71,6 +72,11 @@ class PrivacyNoticePartialResolutionIT extends PrivacyNoticeApiTestSupport {
         // Shared by both upstream clients, keeping the timeout cases quick.
         properties.put("consent-manager.contract-service.read-timeout", READ_TIMEOUT);
         return properties;
+    }
+
+    @AfterEach
+    void resetCatalog() {
+        catalog.reset();
     }
 
     @AfterAll

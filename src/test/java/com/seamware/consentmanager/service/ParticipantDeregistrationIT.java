@@ -25,13 +25,8 @@ import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -87,40 +82,11 @@ class ParticipantDeregistrationIT extends PostgresTestResource {
 
     @Inject UserRepository users;
 
-    /** Committed rows outlive the test transaction, so they are tracked and removed by hand. */
-    private final List<Participant> seeded = new ArrayList<>();
-
     private User user;
 
     @BeforeEach
     void seedUser() {
         user = users.save(new User(USER_IDENTIFIER_PREFIX + UUID.randomUUID(), null, null, null));
-    }
-
-    @AfterEach
-    void removeCommittedRows() {
-        Set<UUID> ids = new HashSet<>();
-        seeded.forEach(participant -> ids.add(participant.getId()));
-        consents.findAll()
-                .forEach(
-                        consent -> {
-                            if (names(ids, consent.getProviderId(), consent.getConsumerId())) {
-                                events.findByConsentIdOrderByOccurredAtAsc(consent.getId())
-                                        .forEach(events::delete);
-                                consents.delete(consent);
-                            }
-                        });
-        notices.findAll()
-                .forEach(
-                        notice -> {
-                            if (names(ids, notice.getProviderId(), notice.getConsumerId())) {
-                                notices.delete(notice);
-                            }
-                        });
-        ids.forEach(links::deleteByIdParticipantId);
-        ids.forEach(id -> participants.findById(id).ifPresent(participants::delete));
-        users.delete(user);
-        seeded.clear();
     }
 
     @ParameterizedTest(name = "as {0}")
@@ -358,10 +324,6 @@ class ParticipantDeregistrationIT extends PostgresTestResource {
         CONSUMER
     }
 
-    private static boolean names(Set<UUID> ids, UUID providerId, UUID consumerId) {
-        return ids.contains(providerId) || ids.contains(consumerId);
-    }
-
     private Participant registerThroughTheService() {
         Participant registered =
                 service.register(
@@ -372,7 +334,6 @@ class ParticipantDeregistrationIT extends PostgresTestResource {
                                 CONTACT_EMAIL,
                                 ENDPOINTS,
                                 LEGAL_PERSON));
-        seeded.add(registered);
         return registered;
     }
 
@@ -386,7 +347,6 @@ class ParticipantDeregistrationIT extends PostgresTestResource {
                                 CONTACT_EMAIL,
                                 ENDPOINTS,
                                 LEGAL_PERSON));
-        seeded.add(saved);
         return saved;
     }
 

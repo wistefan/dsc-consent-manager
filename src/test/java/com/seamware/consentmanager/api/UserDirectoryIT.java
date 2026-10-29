@@ -31,7 +31,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -67,9 +66,6 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
 
     /** Shared by every seeded user but {@link #ME_USER}; stored in differing cases on purpose. */
     private static final String SHARED_EMAIL = "ada@example.org";
-
-    private static final List<String> SEEDED_USERS =
-            List.of(LINKED_USER, OTHER_USER, SHARED_USER, ME_USER);
 
     /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
@@ -116,7 +112,6 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
         Participant caller = participant(CALLER_PARTICIPANT, "Directory Caller Ltd");
         Participant other = participant(OTHER_PARTICIPANT, "Directory Other Ltd");
         link(user(LINKED_USER, SHARED_EMAIL.toUpperCase(Locale.ROOT)), caller);
@@ -125,22 +120,6 @@ class UserDirectoryIT extends KeycloakAndPostgresTestResource {
         link(shared, caller);
         link(shared, other);
         link(user(ME_USER, null), caller);
-    }
-
-    /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        SEEDED_USERS.forEach(
-                identifier ->
-                        users.findByIdentifier(identifier)
-                                .ifPresent(
-                                        user -> {
-                                            links.findByIdUserId(user.getId())
-                                                    .forEach(links::delete);
-                                            users.delete(user);
-                                        }));
-        participants.findByIdentifier(OTHER_PARTICIPANT).ifPresent(participants::delete);
-        participants.findByIdentifier(CALLER_PARTICIPANT).ifPresent(participants::delete);
     }
 
     @ParameterizedTest(name = "{0} looking up {1} gets {2}")

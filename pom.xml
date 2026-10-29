@@ -45,20 +45,17 @@
         <openapi.generator.version>7.12.0</openapi.generator.version>
         <swagger-annotations.version>2.2.28</swagger-annotations.version>
         <swagger-parser.version>2.1.38</swagger-parser.version>
+        <swagger-request-validator.version>2.46.1</swagger-request-validator.version>
         <openapi.bundle.directory>${project.build.directory}/openapi-bundle</openapi.bundle.directory>
         <openapi.bundle.file>${openapi.bundle.directory}/openapi.yaml</openapi.bundle.file>
         <jackson-databind-nullable.version>0.2.6</jackson-databind-nullable.version>
 
         <!-- Code coverage -->
-        <jacoco.version>0.8.15</jacoco.version>
-        <!--
-            Minimum line coverage ratio.
-            Set to 0.0 because JaCoCo 0.8.15 cannot instrument Java 25 bytecode
-            (class file version 69). The agent runs but silently produces empty
-            coverage data. When a JaCoCo release adds Java 25 support, bump
-            jacoco.version and raise this to 0.50 or higher.
-        -->
-        <jacoco.minimum.coverage>0.00</jacoco.minimum.coverage>
+        <jacoco.version>0.8.16</jacoco.version>
+        <!-- Merged (unit + integration) BUNDLE ratios, each the measured value rounded down to 0.05
+             (re-measured 2026-10-28 after Step 11: LINE 0.629, BRANCH 0.459) -->
+        <jacoco.minimum.line-coverage>0.60</jacoco.minimum.line-coverage>
+        <jacoco.minimum.branch-coverage>0.45</jacoco.minimum.branch-coverage>
 
         <!-- Code formatting -->
         <spotless.version>3.10.3</spotless.version>
@@ -67,6 +64,17 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Keeps swagger-request-validator's parser modules on the project's parser version -->
+            <dependency>
+                <groupId>io.swagger.parser.v3</groupId>
+                <artifactId>swagger-parser</artifactId>
+                <version>${swagger-parser.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.swagger.parser.v3</groupId>
+                <artifactId>swagger-parser-v2-converter</artifactId>
+                <version>${swagger-parser.version}</version>
+            </dependency>
             <!-- Testcontainers BOM for consistent version management -->
             <dependency>
                 <groupId>org.testcontainers</groupId>
@@ -430,6 +438,14 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Validates every IT response against the bundled spec (OpenApiResponseValidationFilter) -->
+        <dependency>
+            <groupId>com.atlassian.oai</groupId>
+            <artifactId>swagger-request-validator-core</artifactId>
+            <version>${swagger-request-validator.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- In-process SMTP server for the notification ITs -->
         <dependency>
             <groupId>com.icegreen</groupId>
@@ -571,6 +587,12 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- OpenApiResponseValidationFilter validates responses against this file. -->
+                    <systemPropertyVariables>
+                        <openapi.bundle.file>${openapi.bundle.file}</openapi.bundle.file>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
 
             <!-- Integration Tests (Failsafe) -->
@@ -578,7 +600,8 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <configuration>
-                    <!-- OpenApiServingIT compares the served spec against this file. -->
+                    <!-- OpenApiServingIT compares the served spec against this file, and
+                         OpenApiResponseValidationFilter validates responses against it. -->
                     <systemPropertyVariables>
                         <openapi.bundle.file>${openapi.bundle.file}</openapi.bundle.file>
                     </systemPropertyVariables>
@@ -665,6 +688,17 @@
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>${jacoco.version}</version>
+                <!-- Plugin-level so report and check measure the same classes; the agent
+                     executions override it so no `$`/`*` pattern reaches the forked argLine -->
+                <configuration>
+                    <excludes>
+                        <exclude>com/seamware/consentmanager/api/generated/**</exclude>
+                        <!-- Micronaut's compile-time bean definitions, introspections and AOP proxies -->
+                        <exclude>**/$*Definition*</exclude>
+                        <exclude>**/$*Introspection*</exclude>
+                        <exclude>**/$*Intercepted*</exclude>
+                    </excludes>
+                </configuration>
                 <executions>
                     <!-- Prepare the JaCoCo agent for unit tests (Surefire) -->
                     <execution>
@@ -672,6 +706,9 @@
                         <goals>
                             <goal>prepare-agent</goal>
                         </goals>
+                        <configuration>
+                            <excludes combine.self="override"/>
+                        </configuration>
                     </execution>
                     <!-- Prepare the JaCoCo agent for integration tests (Failsafe) -->
                     <execution>
@@ -679,6 +716,9 @@
                         <goals>
                             <goal>prepare-agent-integration</goal>
                         </goals>
+                        <configuration>
+                            <excludes combine.self="override"/>
+                        </configuration>
                     </execution>
                     <!-- Merge unit and integration test execution data -->
                     <execution>
@@ -727,15 +767,45 @@
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>${jacoco.minimum.coverage}</minimum>
+                                            <minimum>${jacoco.minimum.line-coverage}</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${jacoco.minimum.branch-coverage}</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                                <!-- Security-critical classes miss no branch, whatever the bundle
+                                     ratio; the trailing `*` takes in their nested types -->
+                                <rule>
+                                    <element>CLASS</element>
+                                    <includes>
+                                        <include>com.seamware.consentmanager.service.ConsentStateMachine*</include>
+                                        <include>com.seamware.consentmanager.domain.ConsentStatus*</include>
+                                        <include>com.seamware.consentmanager.security.ClaimMapper*</include>
+                                        <include>com.seamware.consentmanager.security.PrincipalResolutionFilter*</include>
+                                        <include>com.seamware.consentmanager.security.PrincipalArgumentBinder*</include>
+                                        <include>com.seamware.consentmanager.security.ParticipantPrincipal*</include>
+                                        <include>com.seamware.consentmanager.security.UserPrincipal*</include>
+                                        <include>com.seamware.consentmanager.security.CatalogPrincipal*</include>
+                                        <include>com.seamware.consentmanager.security.ConsentManagerTokenValidator*</include>
+                                        <include>com.seamware.consentmanager.security.IssuerSignatureVerifier*</include>
+                                        <include>com.seamware.consentmanager.security.UnsignedTokenRejector*</include>
+                                        <include>com.seamware.consentmanager.service.CallerScope*</include>
+                                        <include>com.seamware.consentmanager.signing.CanonicalJsonSerializer*</include>
+                                        <include>com.seamware.consentmanager.signing.JwsConsentSigningService*</include>
+                                        <include>com.seamware.consentmanager.signing.SigningKeyStore*</include>
+                                    </includes>
+                                    <limits>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>MISSEDCOUNT</value>
+                                            <maximum>0</maximum>
                                         </limit>
                                     </limits>
                                 </rule>
                             </rules>
-                            <!-- Exclude generated code from coverage checks -->
-                            <excludes>
-                                <exclude>com/seamware/consentmanager/api/generated/**</exclude>
-                            </excludes>
                         </configuration>
                     </execution>
                 </executions>

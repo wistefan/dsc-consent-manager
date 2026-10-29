@@ -10,11 +10,13 @@ import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
+import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.OidcDiscoveryStub;
+import com.seamware.consentmanager.support.TokenTampering;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micronaut.context.ApplicationContext;
@@ -31,9 +33,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -145,6 +150,25 @@ class ConsentManagerTokenValidatorTest {
     /** A string that is a bearer token in position only. */
     private static final String MALFORMED_TOKEN = "not.a.jwt";
 
+    /** A JWS payload that is well-formed base64url but not a JSON claim set. */
+    private static final String NON_CLAIM_SET_PAYLOAD = "not a claim set";
+
+    /** A subject claim present in form but naming nobody. */
+    private static final String BLANK_SUBJECT = "   ";
+
+    /** Separates the header, payload and signature segments of a compact JWS. */
+    private static final String SEGMENT_SEPARATOR = ".";
+
+    /** Index of the payload among a compact JWS's segments. */
+    private static final int PAYLOAD_SEGMENT = 1;
+
+    /** Where a forged {@code x5u} header points; {@code .invalid} so nothing could answer. */
+    private static final URI ATTACKER_CERTIFICATE_URL =
+            URI.create("https://attacker.invalid/certificate.pem");
+
+    /** A {@code crit} member no implementation of this service understands. */
+    private static final String UNRECOGNISED_CRITICAL_PARAMETER = "urn:test:unrecognised";
+
     private static OidcDiscoveryStub primary;
     private static OidcDiscoveryStub secondary;
     private static ApplicationContext context;
@@ -185,6 +209,12 @@ class ConsentManagerTokenValidatorTest {
                         context.getBean(IssuerSignatureVerifier.class),
                         context.getBean(ClaimMapper.class),
                         claimMetrics);
+    }
+
+    @AfterEach
+    void resetProviders() {
+        primary.reset();
+        secondary.reset();
     }
 
     /** Shuts the context and both stubs down. */
@@ -235,6 +265,57 @@ class ConsentManagerTokenValidatorTest {
                                 () ->
                                         signWithForeignKey(
                                                 UNPUBLISHED_KEY_ID, claims(primary.issuer())))),
+                Arguments.of(
+                        "no kid, signed by a key the issuer does not publish",
+                        token(() -> signWithForeignKey(null, claims(primary.issuer())))),
+                Arguments.of(
+                        "an embedded jwk header carrying the key that signed it",
+                        token(
+                                () ->
+                                        TokenTampering.resigned(
+                                                sign(primary, claims(primary.issuer())),
+                                                foreignKey,
+                                                new JWSHeader.Builder(JWSAlgorithm.RS256)
+                                                        .keyID(primary.initialKeyId())
+                                                        .jwk(foreignKey.toPublicJWK())))),
+                Arguments.of(
+                        "a jku header naming another trusted issuer's key set, signed by its key",
+                        token(
+                                () ->
+                                        secondary
+                                                .signToken(
+                                                        secondary.initialKeyId(),
+                                                        new JWSHeader.Builder(JWSAlgorithm.RS256)
+                                                                .keyID(secondary.initialKeyId())
+                                                                .jwkURL(
+                                                                        URI.create(
+                                                                                secondary
+                                                                                        .jwksUri())),
+                                                        claims(primary.issuer()))
+                                                .serialize())),
+                Arguments.of(
+                        "an x5u header naming a certificate the attacker serves",
+                        token(
+                                () ->
+                                        TokenTampering.resigned(
+                                                sign(primary, claims(primary.issuer())),
+                                                foreignKey,
+                                                new JWSHeader.Builder(JWSAlgorithm.RS256)
+                                                        .keyID(UNPUBLISHED_KEY_ID)
+                                                        .x509CertURL(ATTACKER_CERTIFICATE_URL)))),
+                Arguments.of(
+                        "an RS256 header over the issuer's EC key and its genuine ES256 signature",
+                        token(
+                                () ->
+                                        TokenTampering.withHeader(
+                                                primary.signToken(
+                                                                primary.initialEcKeyId(),
+                                                                claims(primary.issuer()))
+                                                        .serialize(),
+                                                header ->
+                                                        header.put(
+                                                                TokenTampering.ALG,
+                                                                JWSAlgorithm.RS256.getName())))),
                 Arguments.of(
                         "a key genuinely valid at another trusted issuer",
                         token(
@@ -314,6 +395,22 @@ class ConsentManagerTokenValidatorTest {
                                                 primary,
                                                 builder(primary.issuer()).subject(null).build()))),
                 Arguments.of(
+                        "a blank subject",
+                        token(
+                                () ->
+                                        sign(
+                                                primary,
+                                                builder(primary.issuer())
+                                                        .subject(BLANK_SUBJECT)
+                                                        .build()))),
+                Arguments.of(
+                        "a genuine header over a payload that is not a claim set",
+                        token(
+                                () ->
+                                        withPayload(
+                                                sign(primary, claims(primary.issuer())),
+                                                NON_CLAIM_SET_PAYLOAD))),
+                Arguments.of(
                         "a USER token with no user identifier claim",
                         token(
                                 () ->
@@ -344,9 +441,25 @@ class ConsentManagerTokenValidatorTest {
                 .isEmpty();
     }
 
-    /** Tokens whose header alone disqualifies them, before any key is looked up. */
+    /** Tokens whose header alone disqualifies them, whichever key signed them. */
     private static Stream<Arguments> refusedHeaders() {
         return Stream.of(
+                Arguments.of(
+                        "a genuine signature under a crit parameter nobody understands",
+                        token(
+                                () ->
+                                        primary.signToken(
+                                                        primary.initialKeyId(),
+                                                        new JWSHeader.Builder(JWSAlgorithm.RS256)
+                                                                .keyID(primary.initialKeyId())
+                                                                .criticalParams(
+                                                                        Set.of(
+                                                                                UNRECOGNISED_CRITICAL_PARAMETER))
+                                                                .customParam(
+                                                                        UNRECOGNISED_CRITICAL_PARAMETER,
+                                                                        Boolean.TRUE),
+                                                        claims(primary.issuer()))
+                                                .serialize())),
                 Arguments.of(
                         "alg: none over otherwise impeccable claims",
                         token(() -> new PlainJWT(claims(primary.issuer())).serialize())),
@@ -357,13 +470,14 @@ class ConsentManagerTokenValidatorTest {
                                         symmetricallySigned(
                                                 primary.initialKeyId(), claims(primary.issuer())))),
                 Arguments.of("a string that is not a JWT", token(() -> MALFORMED_TOKEN)),
-                Arguments.of("an empty token", token(() -> "")));
+                Arguments.of("an empty token", token(() -> "")),
+                Arguments.of("no token at all", token(() -> null)));
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("refusedHeaders")
-    @DisplayName("refuses a token the signature-algorithm allow-list excludes")
-    void refusesDisallowedAlgorithms(String description, Supplier<String> token) {
+    @DisplayName("refuses a token its header alone disqualifies")
+    void refusesDisqualifyingHeaders(String description, Supplier<String> token) {
         assertThat(authenticate(token.get()))
                 .as(
                         "%s must be refused for what its header says, not for which key material"
@@ -430,6 +544,22 @@ class ConsentManagerTokenValidatorTest {
                                 + " through the key-selection layer as well as past the header check")
                 .isPresent();
         assertThat(authentication.get().getRoles()).containsExactly(Role.USER.name());
+    }
+
+    /** Pins that the no-kid refusal above is about the foreign key, not the absent kid. */
+    @Test
+    @DisplayName("authenticates a genuinely signed token whose header names no kid")
+    void authenticatesGenuineTokenWithoutKeyId() {
+        String token =
+                primary.signToken(
+                                primary.initialKeyId(),
+                                new JWSHeader.Builder(JWSAlgorithm.RS256),
+                                roles(builder(primary.issuer()), USER_ROLE_VALUE).build())
+                        .serialize();
+
+        assertThat(authenticate(token))
+                .as("RFC 7515 makes kid optional, so every published key of the issuer is tried")
+                .isPresent();
     }
 
     /** Roles claims that grant nothing, each of which must still authenticate. */
@@ -612,6 +742,29 @@ class ConsentManagerTokenValidatorTest {
     }
 
     @Test
+    @DisplayName("refuses and authenticates without a meter registry, as when metrics are off")
+    void validatesWithoutAMeterRegistry() {
+        ConsentManagerTokenValidator unmetered =
+                new ConsentManagerTokenValidator(
+                        context.getBean(IdentityProviderRegistry.class),
+                        context.getBean(IssuerSignatureVerifier.class),
+                        context.getBean(ClaimMapper.class),
+                        null);
+        String subjectless = sign(primary, builder(primary.issuer()).subject(null).build());
+        String valid = sign(primary, roles(builder(primary.issuer()), USER_ROLE_VALUE).build());
+
+        assertThat(
+                        Mono.from(unmetered.validateToken(subjectless, null))
+                                .blockOptional(VALIDATION_TIMEOUT))
+                .as("a counted refusal must not need a bound meter registry")
+                .isEmpty();
+        assertThat(
+                        Mono.from(unmetered.validateToken(valid, null))
+                                .blockOptional(VALIDATION_TIMEOUT))
+                .isPresent();
+    }
+
+    @Test
     @DisplayName("counts no claim refusal for a token that authenticates")
     void countsNothingForAValidToken() {
         double totalBefore = allClaimRejections();
@@ -654,6 +807,13 @@ class ConsentManagerTokenValidatorTest {
     /** Runs a raw compact token through the validator under test. */
     private static Optional<Authentication> authenticate(String token) {
         return Mono.from(validator.validateToken(token, null)).blockOptional(VALIDATION_TIMEOUT);
+    }
+
+    /** Replaces a compact token's payload segment, keeping its header and signature. */
+    private static String withPayload(String token, String payload) {
+        String[] segments = token.split(Pattern.quote(SEGMENT_SEPARATOR));
+        segments[PAYLOAD_SEGMENT] = Base64URL.encode(payload).toString();
+        return String.join(SEGMENT_SEPARATOR, segments);
     }
 
     /** Types a token-minting lambda so a case needs no cast. */

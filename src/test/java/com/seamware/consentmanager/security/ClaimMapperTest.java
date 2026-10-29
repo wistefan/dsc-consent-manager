@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.nimbusds.jwt.JWTClaimsSet;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -76,6 +77,9 @@ class ClaimMapperTest {
 
     /** The string an IDP emits when it serialises a boolean claim as a numeric flag. */
     private static final String NUMERIC_TRUE = "1";
+
+    /** A string present in form but carrying nothing, as a claim value or a path segment. */
+    private static final String BLANK_VALUE = "   ";
 
     private final ClaimMapper mapper = new ClaimMapper();
 
@@ -228,6 +232,21 @@ class ClaimMapperTest {
                         claims(Map.of(NAMESPACED_ROLES_CLAIM, USER_ROLE_VALUE)),
                         List.of(NAMESPACED_ROLES_CLAIM),
                         List.of(USER_ROLE_VALUE)),
+                Arguments.of(
+                        "a bare blank string, which counts as no value",
+                        claims(Map.of(NAMESPACED_ROLES_CLAIM, BLANK_VALUE)),
+                        List.of(NAMESPACED_ROLES_CLAIM),
+                        List.of()),
+                Arguments.of(
+                        "a null path segment, which never matches a claim",
+                        claims(Map.of(NAMESPACED_ROLES_CLAIM, List.of(USER_ROLE_VALUE))),
+                        Collections.singletonList(null),
+                        List.of()),
+                Arguments.of(
+                        "a blank path segment, even where a claim of that name exists",
+                        claims(Map.of(BLANK_VALUE, List.of(USER_ROLE_VALUE))),
+                        List.of(BLANK_VALUE),
+                        List.of()),
                 Arguments.of(
                         "a space-separated string, which is never split",
                         claims(

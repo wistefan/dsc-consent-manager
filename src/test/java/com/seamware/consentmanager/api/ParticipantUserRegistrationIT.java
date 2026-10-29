@@ -14,6 +14,8 @@ import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
+import com.seamware.consentmanager.support.Race;
+import com.seamware.consentmanager.support.RawSql;
 import io.micronaut.core.type.Argument;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
@@ -26,13 +28,14 @@ import io.micronaut.serde.ObjectMapper;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -42,8 +45,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * {@code POST /participants/me/users} end to end: guards the outcome and status per starting state,
- * an adoption rewriting attributes, and the body naming a participant other than the token's.
+ * {@code POST /participants/me/users} end to end: guards the outcome and status per starting state
+ * (including a race), an adoption rewriting attributes, and the body naming a foreign participant.
  */
 @MicronautTest(transactional = false)
 @DisplayName("Participant user registration")
@@ -72,14 +75,33 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
 
     private static final String MAPPED_USER = "urn:test:user:registration-mapped";
 
-    private static final List<String> SEEDED_USERS =
-            List.of(
-                    NEW_USER,
-                    EXISTING_USER,
-                    ADOPTED_USER,
-                    REPEATED_USER,
-                    SMUGGLED_USER,
-                    MAPPED_USER);
+    private static final String RACED_USER = "urn:test:user:registration-raced";
+
+    /** Parallel registrations of one identifier; enough to make losing the insert routine. */
+    private static final int CONCURRENT_CALLERS = 8;
+
+    /** The outcome, and the only one answered {@code 201}, of a registration that made the user. */
+    private static final String CREATED_OUTCOME = "CREATED";
+
+    /**
+     * Every outcome a registration may report. A racer can adopt the user before its creator links
+     * it, so a loser may say {@code LINKED} as well as {@code ALREADY_LINKED}.
+     */
+    private static final Set<String> REGISTRATION_OUTCOMES =
+            Set.of(CREATED_OUTCOME, "LINKED", "ALREADY_LINKED");
+
+    /** Every scenario but the race sends exactly one registration. */
+    private static final int SINGLE_CALLER = 1;
+
+    /** Rows {@code users} holds for one identifier, which its unique key bounds at one. */
+    private static final String COUNT_USERS = "SELECT count(*) FROM users WHERE identifier = ?";
+
+    /** The caller's links to one identifier, which the composite key bounds at one. */
+    private static final String COUNT_CALLER_LINKS =
+            "SELECT count(*) FROM user_participants l"
+                    + " JOIN users u ON u.id = l.user_id"
+                    + " JOIN participants p ON p.id = l.participant_id"
+                    + " WHERE u.identifier = ? AND p.identifier = ?";
 
     /** Attributes an earlier registrant recorded, which a later one must not be able to rewrite. */
     private static final Map<String, Object> ORIGINAL_ATTRIBUTES =
@@ -124,7 +146,7 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     private enum Scenario {
 
         /** Nobody carries the identifier: the user is created by this very request. */
-        UNKNOWN_USER(NEW_USER, HttpStatus.CREATED, "CREATED") {
+        UNKNOWN_USER(NEW_USER, HttpStatus.CREATED, CREATED_OUTCOME, SINGLE_CALLER) {
             @Override
             void prime(ParticipantUserRegistrationIT it) {
                 // Deliberately empty: the unprimed directory is the starting state.
@@ -132,7 +154,7 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
         },
 
         /** The user exists but belongs to nobody the caller knows: this request adopts it. */
-        EXISTING_UNLINKED_USER(ADOPTED_USER, HttpStatus.OK, "LINKED") {
+        EXISTING_UNLINKED_USER(ADOPTED_USER, HttpStatus.OK, "LINKED", SINGLE_CALLER) {
             @Override
             void prime(ParticipantUserRegistrationIT it) {
                 it.users.save(new User(ADOPTED_USER, null, null, null));
@@ -140,10 +162,18 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
         },
 
         /** The caller registered the user already, so a repeat changes nothing published. */
-        ALREADY_LINKED_USER(REPEATED_USER, HttpStatus.OK, "ALREADY_LINKED") {
+        ALREADY_LINKED_USER(REPEATED_USER, HttpStatus.OK, "ALREADY_LINKED", SINGLE_CALLER) {
             @Override
             void prime(ParticipantUserRegistrationIT it) {
                 it.post(Map.of("identifier", REPEATED_USER));
+            }
+        },
+
+        /** Nobody carries the identifier and many register it at once: one creates, none fails. */
+        CONCURRENT(RACED_USER, HttpStatus.CREATED, CREATED_OUTCOME, CONCURRENT_CALLERS) {
+            @Override
+            void prime(ParticipantUserRegistrationIT it) {
+                // Deliberately empty: the race itself is the starting state.
             }
         };
 
@@ -153,10 +183,14 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
 
         private final String expectedOutcome;
 
-        Scenario(String identifier, HttpStatus expectedStatus, String expectedOutcome) {
+        private final int callers;
+
+        Scenario(
+                String identifier, HttpStatus expectedStatus, String expectedOutcome, int callers) {
             this.identifier = identifier;
             this.expectedStatus = expectedStatus;
             this.expectedOutcome = expectedOutcome;
+            this.callers = callers;
         }
 
         abstract void prime(ParticipantUserRegistrationIT it);
@@ -167,30 +201,13 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     }
 
     @BeforeEach
-    void awaitTheRealmAndEmptyTheDirectory() {
+    void awaitTheRealmAndSeedTheDirectory() {
         Await.until(
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
         participant(CALLER_PARTICIPANT, "Registration Caller Ltd");
         participant(FOREIGN_PARTICIPANT, "Registration Foreign Ltd");
-    }
-
-    /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        SEEDED_USERS.forEach(
-                identifier ->
-                        users.findByIdentifier(identifier)
-                                .ifPresent(
-                                        user -> {
-                                            links.findByIdUserId(user.getId())
-                                                    .forEach(links::delete);
-                                            users.delete(user);
-                                        }));
-        participants.findByIdentifier(FOREIGN_PARTICIPANT).ifPresent(participants::delete);
-        participants.findByIdentifier(CALLER_PARTICIPANT).ifPresent(participants::delete);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -199,12 +216,43 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     void eachStartingStateReachesItsOwnOutcome(Scenario scenario) throws IOException {
         scenario.prime(this);
 
-        HttpResponse<String> response = post(Map.of("identifier", scenario.identifier));
+        // Issued before the barrier, so Keycloak's latency cannot stagger the racers' POSTs.
+        String token = KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT);
+        List<Race.Outcome<HttpResponse<String>>> raced =
+                Race.run(
+                        scenario.callers,
+                        () -> post(Map.of("identifier", scenario.identifier), token));
 
-        assertThat(response.code()).isEqualTo(scenario.expectedStatus.getCode());
-        assertThat(body(response)).containsEntry("outcome", scenario.expectedOutcome);
-        assertThat(userOf(response)).containsEntry("identifier", scenario.identifier);
-        assertThat(participantsOf(userOf(response))).containsExactly(CALLER_PARTICIPANT);
+        assertThat(raced).as("no caller's request threw").allMatch(Race.Outcome::succeeded);
+        List<HttpResponse<String>> responses = raced.stream().map(Race.Outcome::value).toList();
+        for (HttpResponse<String> response : responses) {
+            String outcome = outcomeOf(response);
+            assertThat(outcome)
+                    .as("every caller reports a registration outcome")
+                    .isIn(REGISTRATION_OUTCOMES);
+            assertThat(response.code())
+                    .as("every caller succeeds, and only the creator is told 201")
+                    .isEqualTo(statusOf(outcome).getCode());
+            assertThat(userOf(response)).containsEntry("identifier", scenario.identifier);
+            assertThat(participantsOf(userOf(response))).containsExactly(CALLER_PARTICIPANT);
+        }
+        assertThat(responses)
+                .as("exactly one caller reaches the scenario's outcome, with its status")
+                .filteredOn(response -> scenario.expectedOutcome.equals(outcomeOf(response)))
+                .singleElement()
+                .extracting(HttpResponse::code)
+                .isEqualTo(scenario.expectedStatus.getCode());
+        assertThat(RawSql.count(COUNT_USERS, scenario.identifier))
+                .as("PostgreSQL holds one user however many callers raced")
+                .isOne();
+        assertThat(RawSql.count(COUNT_CALLER_LINKS, scenario.identifier, CALLER_PARTICIPANT))
+                .as("and one link from the caller to it")
+                .isOne();
+    }
+
+    /** The status the route answers an outcome with: only a creation is {@code 201}. */
+    private static HttpStatus statusOf(String outcome) {
+        return CREATED_OUTCOME.equals(outcome) ? HttpStatus.CREATED : HttpStatus.OK;
     }
 
     @Test
@@ -337,9 +385,20 @@ class ParticipantUserRegistrationIT extends KeycloakAndPostgresTestResource {
     }
 
     private HttpResponse<String> post(Map<String, Object> body) {
-        return exchange(
-                HttpRequest.POST(PATH, body),
-                KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
+        return post(body, KeycloakTestResource.accessToken(RealmPrincipal.PARTICIPANT));
+    }
+
+    private HttpResponse<String> post(Map<String, Object> body, String token) {
+        return exchange(HttpRequest.POST(PATH, body), token);
+    }
+
+    /** The {@code outcome} member of a registration result. */
+    private String outcomeOf(HttpResponse<String> response) {
+        try {
+            return (String) body(response).get("outcome");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     /** The {@code user} member of a registration result. */

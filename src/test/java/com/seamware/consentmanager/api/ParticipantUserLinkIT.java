@@ -40,10 +40,8 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -75,9 +73,6 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
     private static final String CONSENTING_USER = "urn:test:user:link-consenting";
 
     private static final String UNKNOWN_USER = "urn:test:user:link-nobody";
-
-    private static final List<String> SEEDED_USERS =
-            List.of(LINKED_USER, UNLINKED_USER, CONSENTING_USER);
 
     private static final List<String> SEEDED_PARTICIPANTS =
             List.of(CALLER_PARTICIPANT, FOREIGN_PARTICIPANT, THIRD_PARTICIPANT);
@@ -131,38 +126,10 @@ class ParticipantUserLinkIT extends KeycloakAndPostgresTestResource {
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
         SEEDED_PARTICIPANTS.forEach(identifier -> participant(identifier));
         seedUser(LINKED_USER, CALLER_PARTICIPANT, FOREIGN_PARTICIPANT);
         seedUser(UNLINKED_USER, FOREIGN_PARTICIPANT);
         seedUser(CONSENTING_USER, CALLER_PARTICIPANT, FOREIGN_PARTICIPANT);
-    }
-
-    /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        SEEDED_USERS.forEach(
-                identifier ->
-                        users.findByIdentifier(identifier)
-                                .ifPresent(
-                                        user -> {
-                                            consents.findByUserId(user.getId(), Pageable.UNPAGED)
-                                                    .forEach(consents::delete);
-                                            links.findByIdUserId(user.getId())
-                                                    .forEach(links::delete);
-                                            users.delete(user);
-                                        }));
-        List<Participant> seeded =
-                SEEDED_PARTICIPANTS.stream()
-                        .map(participants::findByIdentifier)
-                        .flatMap(Optional::stream)
-                        .toList();
-        // Notices name participants on both sides, so all notices go before any participant.
-        seeded.forEach(
-                stored ->
-                        notices.findByProviderIdAndArchivedAtIsNull(stored.getId())
-                                .forEach(notices::delete));
-        seeded.forEach(participants::delete);
     }
 
     @Test

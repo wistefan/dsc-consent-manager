@@ -37,7 +37,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -124,23 +123,7 @@ class ConsentGrantIT extends KeycloakAndPostgresTestResource {
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
         identifier = KeycloakTestResource.subject(userToken());
-        removeCommittedRows();
         notice = seedNotice(null);
-    }
-
-    /** Removes committed rows; consents go first because they restrict their user and parties. */
-    @AfterEach
-    void removeCommittedRows() {
-        consents.deleteAll();
-        notices.deleteAll();
-        users.findByIdentifier(identifier).ifPresent(users::delete);
-        users.findByIdentifier(OTHER_USER).ifPresent(users::delete);
-        List.of(PROVIDER, CONSUMER)
-                .forEach(
-                        party ->
-                                participants
-                                        .findByIdentifier(party)
-                                        .ifPresent(participants::delete));
     }
 
     static Stream<Arguments> decisions() {

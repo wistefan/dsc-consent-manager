@@ -31,7 +31,6 @@ import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -162,9 +161,6 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
     @Inject ParticipantRepository participants;
 
     @Inject UserParticipantRepository links;
-
-    /** The {@code USER} caller's identifier, resolved once because reading it costs a token. */
-    private String userIdentifier;
 
     /**
      * Points the Contract Service at a closed port with the smallest retry budget, so the
@@ -616,8 +612,6 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        userIdentifier = KeycloakTestResource.subject(Caller.USER.token());
-        removeCommittedRows();
         Participant caller =
                 participants
                         .findByIdentifier(CALLER_PARTICIPANT)
@@ -645,27 +639,6 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
                                                 null,
                                                 Map.of(),
                                                 null)));
-    }
-
-    /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
-    @AfterAll
-    void removeCommittedRows() {
-        Stream.of(LINKED_USER, userIdentifier)
-                .forEach(
-                        identifier ->
-                                users.findByIdentifier(identifier)
-                                        .ifPresent(
-                                                user -> {
-                                                    links.findByIdUserId(user.getId())
-                                                            .forEach(links::delete);
-                                                    users.delete(user);
-                                                }));
-        Stream.of(CALLER_PARTICIPANT, OTHER_PARTICIPANT)
-                .forEach(
-                        identifier ->
-                                participants
-                                        .findByIdentifier(identifier)
-                                        .ifPresent(participants::delete));
     }
 
     @ParameterizedTest(name = "{1} on {0} is {2}")

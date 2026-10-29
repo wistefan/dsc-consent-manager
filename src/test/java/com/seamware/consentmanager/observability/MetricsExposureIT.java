@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -73,6 +74,11 @@ class MetricsExposureIT extends PostgresTestResource {
     @Inject IdentityProviderRegistry registry;
 
     @Inject ConsentMetrics consentMetrics;
+
+    @AfterEach
+    void resetProvider() {
+        provider.reset();
+    }
 
     @AfterAll
     static void stopProvider() {

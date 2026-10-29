@@ -113,13 +113,19 @@ public final class OidcDiscoveryStub implements AutoCloseable {
      * @throws IllegalArgumentException if this stub publishes no key under {@code keyId}
      */
     public SignedJWT signToken(String keyId, JWTClaimsSet claims) {
-        JWK key = jwkSet.getKeyByKeyId(keyId);
-        if (key == null) {
-            throw new IllegalArgumentException(
-                    "This stub publishes no key with kid '" + keyId + "'");
-        }
-        SignedJWT token =
-                new SignedJWT(new JWSHeader.Builder(algorithmOf(key)).keyID(keyId).build(), claims);
+        return signToken(
+                keyId,
+                new JWSHeader.Builder(algorithmOf(publishedKey(keyId))).keyID(keyId),
+                claims);
+    }
+
+    /**
+     * Signs a token with the published key {@code keyId} under {@code header} verbatim, so a case
+     * can drop the {@code kid} or add parameters while the signature itself stays genuine.
+     */
+    public SignedJWT signToken(String keyId, JWSHeader.Builder header, JWTClaimsSet claims) {
+        JWK key = publishedKey(keyId);
+        SignedJWT token = new SignedJWT(header.build(), claims);
         try {
             token.sign(signerFor(key));
         } catch (JOSEException failure) {
@@ -132,6 +138,16 @@ public final class OidcDiscoveryStub implements AutoCloseable {
     public int jwksRequestCount() {
         return server.countRequestsMatching(getRequestedFor(urlEqualTo(JWKS_PATH)).build())
                 .getCount();
+    }
+
+    /** The published key under {@code keyId}; refuses one this stub does not publish. */
+    private JWK publishedKey(String keyId) {
+        JWK key = jwkSet.getKeyByKeyId(keyId);
+        if (key == null) {
+            throw new IllegalArgumentException(
+                    "This stub publishes no key with kid '" + keyId + "'");
+        }
+        return key;
     }
 
     /** {@code ES256} for an elliptic-curve key, {@code RS256} otherwise. */
@@ -321,6 +337,16 @@ public final class OidcDiscoveryStub implements AutoCloseable {
                 }
                 """
                 .formatted(declaredIssuer, jwksUri(), issuer(), issuer());
+    }
+
+    /**
+     * Forgets recorded requests and failure modes, serving matching metadata again. Keeps the
+     * current key set, since a running context may have cached it.
+     */
+    public void reset() {
+        server.resetAll();
+        jwksFailureStatus = JWKS_SERVED_NORMALLY;
+        serveMatchingMetadata();
     }
 
     /** Stops the stub server. */

@@ -161,7 +161,7 @@ public class IssuerSignatureVerifier {
                 .increment();
         ProviderState state = stateOf(provider);
         if (OUTCOME_UNAVAILABLE.equals(outcome)) {
-            if (state.markUnavailable() && LOG.isWarnEnabled()) {
+            if (state.markUnavailable()) {
                 LOG.warn(
                         "The key set of provider '{}' could not be read; its tokens are rejected"
                                 + " and it will not be asked again for {}",
@@ -173,7 +173,7 @@ public class IssuerSignatureVerifier {
         boolean verified = OUTCOME_VERIFIED.equals(outcome);
         boolean changed = state.markChecked(verified);
         // A kid is a public key-set index, not key material, so it is safe above DEBUG.
-        if (!verified && changed && LOG.isWarnEnabled()) {
+        if (!verified && changed) {
             LOG.warn(
                     "No key published by provider '{}' verified a token presenting kid '{}'; "
                             + "the key set is cached, so a rotation this service has not yet "
@@ -182,7 +182,7 @@ public class IssuerSignatureVerifier {
                     provider.name(),
                     jwt.getHeader().getKeyID(),
                     OUTCOME_REJECTED);
-        } else if (!verified && LOG.isDebugEnabled()) {
+        } else if (!verified) {
             LOG.debug(
                     "No key published by provider '{}' verified a token presenting kid '{}'",
                     provider.name(),

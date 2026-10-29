@@ -37,13 +37,9 @@ import jakarta.inject.Inject;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
 import java.util.function.Supplier;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -141,44 +137,9 @@ class ParticipantDeregistrationSurfaceIT extends KeycloakAndPostgresTestResource
                 "the Keycloak realm to resolve",
                 DISCOVERY_TIMEOUT,
                 () -> registry.findByIssuer(KeycloakTestResource.issuer()).isPresent());
-        removeCommittedRows();
         seededNotices = 0;
         participants.save(participant(CALLER_PARTICIPANT));
         user = users.save(new User(AFFILIATED_USER, null, null, null));
-    }
-
-    /** Rows committed by these tests outlive the transaction, so they are removed by hand. */
-    @AfterEach
-    void removeCommittedRows() {
-        Set<UUID> ids = new HashSet<>();
-        participants
-                .findAll()
-                .forEach(
-                        stored -> {
-                            if (seededByThisTest(stored.getIdentifier())) {
-                                ids.add(stored.getId());
-                            }
-                        });
-        consents.findAll()
-                .forEach(
-                        consent -> {
-                            if (names(ids, consent.getProviderId(), consent.getConsumerId())) {
-                                events.findByConsentIdOrderByOccurredAtAsc(consent.getId())
-                                        .forEach(events::delete);
-                                consents.delete(consent);
-                            }
-                        });
-        notices.findAll()
-                .forEach(
-                        notice -> {
-                            if (names(ids, notice.getProviderId(), notice.getConsumerId())) {
-                                notices.delete(notice);
-                            }
-                        });
-        ids.forEach(links::deleteByIdParticipantId);
-        ids.forEach(id -> participants.findById(id).ifPresent(participants::delete));
-        users.findByIdentifier(AFFILIATED_USER).ifPresent(users::delete);
-        user = null;
     }
 
     @Test
@@ -347,14 +308,6 @@ class ParticipantDeregistrationSurfaceIT extends KeycloakAndPostgresTestResource
                                 notice.getContractUri(),
                                 noTerms()));
         events.save(new ConsentEvent(consent.getId(), PRIOR_EVENT_STATE, null, null));
-    }
-
-    private boolean seededByThisTest(String identifier) {
-        return identifier.equals(CALLER_PARTICIPANT) || identifier.startsWith(COUNTERPARTY_PREFIX);
-    }
-
-    private static boolean names(Set<UUID> ids, UUID providerId, UUID consumerId) {
-        return ids.contains(providerId) || ids.contains(consumerId);
     }
 
     private Map<String, Object> body(HttpResponse<String> response) throws IOException {

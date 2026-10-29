@@ -17,18 +17,18 @@ import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.nimbusds.jose.util.Base64URL;
+import com.seamware.consentmanager.signing.SigningFixtures.Tamper;
 import com.seamware.consentmanager.support.ReceiptSignatures;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -60,17 +60,14 @@ class JwsConsentSigningServiceTest {
 
     private static final int PAYLOAD_PART = 1;
 
-    private static final int SIGNATURE_PART = 2;
-
     private static final int COMPACT_PARTS = 3;
-
-    /** Bit flipped in the first signature byte by the tamper matrix. */
-    private static final int FLIPPED_BIT = 0x01;
 
     /** Not {@code @Serdeable}, so the application's mapper cannot encode it. */
     private record Unencodable(String value) {}
 
     /** Signs with {@link #KEY_ID} and also publishes {@link #RETIRED_KEY_ID}. */
+    private static SigningKeyStore rotatedKeys;
+
     private static JwsConsentSigningService rotated;
 
     /** A receipt whose members a verifier recomputes. */
@@ -87,11 +84,11 @@ class JwsConsentSigningServiceTest {
     @BeforeAll
     static void rotate() throws JOSEException {
         JWK retired = new ECKeyGenerator(Curve.P_256).keyID(RETIRED_KEY_ID).generate();
-        rotated =
-                signing(
-                        store(
-                                new ECKeyGenerator(Curve.P_256).keyID(KEY_ID).generate(),
-                                new JWKSet(retired.toPublicJWK()).toString()));
+        rotatedKeys =
+                store(
+                        new ECKeyGenerator(Curve.P_256).keyID(KEY_ID).generate(),
+                        new JWKSet(retired.toPublicJWK()).toString());
+        rotated = signing(rotatedKeys);
     }
 
     static Stream<Arguments> algorithms() throws JOSEException {
@@ -165,59 +162,14 @@ class JwsConsentSigningServiceTest {
         assertThat(rotated.verify(receipt, jws)).isFalse();
     }
 
-    static Stream<Arguments> tampering() {
-        return Stream.of(
-                receiptTamper(
-                        "one character of a string member changed",
-                        receipt -> {
-                            String id = (String) receipt.get(CONSENT_ID);
-                            receipt.put(CONSENT_ID, id.substring(0, id.length() - 1) + "2");
-                            return receipt;
-                        }),
-                receiptTamper(
-                        "a number changed",
-                        receipt -> {
-                            receipt.put(
-                                    CONSENT_TIMESTAMP, (Long) receipt.get(CONSENT_TIMESTAMP) + 1);
-                            return receipt;
-                        }),
-                receiptTamper(
-                        "a member added",
-                        receipt -> {
-                            receipt.put(TAMPERED, TAMPERED);
-                            return receipt;
-                        }),
-                receiptTamper(
-                        "a member removed",
-                        receipt -> {
-                            receipt.remove(PURPOSES);
-                            return receipt;
-                        }),
-                jwsTamper("a byte of the signature flipped", JwsConsentSigningServiceTest::flipped),
-                jwsTamper(
-                        "the kid swapped for another published key's",
-                        jws -> withHeader(jws, header(JWSAlgorithm.ES256, RETIRED_KEY_ID))),
-                jwsTamper(
-                        "a kid no key is published under",
-                        jws -> withHeader(jws, header(JWSAlgorithm.ES256, TAMPERED))),
-                jwsTamper(
-                        "an alg the named key does not publish",
-                        jws -> withHeader(jws, header(JWSAlgorithm.ES384, KEY_ID))),
-                jwsTamper("an attached payload", JwsConsentSigningServiceTest::attached),
-                jwsTamper("not a JWS", jws -> TAMPERED));
-    }
-
     @ParameterizedTest(name = "{0}")
-    @MethodSource("tampering")
+    @EnumSource(Tamper.class)
     @DisplayName("refuses a tampered receipt or JWS without throwing")
-    void refusesTampering(
-            String name,
-            UnaryOperator<Map<String, Object>> receiptTamper,
-            UnaryOperator<String> jwsTamper) {
+    void refusesTampering(Tamper tamper) {
         String jws = rotated.sign(receipt()).jws();
 
-        Map<String, Object> presented = receiptTamper.apply(receipt());
-        String presentedJws = jwsTamper.apply(jws);
+        Map<String, Object> presented = tamper.receipt(receipt());
+        String presentedJws = tamper.jws(jws, receipt(), rotatedKeys);
 
         assertThat(rotated.verify(presented, presentedJws)).isFalse();
         assertThat(rotated.verifyCanonical(canonical().toJson(presented), presentedJws)).isFalse();
@@ -258,37 +210,5 @@ class JwsConsentSigningServiceTest {
                 .isInstanceOf(ReceiptSigningException.class)
                 .hasCauseInstanceOf(RuntimeException.class);
         assertThat(rotated.verify(unencodable, rotated.sign(receipt()).jws())).isFalse();
-    }
-
-    private static Arguments receiptTamper(
-            String name, UnaryOperator<Map<String, Object>> receiptTamper) {
-        return Arguments.of(name, receiptTamper, UnaryOperator.<String>identity());
-    }
-
-    private static Arguments jwsTamper(String name, UnaryOperator<String> jwsTamper) {
-        return Arguments.of(name, UnaryOperator.<Map<String, Object>>identity(), jwsTamper);
-    }
-
-    private static JWSHeader header(JWSAlgorithm algorithm, String keyId) {
-        return new JWSHeader.Builder(algorithm).type(JOSEObjectType.JOSE).keyID(keyId).build();
-    }
-
-    private static String withHeader(String jws, JWSHeader header) {
-        String[] parts = jws.split("\\" + DOT, -1);
-        return header.toBase64URL() + DOT + DOT + parts[SIGNATURE_PART];
-    }
-
-    private static String flipped(String jws) {
-        String[] parts = jws.split("\\" + DOT, -1);
-        byte[] signature = Base64URL.from(parts[SIGNATURE_PART]).decode();
-        signature[0] ^= FLIPPED_BIT;
-        return parts[HEADER_PART] + DOT + DOT + Base64URL.encode(signature);
-    }
-
-    private static String attached(String jws) {
-        String[] parts = jws.split("\\" + DOT, -1);
-        Base64URL payload =
-                Base64URL.encode(canonical().toJson(receipt()).getBytes(StandardCharsets.UTF_8));
-        return parts[HEADER_PART] + DOT + payload + DOT + parts[SIGNATURE_PART];
     }
 }
