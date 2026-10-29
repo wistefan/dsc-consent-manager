@@ -28,7 +28,6 @@ import io.micronaut.http.HttpResponse;
 import io.micronaut.http.body.CloseableByteBody;
 import io.micronaut.http.client.DefaultHttpClientConfiguration;
 import io.micronaut.http.client.RawHttpClient;
-import io.micronaut.http.ssl.SslConfiguration;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -40,7 +39,6 @@ import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.security.KeyStore;
 import java.time.Duration;
 import java.time.Instant;
@@ -89,12 +87,6 @@ class ParticipantWebhookClientTest {
     private static final String EXTERNAL_HOST = "webhooks.example.org";
 
     private static final String EXTERNAL_ENDPOINT = "https://" + EXTERNAL_HOST + HOOK_PATH;
-
-    private static final String STORE_PASSWORD = "webhook-test";
-
-    private static final String STORE_TYPE = "PKCS12";
-
-    private static final String CERT_ALIAS = "webhook-stub";
 
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(1);
 
@@ -162,7 +154,7 @@ class ParticipantWebhookClientTest {
     /** Far beyond any response a webhook needs, to prove the body is never buffered. */
     private static final int OVERSIZED_BODY_BYTES = 16 * 1024 * 1024;
 
-    private static Path stores;
+    private static WebhookStubTls stubTls;
 
     private static WireMockServer stub;
 
@@ -178,66 +170,8 @@ class ParticipantWebhookClientTest {
 
     @BeforeAll
     static void start() throws IOException, InterruptedException {
-        stores = Files.createTempDirectory("webhook-tls");
-        Path keystore = keystore();
-        Path certificate = stores.resolve("stub.pem");
-        keytool(
-                "-genkeypair",
-                "-alias",
-                CERT_ALIAS,
-                "-keyalg",
-                "EC",
-                "-groupname",
-                "secp256r1",
-                "-dname",
-                "CN=" + LOOPBACK_HOST,
-                "-ext",
-                "SAN=dns:localhost,ip:127.0.0.1",
-                "-validity",
-                "1",
-                "-keystore",
-                keystore.toString(),
-                "-storetype",
-                STORE_TYPE,
-                "-storepass",
-                STORE_PASSWORD,
-                "-keypass",
-                STORE_PASSWORD);
-        keytool(
-                "-exportcert",
-                "-rfc",
-                "-alias",
-                CERT_ALIAS,
-                "-keystore",
-                keystore.toString(),
-                "-storetype",
-                STORE_TYPE,
-                "-storepass",
-                STORE_PASSWORD,
-                "-file",
-                certificate.toString());
-        keytool(
-                "-importcert",
-                "-noprompt",
-                "-alias",
-                CERT_ALIAS,
-                "-file",
-                certificate.toString(),
-                "-keystore",
-                truststore().toString(),
-                "-storetype",
-                STORE_TYPE,
-                "-storepass",
-                STORE_PASSWORD);
-        stub =
-                new WireMockServer(
-                        options()
-                                .httpDisabled(true)
-                                .dynamicHttpsPort()
-                                .keystorePath(keystore.toString())
-                                .keystoreType(STORE_TYPE)
-                                .keystorePassword(STORE_PASSWORD)
-                                .keyManagerPassword(STORE_PASSWORD));
+        stubTls = WebhookStubTls.generate();
+        stub = new WireMockServer(stubTls.serve(options()));
         stub.start();
         hookUrl = "https://" + LOOPBACK_HOST + ":" + stub.httpsPort() + HOOK_PATH;
         context =
@@ -270,12 +204,7 @@ class ParticipantWebhookClientTest {
     static void stop() throws IOException {
         context.close();
         stub.stop();
-        try (Stream<Path> files = Files.list(stores)) {
-            for (Path file : files.toList()) {
-                Files.delete(file);
-            }
-        }
-        Files.delete(stores);
+        stubTls.delete();
     }
 
     @ParameterizedTest(name = "HTTP {0} -> {1}")
@@ -658,13 +587,13 @@ class ParticipantWebhookClientTest {
     }
 
     private static ServerSocket tlsServerSocket() throws Exception {
-        KeyStore store = KeyStore.getInstance(STORE_TYPE);
-        try (InputStream in = Files.newInputStream(keystore())) {
-            store.load(in, STORE_PASSWORD.toCharArray());
+        KeyStore store = KeyStore.getInstance(WebhookStubTls.STORE_TYPE);
+        try (InputStream in = Files.newInputStream(stubTls.keystore())) {
+            store.load(in, WebhookStubTls.STORE_PASSWORD.toCharArray());
         }
         KeyManagerFactory keys =
                 KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        keys.init(store, STORE_PASSWORD.toCharArray());
+        keys.init(store, WebhookStubTls.STORE_PASSWORD.toCharArray());
         SSLContext tls = SSLContext.getInstance(TLS_PROTOCOL);
         tls.init(keys.getKeyManagers(), null, null);
         return tls.getServerSocketFactory()
@@ -743,12 +672,7 @@ class ParticipantWebhookClientTest {
         overrides.accept(settings);
         DefaultHttpClientConfiguration configuration =
                 ParticipantWebhookHttpClientFactory.configuration(settings);
-        SslConfiguration.TrustStoreConfiguration trust =
-                new SslConfiguration.TrustStoreConfiguration();
-        trust.setPath("file:" + truststore());
-        trust.setPassword(STORE_PASSWORD);
-        trust.setType(STORE_TYPE);
-        configuration.getSslConfiguration().setTrustStore(trust);
+        configuration.getSslConfiguration().setTrustStore(stubTls.trustStore());
         RawHttpClient http = RawHttpClient.create(null, configuration);
         ParticipantWebhookClient client =
                 new ParticipantWebhookClient(http, signing, resolver, settings);
@@ -835,22 +759,5 @@ class ParticipantWebhookClientTest {
                 "did:web:subject.example.org",
                 ConsentStatus.REVOKED,
                 false);
-    }
-
-    private static Path keystore() {
-        return stores.resolve("keystore.p12");
-    }
-
-    private static Path truststore() {
-        return stores.resolve("truststore.p12");
-    }
-
-    private static void keytool(String... arguments) throws IOException, InterruptedException {
-        List<String> command = new ArrayList<>();
-        command.add(Path.of(System.getProperty("java.home"), "bin", "keytool").toString());
-        command.addAll(List.of(arguments));
-        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-        String output = new String(process.getInputStream().readAllBytes());
-        assertThat(process.waitFor()).as(output).isZero();
     }
 }

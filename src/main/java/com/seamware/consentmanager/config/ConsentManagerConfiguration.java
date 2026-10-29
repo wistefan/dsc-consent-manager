@@ -303,6 +303,97 @@ public class ConsentManagerConfiguration {
         /** Default webhook response timeout. */
         public static final Duration DEFAULT_READ_TIMEOUT = Duration.ofSeconds(5);
 
+        /** Default pause between dispatcher ticks. */
+        public static final Duration DEFAULT_POLL_INTERVAL = Duration.ofSeconds(5);
+
+        /** Default rows claimed per tick. */
+        public static final int DEFAULT_BATCH_SIZE = 50;
+
+        /** Default cap on one participant's rows per tick. */
+        public static final int DEFAULT_PER_PARTICIPANT_BATCH_LIMIT = 5;
+
+        /** Default number of concurrent deliveries. */
+        public static final int DEFAULT_CONCURRENCY = 16;
+
+        /** Default time a claimed batch stays out of every other replica's reach. */
+        public static final Duration DEFAULT_LEASE = Duration.ofSeconds(60);
+
+        /** Default retry delays; one entry per retry, so the default allows seven attempts. */
+        public static final List<Duration> DEFAULT_BACKOFF =
+                List.of(
+                        Duration.ofMinutes(1),
+                        Duration.ofMinutes(5),
+                        Duration.ofMinutes(15),
+                        Duration.ofHours(1),
+                        Duration.ofHours(6),
+                        Duration.ofHours(24));
+
+        /** Default fraction each retry delay is randomly lengthened or shortened by. */
+        public static final double DEFAULT_JITTER = 0.1;
+
+        /** Default age past which an undelivered row is abandoned and redacted. */
+        public static final Duration DEFAULT_MAX_AGE = Duration.ofHours(36);
+
+        /** Default pause between age and retention sweeps. */
+        public static final Duration DEFAULT_SWEEP_INTERVAL = Duration.ofMinutes(1);
+
+        /** Default time delivery history is kept. */
+        public static final Duration DEFAULT_RETENTION = Duration.ofDays(30);
+
+        /**
+         * Slack a send must have left before its lease expires; absorbs the scheduling delay
+         * between the dispatcher's deadline check and the connect.
+         */
+        public static final Duration LEASE_MARGIN = Duration.ofSeconds(10);
+
+        /** Whether this replica delivers, bound to {@code PARTICIPANT_NOTIFICATIONS_ENABLED}. */
+        private boolean enabled = true;
+
+        /** Pause between ticks, bound to {@code PARTICIPANT_NOTIFICATIONS_POLL_INTERVAL}. */
+        private Duration pollInterval = DEFAULT_POLL_INTERVAL;
+
+        /** Rows claimed per tick, bound to {@code PARTICIPANT_NOTIFICATIONS_BATCH_SIZE}. */
+        private int batchSize = DEFAULT_BATCH_SIZE;
+
+        /**
+         * Most rows of one participant per tick, bound to {@code
+         * PARTICIPANT_NOTIFICATIONS_PER_PARTICIPANT_BATCH_LIMIT}; below {@link #concurrency}.
+         */
+        private int perParticipantBatchLimit = DEFAULT_PER_PARTICIPANT_BATCH_LIMIT;
+
+        /** Concurrent deliveries, bound to {@code PARTICIPANT_NOTIFICATIONS_CONCURRENCY}. */
+        private int concurrency = DEFAULT_CONCURRENCY;
+
+        /**
+         * How long a claimed batch is reserved, bound to {@code PARTICIPANT_NOTIFICATIONS_LEASE};
+         * must cover the whole batch, see {@link #sendBound()}.
+         */
+        private Duration lease = DEFAULT_LEASE;
+
+        /**
+         * Delay before each retry, bound to {@code PARTICIPANT_NOTIFICATIONS_BACKOFF}; a failure
+         * past the last entry abandons the row.
+         */
+        private List<Duration> backoff = DEFAULT_BACKOFF;
+
+        /** Random spread of each retry delay, bound to {@code PARTICIPANT_NOTIFICATIONS_JITTER}. */
+        private double jitter = DEFAULT_JITTER;
+
+        /**
+         * Age at which an undelivered row is abandoned and its payload dropped, bound to {@code
+         * PARTICIPANT_NOTIFICATIONS_MAX_AGE}; the bound on keeping an erased subject's identifier.
+         */
+        private Duration maxAge = DEFAULT_MAX_AGE;
+
+        /** Pause between sweeps, bound to {@code PARTICIPANT_NOTIFICATIONS_SWEEP_INTERVAL}. */
+        private Duration sweepInterval = DEFAULT_SWEEP_INTERVAL;
+
+        /**
+         * How long terminal rows are kept as history, bound to {@code
+         * PARTICIPANT_NOTIFICATIONS_RETENTION}.
+         */
+        private Duration retention = DEFAULT_RETENTION;
+
         /**
          * Bound on resolving a webhook host, bound to {@code
          * PARTICIPANT_NOTIFICATIONS_RESOLVE_TIMEOUT}; a lookup that outlasts it is retried.
@@ -338,6 +429,11 @@ public class ConsentManagerConfiguration {
                                     .filter(host -> host != null && !host.isBlank())
                                     .map(String::trim)
                                     .toList();
+        }
+
+        /** Longest one delivery attempt can take: name lookup, connect and response. */
+        public Duration sendBound() {
+            return resolveTimeout.plus(connectTimeout).plus(readTimeout);
         }
     }
 
