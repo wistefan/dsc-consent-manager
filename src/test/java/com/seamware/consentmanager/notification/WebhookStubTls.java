@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 /**
@@ -83,6 +84,23 @@ record WebhookStubTls(Path keystore, Path truststore) {
         return tls;
     }
 
+    /** {@link #generate()} for class initialisation, where a checked exception cannot escape. */
+    static WebhookStubTls generateUnchecked() {
+        try {
+            return generate();
+        } catch (IOException e) {
+            throw new IllegalStateException(e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e.getMessage(), e);
+        }
+    }
+
+    /** Context properties under which the webhook client trusts this certificate. */
+    Map<String, String> clientProperties() {
+        return Map.of(TrustingWebhookClientFactory.TRUSTSTORE, truststore.toString());
+    }
+
     /** {@code options} serving HTTPS only, with this certificate. */
     WireMockConfiguration serve(WireMockConfiguration options) {
         return options.httpDisabled(true)
@@ -95,6 +113,11 @@ record WebhookStubTls(Path keystore, Path truststore) {
 
     /** A client truststore admitting only this certificate. */
     SslConfiguration.TrustStoreConfiguration trustStore() {
+        return trustStore(truststore);
+    }
+
+    /** A client truststore read from {@code truststore}, as {@link #generate()} writes it. */
+    static SslConfiguration.TrustStoreConfiguration trustStore(Path truststore) {
         SslConfiguration.TrustStoreConfiguration trust =
                 new SslConfiguration.TrustStoreConfiguration();
         trust.setPath("file:" + truststore);

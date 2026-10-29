@@ -10,7 +10,6 @@ import static com.seamware.consentmanager.support.ConsentFixtures.participant;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
-import com.seamware.consentmanager.config.ConsentManagerConfiguration.ParticipantNotifications;
 import com.seamware.consentmanager.domain.Consent;
 import com.seamware.consentmanager.domain.ConsentEvent;
 import com.seamware.consentmanager.domain.ConsentEventState;
@@ -26,21 +25,14 @@ import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.PostgresTestResource;
-import io.micronaut.context.annotation.Bean;
-import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Property;
-import io.micronaut.context.annotation.Replaces;
-import io.micronaut.context.annotation.Requires;
-import io.micronaut.http.client.DefaultHttpClientConfiguration;
-import io.micronaut.http.client.RawHttpClient;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
-import jakarta.inject.Named;
-import jakarta.inject.Singleton;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
@@ -53,7 +45,6 @@ import org.junit.jupiter.api.Test;
  * its {@code poll-interval} binds, and it delivers a queued row without any test calling it.
  */
 @MicronautTest(transactional = false)
-@Property(name = NotificationSchedulingIT.PROBE_ENABLED, value = "true")
 @Property(name = "consent-manager.participant-notifications.enabled", value = "true")
 @Property(
         name = "consent-manager.participant-notifications.poll-interval",
@@ -63,9 +54,6 @@ import org.junit.jupiter.api.Test;
         value = NotificationSchedulingIT.LOOPBACK_HOST)
 @DisplayName("Scheduled notification delivery")
 class NotificationSchedulingIT extends PostgresTestResource {
-
-    /** Swaps in a webhook client trusting the stub, so no other suite inherits it. */
-    static final String PROBE_ENABLED = "notification-scheduling-probe.enabled";
 
     static final String POLL_INTERVAL = "200ms";
 
@@ -81,7 +69,7 @@ class NotificationSchedulingIT extends PostgresTestResource {
     private static final int OK = 200;
 
     /** Created at class initialisation, before the context builds the replacing client. */
-    private static final WebhookStubTls STUB_TLS = generateTls();
+    private static final WebhookStubTls STUB_TLS = WebhookStubTls.generateUnchecked();
 
     private static WireMockServer stub;
 
@@ -107,6 +95,14 @@ class NotificationSchedulingIT extends PostgresTestResource {
     static void stopStub() throws IOException {
         stub.stop();
         STUB_TLS.delete();
+    }
+
+    /** Adds trust in the stub, so only this suite's client accepts its certificate. */
+    @Override
+    public Map<String, String> getProperties() {
+        Map<String, String> properties = new HashMap<>(super.getProperties());
+        properties.putAll(STUB_TLS.clientProperties());
+        return properties;
     }
 
     @Test
@@ -184,33 +180,5 @@ class NotificationSchedulingIT extends PostgresTestResource {
                         ConsentStatus.GRANTED,
                         true);
         return outbox.save(NotificationOutboxEntry.pending(recipient, payload)).getId();
-    }
-
-    private static WebhookStubTls generateTls() {
-        try {
-            return WebhookStubTls.generate();
-        } catch (IOException e) {
-            throw new IllegalStateException(e.getMessage(), e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException(e.getMessage(), e);
-        }
-    }
-
-    /** The production webhook client configuration, plus trust in the stub's certificate. */
-    @Factory
-    @Requires(property = PROBE_ENABLED, value = "true")
-    static class TrustingWebhookClientFactory {
-
-        @Singleton
-        @Named(ParticipantWebhookHttpClientFactory.NAME)
-        @Replaces(bean = RawHttpClient.class, named = ParticipantWebhookHttpClientFactory.NAME)
-        @Bean(preDestroy = "close")
-        RawHttpClient trustingWebhookClient(ParticipantNotifications settings) {
-            DefaultHttpClientConfiguration configuration =
-                    ParticipantWebhookHttpClientFactory.configuration(settings);
-            configuration.getSslConfiguration().setTrustStore(STUB_TLS.trustStore());
-            return RawHttpClient.create(null, configuration);
-        }
     }
 }
