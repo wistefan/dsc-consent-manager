@@ -7,12 +7,15 @@ import com.seamware.consentmanager.signing.ReceiptSigningException;
 import com.seamware.consentmanager.signing.SignatureType;
 import com.seamware.consentmanager.signing.SignedReceipt;
 import io.micronaut.core.annotation.NonNull;
+import io.micronaut.core.io.buffer.ByteArrayBufferFactory;
+import io.micronaut.http.ByteBodyHttpResponse;
 import io.micronaut.http.HttpRequest;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.MediaType;
-import io.micronaut.http.client.HttpClient;
+import io.micronaut.http.body.CloseableByteBody;
+import io.micronaut.http.body.stream.AvailableByteArrayBody;
+import io.micronaut.http.client.RawHttpClient;
 import io.micronaut.http.client.exceptions.HttpClientException;
-import io.micronaut.http.client.exceptions.HttpClientResponseException;
 import io.micronaut.http.client.exceptions.ReadTimeoutException;
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
@@ -27,9 +30,11 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -37,6 +42,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import reactor.core.publisher.Mono;
 
 /**
  * Makes one delivery attempt of a notification: vets the endpoint, signs, POSTs, classifies. Never
@@ -46,6 +52,8 @@ import java.util.stream.Collectors;
  * typed {@link SignatureType#NOTIFICATION}, so a recipient verifies the bytes it received against
  * {@code /.well-known/jwks.json}. An endpoint is refused before any connect unless it is https and
  * either named by a non-empty {@code allowed-hosts} or resolving only to external addresses.
+ * Concurrent lookups of one host share a single resolver thread, so a host whose DNS stalls cannot
+ * starve the others' lookups; the response body is never read.
  */
 @Singleton
 public class ParticipantWebhookClient {
@@ -67,9 +75,7 @@ public class ParticipantWebhookClient {
 
     static final String SIGNING_FAILED = "signing failed";
 
-    /** Lookups run here so {@code resolveTimeout} can bound them; a full pool fails the lookup. */
-    static final int RESOLVER_THREADS = 8;
-
+    /** Distinct hosts awaiting a resolver thread; beyond it a lookup fails at once. */
     static final int RESOLVER_QUEUE_CAPACITY = 64;
 
     private static final String RESOLVER_THREAD_PREFIX = "webhook-resolver-";
@@ -79,15 +85,19 @@ public class ParticipantWebhookClient {
     /** Netty's connect-timeout exception, named so this class needs no Netty dependency. */
     private static final String CONNECT_TIMEOUT_EXCEPTION = "ConnectTimeoutException";
 
-    private final HttpClient http;
+    private final RawHttpClient http;
     private final ConsentSigningService signing;
     private final HostResolver resolver;
     private final Set<String> allowedHosts;
     private final long resolveTimeoutNanos;
     private final ExecutorService resolverPool;
 
+    /** Lookups still running, by host; an entry is removed before its future completes. */
+    private final ConcurrentMap<String, CompletableFuture<InetAddress[]>> inFlight =
+            new ConcurrentHashMap<>();
+
     public ParticipantWebhookClient(
-            @Named(ParticipantWebhookHttpClientFactory.NAME) HttpClient http,
+            @Named(ParticipantWebhookHttpClientFactory.NAME) RawHttpClient http,
             ConsentSigningService signing,
             HostResolver resolver,
             ParticipantNotifications settings) {
@@ -98,8 +108,8 @@ public class ParticipantWebhookClient {
         this.resolveTimeoutNanos = settings.getResolveTimeout().toNanos();
         this.resolverPool =
                 new ThreadPoolExecutor(
-                        RESOLVER_THREADS,
-                        RESOLVER_THREADS,
+                        settings.getResolverThreads(),
+                        settings.getResolverThreads(),
                         0L,
                         TimeUnit.MILLISECONDS,
                         new ArrayBlockingQueue<>(RESOLVER_QUEUE_CAPACITY),
@@ -161,37 +171,73 @@ public class ParticipantWebhookClient {
         return Optional.of(uri);
     }
 
-    /** The host's addresses, or empty when the lookup failed, timed out or could not start. */
+    /**
+     * The host's addresses, or empty when the lookup failed, timed out or could not start. A
+     * timed-out lookup is left running rather than cancelled: the system resolver cannot be
+     * interrupted, and later senders to the same host keep waiting on it.
+     */
     private Optional<InetAddress[]> resolve(String host) {
-        Future<InetAddress[]> lookup;
-        try {
-            lookup = resolverPool.submit(() -> resolver.resolve(host));
-        } catch (RejectedExecutionException e) {
+        Optional<CompletableFuture<InetAddress[]>> lookup = lookup(host);
+        if (lookup.isEmpty()) {
             return Optional.empty();
         }
         try {
-            return Optional.of(lookup.get(resolveTimeoutNanos, TimeUnit.NANOSECONDS));
+            return Optional.of(lookup.get().get(resolveTimeoutNanos, TimeUnit.NANOSECONDS));
         } catch (TimeoutException | ExecutionException e) {
-            lookup.cancel(true);
             return Optional.empty();
         } catch (InterruptedException e) {
-            lookup.cancel(true);
             Thread.currentThread().interrupt();
             return Optional.empty();
         }
     }
 
+    /** Joins the running lookup of {@code host}, or starts one; empty when the pool is full. */
+    private Optional<CompletableFuture<InetAddress[]>> lookup(String host) {
+        CompletableFuture<InetAddress[]> started = new CompletableFuture<>();
+        CompletableFuture<InetAddress[]> running = inFlight.putIfAbsent(host, started);
+        if (running != null) {
+            return Optional.of(running);
+        }
+        try {
+            resolverPool.execute(() -> runLookup(host, started));
+        } catch (RejectedExecutionException e) {
+            inFlight.remove(host, started);
+            started.completeExceptionally(e);
+            return Optional.empty();
+        }
+        return Optional.of(started);
+    }
+
+    private void runLookup(String host, CompletableFuture<InetAddress[]> lookup) {
+        try {
+            InetAddress[] addresses = resolver.resolve(host);
+            inFlight.remove(host, lookup);
+            lookup.complete(addresses);
+        } catch (Exception e) {
+            inFlight.remove(host, lookup);
+            lookup.completeExceptionally(e);
+        }
+    }
+
     /** Sends the signed body and classifies the response or transport failure. */
     private DeliveryOutcome post(URI uri, SignedReceipt<NotificationPayload> signed) {
-        HttpRequest<byte[]> request =
-                HttpRequest.POST(uri, signed.canonicalJson().getBytes(StandardCharsets.UTF_8))
+        HttpRequest<?> request =
+                HttpRequest.POST(uri, null)
                         .contentType(MediaType.APPLICATION_JSON_TYPE)
                         .header(SIGNATURE_HEADER, signed.jws());
+        CloseableByteBody body =
+                AvailableByteArrayBody.create(
+                        ByteArrayBufferFactory.INSTANCE,
+                        signed.canonicalJson().getBytes(StandardCharsets.UTF_8));
         try {
-            HttpResponse<?> response = http.toBlocking().exchange(request);
-            return DeliveryOutcome.forStatus(response.code());
-        } catch (HttpClientResponseException e) {
-            return DeliveryOutcome.forStatus(e.code());
+            // The raw exchange yields the status without buffering the body; closing discards it.
+            HttpResponse<?> response = Mono.from(http.exchange(request, body, null)).block();
+            if (response == null) {
+                return DeliveryOutcome.retry(IO_ERROR);
+            }
+            try (ByteBodyHttpResponse<?> unread = (ByteBodyHttpResponse<?>) response) {
+                return DeliveryOutcome.forStatus(unread.code());
+            }
         } catch (ReadTimeoutException e) {
             return DeliveryOutcome.retry(READ_TIMEOUT);
         } catch (HttpClientException e) {

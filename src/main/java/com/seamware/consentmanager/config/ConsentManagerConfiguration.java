@@ -294,6 +294,9 @@ public class ConsentManagerConfiguration {
         /** Default bound on resolving a webhook host; the JDK resolver has none of its own. */
         public static final Duration DEFAULT_RESOLVE_TIMEOUT = Duration.ofSeconds(2);
 
+        /** Default number of concurrent webhook host lookups. */
+        public static final int DEFAULT_RESOLVER_THREADS = 8;
+
         /** Default webhook connection-attempt timeout. */
         public static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(2);
 
@@ -305,6 +308,13 @@ public class ConsentManagerConfiguration {
          * PARTICIPANT_NOTIFICATIONS_RESOLVE_TIMEOUT}; a lookup that outlasts it is retried.
          */
         private Duration resolveTimeout = DEFAULT_RESOLVE_TIMEOUT;
+
+        /**
+         * Concurrent webhook host lookups, bound to {@code
+         * PARTICIPANT_NOTIFICATIONS_RESOLVER_THREADS}; a stalled host holds at most one, since
+         * lookups of the same host are shared.
+         */
+        private int resolverThreads = DEFAULT_RESOLVER_THREADS;
 
         /** Connect timeout, bound to {@code PARTICIPANT_NOTIFICATIONS_CONNECT_TIMEOUT}. */
         private Duration connectTimeout = DEFAULT_CONNECT_TIMEOUT;

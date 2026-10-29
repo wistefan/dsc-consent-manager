@@ -19,10 +19,11 @@ import com.seamware.consentmanager.notification.DeliveryOutcome.Result;
 import com.seamware.consentmanager.signing.CanonicalJsonSerializer;
 import com.seamware.consentmanager.signing.ConsentSigningService;
 import com.seamware.consentmanager.signing.SignatureType;
+import com.seamware.consentmanager.support.Await;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.env.Environment;
 import io.micronaut.http.client.DefaultHttpClientConfiguration;
-import io.micronaut.http.client.HttpClient;
+import io.micronaut.http.client.RawHttpClient;
 import io.micronaut.http.ssl.ClientSslConfiguration;
 import io.micronaut.http.ssl.SslConfiguration;
 import java.io.IOException;
@@ -36,7 +37,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -94,6 +101,20 @@ class ParticipantWebhookClientTest {
     private static final String PUBLIC_ADDRESS = "203.0.113.10";
 
     private static final String PRIVATE_ADDRESS = "10.1.2.3";
+
+    /** Resolves through the stub only; its DNS never answers. */
+    private static final String STALLED_HOST = "stalled.example.org";
+
+    /** Senders queued on the stalled host; more than the pool, so uncoalesced lookups starve it. */
+    private static final int STALLED_SENDERS = 4;
+
+    private static final int COALESCING_RESOLVER_THREADS = 2;
+
+    /** Long enough that the stalled senders still wait when the healthy host is sent to. */
+    private static final Duration COALESCING_RESOLVE_TIMEOUT = Duration.ofSeconds(2);
+
+    /** Far beyond any response a webhook needs, to prove the body is never buffered. */
+    private static final int OVERSIZED_BODY_BYTES = 16 * 1024 * 1024;
 
     private static Path stores;
 
@@ -260,6 +281,20 @@ class ParticipantWebhookClientTest {
                 .isLessThan(READ_TIMEOUT.plus(TIMEOUT_SLACK));
     }
 
+    @ParameterizedTest(name = "HTTP {0} with an oversized body -> {1}")
+    @CsvSource({"200, DELIVERED", "404, ABANDON", "503, RETRY"})
+    void oversizedResponseBodyIsNeverRead(int status, Result expected) {
+        stub.stubFor(
+                post(urlEqualTo(HOOK_PATH))
+                        .willReturn(
+                                aResponse()
+                                        .withStatus(status)
+                                        .withBody(new byte[OVERSIZED_BODY_BYTES])));
+
+        assertThat(client(List.of(LOOPBACK_HOST)).send(hookUrl, payload()).result())
+                .isEqualTo(expected);
+    }
+
     @Test
     void refusedConnectionRetries() {
         WireMockServer dead = new WireMockServer(options().httpDisabled(true).dynamicHttpsPort());
@@ -393,16 +428,92 @@ class ParticipantWebhookClientTest {
         never.countDown();
     }
 
+    @Test
+    void stalledHostHoldsOneResolverThread() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger stalledLookups = new AtomicInteger();
+        HostResolver resolver =
+                host -> {
+                    if (!host.equals(STALLED_HOST)) {
+                        return resolvingTo(PRIVATE_ADDRESS).resolve(host);
+                    }
+                    stalledLookups.incrementAndGet();
+                    try {
+                        release.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    throw new UnknownHostException(host);
+                };
+        ParticipantWebhookClient client =
+                client(
+                        List.of(),
+                        resolver,
+                        settings -> {
+                            settings.setResolverThreads(COALESCING_RESOLVER_THREADS);
+                            settings.setResolveTimeout(COALESCING_RESOLVE_TIMEOUT);
+                        });
+        String stalledEndpoint = "https://" + STALLED_HOST + HOOK_PATH;
+        List<Thread> senderThreads = new CopyOnWriteArrayList<>();
+        ExecutorService senders =
+                Executors.newFixedThreadPool(
+                        STALLED_SENDERS,
+                        runnable -> {
+                            Thread thread = new Thread(runnable);
+                            senderThreads.add(thread);
+                            return thread;
+                        });
+        try {
+            List<Future<DeliveryOutcome>> stalled = new ArrayList<>();
+            for (int i = 0; i < STALLED_SENDERS; i++) {
+                stalled.add(senders.submit(() -> client.send(stalledEndpoint, payload())));
+            }
+            Await.until(
+                    "every stalled sender waits on its lookup",
+                    TIMEOUT_SLACK,
+                    () ->
+                            senderThreads.size() == STALLED_SENDERS
+                                    && senderThreads.stream()
+                                            .allMatch(
+                                                    thread ->
+                                                            thread.getState()
+                                                                    == Thread.State.TIMED_WAITING));
+
+            assertThat(client.send(EXTERNAL_ENDPOINT, payload()))
+                    .isEqualTo(
+                            DeliveryOutcome.abandon(
+                                    ParticipantWebhookClient.ENDPOINT_NOT_PERMITTED));
+            for (Future<DeliveryOutcome> outcome : stalled) {
+                assertThat(outcome.get())
+                        .isEqualTo(
+                                DeliveryOutcome.retry(
+                                        ParticipantWebhookClient.NAME_RESOLUTION_FAILED));
+            }
+            assertThat(stalledLookups).hasValue(1);
+        } finally {
+            release.countDown();
+            senders.shutdownNow();
+        }
+    }
+
     private ParticipantWebhookClient client(List<String> allowedHosts) {
         return client(allowedHosts, new HostResolver.SystemHostResolver());
     }
 
-    /** A client trusting only the stub's certificate, with short timeouts. */
     private ParticipantWebhookClient client(List<String> allowedHosts, HostResolver resolver) {
+        return client(allowedHosts, resolver, settings -> {});
+    }
+
+    /** A client trusting only the stub's certificate, with short timeouts unless overridden. */
+    private ParticipantWebhookClient client(
+            List<String> allowedHosts,
+            HostResolver resolver,
+            Consumer<ParticipantNotifications> overrides) {
         ParticipantNotifications settings = new ParticipantNotifications();
         settings.setAllowedHosts(allowedHosts);
         settings.setReadTimeout(READ_TIMEOUT);
         settings.setResolveTimeout(RESOLVE_TIMEOUT);
+        overrides.accept(settings);
         DefaultHttpClientConfiguration configuration =
                 ParticipantWebhookHttpClientFactory.configuration(settings);
         SslConfiguration.TrustStoreConfiguration trust =
@@ -413,7 +524,7 @@ class ParticipantWebhookClientTest {
         ClientSslConfiguration ssl = new ClientSslConfiguration();
         ssl.setTrustStore(trust);
         configuration.setSslConfiguration(ssl);
-        HttpClient http = HttpClient.create(null, configuration);
+        RawHttpClient http = RawHttpClient.create(null, configuration);
         ParticipantWebhookClient client =
                 new ParticipantWebhookClient(http, signing, resolver, settings);
         opened.add(http);

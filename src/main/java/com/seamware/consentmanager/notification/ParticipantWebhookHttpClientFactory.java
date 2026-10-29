@@ -5,13 +5,14 @@ import io.micronaut.context.annotation.Bean;
 import io.micronaut.context.annotation.Factory;
 import io.micronaut.core.annotation.NonNull;
 import io.micronaut.http.client.DefaultHttpClientConfiguration;
-import io.micronaut.http.client.HttpClient;
+import io.micronaut.http.client.RawHttpClient;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 
 /**
  * Defines the context-owned HTTP client webhooks are posted over. Redirects are off, and that is
- * load-bearing: {@link ParticipantWebhookClient} vets only the registered URL.
+ * load-bearing: {@link ParticipantWebhookClient} vets only the registered URL. The client is raw,
+ * so a response body is never buffered and a participant cannot make an attempt pull megabytes.
  */
 @Factory
 public class ParticipantWebhookHttpClientFactory {
@@ -34,7 +35,7 @@ public class ParticipantWebhookHttpClientFactory {
     @Singleton
     @Named(NAME)
     @Bean(preDestroy = "close")
-    public HttpClient participantWebhookHttpClient(ParticipantNotifications settings) {
-        return HttpClient.create(null, configuration(settings));
+    public RawHttpClient participantWebhookHttpClient(ParticipantNotifications settings) {
+        return RawHttpClient.create(null, configuration(settings));
     }
 }

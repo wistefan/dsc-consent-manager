@@ -340,6 +340,11 @@ One delivery attempt: sign, POST, classify (AC7, and the classification behind A
   executor under `resolveTimeout` (see *SSRF fence*); a timeout or an `UnknownHostException`
   returns `RETRY` with `name resolution failed`. Add `allowedHosts` to
   `ParticipantNotifications` (env `PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS`, empty default).
+  The executor has `resolverThreads` threads (env `PARTICIPANT_NOTIFICATIONS_RESOLVER_THREADS`,
+  default 8), and concurrent lookups of one host share a single in-flight lookup, so a host whose
+  DNS stalls holds at most one thread however many of its rows are sent. A timed-out lookup is
+  left running, not cancelled (`getaddrinfo` cannot be interrupted). The POST uses the raw
+  client, so the response body is never buffered; only the status is read.
 - `notification/DeliveryOutcome` (sealed or record + enum): `DELIVERED` for 2xx. `RETRY` with a
   reason for 408, 429, 5xx, connect/read timeout and I/O errors. `ABANDON` with a reason for any
   other 4xx and for 3xx. Keep the status ranges as named constants.
@@ -372,7 +377,8 @@ Drain the outbox safely across replicas (AC3, AC8–AC13).
   `SmtpConfigurationValidator`/`IdentityProviderRegistryValidator`) that requires
   `lease > ceil(batchSize / concurrency) × sendBound + margin` (`sendBound = resolveTimeout +
   connectTimeout + readTimeout`, margin a named constant, `10s`), `perParticipantBatchLimit <
-  concurrency`, a non-empty, positive backoff, and `maxAge ≥ sum(backoff) × (1 + jitter) +
+  concurrency`, `resolverThreads > floor((concurrency − 1) / perParticipantBatchLimit)` (each
+  dead host holds at most one resolver thread, so the AC12 isolation bound leaves one free), a non-empty, positive backoff, and `maxAge ≥ sum(backoff) × (1 + jitter) +
   (backoff.size() + 1) × (lease + pollInterval)` (each attempt can spend a lease in flight and a
   poll interval waiting to be claimed; defaults: ≈ 34.5 h + 7 × 65 s ≈ 34.6 h ≤ 36 h). Each
   refusal names the offending settings. `NotificationConfigurationValidatorTest`, parameterized

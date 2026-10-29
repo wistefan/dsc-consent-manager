@@ -8,6 +8,7 @@
   "NOTIFICATION_CLIENT_URL" $cfg.notificationClientUrl
   "RECEIPTS_JURISDICTION" $cfg.receiptsJurisdiction
   "PARTICIPANT_NOTIFICATIONS_RESOLVE_TIMEOUT" $cfg.participantNotifications.resolveTimeout
+  "PARTICIPANT_NOTIFICATIONS_RESOLVER_THREADS" $cfg.participantNotifications.resolverThreads
   "PARTICIPANT_NOTIFICATIONS_CONNECT_TIMEOUT" $cfg.participantNotifications.connectTimeout
   "PARTICIPANT_NOTIFICATIONS_READ_TIMEOUT" $cfg.participantNotifications.readTimeout
   "PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS" (join "," ($cfg.participantNotifications.allowedHosts | default list))
