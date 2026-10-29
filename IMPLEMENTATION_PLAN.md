@@ -24,6 +24,7 @@ Where the ticket text and the repo differ, the repo wins:
   | Held → target | Event | Recipients |
   |---|---|---|
   | (new) / `PENDING` → `GRANTED`, incl. resume | `CONSENT_GRANTED` | provider and consumer |
+  | `DRAFT` → `GRANTED` (edge exists; nothing creates a `DRAFT` today) | `CONSENT_GRANTED` | provider and consumer |
   | `GRANTED` → `REVOKED` (subject revoke, a decision superseding a grant, erasure) | `CONSENT_REVOKED` | provider and consumer |
   | `GRANTED` → `TERMINATED` | `CONSENT_TERMINATED` | the party that did **not** initiate it; both if system-initiated |
   | `GRANTED` → `EXPIRED` | `CONSENT_EXPIRED` | provider and consumer |
@@ -51,16 +52,26 @@ Where the ticket text and the repo differ, the repo wins:
   ticket's index does.
 - **Claiming uses a lease, not a lock held across HTTP.** A short transaction selects due rows
   `FOR UPDATE SKIP LOCKED`, pushes their `next_attempt_at` forward by a lease, stamps a fresh
-  `lease_token` (UUIDv7, one per claim), then commits. Lease arithmetic uses the database clock
-  (`now()`), so clock skew between replicas cannot shorten a lease. Delivery runs outside any
-  transaction, and the outcome is written in a second short transaction. If the process dies
-  mid-send, the row becomes due again when the lease expires (at-least-once, AC3).
-- **A lease covers the whole batch, and outcomes are fenced.** One request is bounded by
-  connect + read timeout, but a batch runs in waves of `concurrency`, so it takes up to
-  `ceil(batchSize / concurrency) × (connectTimeout + readTimeout)`. Startup validation requires
-  the lease to exceed *that* bound plus a margin (defaults: `ceil(50/8) × 7s = 49s < 60s`). The
-  dispatcher also never starts a send whose lease has less than `connectTimeout + readTimeout`
-  left; such a row is dropped from the batch untouched and is re-claimed after expiry. Every
+  `lease_token` (UUIDv7, one per claim), then commits. Delivery runs outside any transaction, and
+  the outcome is written in a second short transaction. If the process dies mid-send, the row
+  becomes due again when the lease expires (at-least-once, AC3).
+- **Two clocks, each used where it is safe.** The *stored* expiry is `next_attempt_at = now() +
+  lease` on the database clock, which every replica's claim query compares against, so skew
+  between replicas cannot move it. The *local* decision whether to start a send never reads a
+  wall clock: the dispatcher records `System.nanoTime()` **before** opening the claim transaction
+  and uses `claimStartedNanos + lease` as its send deadline. The database stamps its expiry after
+  that instant, so the local deadline precedes the real expiry whatever the wall-clock skew. The
+  `leased-until` value `lease(…)` returns is for logs only and never feeds a decision.
+- **A lease covers the whole batch, and outcomes are fenced.** One send is bounded by
+  `sendBound = resolveTimeout + connectTimeout + readTimeout` (name resolution has its own
+  timeout, see *SSRF fence*). A batch runs in waves of `concurrency`, so it takes up to
+  `ceil(batchSize / concurrency) × sendBound`. Startup validation requires the lease to exceed
+  *that* plus a named margin (defaults: `ceil(50/16) × 9s = 36s`, `+ 10s` margin `< 60s`). The
+  dispatcher also never starts a send when less than `sendBound + margin` remains before its
+  local deadline; such a row is dropped from the batch untouched and is re-claimed after expiry.
+  The margin absorbs scheduling delay between that check and the connect; a stall longer than it
+  (e.g. a long GC pause) can still yield a duplicate POST, which is the residue the at-least-once
+  contract and `eventId` deduplication exist for. Every
   outcome write is `UPDATE … WHERE id = :id AND lease_token = :token`; 0 rows updated means the
   lease was lost to another replica, and the late outcome is discarded (logged at DEBUG, no
   metric). A late writer can therefore never overwrite a row another replica already moved
@@ -70,7 +81,12 @@ Where the ticket text and the repo differ, the repo wins:
   ranking is a joined subquery and only the base table is locked (shape in Step 1). Deliveries run
   on a bounded pool with short timeouts, and startup validation requires
   `perParticipantBatchLimit < concurrency`, so a dead endpoint can hold at most its cap of workers
-  and never the whole pool (AC12).
+  and never the whole pool (AC12). The precise guarantee, which ADR-0016 states, is that up to
+  `floor((concurrency − 1) / perParticipantBatchLimit)` simultaneously dead endpoints leave a
+  worker free for everyone else — 3 with the defaults (`concurrency` 16, cap 5). Beyond that,
+  healthy rows wait at most one `sendBound` wave, and are never starved. Because `drainOnce()`
+  waits for its batch and the poll is `fixedDelay`, a dead endpoint also delays the *next* tick by
+  at most one `sendBound`; it does not delay deliveries within the current one.
 - **`last_error`** is a short classification (`HTTP 503`, `read timeout`, `connection refused`,
   `no consentNotification endpoint`, `participant deregistered`, `endpoint not permitted`). It
   never holds a response body. The history route returns it, and logs may print it.
@@ -86,11 +102,21 @@ Where the ticket text and the repo differ, the repo wins:
   - **Due rows keep it until they turn terminal.** A revocation caused by erasure is enqueued
     *before* the user is pseudonymised, in the same transaction, so its payload carries the
     identifier the recipients already hold, the only one they can act on. Earlier rows for that
-    user that are still `PENDING`/`FAILED` keep theirs for the same reason. Each such row turns
-    terminal (and is redacted) no later than the end of the backoff schedule plus one lease
-    (≈ 31.4 h with the defaults, ≈ 34.5 h at maximum jitter).
-  - That bound, not `retention`, is what the ADR states. `participant-notifications.retention`
-    (default 30 days) only limits how long the identifier-free delivery history is kept.
+    user that are still `PENDING`/`FAILED` keep theirs for the same reason. If deliveries run on
+    schedule, each such row turns terminal (and is redacted) by the end of the backoff schedule
+    plus one lease (≈ 31.4 h with the defaults, ≈ 34.5 h at maximum jitter).
+  - **A hard age backstop enforces the bound** even when they do not (dispatcher disabled, down,
+    behind a backlog, or rows repeatedly dropped for lack of lease). `NotificationOutboxSweeper`
+    runs on its own schedule, **independent of `enabled`**, and on startup. It abandons every
+    non-terminal row whose `created_at` is older than `participant-notifications.max-age`
+    (default `36h`), sets `payload = NULL`, `last_error = 'max age exceeded'` and clears
+    `lease_token`, so any in-flight holder's outcome is discarded. The claim query also excludes
+    such rows, so a row past `max-age` is never sent between sweeps. Startup validation requires
+    `max-age ≥ sum(backoff) × (1 + jitter) + lease`.
+  - The ADR states the bound as `max-age + sweepInterval` after enqueue, while at least one
+    replica runs. With no replica running nothing runs at all, and the first sweep on startup
+    redacts. `participant-notifications.retention` (default 30 days) only limits how long the
+    identifier-free delivery history is kept.
 - **SSRF fence on the participant-supplied URL.** `consentNotification` only requires https, so
   delivery gets the same fence `SelfDescriptionClient.permits` applies: the address heuristic
   (`isInternal`/`isExternal`: loopback, link-local, site-local, any-local, multicast, CGNAT
@@ -100,7 +126,12 @@ Where the ticket text and the repo differ, the repo wins:
   reachable. `participant-notifications.allowed-hosts` mirrors `self-description.allowed-hosts`
   (non-empty = only these hosts, which waive the address check), and is how the WireMock ITs
   reach loopback. The DNS-rebinding window between check and connect stays open exactly as for
-  self-descriptions, and `allowed-hosts` closes it; `docs/security.md` says so.
+  self-descriptions, and `allowed-hosts` closes it; `docs/security.md` says so. The JDK resolver
+  has no timeout and the HTTP connect timeout does not cover it, so the check resolves the host on
+  a dedicated bounded resolver executor under `resolveTimeout` (default `2s`) via
+  `Future.get(timeout)`. A lookup that times out is `RETRY` with `name resolution timeout`, and
+  is counted in `sendBound`. The HTTP client's own lookup moments later hits the JVM's positive
+  DNS cache; the lease margin absorbs the rare miss.
 - **Redirects are not followed** (the other half of the SSRF fence). A 3xx response is a permanent
   failure.
 - **Notification signatures are typed.** `JwsConsentSigningService` signs every receipt with
@@ -135,7 +166,7 @@ Add the storage layer with no callers yet.
     `payload` as `@TypeDef(type = DataType.JSON)`, mirroring how `Consent.snapshot` /
     `Participant.endpoints` map `jsonb`.
   - `NotificationOutboxRepository` (`@JdbcRepository(dialect = POSTGRES)`):
-    `claimDue(int batchSize, int perParticipant)` as a native query. The window function lives in
+    `claimDue(int batchSize, int perParticipant, long maxAgeSeconds)` as a native query. The window function lives in
     a joined subquery and only the base table is locked, because `FOR UPDATE` directly over a
     window function is rejected by Postgres 16:
 
@@ -143,7 +174,8 @@ Add the storage layer with no callers yet.
     SELECT o.* FROM notification_outbox o
     JOIN (SELECT id, row_number() OVER (PARTITION BY participant_id ORDER BY next_attempt_at) rn
           FROM notification_outbox
-          WHERE status IN ('PENDING','FAILED') AND next_attempt_at <= now()) r ON r.id = o.id
+          WHERE status IN ('PENDING','FAILED') AND next_attempt_at <= now()
+            AND created_at > now() - make_interval(secs => :maxAgeSeconds)) r ON r.id = o.id
     WHERE r.rn <= :perParticipant
     ORDER BY o.next_attempt_at
     LIMIT :batchSize
@@ -158,13 +190,16 @@ Add the storage layer with no callers yet.
     `… WHERE id = :id AND lease_token = :token` and returning the updated row count; the
     terminal two also set `payload = NULL`. `findByParticipantIdOrderByCreatedAtDesc(UUID,
     Pageable)`. `countDueByParticipant()` for the depth gauge. `deleteTerminalBefore(Instant)` for
-    retention.
+    retention. `abandonOlderThan(long maxAgeSeconds)`, the unfenced age backstop: every
+    `PENDING`/`FAILED` row with `created_at <= now() - max-age` becomes `ABANDONED`,
+    `payload = NULL`, `last_error = 'max age exceeded'`, `lease_token = NULL`; returns the count.
 - Tests: `NotificationOutboxRepositoryIT` (extends `PostgresTestResource`). Cover round-trip of the
   jsonb payload; the claim returns only due `PENDING`/`FAILED` rows; the per-participant cap (as
   an upper bound, given the locked-row note above); two concurrent claims in separate transactions
   (two threads via `support/Race`) returning disjoint sets; a fenced write with a stale token
-  updating 0 rows and leaving the row unchanged; and the payload `CHECK` refusing a terminal row
-  with a payload. Reset between tests with `support/DatabaseReset` (add the new table if it
+  updating 0 rows and leaving the row unchanged; the payload `CHECK` refusing a terminal row
+  with a payload; and a row aged past `max-age` (by rewriting `created_at`) never being claimed,
+  then being abandoned with a null payload by `abandonOlderThan`, leased or not. Reset between tests with `support/DatabaseReset` (add the new table if it
   enumerates tables).
 - Acceptance: `./mvnw verify` green. Flyway applies V6 on the Testcontainers database.
 
@@ -212,10 +247,10 @@ Make every permission-changing move durably queue its notifications atomically (
 One delivery attempt: sign, POST, classify (AC7, and the classification behind AC9–AC10).
 
 - `ConsentManagerConfiguration.ParticipantNotifications` (new nested class, `@Getter @Setter`,
-  under `participant-notifications`): for this step `connectTimeout` (default `2s`) and
-  `readTimeout` (default `5s`). Steps 4–5 add the rest. Bind env vars
-  `PARTICIPANT_NOTIFICATIONS_CONNECT_TIMEOUT` / `_READ_TIMEOUT` in `application.yml`, `.env.sample`
-  and the chart.
+  under `participant-notifications`): for this step `resolveTimeout` (default `2s`),
+  `connectTimeout` (default `2s`) and `readTimeout` (default `5s`). Steps 4–5 add the rest. Bind
+  env vars `PARTICIPANT_NOTIFICATIONS_RESOLVE_TIMEOUT` / `_CONNECT_TIMEOUT` / `_READ_TIMEOUT` in
+  `application.yml`, `.env.sample` and the chart.
 - `notification/ParticipantWebhookClient`: a dedicated Micronaut `HttpClient`, built like
   `client/SelfDescriptionHttpClientFactory` from the configured timeouts, with
   `followRedirects=false`. It sends `POST` to the endpoint with body = canonical RFC 8785 JSON of
@@ -231,7 +266,9 @@ One delivery attempt: sign, POST, classify (AC7, and the classification behind A
   helpers below them) into a shared `client/NetworkAddressPolicy`, behaviour unchanged, with
   `SelfDescriptionClient` delegating to it. The webhook client refuses a non-https URL, a host
   outside a non-empty `allowed-hosts`, or a host that is not external, *before* connecting,
-  returning `ABANDON` with `endpoint not permitted`. Add `allowedHosts` to
+  returning `ABANDON` with `endpoint not permitted`. Resolution runs on a dedicated bounded
+  executor under `resolveTimeout` (see *SSRF fence*); a timeout returns `RETRY` with
+  `name resolution timeout`, and an unknown host returns `ABANDON`/`endpoint not permitted`. Add `allowedHosts` to
   `ParticipantNotifications` (env `PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS`, empty default).
 - `notification/DeliveryOutcome` (sealed or record + enum): `DELIVERED` for 2xx. `RETRY` with a
   reason for 408, 429, 5xx, connect/read timeout and I/O errors. `ABANDON` with a reason for any
@@ -248,19 +285,24 @@ One delivery attempt: sign, POST, classify (AC7, and the classification behind A
   - `NetworkAddressPolicyTest`, parameterized over the address classes (loopback, `10/8`,
     `172.16/12`, `192.168/16`, `169.254/16`, `100.64/10`, `fc00::/7`, `::1`, a public address),
     plus a webhook-client case: an internal endpoint returns `ABANDON`/`endpoint not permitted`
-    without a connect attempt, and an `allowed-hosts` entry admits loopback. Existing
+    without a connect attempt, and an `allowed-hosts` entry admits loopback. A resolver stubbed
+    to block (the resolver is an injectable seam, `HostResolver`) returns `RETRY`/`name
+    resolution timeout` within roughly `resolveTimeout`. Existing
     `SelfDescriptionClient` tests stay green unchanged.
 
 ### Step 4: Dispatcher with backoff, abandonment and retention
 Drain the outbox safely across replicas (AC3, AC8–AC13).
 
 - Extend `ParticipantNotifications`, each with a named default and an env var:
-  `enabled` (true), `pollInterval` (`5s`), `batchSize` (50), `perParticipantBatchLimit` (5),
-  `concurrency` (8), `lease` (`60s`), `backoff` (list, default `1m,5m,15m,1h,6h,24h`),
-  `jitter` (fraction, default `0.1`), `retention` (`30d`). Add a startup validator (pattern:
+  `enabled` (true, delivery only), `pollInterval` (`5s`), `batchSize` (50),
+  `perParticipantBatchLimit` (5), `concurrency` (16), `lease` (`60s`), `backoff` (list, default
+  `1m,5m,15m,1h,6h,24h`), `jitter` (fraction, default `0.1`), `maxAge` (`36h`), `sweepInterval`
+  (`1m`), `retention` (`30d`). Add a startup validator (pattern:
   `SmtpConfigurationValidator`/`IdentityProviderRegistryValidator`) that requires
-  `lease > ceil(batchSize / concurrency) × (connectTimeout + readTimeout) + margin` (named
-  constant), `perParticipantBatchLimit < concurrency`, and a non-empty, positive backoff. Each
+  `lease > ceil(batchSize / concurrency) × sendBound + margin` (`sendBound = resolveTimeout +
+  connectTimeout + readTimeout`, margin a named constant, `10s`), `perParticipantBatchLimit <
+  concurrency`, a non-empty, positive backoff, and `maxAge ≥ sum(backoff) × (1 + jitter) + lease`
+  (defaults: ≈ 34.5 h + 1 m ≤ 36 h). Each
   refusal names the offending settings. `NotificationConfigurationValidatorTest`, parameterized
   over the defaults (admitted) and each violated rule (refused).
 - `notification/NotificationBackoff` (pure): `nextAttemptAt(attemptsSoFar, now, random)` returns
@@ -268,11 +310,13 @@ Drain the outbox safely across replicas (AC3, AC8–AC13).
   first attempt plus six retries, the seventh failure abandons.
 - `notification/NotificationDispatcher`: `@Scheduled(fixedDelay = "${…poll-interval}")` calling
   `drainOnce()` (public, so tests drive it with `enabled=false`). Each tick:
-  1. Claim and lease in one short transaction; keep the token and leased-until time.
+  1. Read `System.nanoTime()`, then claim and lease in one short transaction; keep the token.
+     The local send deadline is that reading `+ lease` (see *Two clocks*); the returned
+     leased-until time is only logged.
   2. For each row, on a bounded pool (reuse the `NotificationThreadPool` pattern, sized by
-     `concurrency`): if the lease has less than `connectTimeout + readTimeout` left, drop the row
-     untouched (it is re-claimed after expiry). Otherwise resolve the recipient's current
-     `endpoints.consentNotification`.
+     `concurrency`): if less than `sendBound + margin` remains before the local deadline
+     (`System.nanoTime()` again), drop the row untouched (it is re-claimed after expiry).
+     Otherwise resolve the recipient's current `endpoints.consentNotification`.
   3. Abandon immediately with a reason if the participant is gone or deregistered, or has no
      endpoint (AC11). Otherwise send through `ParticipantWebhookClient`, which applies the address
      fence first.
@@ -280,8 +324,14 @@ Drain the outbox safely across replicas (AC3, AC8–AC13).
      `DELIVERED` + `delivered_at`, payload nulled. `FAILED` + `attempts+1` + `last_error` + backoff
      `next_attempt_at`. Or `ABANDONED`, payload nulled (AC9, AC10). A 0-row update means the lease
      was lost; discard the outcome and record no metric.
-  5. Wait for the batch, bounded by the lease; on expiry cancel the tasks not yet started.
-  6. Purge terminal rows older than `retention`.
+  5. Wait for the batch, bounded by the local deadline; on reaching it cancel the tasks not yet
+     started.
+
+  `notification/NotificationOutboxSweeper`: a separate `@Scheduled(fixedDelay =
+  "${…sweep-interval}", initialDelay = "0s")` bean that runs whatever `enabled` says, calling
+  `sweepOnce()` (public, for tests): `abandonOlderThan(maxAge)` (the erasure backstop, logged at
+  WARN with the count and counted as abandonment reason `max age exceeded`), then
+  `deleteTerminalBefore(now − retention)`. It sends nothing, so it is safe on every replica.
 
   Log every abandonment at WARN with participant id, consent id and reason, and never the user
   identifier, which `LogLeakIT` must keep passing.
@@ -294,10 +344,19 @@ Drain the outbox safely across replicas (AC3, AC8–AC13).
     attempt and 429 → `FAILED` (AC10), and the no-endpoint case → `ABANDONED` with no HTTP call
     (AC11). Cover an expired lease being re-claimed, with the row delivered (AC3), and the stale
     holder's late outcome write updating nothing. Cover a row whose lease is nearly spent never
-    being sent. Cover an endpoint resolving to loopback without an `allowed-hosts` entry →
-    `ABANDONED` with `endpoint not permitted` and no request reaching WireMock.
-  - Isolation: participant A's endpoint stalls past the read timeout with many rows, participant B
-    has one row, and B is `DELIVERED` within the first `drainOnce()` (AC12).
+    being sent, with the send deadline taken from a stubbed nanosecond source (an injectable
+    `LongSupplier`) so the test does not depend on the wall clock. Cover an endpoint resolving to
+    loopback without an `allowed-hosts` entry → `ABANDONED` with `endpoint not permitted` and no
+    request reaching WireMock.
+  - `NotificationOutboxSweeperIT`, with `enabled=false`: a `PENDING` row and a `FAILED` row aged
+    past `max-age` become `ABANDONED` with a null payload and `max age exceeded` after
+    `sweepOnce()`, with no request reaching WireMock; a younger row is untouched; a terminal row
+    older than `retention` is deleted.
+  - Isolation: `floor((concurrency − 1) / perParticipantBatchLimit)` participants (3 with the
+    defaults) each have an endpoint that stalls past the read timeout and more rows than the cap;
+    participant B has one row. B is `DELIVERED` within the first `drainOnce()`, and its
+    `delivered_at` is earlier than the drain's start plus `readTimeout`, which fails if B had to
+    wait for a stalled wave (AC12).
 
 ### Step 5: Per-participant delivery metrics
 Make delivery observable (AC14).
@@ -364,16 +423,22 @@ Prove the whole path against a WireMock recipient (AC12, AC13, AC16, AC17).
   only way past the address fence; main config never carries it.
 - Make sure these ITs disable the scheduler (`participant-notifications.enabled=false` in
   `application-test.yml`, overridden per test only where wanted) so existing ITs are unaffected.
+  The sweeper still runs there; it touches only rows older than `max-age`, which no IT creates
+  except by rewriting `created_at`, and those ITs call `sweepOnce()` directly.
 
 ### Step 8: Documentation, ADR and chart
 Record the contract for integrators and operators.
 
 - `docs/adr/0016-participant-notifications-use-a-transactional-outbox.md`: outbox versus inline
   send, lease claim with whole-batch lease and fenced outcomes, the which-moves-notify table,
-  frozen payload/`eventId`, the erasure bound (identifier only on due rows, nulled on turning
-  terminal, at most the backoff schedule plus one lease after enqueue; retention covers only
-  identifier-free history), the SSRF fence and redirects off, the typed notification signature,
-  and no expiry trigger. Set ADR-0011's status line to "partly superseded by ADR-0016
+  frozen payload/`eventId`, the two clocks (stored expiry on the database clock, send deadline
+  on local monotonic time taken before the claim) and the residual duplicate under a stall longer
+  than the margin, the isolation guarantee stated as `floor((concurrency − 1) /
+  perParticipantBatchLimit)` dead endpoints and the one-`sendBound` tick delay, the erasure bound
+  (identifier only on due rows, nulled on turning terminal, at most `max-age + sweepInterval`
+  after enqueue while a replica runs, enforced by the sweeper regardless of `enabled`; retention
+  covers only identifier-free history), the SSRF fence with its resolve timeout and redirects
+  off, the typed notification signature, and no expiry trigger. Set ADR-0011's status line to "partly superseded by ADR-0016
   (participant delivery)" and leave its body unchanged.
 - `docs/security.md`: the webhook's address fence beside the self-description one, the same
   DNS-rebinding residual and how `allowed-hosts` closes it, and the `typ` separation between
