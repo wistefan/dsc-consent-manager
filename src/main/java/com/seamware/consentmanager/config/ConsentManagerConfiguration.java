@@ -283,6 +283,55 @@ public class ConsentManagerConfiguration {
     }
 
     /**
+     * Webhook delivery of consent changes to participants, bound under {@code
+     * consent-manager.participant-notifications}; {@link Notifications} is subject email.
+     */
+    @Getter
+    @Setter
+    @ConfigurationProperties("participant-notifications")
+    public static class ParticipantNotifications {
+
+        /** Default bound on resolving a webhook host; the JDK resolver has none of its own. */
+        public static final Duration DEFAULT_RESOLVE_TIMEOUT = Duration.ofSeconds(2);
+
+        /** Default webhook connection-attempt timeout. */
+        public static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(2);
+
+        /** Default webhook response timeout. */
+        public static final Duration DEFAULT_READ_TIMEOUT = Duration.ofSeconds(5);
+
+        /**
+         * Bound on resolving a webhook host, bound to {@code
+         * PARTICIPANT_NOTIFICATIONS_RESOLVE_TIMEOUT}; a lookup that outlasts it is retried.
+         */
+        private Duration resolveTimeout = DEFAULT_RESOLVE_TIMEOUT;
+
+        /** Connect timeout, bound to {@code PARTICIPANT_NOTIFICATIONS_CONNECT_TIMEOUT}. */
+        private Duration connectTimeout = DEFAULT_CONNECT_TIMEOUT;
+
+        /** Response timeout, bound to {@code PARTICIPANT_NOTIFICATIONS_READ_TIMEOUT}. */
+        private Duration readTimeout = DEFAULT_READ_TIMEOUT;
+
+        /**
+         * Hosts a webhook may be delivered to, bound to {@code
+         * PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS}; empty admits any host whose addresses are all
+         * external. A listed host is exempt from the private-address refusal.
+         */
+        private List<String> allowedHosts = List.of();
+
+        /** Sets the allow-list, dropping the blank entry an unset variable binds as. */
+        public void setAllowedHosts(@Nullable List<String> allowedHosts) {
+            this.allowedHosts =
+                    allowedHosts == null
+                            ? List.of()
+                            : allowedHosts.stream()
+                                    .filter(host -> host != null && !host.isBlank())
+                                    .map(String::trim)
+                                    .toList();
+        }
+    }
+
+    /**
      * What a consent receipt states about this deployment, bound under {@code
      * consent-manager.receipts}.
      */

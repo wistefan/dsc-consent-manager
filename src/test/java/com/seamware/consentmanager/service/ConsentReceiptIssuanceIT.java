@@ -19,6 +19,7 @@ import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.signing.CanonicalJsonSerializer;
 import com.seamware.consentmanager.signing.ConsentSigningService;
 import com.seamware.consentmanager.signing.JwsConsentSigningService;
+import com.seamware.consentmanager.signing.SignatureType;
 import com.seamware.consentmanager.signing.SignedReceipt;
 import com.seamware.consentmanager.signing.SigningKeyStore;
 import com.seamware.consentmanager.support.ConsentFixtures;
@@ -234,9 +235,9 @@ class ConsentReceiptIssuanceIT extends PostgresTestResource {
 
         @Override
         @NonNull
-        public <R> SignedReceipt<R> sign(@NonNull R receipt) {
+        public <R> SignedReceipt<R> sign(@NonNull R receipt, @NonNull SignatureType type) {
             signed.incrementAndGet();
-            return delegate.sign(receipt);
+            return delegate.sign(receipt, type);
         }
 
         @Override
@@ -245,8 +246,11 @@ class ConsentReceiptIssuanceIT extends PostgresTestResource {
         }
 
         @Override
-        public boolean verifyCanonical(@NonNull String canonicalJson, @NonNull String detachedJws) {
-            return delegate.verifyCanonical(canonicalJson, detachedJws);
+        public boolean verifyCanonical(
+                @NonNull String canonicalJson,
+                @NonNull String detachedJws,
+                @NonNull SignatureType type) {
+            return delegate.verifyCanonical(canonicalJson, detachedJws, type);
         }
     }
 }

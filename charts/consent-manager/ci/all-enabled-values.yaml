@@ -28,6 +28,8 @@ config:
     fromAddress: noreply@example.org
     fromName: Consent Manager
   notificationClientUrl: https://wallet.example.org
+  participantNotifications:
+    allowedHosts: [webhooks.example.org]
   extraEnv:
     SELF_DESCRIPTION_ALLOWED_HOSTS: catalog.example.org
 
