@@ -133,7 +133,8 @@ public class ConsentLifecycleService {
                                 consent.getId(),
                                 ConsentStatus.TERMINATED,
                                 caller.getIdentifier(),
-                                EXPLICIT_TRIGGER));
+                                EXPLICIT_TRIGGER,
+                                caller.getId()));
         notifyTerminated(caller, details.consent());
         return details;
     }

@@ -149,8 +149,11 @@ reader who asks for it by name, and no one should read it as a record awaiting c
 - The terminated consents are a one-way move. A consent-lifecycle ticket must not treat
   `TERMINATED` as a state its own flows can resume from — the same constraint ADR 0007 records for
   users, now reachable from the participant side too.
-- **The sweep covers `participants`, `user_participants`, `privacy_notices` and `consents` only.**
-  It is sound today because nothing else stores anything about the participant. A later ticket that
+- **The sweep covers `participants`, `user_participants`, `privacy_notices`, `consents` and
+  `notification_outbox` only.** The outbox rows still due to the participant are abandoned
+  (`participant deregistered`, payload dropped), since its endpoints are cleared and nothing queued
+  for it can be delivered; ADR 0016 records why. It is sound because nothing else stores anything
+  about the participant. A later ticket that
   records a participant identifier, endpoint or contact in `consent_events.details`, in a consent
   snapshot, or in a new table has to sweep it in `ParticipantService.deregister` in the same change,
   or the cascade will silently leave it behind.

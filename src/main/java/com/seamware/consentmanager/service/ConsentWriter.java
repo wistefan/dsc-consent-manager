@@ -9,6 +9,7 @@ import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.NotFoundException;
+import com.seamware.consentmanager.notification.ParticipantNotificationService;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import io.micronaut.core.annotation.NonNull;
@@ -42,16 +43,19 @@ public class ConsentWriter {
     private final ConsentEventRepository events;
     private final ConsentFactory factory;
     private final ConsentReceiptIssuer issuer;
+    private final ParticipantNotificationService notifications;
 
     public ConsentWriter(
             ConsentRepository consents,
             ConsentEventRepository events,
             ConsentFactory factory,
-            ConsentReceiptIssuer issuer) {
+            ConsentReceiptIssuer issuer,
+            ParticipantNotificationService notifications) {
         this.consents = consents;
         this.events = events;
         this.factory = factory;
         this.issuer = issuer;
+        this.notifications = notifications;
     }
 
     /**
@@ -146,11 +150,26 @@ public class ConsentWriter {
             @NonNull ConsentStatus target,
             @NonNull String actor,
             @NonNull ConsentEventTrigger trigger) {
+        return move(consentId, target, actor, trigger, null);
+    }
+
+    /**
+     * {@link #move(UUID, ConsentStatus, String, ConsentEventTrigger)} asked for by the participant
+     * {@code initiator}, which is then not notified of its own move; null when no party asked.
+     */
+    @NonNull
+    @Transactional
+    public ConsentMove move(
+            @NonNull UUID consentId,
+            @NonNull ConsentStatus target,
+            @NonNull String actor,
+            @NonNull ConsentEventTrigger trigger,
+            @Nullable UUID initiator) {
         Consent locked =
                 consents.findByIdForUpdate(consentId)
                         .orElseThrow(
                                 () -> new NotFoundException(UNKNOWN_CONSENT.formatted(consentId)));
-        return moved(locked, target, actor, trigger);
+        return moved(locked, target, actor, trigger, initiator);
     }
 
     /**
@@ -225,7 +244,9 @@ public class ConsentWriter {
                                 ConsentStatus.GRANTED,
                                 ConsentEventState.CONSENT_RESUMED,
                                 actor,
-                                SUBJECT_TRIGGER));
+                                SUBJECT_TRIGGER),
+                        held,
+                        null);
         return new ResumedConsent(new ConsentMove(held, answered), List.copyOf(collateral));
     }
 
@@ -236,7 +257,7 @@ public class ConsentWriter {
         if (inForce == null) {
             return null;
         }
-        return moved(inForce, ConsentStatus.REVOKED, actor, SUBJECT_TRIGGER);
+        return moved(inForce, ConsentStatus.REVOKED, actor, SUBJECT_TRIGGER, null);
     }
 
     /**
@@ -253,7 +274,9 @@ public class ConsentWriter {
             unanswered.setParentConsentId(superseded);
         }
         unanswered.setSnapshot(snapshot);
-        return saveUpdated(factory.transition(unanswered, decision, actor, SUBJECT_TRIGGER));
+        ConsentStatus held = unanswered.getStatus();
+        return saveUpdated(
+                factory.transition(unanswered, decision, actor, SUBJECT_TRIGGER), held, null);
     }
 
     /**
@@ -262,16 +285,28 @@ public class ConsentWriter {
      */
     private List<ConsentMove> closeRedundant(List<Consent> redundant, String actor) {
         return redundant.stream()
-                .map(consent -> moved(consent, ConsentStatus.TERMINATED, actor, CLEANUP_TRIGGER))
+                .map(
+                        consent ->
+                                moved(
+                                        consent,
+                                        ConsentStatus.TERMINATED,
+                                        actor,
+                                        CLEANUP_TRIGGER,
+                                        null))
                 .toList();
     }
 
     /** Applies one move, capturing the held status before the transition overwrites it. */
     private ConsentMove moved(
-            Consent consent, ConsentStatus target, String actor, ConsentEventTrigger trigger) {
+            Consent consent,
+            ConsentStatus target,
+            String actor,
+            ConsentEventTrigger trigger,
+            @Nullable UUID initiator) {
         ConsentStatus held = consent.getStatus();
         return new ConsentMove(
-                held, saveUpdated(factory.transition(consent, target, actor, trigger)));
+                held,
+                saveUpdated(factory.transition(consent, target, actor, trigger), held, initiator));
     }
 
     /** Stores the decision as a new consent, linked to whatever the pair last held. */
@@ -295,17 +330,26 @@ public class ConsentWriter {
                         actor));
     }
 
-    /** Inserts the consent with its event; a consent stored without its trail is untraceable. */
+    /**
+     * Inserts the consent with its event and queues its notifications; a consent stored without its
+     * trail is untraceable. Queued before the receipt, so a signing failure rolls the rows back.
+     */
     private RecordedConsent saveNew(RecordedConsent recorded) {
         consents.save(recorded.consent());
         events.save(recorded.event());
+        notifications.enqueue(recorded, null, null);
         return issueIfGranted(recorded);
     }
 
-    /** Applies a move to a stored consent and appends the event recording it. */
-    private RecordedConsent saveUpdated(RecordedConsent recorded) {
+    /**
+     * Applies a move from {@code held} to a stored consent, appends its event and queues its
+     * notifications, before the receipt as in {@link #saveNew}.
+     */
+    private RecordedConsent saveUpdated(
+            RecordedConsent recorded, ConsentStatus held, @Nullable UUID initiator) {
         consents.update(recorded.consent());
         events.save(recorded.event());
+        notifications.enqueue(recorded, held, initiator);
         return issueIfGranted(recorded);
     }
 
