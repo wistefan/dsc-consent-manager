@@ -9,6 +9,7 @@ import io.micronaut.data.annotation.TypeDef;
 import io.micronaut.data.model.DataType;
 import io.micronaut.serde.annotation.Serdeable;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.UUID;
 
@@ -22,6 +23,9 @@ public class ConsentEvent {
 
     /** Event type used when none is given. */
     public static final String DEFAULT_EVENT_TYPE = "explicit";
+
+    /** {@code timestamptz} precision, so a notification or receipt reports the stored instant. */
+    private static final ChronoUnit STORED_PRECISION = ChronoUnit.MICROS;
 
     /** Application-generated UUIDv7 primary key. */
     @Id private UUID id;
@@ -65,7 +69,7 @@ public class ConsentEvent {
         this.eventState = eventState;
         this.eventType = DEFAULT_EVENT_TYPE;
         this.actor = actor;
-        this.occurredAt = Instant.now();
+        this.occurredAt = Instant.now().truncatedTo(STORED_PRECISION);
         this.details = details;
     }
 
@@ -82,7 +86,7 @@ public class ConsentEvent {
         this.eventState = eventState;
         this.eventType = eventType;
         this.actor = actor;
-        this.occurredAt = occurredAt;
+        this.occurredAt = occurredAt.truncatedTo(STORED_PRECISION);
         this.details = details;
     }
 
