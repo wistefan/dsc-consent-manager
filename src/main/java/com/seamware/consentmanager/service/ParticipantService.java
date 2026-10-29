@@ -8,6 +8,8 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.NotFoundException;
+import com.seamware.consentmanager.notification.NotificationOutboxRepository;
+import com.seamware.consentmanager.notification.ParticipantNotificationService;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
@@ -115,6 +117,10 @@ public class ParticipantService {
 
     private final ConsentManagerConfiguration.Participants paging;
 
+    private final ParticipantNotificationService participantNotifications;
+
+    private final NotificationOutboxRepository outbox;
+
     public ParticipantService(
             ParticipantRepository participants,
             ConsentRepository consents,
@@ -122,7 +128,9 @@ public class ParticipantService {
             ConsentFactory consentFactory,
             PrivacyNoticeRepository notices,
             UserParticipantRepository links,
-            ConsentManagerConfiguration.Participants paging) {
+            ConsentManagerConfiguration.Participants paging,
+            ParticipantNotificationService participantNotifications,
+            NotificationOutboxRepository outbox) {
         this.participants = participants;
         this.consents = consents;
         this.consentEvents = consentEvents;
@@ -130,6 +138,8 @@ public class ParticipantService {
         this.notices = notices;
         this.links = links;
         this.paging = paging;
+        this.participantNotifications = participantNotifications;
+        this.outbox = outbox;
     }
 
     /**
@@ -273,7 +283,9 @@ public class ParticipantService {
                 consents.findNamingParticipantForUpdate(participantId, UNANSWERED_STATUSES);
         refuseWhileGranted(participant, participantId);
 
-        List<ConsentMove> terminated = terminate(unanswered);
+        List<ConsentMove> terminated = terminate(unanswered, participantId);
+        // Its endpoints are cleared below, so nothing still queued for it can be delivered.
+        int notificationsAbandoned = outbox.abandonForParticipant(participantId);
         int linksRemoved = links.deleteByIdParticipantId(participantId);
         int noticesArchived = archiveNotices(participantId);
         int consentsRetained = consents.countByParticipant(participantId);
@@ -281,12 +293,13 @@ public class ParticipantService {
 
         LOG.info(
                 "Deregistered participant {}: terminated {}, retained {}, archived {}, unlinked {},"
-                        + " record {}",
+                        + " notifications abandoned {}, record {}",
                 participant.getIdentifier(),
                 terminated.size(),
                 consentsRetained,
                 noticesArchived,
                 linksRemoved,
+                notificationsAbandoned,
                 deregisteredAt == null ? "deleted" : "retained");
         return new DeregistrationResult(
                 deregisteredAt, terminated, consentsRetained, noticesArchived, linksRemoved);
@@ -345,10 +358,11 @@ public class ParticipantService {
     }
 
     /**
-     * Terminates the locked unanswered consents with an event each; returns each move and its prior
-     * status. Not reported here, as only a committed move may be counted.
+     * Terminates the locked unanswered consents with an event each, at {@code participantId}'s
+     * request; returns each move and its prior status. Not reported here, as only a committed move
+     * may be counted.
      */
-    private List<ConsentMove> terminate(List<Consent> unanswered) {
+    private List<ConsentMove> terminate(List<Consent> unanswered, UUID participantId) {
         List<ConsentMove> closed =
                 unanswered.stream()
                         .map(
@@ -360,6 +374,11 @@ public class ParticipantService {
         if (!closed.isEmpty()) {
             consents.updateAll(closed.stream().map(move -> move.recorded().consent()).toList());
             consentEvents.saveAll(closed.stream().map(move -> move.recorded().event()).toList());
+            // An unanswered offer grants nothing, so this queues no row; it keeps the hook total.
+            closed.forEach(
+                    move ->
+                            participantNotifications.enqueue(
+                                    move.recorded(), move.held(), participantId));
         }
         return closed;
     }

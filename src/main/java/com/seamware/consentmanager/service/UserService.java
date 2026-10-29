@@ -14,6 +14,7 @@ import com.seamware.consentmanager.error.BadRequestException;
 import com.seamware.consentmanager.error.ConflictException;
 import com.seamware.consentmanager.error.NotFoundException;
 import com.seamware.consentmanager.error.ProblemType;
+import com.seamware.consentmanager.notification.ParticipantNotificationService;
 import com.seamware.consentmanager.observability.FailureSummary;
 import com.seamware.consentmanager.observability.LogPseudonymizer;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
@@ -143,6 +144,8 @@ public class UserService {
 
     private final ConsentManagerConfiguration.Users configuration;
 
+    private final ParticipantNotificationService participantNotifications;
+
     public UserService(
             UserRepository users,
             UserParticipantRepository links,
@@ -153,7 +156,8 @@ public class UserService {
             ConsentFactory consentFactory,
             ErasureVerifier erasureVerifier,
             LogPseudonymizer pseudonymizer,
-            ConsentManagerConfiguration.Users configuration) {
+            ConsentManagerConfiguration.Users configuration,
+            ParticipantNotificationService participantNotifications) {
         this.users = users;
         this.links = links;
         this.participants = participants;
@@ -164,6 +168,7 @@ public class UserService {
         this.erasureVerifier = erasureVerifier;
         this.pseudonymizer = pseudonymizer;
         this.configuration = configuration;
+        this.participantNotifications = participantNotifications;
     }
 
     /**
@@ -433,6 +438,8 @@ public class UserService {
     /**
      * Closes every open consent per {@link #ERASURE_CLOSINGS}, returning each move with its held
      * status. One locked read, so a concurrently granted request is revoked, not terminated stale.
+     * Queued notifications name the subject as recipients know it, so this runs before
+     * pseudonymising.
      */
     private List<ConsentMove> close(UUID userId) {
         List<ConsentMove> closed =
@@ -449,6 +456,8 @@ public class UserService {
         if (!closed.isEmpty()) {
             consents.updateAll(closed.stream().map(move -> move.recorded().consent()).toList());
             consentEvents.saveAll(closed.stream().map(move -> move.recorded().event()).toList());
+            closed.forEach(
+                    move -> participantNotifications.enqueue(move.recorded(), move.held(), null));
         }
         return closed;
     }
