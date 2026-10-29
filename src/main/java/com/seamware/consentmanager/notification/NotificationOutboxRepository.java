@@ -79,13 +79,13 @@ public interface NotificationOutboxRepository
                     + " WHERE id = :id AND lease_token = :token")
     int markDelivered(UUID id, UUID token);
 
-    /** Records a failed attempt and schedules the retry {@code delaySeconds} from now. */
+    /** Records a failed attempt and schedules the retry {@code delayMillis} from now. */
     @Query(
             "UPDATE notification_outbox SET status = 'FAILED',"
-                    + " next_attempt_at = now() + make_interval(secs => :delaySeconds),"
+                    + " next_attempt_at = now() + :delayMillis * INTERVAL '1 millisecond',"
                     + " last_error = :reason, lease_token = NULL, attempts = attempts + 1"
                     + " WHERE id = :id AND lease_token = :token")
-    int markFailed(UUID id, UUID token, long delaySeconds, String reason);
+    int markFailed(UUID id, UUID token, long delayMillis, String reason);
 
     /** Gives up on the row after an attempt and drops the payload. */
     @Query(
@@ -110,15 +110,19 @@ public interface NotificationOutboxRepository
                     + " AND created_at <= now() - make_interval(secs => :retentionSeconds)")
     int deleteTerminalOlderThan(long retentionSeconds);
 
-    /** The age backstop: abandons every due row past the max age, leased or not. */
+    /**
+     * The age backstop: abandons every due row past the max age, leased or not, and returns the
+     * rows it abandoned.
+     */
     @Query(
             "UPDATE notification_outbox SET status = 'ABANDONED', payload = NULL,"
                     + " last_error = '"
                     + AbandonReason.MAX_AGE_EXCEEDED
                     + "', lease_token = NULL"
                     + " WHERE status IN ('PENDING', 'FAILED')"
-                    + " AND created_at <= now() - make_interval(secs => :maxAgeSeconds)")
-    int abandonOlderThan(long maxAgeSeconds);
+                    + " AND created_at <= now() - make_interval(secs => :maxAgeSeconds)"
+                    + " RETURNING participant_id, consent_id")
+    List<AbandonedRow> abandonOlderThan(long maxAgeSeconds);
 
     /** The deregistration sweep: abandons every due row of the participant, leased or not. */
     @Query(

@@ -12,6 +12,15 @@
   "PARTICIPANT_NOTIFICATIONS_CONNECT_TIMEOUT" $cfg.participantNotifications.connectTimeout
   "PARTICIPANT_NOTIFICATIONS_READ_TIMEOUT" $cfg.participantNotifications.readTimeout
   "PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS" (join "," ($cfg.participantNotifications.allowedHosts | default list))
+  "PARTICIPANT_NOTIFICATIONS_POLL_INTERVAL" $cfg.participantNotifications.pollInterval
+  "PARTICIPANT_NOTIFICATIONS_BATCH_SIZE" $cfg.participantNotifications.batchSize
+  "PARTICIPANT_NOTIFICATIONS_PER_PARTICIPANT_BATCH_LIMIT" $cfg.participantNotifications.perParticipantBatchLimit
+  "PARTICIPANT_NOTIFICATIONS_CONCURRENCY" $cfg.participantNotifications.concurrency
+  "PARTICIPANT_NOTIFICATIONS_LEASE" $cfg.participantNotifications.lease
+  "PARTICIPANT_NOTIFICATIONS_BACKOFF" (join "," ($cfg.participantNotifications.backoff | default list))
+  "PARTICIPANT_NOTIFICATIONS_MAX_AGE" $cfg.participantNotifications.maxAge
+  "PARTICIPANT_NOTIFICATIONS_SWEEP_INTERVAL" $cfg.participantNotifications.sweepInterval
+  "PARTICIPANT_NOTIFICATIONS_RETENTION" $cfg.participantNotifications.retention
   "IDP_JWKS_CACHE_TTL" $cfg.cache.idpJwksTtl
   "CONTRACT_SERVICE_CACHE_TTL" $cfg.cache.contractServiceTtl
   "CONTRACT_SERVICE_CACHE_MAX_SIZE" $cfg.cache.contractServiceMaxSize
@@ -60,6 +69,11 @@ data:
   IDP_DISCOVERY_URL: {{ required "identityProviders.primary.discoveryUrl is required" $idp.discoveryUrl | quote }}
   IDP_AUDIENCE: {{ required "identityProviders.primary.audience is required" $idp.audience | quote }}
   IDP_ALLOW_INSECURE_TRANSPORT: {{ $idp.allowInsecureTransport | default false | quote }}
+  {{- /* Rendered outside the empty-omitting loop below, where false and 0 would be dropped. */}}
+  PARTICIPANT_NOTIFICATIONS_ENABLED: {{ ne (toString $cfg.participantNotifications.enabled) "false" | quote }}
+  {{- if not (kindIs "invalid" $cfg.participantNotifications.jitter) }}
+  PARTICIPANT_NOTIFICATIONS_JITTER: {{ include "consent-manager.envValue" $cfg.participantNotifications.jitter }}
+  {{- end }}
   {{- if $cfg.smtp.host }}
   SMTP_STARTTLS: {{ $cfg.smtp.startTls | quote }}
   {{- end }}

@@ -66,6 +66,11 @@ consent-manager:
   logging:
     pseudonym-key: test-only-log-pseudonym-key-not-a-secret
 
+  # No background delivery: a suite that enqueues rows asserts on them as left. Delivery
+  # tests drive NotificationDispatcher.drainOnce() themselves.
+  participant-notifications:
+    enabled: false
+
   # Every test signs with a key generated per context; the JWKS publishes it.
   receipts:
     ephemeral-signing-key: true

@@ -116,6 +116,21 @@ config:
     readTimeout: 5s
     # Operator-only: listed hosts are the only webhook targets and skip the private-address check.
     allowedHosts: []
+    # Whether these replicas deliver; the age and retention sweeps run either way.
+    enabled: true
+    pollInterval: 5s
+    batchSize: 50
+    # Must stay below concurrency.
+    perParticipantBatchLimit: 5
+    concurrency: 16
+    # Startup refuses a lease too short for a whole batch to send.
+    lease: 60s
+    backoff: [1m, 5m, 15m, 1h, 6h, 24h]
+    jitter: 0.1
+    # Undelivered rows older than this are abandoned and redacted; must cover the retry schedule.
+    maxAge: 36h
+    sweepInterval: 1m
+    retention: 30d
   receiptsJurisdiction: EU
   cache:
     idpJwksTtl: 60s
