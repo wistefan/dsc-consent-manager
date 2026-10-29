@@ -7,6 +7,7 @@ import com.seamware.consentmanager.signing.ReceiptSigningException;
 import com.seamware.consentmanager.signing.SignatureType;
 import com.seamware.consentmanager.signing.SignedReceipt;
 import io.micronaut.core.annotation.NonNull;
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.core.io.buffer.ByteArrayBufferFactory;
 import io.micronaut.http.ByteBodyHttpResponse;
 import io.micronaut.http.HttpRequest;
@@ -32,6 +33,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -43,9 +45,10 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
-import reactor.core.Exceptions;
-import reactor.core.publisher.Mono;
+import org.reactivestreams.Subscription;
+import reactor.core.CoreSubscriber;
 
 /**
  * Makes one delivery attempt of a notification: vets the endpoint, signs, POSTs, classifies. Never
@@ -242,22 +245,46 @@ public class ParticipantWebhookClient {
                         ByteArrayBufferFactory.INSTANCE,
                         signed.canonicalJson().getBytes(StandardCharsets.UTF_8));
         try {
-            // The raw exchange yields the status without buffering the body; closing discards it.
-            HttpResponse<?> response =
-                    Mono.from(http.exchange(request, body, null)).timeout(exchangeDeadline).block();
+            ByteBodyHttpResponse<?> response = exchange(request, body);
             if (response == null) {
                 return DeliveryOutcome.retry(IO_ERROR);
             }
-            try (ByteBodyHttpResponse<?> unread = (ByteBodyHttpResponse<?>) response) {
-                return DeliveryOutcome.forStatus(unread.code());
+            // The raw exchange yields the status without buffering the body; closing discards it.
+            try (response) {
+                return DeliveryOutcome.forStatus(response.code());
             }
+        } catch (TimeoutException e) {
+            return DeliveryOutcome.retry(RESPONSE_TIMEOUT);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return DeliveryOutcome.retry(IO_ERROR);
         } catch (ReadTimeoutException e) {
             return DeliveryOutcome.retry(READ_TIMEOUT);
         } catch (HttpClientException e) {
             return DeliveryOutcome.retry(transportReason(e));
         } catch (RuntimeException e) {
-            return DeliveryOutcome.retry(
-                    Exceptions.unwrap(e) instanceof TimeoutException ? RESPONSE_TIMEOUT : IO_ERROR);
+            return DeliveryOutcome.retry(IO_ERROR);
+        }
+    }
+
+    /**
+     * Runs the exchange under {@link #exchangeDeadline}; null when it completed empty. A response
+     * that loses the race with the deadline is closed, never dropped, so its connection is freed.
+     */
+    @Nullable
+    private ByteBodyHttpResponse<?> exchange(HttpRequest<?> request, CloseableByteBody body)
+            throws TimeoutException, InterruptedException {
+        ExchangeSubscriber subscriber = new ExchangeSubscriber();
+        http.exchange(request, body, null).subscribe(subscriber);
+        try {
+            return subscriber.response.get(exchangeDeadline.toNanos(), TimeUnit.NANOSECONDS);
+        } catch (ExecutionException e) {
+            throw e.getCause() instanceof RuntimeException failure
+                    ? failure
+                    : new IllegalStateException(e.getCause());
+        } catch (TimeoutException | InterruptedException e) {
+            subscriber.abandon();
+            throw e;
         }
     }
 
@@ -273,6 +300,64 @@ public class ParticipantWebhookClient {
             }
         }
         return IO_ERROR;
+    }
+
+    /**
+     * Hands the exchange's response to whoever still wants it, else closes it. Unlike Reactor's
+     * {@code timeout}/{@code block}, it never drops a response emitted after the caller gave up.
+     */
+    private static final class ExchangeSubscriber implements CoreSubscriber<HttpResponse<?>> {
+
+        private final CompletableFuture<ByteBodyHttpResponse<?>> response =
+                new CompletableFuture<>();
+        private final AtomicReference<Subscription> subscription = new AtomicReference<>();
+        private volatile boolean cancelled;
+
+        @Override
+        public void onSubscribe(Subscription s) {
+            if (!subscription.compareAndSet(null, s)) {
+                s.cancel();
+                return;
+            }
+            s.request(Long.MAX_VALUE);
+            if (cancelled) {
+                s.cancel();
+            }
+        }
+
+        @Override
+        public void onNext(HttpResponse<?> item) {
+            ByteBodyHttpResponse<?> raw = (ByteBodyHttpResponse<?>) item;
+            if (!response.complete(raw)) {
+                raw.close();
+            }
+        }
+
+        @Override
+        public void onError(Throwable failure) {
+            response.completeExceptionally(failure);
+        }
+
+        @Override
+        public void onComplete() {
+            response.complete(null);
+        }
+
+        /** Gives up on the exchange: closes a response already handed over and cancels it. */
+        void abandon() {
+            response.completeExceptionally(new CancellationException());
+            response.thenAccept(
+                    won -> {
+                        if (won != null) {
+                            won.close();
+                        }
+                    });
+            cancelled = true;
+            Subscription s = subscription.get();
+            if (s != null) {
+                s.cancel();
+            }
+        }
     }
 
     private static Set<String> lowerCased(List<String> hosts) {

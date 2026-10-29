@@ -22,6 +22,10 @@ import com.seamware.consentmanager.signing.SignatureType;
 import com.seamware.consentmanager.support.Await;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.env.Environment;
+import io.micronaut.http.ByteBodyHttpResponse;
+import io.micronaut.http.HttpRequest;
+import io.micronaut.http.HttpResponse;
+import io.micronaut.http.body.CloseableByteBody;
 import io.micronaut.http.client.DefaultHttpClientConfiguration;
 import io.micronaut.http.client.RawHttpClient;
 import io.micronaut.http.ssl.ClientSslConfiguration;
@@ -29,6 +33,7 @@ import io.micronaut.http.ssl.SslConfiguration;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.Proxy;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -49,6 +54,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -64,6 +70,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.reactivestreams.Publisher;
+import org.reactivestreams.Subscription;
 
 /**
  * One webhook delivery attempt against an in-process HTTPS stub. The stub's certificate is made per
@@ -132,6 +140,15 @@ class ParticipantWebhookClientTest {
     private static final int OK = 200;
 
     private static final String PUBLIC_ADDRESS = "203.0.113.10";
+
+    private static final String PUBLIC_HOOK_URL = "https://hooks.example.org/consent";
+
+    private static final Duration LATE_CONNECT_TIMEOUT = Duration.ofMillis(100);
+
+    private static final Duration LATE_READ_TIMEOUT = Duration.ofMillis(200);
+
+    /** Well past {@code LATE_CONNECT_TIMEOUT + LATE_READ_TIMEOUT}, the exchange deadline. */
+    private static final Duration LATE_RESPONSE_DELAY = Duration.ofMillis(600);
 
     private static final String PRIVATE_ADDRESS = "10.1.2.3";
 
@@ -567,6 +584,25 @@ class ParticipantWebhookClientTest {
         }
     }
 
+    @Test
+    @DisplayName("a response arriving after the exchange deadline is closed, not dropped")
+    void lateResponseIsClosed() {
+        AtomicBoolean closed = new AtomicBoolean();
+        RawHttpClient late = lateResponder(unreadResponse(closed));
+        ParticipantNotifications settings = new ParticipantNotifications();
+        settings.setConnectTimeout(LATE_CONNECT_TIMEOUT);
+        settings.setReadTimeout(LATE_READ_TIMEOUT);
+        ParticipantWebhookClient client =
+                new ParticipantWebhookClient(late, signing, resolvingTo(PUBLIC_ADDRESS), settings);
+        opened.add(client::shutdown);
+
+        DeliveryOutcome outcome = client.send(PUBLIC_HOOK_URL, payload());
+
+        assertThat(outcome)
+                .isEqualTo(DeliveryOutcome.retry(ParticipantWebhookClient.RESPONSE_TIMEOUT));
+        Await.until("the late response is closed", TIMEOUT_SLACK, closed::get);
+    }
+
     /**
      * A send to {@code endpoint} retries for {@code reason} within {@code sendBound} plus slack.
      */
@@ -702,6 +738,64 @@ class ParticipantWebhookClientTest {
         return client;
     }
 
+    /**
+     * A client whose exchange emits {@code response} only after {@link #LATE_RESPONSE_DELAY} and
+     * ignores cancellation, as a response racing the deadline does.
+     */
+    private static RawHttpClient lateResponder(HttpResponse<?> response) {
+        return new RawHttpClient() {
+            @Override
+            public Publisher<? extends HttpResponse<?>> exchange(
+                    HttpRequest<?> request, CloseableByteBody body, Thread blockedThread) {
+                body.close();
+                return subscriber -> {
+                    subscriber.onSubscribe(
+                            new Subscription() {
+                                @Override
+                                public void request(long n) {}
+
+                                @Override
+                                public void cancel() {}
+                            });
+                    Thread.ofVirtual()
+                            .start(
+                                    () -> {
+                                        try {
+                                            Thread.sleep(LATE_RESPONSE_DELAY);
+                                        } catch (InterruptedException e) {
+                                            Thread.currentThread().interrupt();
+                                            return;
+                                        }
+                                        subscriber.onNext(response);
+                                        subscriber.onComplete();
+                                    });
+                };
+            }
+
+            @Override
+            public void close() {}
+        };
+    }
+
+    /** A {@code 200} raw response that records being closed and supports nothing else. */
+    private static ByteBodyHttpResponse<?> unreadResponse(AtomicBoolean closed) {
+        return (ByteBodyHttpResponse<?>)
+                Proxy.newProxyInstance(
+                        ByteBodyHttpResponse.class.getClassLoader(),
+                        new Class<?>[] {ByteBodyHttpResponse.class},
+                        (proxy, method, arguments) ->
+                                switch (method.getName()) {
+                                    case "close" -> {
+                                        closed.set(true);
+                                        yield null;
+                                    }
+                                    case "code" -> OK;
+                                    default ->
+                                            throw new UnsupportedOperationException(
+                                                    method.getName());
+                                });
+    }
+
     private static HostResolver resolvingTo(String... literals) {
         return host -> {
             InetAddress[] addresses = new InetAddress[literals.length];
@@ -712,7 +806,7 @@ class ParticipantWebhookClientTest {
         };
     }
 
-    private static NotificationPayload payload() {
+    static NotificationPayload payload() {
         return new NotificationPayload(
                 NotificationEventType.CONSENT_REVOKED,
                 UUID.randomUUID(),
