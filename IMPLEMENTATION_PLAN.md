@@ -65,7 +65,9 @@ Where the ticket text and the repo differ, the repo wins:
   `leased-until` value `lease(…)` returns is for logs only and never feeds a decision.
 - **A lease covers the whole batch, and outcomes are fenced.** One send is bounded by
   `sendBound = resolveTimeout + connectTimeout + readTimeout` (name resolution has its own
-  timeout, see *SSRF fence*). A batch runs in waves of `concurrency`, so it takes up to
+  timeout, see *SSRF fence*). The client's `readTimeout` is only an idle limit and the TLS
+  handshake has its own 10s default, so the sender also caps the whole exchange (connect,
+  handshake and response) at `connectTimeout + readTimeout`, reported as `response timeout`. A batch runs in waves of `concurrency`, so it takes up to
   `ceil(batchSize / concurrency) × sendBound`. Startup validation requires the lease to exceed
   *that* plus a named margin (defaults: `ceil(50/16) × 9s = 36s`, `+ 10s` margin `< 60s`). The
   dispatcher also never starts a send when less than `sendBound + margin` remains before its
@@ -111,7 +113,8 @@ Where the ticket text and the repo differ, the repo wins:
   Writes that are not a dispatch outcome leave it alone: the sweeper's max-age abandonment, the
   deregistration sweep, and a row dropped untouched for lack of lease. `NotificationBackoff`
   takes the post-increment count.
-- **`last_error`** is a short classification (`HTTP 503`, `read timeout`, `connection refused`,
+- **`last_error`** is a short classification (`HTTP 503`, `read timeout`, `connect timeout`,
+  `response timeout`, `connection refused`,
   `no consentNotification endpoint`, `participant deregistered`, `endpoint not permitted`,
   `name resolution failed`). It
   never holds a response body. The history route returns it, and logs may print it.
@@ -344,7 +347,8 @@ One delivery attempt: sign, POST, classify (AC7, and the classification behind A
   default 8), and concurrent lookups of one host share a single in-flight lookup, so a host whose
   DNS stalls holds at most one thread however many of its rows are sent. A timed-out lookup is
   left running, not cancelled (`getaddrinfo` cannot be interrupted). The POST uses the raw
-  client, so the response body is never buffered; only the status is read.
+  client, so the response body is never buffered; only the status is read. The exchange is
+  capped at `connectTimeout + readTimeout` in total (see *A lease covers the whole batch*).
 - `notification/DeliveryOutcome` (sealed or record + enum): `DELIVERED` for 2xx. `RETRY` with a
   reason for 408, 429, 5xx, connect/read timeout and I/O errors. `ABANDON` with a reason for any
   other 4xx and for 3xx. Keep the status ranges as named constants.
@@ -377,7 +381,8 @@ Drain the outbox safely across replicas (AC3, AC8–AC13).
   `SmtpConfigurationValidator`/`IdentityProviderRegistryValidator`) that requires
   `lease > ceil(batchSize / concurrency) × sendBound + margin` (`sendBound = resolveTimeout +
   connectTimeout + readTimeout`, margin a named constant, `10s`), `perParticipantBatchLimit <
-  concurrency`, `resolverThreads > floor((concurrency − 1) / perParticipantBatchLimit)` (each
+  concurrency`, `resolverThreads ≥ 1` (a bare `ThreadPoolExecutor` refusal would not name the
+  setting) and `resolverThreads > floor((concurrency − 1) / perParticipantBatchLimit)` (each
   dead host holds at most one resolver thread, so the AC12 isolation bound leaves one free), a non-empty, positive backoff, and `maxAge ≥ sum(backoff) × (1 + jitter) +
   (backoff.size() + 1) × (lease + pollInterval)` (each attempt can spend a lease in flight and a
   poll interval waiting to be claimed; defaults: ≈ 34.5 h + 7 × 65 s ≈ 34.6 h ≤ 36 h). Each

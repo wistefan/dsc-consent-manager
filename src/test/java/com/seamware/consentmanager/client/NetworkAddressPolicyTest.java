@@ -53,4 +53,9 @@ class NetworkAddressPolicyTest {
                 .isFalse();
         assertThat(NetworkAddressPolicy.allExternal(InetAddress.getByName(PUBLIC_V4))).isTrue();
     }
+
+    @Test
+    void noAddressIsNotExternal() {
+        assertThat(NetworkAddressPolicy.allExternal()).isFalse();
+    }
 }

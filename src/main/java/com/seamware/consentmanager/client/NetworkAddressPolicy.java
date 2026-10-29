@@ -42,9 +42,10 @@ public final class NetworkAddressPolicy {
         }
     }
 
-    /** Whether none of those addresses is internal. */
+    /** Whether there is at least one address and none is internal; fails closed on none. */
     public static boolean allExternal(@NonNull InetAddress... addresses) {
-        return Arrays.stream(addresses).noneMatch(NetworkAddressPolicy::isInternal);
+        return addresses.length > 0
+                && Arrays.stream(addresses).noneMatch(NetworkAddressPolicy::isInternal);
     }
 
     /**

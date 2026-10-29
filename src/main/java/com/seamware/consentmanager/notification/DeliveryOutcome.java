@@ -66,6 +66,10 @@ public record DeliveryOutcome(@NonNull Result result, @Nullable String reason) {
             return delivered();
         }
         String reason = HTTP_REASON.formatted(code);
+        if (code >= REDIRECT_MIN && code <= REDIRECT_MAX) {
+            // Following one would bypass the address fence, so a redirect is final.
+            return abandon(reason);
+        }
         boolean transientFailure =
                 code == REQUEST_TIMEOUT
                         || code == TOO_MANY_REQUESTS

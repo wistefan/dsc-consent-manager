@@ -17,6 +17,7 @@ import io.micronaut.http.body.stream.AvailableByteArrayBody;
 import io.micronaut.http.client.RawHttpClient;
 import io.micronaut.http.client.exceptions.HttpClientException;
 import io.micronaut.http.client.exceptions.ReadTimeoutException;
+import io.netty.channel.ConnectTimeoutException;
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
@@ -25,6 +26,7 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -42,6 +44,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
 
 /**
@@ -53,7 +56,8 @@ import reactor.core.publisher.Mono;
  * {@code /.well-known/jwks.json}. An endpoint is refused before any connect unless it is https and
  * either named by a non-empty {@code allowed-hosts} or resolving only to external addresses.
  * Concurrent lookups of one host share a single resolver thread, so a host whose DNS stalls cannot
- * starve the others' lookups; the response body is never read.
+ * starve the others' lookups; the response body is never read. One attempt takes at most {@code
+ * resolveTimeout + connectTimeout + readTimeout}, however the peer behaves.
  */
 @Singleton
 public class ParticipantWebhookClient {
@@ -69,6 +73,8 @@ public class ParticipantWebhookClient {
 
     static final String CONNECT_TIMEOUT = "connect timeout";
 
+    static final String RESPONSE_TIMEOUT = "response timeout";
+
     static final String CONNECTION_REFUSED = "connection refused";
 
     static final String IO_ERROR = "I/O error";
@@ -82,14 +88,19 @@ public class ParticipantWebhookClient {
 
     private static final String HTTPS_SCHEME = "https";
 
-    /** Netty's connect-timeout exception, named so this class needs no Netty dependency. */
-    private static final String CONNECT_TIMEOUT_EXCEPTION = "ConnectTimeoutException";
-
     private final RawHttpClient http;
     private final ConsentSigningService signing;
     private final HostResolver resolver;
     private final Set<String> allowedHosts;
     private final long resolveTimeoutNanos;
+
+    /**
+     * Total budget of one exchange, connect included. Needed because the client's read timeout is
+     * an idle limit and the TLS handshake has its own, so a peer that stalls the handshake or drips
+     * its response would otherwise outlast {@code connectTimeout + readTimeout}.
+     */
+    private final Duration exchangeDeadline;
+
     private final ExecutorService resolverPool;
 
     /** Lookups still running, by host; an entry is removed before its future completes. */
@@ -106,6 +117,7 @@ public class ParticipantWebhookClient {
         this.resolver = resolver;
         this.allowedHosts = lowerCased(settings.getAllowedHosts());
         this.resolveTimeoutNanos = settings.getResolveTimeout().toNanos();
+        this.exchangeDeadline = settings.getConnectTimeout().plus(settings.getReadTimeout());
         this.resolverPool =
                 new ThreadPoolExecutor(
                         settings.getResolverThreads(),
@@ -231,7 +243,8 @@ public class ParticipantWebhookClient {
                         signed.canonicalJson().getBytes(StandardCharsets.UTF_8));
         try {
             // The raw exchange yields the status without buffering the body; closing discards it.
-            HttpResponse<?> response = Mono.from(http.exchange(request, body, null)).block();
+            HttpResponse<?> response =
+                    Mono.from(http.exchange(request, body, null)).timeout(exchangeDeadline).block();
             if (response == null) {
                 return DeliveryOutcome.retry(IO_ERROR);
             }
@@ -243,14 +256,16 @@ public class ParticipantWebhookClient {
         } catch (HttpClientException e) {
             return DeliveryOutcome.retry(transportReason(e));
         } catch (RuntimeException e) {
-            return DeliveryOutcome.retry(IO_ERROR);
+            return DeliveryOutcome.retry(
+                    Exceptions.unwrap(e) instanceof TimeoutException ? RESPONSE_TIMEOUT : IO_ERROR);
         }
     }
 
     /** A short name for a transport failure, read from its cause chain. */
     private static String transportReason(Throwable failure) {
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-            if (cause.getClass().getSimpleName().equals(CONNECT_TIMEOUT_EXCEPTION)) {
+            // Before ConnectException, which Netty's connect timeout extends.
+            if (cause instanceof ConnectTimeoutException) {
                 return CONNECT_TIMEOUT;
             }
             if (cause instanceof ConnectException) {

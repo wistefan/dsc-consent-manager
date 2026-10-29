@@ -27,10 +27,17 @@ import io.micronaut.http.client.RawHttpClient;
 import io.micronaut.http.ssl.ClientSslConfiguration;
 import io.micronaut.http.ssl.SslConfiguration;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.KeyStore;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -45,6 +52,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -83,6 +92,30 @@ class ParticipantWebhookClientTest {
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(1);
 
     private static final Duration RESOLVE_TIMEOUT = Duration.ofMillis(300);
+
+    /**
+     * Below Micronaut's 10s TLS handshake timeout, so a silent peer must hit the exchange deadline.
+     */
+    private static final Duration TEST_CONNECT_TIMEOUT = Duration.ofSeconds(1);
+
+    private static final int BACKLOG = 1;
+
+    private static final int FILLER_CONNECT_MILLIS = 200;
+
+    private static final int REQUEST_READ_BYTES = 8_192;
+
+    private static final String TLS_PROTOCOL = "TLS";
+
+    private static final byte[] DRIP_HEAD =
+            "HTTP/1.1 200 OK\r\nX-Drip: ".getBytes(StandardCharsets.US_ASCII);
+
+    private static final int DRIP_BYTE = 'a';
+
+    /** Well under the read timeout, so an idle limit alone never fires. */
+    private static final Duration DRIP_INTERVAL = Duration.ofMillis(200);
+
+    /** Never counted down; a peer awaiting it stays silent until closed. */
+    private static final CountDownLatch NEVER = new CountDownLatch(1);
 
     /** How much later than its timeout a bounded attempt may return and still count as bounded. */
     private static final Duration TIMEOUT_SLACK = Duration.ofSeconds(2);
@@ -133,7 +166,7 @@ class ParticipantWebhookClientTest {
     @BeforeAll
     static void start() throws IOException, InterruptedException {
         stores = Files.createTempDirectory("webhook-tls");
-        Path keystore = stores.resolve("keystore.p12");
+        Path keystore = keystore();
         Path certificate = stores.resolve("stub.pem");
         keytool(
                 "-genkeypair",
@@ -388,6 +421,10 @@ class ParticipantWebhookClientTest {
                                 },
                         DeliveryOutcome.retry(ParticipantWebhookClient.NAME_RESOLUTION_FAILED)),
                 Arguments.of(
+                        "resolves to no address at all",
+                        resolvingTo(),
+                        DeliveryOutcome.abandon(ParticipantWebhookClient.ENDPOINT_NOT_PERMITTED)),
+                Arguments.of(
                         "resolves to a private address",
                         resolvingTo(PRIVATE_ADDRESS),
                         DeliveryOutcome.abandon(ParticipantWebhookClient.ENDPOINT_NOT_PERMITTED)),
@@ -496,6 +533,138 @@ class ParticipantWebhookClientTest {
         }
     }
 
+    @Test
+    void silentPeerRetriesWithinTheSendBound() throws IOException {
+        try (ServerSocket silent = new ServerSocket(0, BACKLOG, InetAddress.getLoopbackAddress());
+                Peer peer = Peer.start(silent, socket -> NEVER.await())) {
+            assertBoundedRetry(
+                    urlOf(silent.getLocalPort()), ParticipantWebhookClient.RESPONSE_TIMEOUT);
+        }
+    }
+
+    @Test
+    void drippedResponseRetriesWithinTheSendBound() throws Exception {
+        try (ServerSocket tls = tlsServerSocket();
+                Peer peer = Peer.start(tls, ParticipantWebhookClientTest::dripResponse)) {
+            assertBoundedRetry(
+                    urlOf(tls.getLocalPort()), ParticipantWebhookClient.RESPONSE_TIMEOUT);
+        }
+    }
+
+    @Test
+    void unansweredConnectRetriesAsConnectTimeout() throws IOException {
+        try (ServerSocket full = new ServerSocket(0, BACKLOG, InetAddress.getLoopbackAddress())) {
+            List<Socket> queued = new ArrayList<>();
+            try {
+                fillAcceptQueue(full, queued);
+                assertBoundedRetry(
+                        urlOf(full.getLocalPort()), ParticipantWebhookClient.CONNECT_TIMEOUT);
+            } finally {
+                for (Socket socket : queued) {
+                    socket.close();
+                }
+            }
+        }
+    }
+
+    /**
+     * A send to {@code endpoint} retries for {@code reason} within {@code sendBound} plus slack.
+     */
+    private void assertBoundedRetry(String endpoint, String reason) {
+        ParticipantWebhookClient client = client(List.of(LOOPBACK_HOST));
+
+        long started = System.nanoTime();
+        DeliveryOutcome outcome = client.send(endpoint, payload());
+
+        assertThat(outcome).isEqualTo(DeliveryOutcome.retry(reason));
+        assertThat(Duration.ofNanos(System.nanoTime() - started))
+                .isLessThan(TEST_CONNECT_TIMEOUT.plus(READ_TIMEOUT).plus(TIMEOUT_SLACK));
+    }
+
+    /**
+     * Connects until the kernel stops completing handshakes for the never-accepting socket, so the
+     * next SYN is dropped and the client's connect times out.
+     */
+    private static void fillAcceptQueue(ServerSocket server, List<Socket> queued)
+            throws IOException {
+        while (true) {
+            Socket filler = new Socket();
+            try {
+                filler.connect(server.getLocalSocketAddress(), FILLER_CONNECT_MILLIS);
+                queued.add(filler);
+            } catch (SocketTimeoutException full) {
+                filler.close();
+                return;
+            }
+        }
+    }
+
+    /**
+     * Completes the TLS handshake, then answers one header byte at a time, each under the idle
+     * limit.
+     */
+    private static void dripResponse(Socket socket) throws IOException, InterruptedException {
+        socket.getInputStream().read(new byte[REQUEST_READ_BYTES]);
+        OutputStream out = socket.getOutputStream();
+        out.write(DRIP_HEAD);
+        while (true) {
+            out.write(DRIP_BYTE);
+            out.flush();
+            Thread.sleep(DRIP_INTERVAL);
+        }
+    }
+
+    private static ServerSocket tlsServerSocket() throws Exception {
+        KeyStore store = KeyStore.getInstance(STORE_TYPE);
+        try (InputStream in = Files.newInputStream(keystore())) {
+            store.load(in, STORE_PASSWORD.toCharArray());
+        }
+        KeyManagerFactory keys =
+                KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        keys.init(store, STORE_PASSWORD.toCharArray());
+        SSLContext tls = SSLContext.getInstance(TLS_PROTOCOL);
+        tls.init(keys.getKeyManagers(), null, null);
+        return tls.getServerSocketFactory()
+                .createServerSocket(0, BACKLOG, InetAddress.getLoopbackAddress());
+    }
+
+    /** Serves one connection on a virtual thread; closing it releases the connection. */
+    private record Peer(Thread thread, List<Socket> accepted) implements AutoCloseable {
+
+        interface Behaviour {
+            void serve(Socket socket) throws Exception;
+        }
+
+        static Peer start(ServerSocket server, Behaviour behaviour) {
+            List<Socket> accepted = new CopyOnWriteArrayList<>();
+            Thread thread =
+                    Thread.ofVirtual()
+                            .start(
+                                    () -> {
+                                        try {
+                                            Socket socket = server.accept();
+                                            accepted.add(socket);
+                                            behaviour.serve(socket);
+                                        } catch (Exception e) {
+                                            // the client hung up or the test closed the server
+                                        }
+                                    });
+            return new Peer(thread, accepted);
+        }
+
+        @Override
+        public void close() throws IOException {
+            thread.interrupt();
+            for (Socket socket : accepted) {
+                socket.close();
+            }
+        }
+    }
+
+    private static String urlOf(int port) {
+        return "https://" + LOOPBACK_HOST + ":" + port + HOOK_PATH;
+    }
+
     private ParticipantWebhookClient client(List<String> allowedHosts) {
         return client(allowedHosts, new HostResolver.SystemHostResolver());
     }
@@ -513,6 +682,7 @@ class ParticipantWebhookClientTest {
         settings.setAllowedHosts(allowedHosts);
         settings.setReadTimeout(READ_TIMEOUT);
         settings.setResolveTimeout(RESOLVE_TIMEOUT);
+        settings.setConnectTimeout(TEST_CONNECT_TIMEOUT);
         overrides.accept(settings);
         DefaultHttpClientConfiguration configuration =
                 ParticipantWebhookHttpClientFactory.configuration(settings);
@@ -552,6 +722,10 @@ class ParticipantWebhookClientTest {
                 "did:web:subject.example.org",
                 ConsentStatus.REVOKED,
                 false);
+    }
+
+    private static Path keystore() {
+        return stores.resolve("keystore.p12");
     }
 
     private static Path truststore() {
