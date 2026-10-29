@@ -78,6 +78,16 @@ class ConsentManagerConfigurationTest {
                                 bean(context, ConsentManagerConfiguration.Participants.class)
                                         .getPageMaxSize()),
                 setting(
+                        "consent-manager.participant-notifications.page-max-size",
+                        "29",
+                        29,
+                        context ->
+                                bean(
+                                                context,
+                                                ConsentManagerConfiguration.ParticipantNotifications
+                                                        .class)
+                                        .getPageMaxSize()),
+                setting(
                         "consent-manager.consents.lineage-max-depth",
                         "7",
                         7,

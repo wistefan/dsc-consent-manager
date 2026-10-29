@@ -300,6 +300,9 @@ consent-manager:
     sweep-interval: ${PARTICIPANT_NOTIFICATIONS_SWEEP_INTERVAL:1m}
     # How long delivered and abandoned rows are kept as delivery history.
     retention: ${PARTICIPANT_NOTIFICATIONS_RETENTION:30d}
+    # Paging of GET /participants/me/notifications; a larger size is clamped, not refused.
+    page-default-size: ${PARTICIPANT_NOTIFICATIONS_PAGE_DEFAULT_SIZE:20}
+    page-max-size: ${PARTICIPANT_NOTIFICATIONS_PAGE_MAX_SIZE:100}
 
   errors:
     # Publish a 5xx exception message as `detail`. Dev-only debugging aid; stack traces

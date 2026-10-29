@@ -110,6 +110,7 @@ Implemented operations:
 | `POST /participants/me/users/bulk` | `PARTICIPANT` | `ParticipantUserController` |
 | `PATCH /participants/me/users/{identifier}` | `PARTICIPANT` | `ParticipantUserController` |
 | `DELETE /participants/me/users/{identifier}` | `PARTICIPANT` | `ParticipantUserController` |
+| `GET /participants/me/notifications` | `PARTICIPANT` | `ParticipantNotificationController` |
 | `POST /privacy-notices` | `PARTICIPANT` | `PrivacyNoticeController` |
 | `POST /privacy-notices/by-contract` | `PARTICIPANT` | `PrivacyNoticeController` |
 | `GET /privacy-notices/{id}` | `USER`, `PARTICIPANT`, `CATALOG` | `PrivacyNoticeController` |

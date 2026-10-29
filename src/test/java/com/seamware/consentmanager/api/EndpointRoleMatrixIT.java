@@ -79,6 +79,9 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
 
     private static final String PATH_PARTICIPANT_USERS = PATH_CURRENT_PARTICIPANT + "/users";
 
+    private static final String PATH_NOTIFICATION_HISTORY =
+            PATH_CURRENT_PARTICIPANT + "/notifications";
+
     private static final String PATH_BULK = PATH_PARTICIPANT_USERS + "/bulk";
 
     private static final String PATH_PRIVACY_NOTICES = "/privacy-notices";
@@ -251,6 +254,9 @@ class EndpointRoleMatrixIT extends KeycloakAndPostgresTestResource {
         DEREGISTER_CURRENT_PARTICIPANT(
                 "delete " + PATH_CURRENT_PARTICIPANT,
                 () -> HttpRequest.DELETE(PATH_CURRENT_PARTICIPANT)),
+        NOTIFICATION_HISTORY(
+                "get " + PATH_NOTIFICATION_HISTORY,
+                () -> HttpRequest.GET(PATH_NOTIFICATION_HISTORY)),
         GENERATE_PRIVACY_NOTICE(
                 "post " + PATH_PRIVACY_NOTICES,
                 () ->

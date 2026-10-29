@@ -300,6 +300,12 @@ public class ConsentManagerConfiguration {
         /** Default webhook connection-attempt timeout. */
         public static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(2);
 
+        /** Default delivery-history page size when the caller names none. */
+        public static final int DEFAULT_PAGE_DEFAULT_SIZE = 20;
+
+        /** Default delivery-history page-size ceiling. */
+        public static final int DEFAULT_PAGE_MAX_SIZE = 100;
+
         /** Default webhook response timeout. */
         public static final Duration DEFAULT_READ_TIMEOUT = Duration.ofSeconds(5);
 
@@ -419,6 +425,18 @@ public class ConsentManagerConfiguration {
          * external. A listed host is exempt from the private-address refusal.
          */
         private List<String> allowedHosts = List.of();
+
+        /**
+         * Page size when {@code GET /participants/me/notifications} names none, bound to {@code
+         * PARTICIPANT_NOTIFICATIONS_PAGE_DEFAULT_SIZE}.
+         */
+        private int pageDefaultSize = DEFAULT_PAGE_DEFAULT_SIZE;
+
+        /**
+         * History page-size ceiling, bound to {@code PARTICIPANT_NOTIFICATIONS_PAGE_MAX_SIZE}; a
+         * larger size, the default included, is clamped rather than refused.
+         */
+        private int pageMaxSize = DEFAULT_PAGE_MAX_SIZE;
 
         /** Sets the allow-list, dropping the blank entry an unset variable binds as. */
         public void setAllowedHosts(@Nullable List<String> allowedHosts) {

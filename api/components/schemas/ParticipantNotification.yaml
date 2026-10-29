@@ -1,0 +1,78 @@
+# Schema: ParticipantNotification — referenced from api/openapi.yaml as
+# components.schemas.ParticipantNotification.
+#
+# One `notification_outbox` row, read from its columns only. The row's payload
+# names the data subject and is never published here (ADR-0007), and no
+# property is nullable: an absent property means there is none.
+type: object
+description: >
+  One consent notification queued for the calling participant, and how far its
+  delivery has got.
+properties:
+  id:
+    type: string
+    format: uuid
+    description: Identifier of this delivery to this participant.
+  eventId:
+    type: string
+    format: uuid
+    description: >
+      Identifier of the consent event reported. It is the `eventId` of the
+      signed document, the same on every retry and shared by every participant
+      the event was sent to, so a receiver deduplicates on it.
+  eventType:
+    type: string
+    enum:
+      - CONSENT_GRANTED
+      - CONSENT_REVOKED
+      - CONSENT_TERMINATED
+      - CONSENT_EXPIRED
+    description: What happened to the consent.
+  consentId:
+    type: string
+    format: uuid
+    description: The consent the event moved.
+  status:
+    type: string
+    enum:
+      - PENDING
+      - FAILED
+      - DELIVERED
+      - ABANDONED
+    description: >
+      `PENDING` has not been attempted yet; `FAILED` means the last attempt
+      failed and a retry is scheduled; `DELIVERED` and `ABANDONED` are final.
+  attempts:
+    type: integer
+    format: int32
+    minimum: 0
+    description: Delivery attempts that have reached an outcome so far.
+  createdAt:
+    type: string
+    format: date-time
+    description: When the notification was queued, in the move's transaction.
+  nextAttemptAt:
+    type: string
+    format: date-time
+    description: >
+      When delivery is next due. Only meaningful while the status is `PENDING`
+      or `FAILED`; absent once the notification is final.
+  deliveredAt:
+    type: string
+    format: date-time
+    description: When the endpoint acknowledged it; absent unless `DELIVERED`.
+  lastError:
+    type: string
+    description: >
+      Short classification of the last failure, such as `HTTP 503`,
+      `read timeout` or `no consentNotification endpoint`. Never a response
+      body. Absent when no attempt has failed.
+    example: "HTTP 503"
+required:
+  - id
+  - eventId
+  - eventType
+  - consentId
+  - status
+  - attempts
+  - createdAt
