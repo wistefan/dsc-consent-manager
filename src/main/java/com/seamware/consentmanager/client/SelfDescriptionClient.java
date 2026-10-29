@@ -11,13 +11,8 @@ import io.micronaut.json.JsonMapper;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.io.IOException;
-import java.net.Inet4Address;
-import java.net.Inet6Address;
-import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.UnknownHostException;
-import java.util.Arrays;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
@@ -45,21 +40,6 @@ public class SelfDescriptionClient {
 
     /** The scheme {@code allow-plaintext-http} admits, for a catalog stub or a private network. */
     private static final String HTTP_SCHEME = "http";
-
-    /** Mask and value of RFC 4193's unique-local IPv6 prefix, {@code fc00::/7}. */
-    private static final int UNIQUE_LOCAL_V6_MASK = 0xfe;
-
-    private static final int UNIQUE_LOCAL_V6_PREFIX = 0xfc;
-
-    /** First octet, and the second's bounds, of RFC 6598's {@code 100.64.0.0/10}. */
-    private static final int SHARED_V4_FIRST_OCTET = 100;
-
-    private static final int SHARED_V4_SECOND_OCTET_MIN = 64;
-
-    private static final int SHARED_V4_SECOND_OCTET_MAX = 127;
-
-    /** Reads an address byte as an unsigned octet. */
-    private static final int OCTET_MASK = 0xff;
 
     private final HttpClient http;
     private final SyncCache<?> cache;
@@ -134,52 +114,7 @@ public class SelfDescriptionClient {
         if (!allowedHosts.isEmpty() && !named) {
             return false;
         }
-        return named || isExternal(host);
-    }
-
-    /**
-     * Whether every address the host resolves to is outside this deployment's network. DNS
-     * rebinding between this check and the connect stays open; {@code allowed-hosts} closes it.
-     */
-    private static boolean isExternal(String host) {
-        try {
-            return Arrays.stream(InetAddress.getAllByName(host))
-                    .noneMatch(SelfDescriptionClient::isInternal);
-        } catch (UnknownHostException e) {
-            return false;
-        }
-    }
-
-    /**
-     * Whether the address is internal; adds {@code fc00::/7} and {@code 100.64.0.0/10}, which
-     * {@link InetAddress}'s own predicates miss.
-     */
-    private static boolean isInternal(InetAddress address) {
-        return address.isLoopbackAddress()
-                || address.isLinkLocalAddress()
-                || address.isSiteLocalAddress()
-                || address.isAnyLocalAddress()
-                || address.isMulticastAddress()
-                || isUniqueLocalV6(address)
-                || isSharedV4(address);
-    }
-
-    /** Whether that is an RFC 4193 unique-local IPv6 address, {@code fc00::/7}. */
-    private static boolean isUniqueLocalV6(InetAddress address) {
-        return address instanceof Inet6Address
-                && (address.getAddress()[0] & UNIQUE_LOCAL_V6_MASK) == UNIQUE_LOCAL_V6_PREFIX;
-    }
-
-    /** Whether that is in RFC 6598 shared address space, {@code 100.64.0.0/10}. */
-    private static boolean isSharedV4(InetAddress address) {
-        if (!(address instanceof Inet4Address)) {
-            return false;
-        }
-        byte[] octets = address.getAddress();
-        int second = octets[1] & OCTET_MASK;
-        return (octets[0] & OCTET_MASK) == SHARED_V4_FIRST_OCTET
-                && second >= SHARED_V4_SECOND_OCTET_MIN
-                && second <= SHARED_V4_SECOND_OCTET_MAX;
+        return named || NetworkAddressPolicy.isExternal(host);
     }
 
     /** The document at that URI, or empty on any failure. */

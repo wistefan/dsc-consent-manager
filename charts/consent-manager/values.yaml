@@ -107,6 +107,15 @@ config:
     fromAddress: ""
     fromName: ""
   notificationClientUrl: ""
+  # Signed consent-change webhooks to participants.
+  participantNotifications:
+    resolveTimeout: 2s
+    # Concurrent webhook host lookups; a stalled host holds at most one.
+    resolverThreads: 8
+    connectTimeout: 2s
+    readTimeout: 5s
+    # Operator-only: listed hosts are the only webhook targets and skip the private-address check.
+    allowedHosts: []
   receiptsJurisdiction: EU
   cache:
     idpJwksTtl: 60s

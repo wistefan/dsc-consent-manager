@@ -271,6 +271,18 @@ consent-manager:
     # SMTP_HOST set, startup fails unless it is an absolute http(s) URL with a host.
     client-url: ${NOTIFICATION_CLIENT_URL:}
 
+  # Signed webhooks to the participants a consent change binds; `notifications` is subject email.
+  participant-notifications:
+    # Bound on resolving a webhook host (the JDK resolver has none); a lookup past it is retried.
+    resolve-timeout: ${PARTICIPANT_NOTIFICATIONS_RESOLVE_TIMEOUT:2s}
+    # Concurrent lookups; one stalled host holds at most one, as lookups of a host are shared.
+    resolver-threads: ${PARTICIPANT_NOTIFICATIONS_RESOLVER_THREADS:8}
+    connect-timeout: ${PARTICIPANT_NOTIFICATIONS_CONNECT_TIMEOUT:2s}
+    read-timeout: ${PARTICIPANT_NOTIFICATIONS_READ_TIMEOUT:5s}
+    # Empty admits any https host whose addresses are all external. An entry restricts delivery
+    # to the listed hosts AND waives the private-address check; operator-only.
+    allowed-hosts: ${PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS:}
+
   errors:
     # Publish a 5xx exception message as `detail`. Dev-only debugging aid; stack traces
     # are never published.
