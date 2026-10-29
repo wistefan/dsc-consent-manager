@@ -88,6 +88,29 @@ Where the ticket text and the repo differ, the repo wins:
   healthy rows wait at most one `sendBound` wave, and are never starved. Because `drainOnce()`
   waits for its batch and the poll is `fixedDelay`, a dead endpoint also delays the *next* tick by
   at most one `sendBound`; it does not delay deliveries within the current one.
+- **Deregistration abandons the participant's queued rows, in its own transaction.** The retain
+  branch of `ParticipantService.deregister` already resets `endpoints` to empty (ADR-0008), so a
+  row still `PENDING`/`FAILED` for a departing participant has nowhere left to go, and ADR-0008
+  requires a new table that records something about the participant to be swept by
+  `deregister` in the same change. `deregister` therefore calls
+  `NotificationOutboxRepository.abandonForParticipant(participantId)` in its transaction: every
+  due row for it becomes `ABANDONED`, `payload = NULL`, `last_error = 'participant
+  deregistered'`, `lease_token = NULL` (so an in-flight outcome is discarded). This is deliberate
+  and ADR-0016 records it: the participant chose to leave and gave up its endpoint, and the
+  revocation is not lost to it, since a deregistered participant still passes
+  `requireRegistered()` and so can read it from `GET /participants/me/notifications` and
+  `GET /consents/check`. Refusing deregistration while a row is owed was rejected, because it
+  would tie the participant's exit to its own endpoint's health for up to `max-age`. Rows are
+  not kept for delivery to a cleared endpoint. The dispatcher's `participant deregistered`
+  abandonment (Step 4) remains as the guard for a row enqueued in a race with deregistration.
+  The delete branch never meets an outbox row: every row names a consent with the participant
+  as provider or consumer, and such a consent forces the retain branch.
+- **`attempts` counts dispatch outcomes.** Every fenced outcome write (`markDelivered`,
+  `markFailed`, `markAbandoned`) sets `attempts = attempts + 1`, so a row delivered first time
+  shows `1`, and so does a `400` abandoned at once or a row abandoned for lack of an endpoint.
+  Writes that are not a dispatch outcome leave it alone: the sweeper's max-age abandonment, the
+  deregistration sweep, and a row dropped untouched for lack of lease. `NotificationBackoff`
+  takes the post-increment count.
 - **`last_error`** is a short classification (`HTTP 503`, `read timeout`, `connection refused`,
   `no consentNotification endpoint`, `participant deregistered`, `endpoint not permitted`,
   `name resolution failed`). It
@@ -106,7 +129,10 @@ Where the ticket text and the repo differ, the repo wins:
     identifier the recipients already hold, the only one they can act on. Earlier rows for that
     user that are still `PENDING`/`FAILED` keep theirs for the same reason. If deliveries run on
     schedule, each such row turns terminal (and is redacted) by the end of the backoff schedule
-    plus one lease (≈ 31.4 h with the defaults, ≈ 34.5 h at maximum jitter).
+    plus, for each of its `backoff.size() + 1` attempts, up to one lease (claim to outcome) and
+    one `pollInterval` (outcome to the next claim): `sum(backoff) × (1 + jitter) +
+    (backoff.size() + 1) × (lease + pollInterval)`, ≈ 31.5 h with the defaults and ≈ 34.6 h at
+    maximum jitter.
   - **A hard age backstop enforces the bound** even when they do not (dispatcher disabled, down,
     behind a backlog, or rows repeatedly dropped for lack of lease). `NotificationOutboxSweeper`
     runs on its own schedule, **independent of `enabled`**, and on startup. It abandons every
@@ -114,7 +140,8 @@ Where the ticket text and the repo differ, the repo wins:
     (default `36h`), sets `payload = NULL`, `last_error = 'max age exceeded'` and clears
     `lease_token`, so any in-flight holder's outcome is discarded. The claim query also excludes
     such rows, so a row past `max-age` is never sent between sweeps. Startup validation requires
-    `max-age ≥ sum(backoff) × (1 + jitter) + lease`.
+    `max-age ≥ sum(backoff) × (1 + jitter) + (backoff.size() + 1) × (lease + pollInterval)`, so
+    the sweeper can never abandon the last scheduled retry of a `CONSENT_REVOKED` before it runs.
   - The ADR states the bound as `max-age + sweepInterval` after enqueue, while at least one
     replica runs. With no replica running nothing runs at all, and the first sweep on startup
     redacts. `participant-notifications.retention` (default 30 days) only limits how long the
@@ -177,7 +204,10 @@ Add the storage layer with no callers yet.
   - `NotificationOutboxRepository` (`@JdbcRepository(dialect = POSTGRES)`):
     `claimDue(int batchSize, int perParticipant, long maxAgeSeconds)` as a native query. The window function lives in
     a joined subquery and only the base table is locked, because `FOR UPDATE` directly over a
-    window function is rejected by Postgres 16:
+    window function is rejected by Postgres 16. The statement is kept as one constant without its
+    lock clause (`CLAIM_DUE`, package-visible) plus a lock suffix, so the annotation is
+    `@Query(CLAIM_DUE + SKIP_LOCKED)` and the test below can run the same text with a waiting
+    lock:
 
     ```sql
     SELECT o.* FROM notification_outbox o
@@ -199,14 +229,17 @@ Add the storage layer with no callers yet.
     claim locks the newer version, and READ COMMITTED's EvalPlanQual re-check evaluates only the
     quals on the locked relation `o`. With the predicates only in `r`, the re-check passes and the
     row is leased and sent twice. The outer copy makes it drop the row instead. `SKIP LOCKED` does
-    not help here, because by then the lock is free.
+    not help here, because by then the lock is free. The window is narrow (it needs the commit to
+    land between this statement's snapshot and its scan reaching the row), and it cannot be staged
+    deterministically under `SKIP LOCKED`; the test below therefore stages it with a waiting lock.
     The ranking also counts rows another replica holds locked, so a concurrent claim may get
     fewer than `perParticipant` rows for one participant. That costs throughput, not correctness.
     `lease(List<UUID> ids, UUID token, Duration lease)` sets `lease_token` and
     `next_attempt_at = now() + lease`, returning the leased-until time.
     Fenced outcome writes `markDelivered` / `markFailed` / `markAbandoned`, each
-    `… WHERE id = :id AND lease_token = :token` and returning the updated row count; the
-    terminal two also set `payload = NULL`. `markFailed(id, token, long delaySeconds, reason)`
+    `… WHERE id = :id AND lease_token = :token`, each setting `attempts = attempts + 1` (see
+    *`attempts`*) and returning the updated row count; the terminal two also set
+    `payload = NULL`. `markFailed(id, token, long delaySeconds, reason)`
     sets `next_attempt_at = now() + make_interval(secs => :delaySeconds)`, so a retry is
     scheduled on the database clock that the claim compares against, never on a replica's wall
     clock. `findByParticipantIdOrderByCreatedAtDesc(UUID,
@@ -214,15 +247,25 @@ Add the storage layer with no callers yet.
     retentionSeconds)` for retention, also on `now()`. `abandonOlderThan(long maxAgeSeconds)`, the unfenced age backstop: every
     `PENDING`/`FAILED` row with `created_at <= now() - max-age` becomes `ABANDONED`,
     `payload = NULL`, `last_error = 'max age exceeded'`, `lease_token = NULL`; returns the count.
+    `abandonForParticipant(UUID participantId)`, the unfenced deregistration sweep, does the same
+    for that participant's `PENDING`/`FAILED` rows with `last_error = 'participant deregistered'`.
+    Neither unfenced write touches `attempts`.
 - Tests: `NotificationOutboxRepositoryIT` (extends `PostgresTestResource`). Cover round-trip of the
   jsonb payload; the claim returns only due `PENDING`/`FAILED` rows; the per-participant cap (as
   an upper bound, given the locked-row note above); two concurrent claims in separate transactions
   (two threads via `support/Race`) returning disjoint sets; a fenced write with a stale token
-  updating 0 rows and leaving the row unchanged; the EvalPlanQual case: replica A leases a row
-  and holds its transaction open, replica B's claim starts and blocks on that row, A commits, and
-  B returns nothing for that id (fails if the outer predicates are removed); the payload `CHECK` refusing a terminal row
+  updating 0 rows and leaving the row unchanged; the EvalPlanQual case, run against
+  `CLAIM_DUE + " FOR UPDATE OF o"` (a waiting lock, not `SKIP LOCKED`, under which B would simply
+  skip the locked row and the test could not fail): replica A leases a row and holds its
+  transaction open; replica B runs the claim on a second connection, and the test waits until
+  `pg_stat_activity` shows B waiting on a lock; A commits; B, re-checking the updated version,
+  must return nothing for that id. This fails if the outer predicates are removed, because B's
+  unlocked `r` was evaluated against the snapshot in which the row was still due. Then the
+  payload `CHECK` refusing a terminal row
   with a payload; and a row aged past `max-age` (by rewriting `created_at`) never being claimed,
-  then being abandoned with a null payload by `abandonOlderThan`, leased or not. Reset between tests with `support/DatabaseReset` (add the new table if it
+  then being abandoned with a null payload by `abandonOlderThan`, leased or not;
+  `abandonForParticipant` touching only that participant's due rows; and every fenced outcome
+  write incrementing `attempts` while the two unfenced ones leave it unchanged. Reset between tests with `support/DatabaseReset` (add the new table if it
   enumerates tables).
 - Acceptance: `./mvnw verify` green. Flyway applies V6 on the Testcontainers database.
 
@@ -243,7 +286,9 @@ Make every permission-changing move durably queue its notifications atomically (
     them, so a receipt failure then rolls back a row that was really written.
   - `UserService.close` (erasure, before pseudonymisation).
   - `ParticipantService.terminate` (deregistration, which produces no rows under the rule, but
-    keeps the hook total).
+    keeps the hook total). `ParticipantService.deregister` also calls
+    `abandonForParticipant` in its transaction (see *Deregistration* in Decisions), and
+    ADR-0008's sweep list gains `notification_outbox`.
 - Carry the terminating participant to the writer: add an initiator to the termination path
   (e.g. `ConsentWriter.move(..., @Nullable UUID initiator)` overload, used by
   `ConsentLifecycleService.terminate` with `caller.getId()`). Every other caller passes `null`.
@@ -255,7 +300,9 @@ Make every permission-changing move durably queue its notifications atomically (
     driving each write path (grant, decide-refuse superseding a grant, revoke, terminate by each
     side, resume, request, refuse, re-confirm, cleanup terminate, erasure, deregistration, and
     `writer.move(…, EXPIRED, …)`), asserting the exact outbox rows: event type, recipients, and
-    payload fields with no snapshot/content keys (AC4–AC6).
+    payload fields with no snapshot/content keys (AC4–AC6). The deregistration row also seeds a
+    `FAILED` `CONSENT_REVOKED` row for the departing participant and one for another participant,
+    and asserts only the first becomes `ABANDONED` (`participant deregistered`, null payload).
   - Rollback (AC2): a `@Replaces` receipt-issuer bean that, inside the transaction, first counts
     the outbox rows for the consent (asserting at least one, which proves the enqueue ran before
     it) and then throws. After the call, assert no outbox row and an unchanged consent. This fails
@@ -325,11 +372,13 @@ Drain the outbox safely across replicas (AC3, AC8–AC13).
   `SmtpConfigurationValidator`/`IdentityProviderRegistryValidator`) that requires
   `lease > ceil(batchSize / concurrency) × sendBound + margin` (`sendBound = resolveTimeout +
   connectTimeout + readTimeout`, margin a named constant, `10s`), `perParticipantBatchLimit <
-  concurrency`, a non-empty, positive backoff, and `maxAge ≥ sum(backoff) × (1 + jitter) + lease`
-  (defaults: ≈ 34.5 h + 1 m ≤ 36 h). Each
+  concurrency`, a non-empty, positive backoff, and `maxAge ≥ sum(backoff) × (1 + jitter) +
+  (backoff.size() + 1) × (lease + pollInterval)` (each attempt can spend a lease in flight and a
+  poll interval waiting to be claimed; defaults: ≈ 34.5 h + 7 × 65 s ≈ 34.6 h ≤ 36 h). Each
   refusal names the offending settings. `NotificationConfigurationValidatorTest`, parameterized
   over the defaults (admitted) and each violated rule (refused).
-- `notification/NotificationBackoff` (pure): `delay(attemptsSoFar, random)` returns the scheduled
+- `notification/NotificationBackoff` (pure): `delay(attemptsMade, random)`, taking the
+  post-increment count, returns the scheduled
   delay ± jitter as a `Duration`, or empty once the schedule is exhausted (→ `ABANDONED`). It
   takes no `now`: the dispatcher passes the delay to `markFailed`, which adds it to the
   database's `now()` (see *Two clocks*). With the
@@ -347,8 +396,9 @@ Drain the outbox safely across replicas (AC3, AC8–AC13).
      endpoint (AC11). Otherwise send through `ParticipantWebhookClient`, which applies the address
      fence first.
   4. Write the outcome in a short, fenced transaction (`lease_token` must still match):
-     `DELIVERED` + `delivered_at`, payload nulled. `FAILED` + `attempts+1` + `last_error` +
-     `next_attempt_at = now() + backoff delay`. Or `ABANDONED`, payload nulled (AC9, AC10). A 0-row update means the lease
+     every outcome sets `attempts+1`. `DELIVERED` + `delivered_at`, payload nulled. `FAILED` +
+     `last_error` + `next_attempt_at = now() + backoff delay`. Or `ABANDONED`, payload nulled
+     (AC9, AC10). A 0-row update means the lease
      was lost; discard the outcome and record no metric.
   5. Wait for the batch, bounded by the local deadline; on reaching it cancel the tasks not yet
      started.
@@ -468,8 +518,11 @@ Record the contract for integrators and operators.
   after enqueue while a replica runs, enforced by the sweeper regardless of `enabled`; retention
   covers only identifier-free history), the SSRF fence with its resolve timeout, lookup failures
   retried and the name-existence residual that follows, and redirects off, the duplicated due
-  predicates in the claim query and why (EvalPlanQual), no ordering (the re-grant case), the typed notification signature, and no expiry trigger. Set ADR-0011's status line to "partly superseded by ADR-0016
-  (participant delivery)" and leave its body unchanged.
+  predicates in the claim query and why (EvalPlanQual), no ordering (the re-grant case), the typed notification signature, and no expiry trigger.
+  Also the deregistration sweep (queued rows abandoned, why, and the rejected alternative of
+  refusing the exit) and that `attempts` counts dispatch outcomes. Set ADR-0011's status line to
+  "partly superseded by ADR-0016 (participant delivery)" and leave its body unchanged. Add
+  `notification_outbox` to ADR-0008's list of what deregistration sweeps.
 - `docs/security.md`: the webhook's address fence beside the self-description one, the same
   DNS-rebinding residual and how `allowed-hosts` closes it, the name-existence residual of
   retrying failed lookups, and the `typ` separation between
