@@ -143,6 +143,8 @@ config:
     participantsMaxSize: 100
     consentsDefaultSize: 20
     consentsMaxSize: 100
+    notificationsDefaultSize: 20
+    notificationsMaxSize: 100
   # Any other non-sensitive variable from .env.sample, e.g. SELF_DESCRIPTION_ALLOWED_HOSTS.
   # Credentials and the variables the deployment sets are refused.
   extraEnv: {}

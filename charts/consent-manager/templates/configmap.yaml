@@ -30,6 +30,8 @@
   "PARTICIPANTS_PAGE_MAX_SIZE" $cfg.pagination.participantsMaxSize
   "CONSENTS_PAGE_DEFAULT_SIZE" $cfg.pagination.consentsDefaultSize
   "CONSENTS_PAGE_MAX_SIZE" $cfg.pagination.consentsMaxSize
+  "PARTICIPANT_NOTIFICATIONS_PAGE_DEFAULT_SIZE" $cfg.pagination.notificationsDefaultSize
+  "PARTICIPANT_NOTIFICATIONS_PAGE_MAX_SIZE" $cfg.pagination.notificationsMaxSize
   "IDP_CLOCK_SKEW" $idp.clockSkew
 }}
 {{- /* An omitted role would fall back to application.yml's default, and a blank one fails startup,

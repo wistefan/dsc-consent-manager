@@ -47,6 +47,9 @@ public interface NotificationOutboxRepository
                     + " ORDER BY o.next_attempt_at"
                     + " LIMIT :batchSize";
 
+    /** One participant's rows, in the order and page {@code pageable} names. */
+    Page<NotificationOutboxEntry> findByParticipantId(UUID participantId, Pageable pageable);
+
     /** Lock clause of {@link #claimDue}: rows another replica is claiming are skipped. */
     String SKIP_LOCKED = " FOR UPDATE OF o SKIP LOCKED";
 

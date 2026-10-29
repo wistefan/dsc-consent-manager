@@ -142,7 +142,7 @@ An unsupported key in any provider entry fails rendering instead of being silent
 | `config.notificationClientUrl` | `""` | Link in the consent-requested email. |
 | `config.receiptsJurisdiction` | `EU` | |
 | `config.cache.*` | see `values.yaml` | IdP JWKS, Contract Service and self-description caches. |
-| `config.pagination.*` | `20` default, `100` max | Participants and consents. |
+| `config.pagination.*` | `20` default, `100` max | Participants, consents and notification history. |
 | `config.extraEnv` | `{}` | Any other non-sensitive variable from `.env.sample`. Credentials, the signing-key variables and keys a dedicated value sets are refused. |
 | `identityProviders.primary.issuer` / `.discoveryUrl` / `.audience` | `""` | **Required.** |
 | `identityProviders.primary.allowInsecureTransport` | `false` | Local development only. |

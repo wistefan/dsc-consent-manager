@@ -79,7 +79,7 @@ class SpecSecurityConsistencyTest {
     private static final Set<String> OPERATION_KEYS = ROUTING_ANNOTATIONS.keySet();
 
     /** Operations {@code api/openapi.yaml} declares; raise it with every added operation. */
-    private static final int SPECIFIED_OPERATION_COUNT = 34;
+    private static final int SPECIFIED_OPERATION_COUNT = 35;
 
     /** Path item key that would hide every operation beneath it from this test. */
     private static final String REF_KEY = "$ref";
