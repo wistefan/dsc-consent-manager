@@ -113,6 +113,12 @@ Where the ticket text and the repo differ, the repo wins:
   Writes that are not a dispatch outcome leave it alone: the sweeper's max-age abandonment, the
   deregistration sweep, and a row dropped untouched for lack of lease. `NotificationBackoff`
   takes the post-increment count.
+- **Retries are durable, not Micronaut `@Retryable`.** `@Retryable` retries in-process on the
+  calling thread. The schedule here spans ~31 h, so an in-process retry would hold a pool worker
+  and the lease for hours, and a restart or a lost lease would lose it, which breaks at-least-once
+  delivery (AC3) and the lease bound. The attempt count and next attempt time therefore live on
+  the outbox row, and `NotificationBackoff` only computes the next delay. In-request retries,
+  such as `ContractServiceClient`'s, keep using `@Retryable`.
 - **`last_error`** is a short classification (`HTTP 503`, `read timeout`, `connect timeout`,
   `response timeout`, `connection refused`,
   `no consentNotification endpoint`, `participant deregistered`, `endpoint not permitted`,
@@ -242,12 +248,13 @@ Add the storage layer with no callers yet.
     Fenced outcome writes `markDelivered` / `markFailed` / `markAbandoned`, each
     `… WHERE id = :id AND lease_token = :token`, each setting `attempts = attempts + 1` (see
     *`attempts`*) and returning the updated row count; the terminal two also set
-    `payload = NULL`. `markFailed(id, token, long delaySeconds, reason)`
-    sets `next_attempt_at = now() + make_interval(secs => :delaySeconds)`, so a retry is
+    `payload = NULL`. `markFailed(id, token, long delayMillis, reason)`
+    sets `next_attempt_at = now() + :delayMillis * INTERVAL '1 millisecond'`, so a retry is
     scheduled on the database clock that the claim compares against, never on a replica's wall
     clock. `findByParticipantIdOrderByCreatedAtDesc(UUID,
     Pageable)`. `countDueByParticipant()` for the depth gauge. `deleteTerminalOlderThan(long
-    retentionSeconds)` for retention, also on `now()`. `abandonOlderThan(long maxAgeSeconds)`, the unfenced age backstop: every
+    retentionSeconds)` for retention, also on `now()`. `abandonOlderThan(long maxAgeSeconds)`, the unfenced age backstop, returning the
+    `(participant_id, consent_id)` of each row it abandons: every
     `PENDING`/`FAILED` row with `created_at <= now() - max-age` becomes `ABANDONED`,
     `payload = NULL`, `last_error = 'max age exceeded'`, `lease_token = NULL`; returns the count.
     `abandonForParticipant(UUID participantId)`, the unfenced deregistration sweep, does the same
@@ -417,7 +424,7 @@ Drain the outbox safely across replicas (AC3, AC8–AC13).
   `notification/NotificationOutboxSweeper`: a separate `@Scheduled(fixedDelay =
   "${…sweep-interval}", initialDelay = "0s")` bean that runs whatever `enabled` says, calling
   `sweepOnce()` (public, for tests): `abandonOlderThan(maxAge)` (the erasure backstop, logged at
-  WARN with the count and counted as abandonment reason `max age exceeded`), then
+  WARN, one line per row with participant id and consent id, and counted as abandonment reason `max age exceeded`), then
   `deleteTerminalOlderThan(retention)`. It sends nothing, so it is safe on every replica.
 
   Log every abandonment at WARN with participant id, consent id and reason, and never the user

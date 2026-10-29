@@ -105,8 +105,8 @@ class NotificationDispatcherIT extends PostgresTestResource {
 
     private static final String SERVER_ERROR = "HTTP 503";
 
-    /** Slack for {@code markFailed} storing whole seconds of the delay. */
-    private static final Duration DELAY_ROUNDING = Duration.ofSeconds(1);
+    /** Slack for {@code markFailed} storing the delay in whole milliseconds. */
+    private static final Duration DELAY_TRUNCATION = Duration.ofMillis(1);
 
     private static WebhookStubTls stubTls;
 
@@ -210,7 +210,7 @@ class NotificationDispatcherIT extends PostgresTestResource {
         assertThat(failed.getLastError()).isEqualTo(SERVER_ERROR);
         assertThat(failed.getNextAttemptAt())
                 .isBetween(
-                        before.plus(scaled(firstDelay, 1 - jitter)).minus(DELAY_ROUNDING),
+                        before.plus(scaled(firstDelay, 1 - jitter)).minus(DELAY_TRUNCATION),
                         after.plus(scaled(firstDelay, 1 + jitter)));
 
         stub.stubFor(post(urlEqualTo(HOOK_PATH)).willReturn(aResponse().withStatus(OK)));
@@ -478,7 +478,7 @@ class NotificationDispatcherIT extends PostgresTestResource {
                                 identifier,
                                 null,
                                 null,
-                                Map.of(NotificationDispatcher.ENDPOINT_KEY, endpoint),
+                                Map.of(Participant.CONSENT_NOTIFICATION_ENDPOINT, endpoint),
                                 null))
                 .getId();
     }

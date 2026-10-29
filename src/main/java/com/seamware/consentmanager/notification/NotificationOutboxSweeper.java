@@ -33,11 +33,11 @@ public class NotificationOutboxSweeper {
             fixedDelay = "${consent-manager.participant-notifications.sweep-interval}",
             initialDelay = "0s")
     public void sweepOnce() {
-        int abandoned = outbox.abandonOlderThan(settings.getMaxAge().toSeconds());
-        if (abandoned > 0) {
+        for (AbandonedRow row : outbox.abandonOlderThan(settings.getMaxAge().toSeconds())) {
             LOG.warn(
-                    "{} undelivered notifications abandoned: reason={}",
-                    abandoned,
+                    "Notification abandoned: participant={} consent={} reason={}",
+                    row.participantId(),
+                    row.consentId(),
                     NotificationOutboxRepository.AbandonReason.MAX_AGE_EXCEEDED);
         }
         int deleted = outbox.deleteTerminalOlderThan(settings.getRetention().toSeconds());

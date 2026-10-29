@@ -9,6 +9,7 @@ import static com.seamware.consentmanager.support.ConsentFixtures.noTerms;
 import static com.seamware.consentmanager.support.ConsentFixtures.participant;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Level;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration.ParticipantNotifications;
 import com.seamware.consentmanager.domain.Consent;
@@ -24,6 +25,7 @@ import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserRepository;
+import com.seamware.consentmanager.support.LogCapture;
 import com.seamware.consentmanager.support.PostgresTestResource;
 import io.micronaut.jdbc.DataSourceResolver;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
@@ -115,7 +117,7 @@ class NotificationOutboxSweeperIT extends PostgresTestResource {
                                         null,
                                         null,
                                         Map.of(
-                                                NotificationDispatcher.ENDPOINT_KEY,
+                                                Participant.CONSENT_NOTIFICATION_ENDPOINT,
                                                 stub.url(HOOK_PATH)),
                                         null))
                         .getId();
@@ -173,7 +175,22 @@ class NotificationOutboxSweeperIT extends PostgresTestResource {
         UUID young = enqueue();
         due.prepare(this, young);
 
-        sweeper.sweepOnce();
+        try (LogCapture captured = LogCapture.attach()) {
+            sweeper.sweepOnce();
+
+            assertThat(captured.events())
+                    .filteredOn(event -> event.getLevel() == Level.WARN)
+                    .map(LogCapture::render)
+                    .as("one WARN line naming the participant, the consent and the reason")
+                    .anySatisfy(
+                            line ->
+                                    assertThat(line)
+                                            .contains(
+                                                    recipient.toString(),
+                                                    consentId.toString(),
+                                                    NotificationOutboxRepository.AbandonReason
+                                                            .MAX_AGE_EXCEEDED));
+        }
 
         NotificationOutboxEntry abandoned = outbox.findById(aged).orElseThrow();
         assertThat(abandoned.getStatus()).isEqualTo(NotificationOutboxStatus.ABANDONED);

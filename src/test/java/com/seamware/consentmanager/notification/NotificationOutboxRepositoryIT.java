@@ -360,7 +360,11 @@ class NotificationOutboxRepositoryIT extends PostgresTestResource {
         rewindCreatedAt(agedAndLeased);
 
         assertThat(claimedIds(WIDE, WIDE)).containsExactly(fresh);
-        assertThat(outbox.abandonOlderThan(MAX_AGE_SECONDS)).isEqualTo(2);
+        assertThat(outbox.abandonOlderThan(MAX_AGE_SECONDS))
+                .as("each abandoned row is named for its WARN line")
+                .containsExactly(
+                        new AbandonedRow(provider, consentId),
+                        new AbandonedRow(provider, consentId));
 
         for (UUID id : List.of(aged, agedAndLeased)) {
             NotificationOutboxEntry row = outbox.findById(id).orElseThrow();

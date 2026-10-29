@@ -48,9 +48,6 @@ public class NotificationDispatcher {
 
     private static final Logger LOG = LoggerFactory.getLogger(NotificationDispatcher.class);
 
-    /** Key of the webhook URL in a participant's {@code endpoints}. */
-    static final String ENDPOINT_KEY = "consentNotification";
-
     static final String NO_ENDPOINT = "no consentNotification endpoint";
 
     static final String NO_PAYLOAD = "payload missing";
@@ -206,7 +203,8 @@ public class NotificationDispatcher {
             return DeliveryOutcome.abandon(
                     NotificationOutboxRepository.AbandonReason.PARTICIPANT_DEREGISTERED);
         }
-        Object endpoint = recipient.get().getEndpoints().get(ENDPOINT_KEY);
+        Object endpoint =
+                recipient.get().getEndpoints().get(Participant.CONSENT_NOTIFICATION_ENDPOINT);
         if (!(endpoint instanceof String url) || url.isBlank()) {
             return DeliveryOutcome.abandon(NO_ENDPOINT);
         }
@@ -233,7 +231,7 @@ public class NotificationDispatcher {
         if (delay.isEmpty()) {
             return abandon(row, token, reason);
         }
-        return outbox.markFailed(row.getId(), token, delay.get().toSeconds(), reason);
+        return outbox.markFailed(row.getId(), token, delay.get().toMillis(), reason);
     }
 
     private int abandon(NotificationOutboxEntry row, UUID token, String reason) {

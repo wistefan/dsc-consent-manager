@@ -22,6 +22,9 @@ import java.util.UUID;
 @MappedEntity("participants")
 public class Participant {
 
+    /** Key of the consent-notification webhook URL in {@link #getEndpoints()}. */
+    public static final String CONSENT_NOTIFICATION_ENDPOINT = "consentNotification";
+
     /** Application-generated UUIDv7 primary key. */
     @Id private UUID id;
 

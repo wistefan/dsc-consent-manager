@@ -7,7 +7,8 @@ import java.util.random.RandomGenerator;
 
 /**
  * The retry schedule: one delay per retry, each spread by up to {@code ±jitter} of itself. Pure;
- * the caller adds the delay to the database clock.
+ * the caller adds the delay to the database clock. Not Micronaut's {@code @Retryable}: these
+ * retries span hours and must outlive the process and its lease, so their state is the outbox row.
  */
 public final class NotificationBackoff {
 
