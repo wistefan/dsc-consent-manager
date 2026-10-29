@@ -23,6 +23,8 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.User;
+import com.seamware.consentmanager.observability.NotificationMetrics;
+import com.seamware.consentmanager.observability.NotificationMetrics.Outcome;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
@@ -31,6 +33,9 @@ import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.signing.ConsentSigningService;
 import com.seamware.consentmanager.signing.SignatureType;
 import com.seamware.consentmanager.support.PostgresTestResource;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micronaut.http.client.DefaultHttpClientConfiguration;
 import io.micronaut.http.client.RawHttpClient;
 import io.micronaut.jdbc.DataSourceResolver;
@@ -50,6 +55,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
@@ -136,6 +142,9 @@ class NotificationDispatcherIT extends PostgresTestResource {
 
     private UUID consentId;
 
+    /** Fresh per test, so every meter reading is this test's alone. */
+    private SimpleMeterRegistry registry;
+
     @BeforeAll
     static void startStub() throws IOException, InterruptedException {
         stubTls = WebhookStubTls.generate();
@@ -152,6 +161,7 @@ class NotificationDispatcherIT extends PostgresTestResource {
     @BeforeEach
     void seed() {
         stub.resetAll();
+        registry = new SimpleMeterRegistry();
         // Rows other suites left due would otherwise join this suite's batches.
         execute("DELETE FROM notification_outbox");
         UUID party = participant(participants, "urn:test:participant:dispatch-party").getId();
@@ -195,7 +205,8 @@ class NotificationDispatcherIT extends PostgresTestResource {
         stub.stubFor(
                 post(urlEqualTo(HOOK_PATH))
                         .willReturn(aResponse().withStatus(SERVICE_UNAVAILABLE)));
-        UUID id = enqueue(recipient(hookUrl()));
+        UUID recipient = recipient(hookUrl());
+        UUID id = enqueue(recipient);
         NotificationDispatcher dispatcher = dispatcher();
 
         Instant before = databaseNow();
@@ -238,6 +249,14 @@ class NotificationDispatcherIT extends PostgresTestResource {
                                                                         .SIGNATURE_HEADER),
                                                         SignatureType.NOTIFICATION))
                                         .isTrue());
+        assertThat(attempts(recipient, Outcome.RETRY)).isOne();
+        assertThat(attempts(recipient, Outcome.DELIVERED)).isOne();
+        assertThat(latency(recipient).count()).isOne();
+        assertThat(latency(recipient).totalTime(TimeUnit.NANOSECONDS))
+                .as("the timer runs from enqueue to the stamped delivery")
+                .isEqualTo(
+                        Duration.between(delivered.getCreatedAt(), delivered.getDeliveredAt())
+                                .toNanos());
     }
 
     @Test
@@ -246,7 +265,8 @@ class NotificationDispatcherIT extends PostgresTestResource {
         stub.stubFor(
                 post(urlEqualTo(HOOK_PATH))
                         .willReturn(aResponse().withStatus(SERVICE_UNAVAILABLE)));
-        UUID id = enqueue(recipient(hookUrl()));
+        UUID recipient = recipient(hookUrl());
+        UUID id = enqueue(recipient);
         NotificationDispatcher dispatcher = dispatcher();
         int attempts = ParticipantNotifications.DEFAULT_BACKOFF.size() + 1;
 
@@ -267,20 +287,34 @@ class NotificationDispatcherIT extends PostgresTestResource {
         assertThat(abandoned.getLastError()).isEqualTo(SERVER_ERROR);
         assertThat(abandoned.getPayload()).isNull();
         stub.verify(attempts, postRequestedFor(urlEqualTo(HOOK_PATH)));
+        assertThat(attempts(recipient, Outcome.RETRY)).isEqualTo(attempts - 1);
+        assertThat(attempts(recipient, Outcome.ABANDONED)).isOne();
+        assertThat(abandoned(recipient, NotificationMetrics.AbandonReason.RETRIES_EXHAUSTED))
+                .isOne();
     }
 
     static Stream<Arguments> responses() {
         return Stream.of(
-                Arguments.of(OK, NotificationOutboxStatus.DELIVERED, null),
-                Arguments.of(BAD_REQUEST, NotificationOutboxStatus.ABANDONED, "HTTP 400"),
-                Arguments.of(TOO_MANY_REQUESTS, NotificationOutboxStatus.FAILED, "HTTP 429"));
+                Arguments.of(OK, NotificationOutboxStatus.DELIVERED, null, Outcome.DELIVERED),
+                Arguments.of(
+                        BAD_REQUEST,
+                        NotificationOutboxStatus.ABANDONED,
+                        "HTTP 400",
+                        Outcome.ABANDONED),
+                Arguments.of(
+                        TOO_MANY_REQUESTS,
+                        NotificationOutboxStatus.FAILED,
+                        "HTTP 429",
+                        Outcome.RETRY));
     }
 
     @ParameterizedTest(name = "HTTP {0} leaves the row {1} after one attempt")
     @MethodSource("responses")
-    void classifiesTheResponse(int code, NotificationOutboxStatus expected, String lastError) {
+    void classifiesTheResponse(
+            int code, NotificationOutboxStatus expected, String lastError, Outcome outcome) {
         stub.stubFor(post(urlEqualTo(HOOK_PATH)).willReturn(aResponse().withStatus(code)));
-        UUID id = enqueue(recipient(hookUrl()));
+        UUID recipient = recipient(hookUrl());
+        UUID id = enqueue(recipient);
 
         dispatcher().drainOnce();
 
@@ -292,6 +326,13 @@ class NotificationDispatcherIT extends PostgresTestResource {
                 .as("only a terminal row drops its payload")
                 .isEqualTo(expected != NotificationOutboxStatus.FAILED);
         assertThat(row.getLeaseToken()).isNull();
+        for (Outcome counted : Outcome.values()) {
+            assertThat(attempts(recipient, counted))
+                    .as("attempts counted as %s", counted)
+                    .isEqualTo(counted == outcome ? 1 : 0);
+        }
+        assertThat(abandoned(recipient, NotificationMetrics.AbandonReason.REJECTED))
+                .isEqualTo(outcome == Outcome.ABANDONED ? 1 : 0);
     }
 
     static Stream<Arguments> unreachableRecipients() {
@@ -299,17 +340,22 @@ class NotificationDispatcherIT extends PostgresTestResource {
                 Arguments.of(
                         "no consentNotification endpoint",
                         (Consumer<Participant>) p -> p.setEndpoints(Map.of()),
-                        NotificationDispatcher.NO_ENDPOINT),
+                        NotificationDispatcher.NO_ENDPOINT,
+                        NotificationMetrics.AbandonReason.NO_ENDPOINT),
                 Arguments.of(
                         "a deregistered participant",
                         (Consumer<Participant>) p -> p.setDeregisteredAt(Instant.now()),
-                        NotificationOutboxRepository.AbandonReason.PARTICIPANT_DEREGISTERED));
+                        NotificationOutboxRepository.AbandonReason.PARTICIPANT_DEREGISTERED,
+                        NotificationMetrics.AbandonReason.PARTICIPANT_DEREGISTERED));
     }
 
     @ParameterizedTest(name = "{0} abandons without an HTTP call")
     @MethodSource("unreachableRecipients")
     void abandonsAnUnreachableRecipient(
-            String description, Consumer<Participant> change, String reason) {
+            String description,
+            Consumer<Participant> change,
+            String reason,
+            NotificationMetrics.AbandonReason metricReason) {
         stub.stubFor(post(anyUrl()).willReturn(aResponse().withStatus(OK)));
         Participant recipient = participants.findById(recipient(hookUrl())).orElseThrow();
         change.accept(recipient);
@@ -324,6 +370,8 @@ class NotificationDispatcherIT extends PostgresTestResource {
         assertThat(row.getAttempts()).isEqualTo(1);
         assertThat(row.getPayload()).isNull();
         stub.verify(0, anyRequestedFor(anyUrl()));
+        assertThat(attempts(recipient.getId(), Outcome.ABANDONED)).isOne();
+        assertThat(abandoned(recipient.getId(), metricReason)).isOne();
     }
 
     @Test
@@ -375,7 +423,8 @@ class NotificationDispatcherIT extends PostgresTestResource {
             "a loopback endpoint without an allowed-hosts entry is abandoned before connecting")
     void refusesAnInternalEndpoint() {
         stub.stubFor(post(anyUrl()).willReturn(aResponse().withStatus(OK)));
-        UUID id = enqueue(recipient(hookUrl()));
+        UUID recipient = recipient(hookUrl());
+        UUID id = enqueue(recipient);
 
         dispatcher(settings(List.of()), System::nanoTime).drainOnce();
 
@@ -383,6 +432,34 @@ class NotificationDispatcherIT extends PostgresTestResource {
         assertThat(row.getStatus()).isEqualTo(NotificationOutboxStatus.ABANDONED);
         assertThat(row.getLastError()).isEqualTo(ParticipantWebhookClient.ENDPOINT_NOT_PERMITTED);
         stub.verify(0, anyRequestedFor(anyUrl()));
+        assertThat(abandoned(recipient, NotificationMetrics.AbandonReason.ENDPOINT_NOT_PERMITTED))
+                .isOne();
+    }
+
+    @Test
+    @DisplayName("the queue-depth gauge reports due rows per participant and drops emptied ones")
+    void reportsQueueDepthPerParticipant() {
+        stub.stubFor(post(urlEqualTo(HOOK_PATH)).willReturn(aResponse().withStatus(OK)));
+        UUID busy = recipient(hookUrl());
+        UUID quiet = recipient(hookUrl());
+        int busyRows = 2;
+        IntStream.range(0, busyRows).forEach(i -> enqueue(busy));
+        enqueue(quiet);
+        NotificationDispatcher dispatcher = dispatcher();
+
+        dispatcher.refreshQueueDepth();
+
+        assertThat(queueDepth(busy)).isEqualTo(busyRows);
+        assertThat(queueDepth(quiet)).isOne();
+
+        dispatcher.drainOnce();
+        dispatcher.refreshQueueDepth();
+
+        assertThat(registry.find(NotificationMetrics.QUEUE_DEPTH_METRIC).gauges())
+                .as("a participant with nothing due has no series")
+                .isEmpty();
+        assertThat(attempts(busy, Outcome.DELIVERED)).isEqualTo(busyRows);
+        assertThat(attempts(quiet, Outcome.DELIVERED)).isOne();
     }
 
     @Test
@@ -444,6 +521,7 @@ class NotificationDispatcherIT extends PostgresTestResource {
                         client,
                         transactions,
                         settings,
+                        new NotificationMetrics(registry),
                         clock,
                         RandomGenerator.getDefault());
         opened.add(dispatcher::shutdown);
@@ -498,6 +576,37 @@ class NotificationDispatcherIT extends PostgresTestResource {
                         ConsentStatus.GRANTED,
                         true);
         return outbox.save(NotificationOutboxEntry.pending(participantId, payload)).getId();
+    }
+
+    private double attempts(UUID participantId, Outcome outcome) {
+        Counter counter =
+                registry.find(NotificationMetrics.ATTEMPTS_METRIC)
+                        .tag(NotificationMetrics.PARTICIPANT_TAG, participantId.toString())
+                        .tag(NotificationMetrics.OUTCOME_TAG, outcome.tag())
+                        .counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    private double abandoned(UUID participantId, NotificationMetrics.AbandonReason reason) {
+        Counter counter =
+                registry.find(NotificationMetrics.ABANDONED_METRIC)
+                        .tag(NotificationMetrics.PARTICIPANT_TAG, participantId.toString())
+                        .tag(NotificationMetrics.REASON_TAG, reason.tag())
+                        .counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    private Timer latency(UUID participantId) {
+        return registry.get(NotificationMetrics.LATENCY_METRIC)
+                .tag(NotificationMetrics.PARTICIPANT_TAG, participantId.toString())
+                .timer();
+    }
+
+    private double queueDepth(UUID participantId) {
+        return registry.get(NotificationMetrics.QUEUE_DEPTH_METRIC)
+                .tag(NotificationMetrics.PARTICIPANT_TAG, participantId.toString())
+                .gauge()
+                .value();
     }
 
     private void makeDue(UUID id) {

@@ -1,6 +1,7 @@
 package com.seamware.consentmanager.notification;
 
 import com.seamware.consentmanager.config.ConsentManagerConfiguration.ParticipantNotifications;
+import com.seamware.consentmanager.observability.NotificationMetrics;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.scheduling.annotation.Scheduled;
 import jakarta.inject.Singleton;
@@ -21,11 +22,15 @@ public class NotificationOutboxSweeper {
 
     private final NotificationOutboxRepository outbox;
     private final ParticipantNotifications settings;
+    private final NotificationMetrics metrics;
 
     NotificationOutboxSweeper(
-            NotificationOutboxRepository outbox, ParticipantNotifications settings) {
+            NotificationOutboxRepository outbox,
+            ParticipantNotifications settings,
+            NotificationMetrics metrics) {
         this.outbox = outbox;
         this.settings = settings;
+        this.metrics = metrics;
     }
 
     /** One sweep; scheduled from startup on, public so tests drive it. */
@@ -39,6 +44,8 @@ public class NotificationOutboxSweeper {
                     row.participantId(),
                     row.consentId(),
                     NotificationOutboxRepository.AbandonReason.MAX_AGE_EXCEEDED);
+            metrics.abandoned(
+                    row.participantId(), NotificationMetrics.AbandonReason.MAX_AGE_EXCEEDED);
         }
         int deleted = outbox.deleteTerminalOlderThan(settings.getRetention().toSeconds());
         if (deleted > 0) {

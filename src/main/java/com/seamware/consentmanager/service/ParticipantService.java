@@ -302,7 +302,12 @@ public class ParticipantService {
                 notificationsAbandoned,
                 deregisteredAt == null ? "deleted" : "retained");
         return new DeregistrationResult(
-                deregisteredAt, terminated, consentsRetained, noticesArchived, linksRemoved);
+                deregisteredAt,
+                terminated,
+                consentsRetained,
+                noticesArchived,
+                linksRemoved,
+                notificationsAbandoned);
     }
 
     /**

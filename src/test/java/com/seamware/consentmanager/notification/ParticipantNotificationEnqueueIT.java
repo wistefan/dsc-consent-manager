@@ -213,7 +213,9 @@ class ParticipantNotificationEnqueueIT extends PostgresTestResource {
                 "UPDATE notification_outbox SET status = 'FAILED' RETURNING id",
                 row -> row.getObject(1));
 
-        participantService.deregister(provider);
+        assertThat(participantService.deregister(provider).notificationsAbandoned())
+                .as("reported so the caller counts them once the transaction commits")
+                .isOne();
 
         assertThat(all())
                 .hasSize(Party.values().length)

@@ -20,6 +20,7 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.PrivacyNoticePayload;
 import com.seamware.consentmanager.domain.User;
+import com.seamware.consentmanager.observability.NotificationMetrics;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.ParticipantRepository;
@@ -27,6 +28,7 @@ import com.seamware.consentmanager.repository.PrivacyNoticeRepository;
 import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.support.LogCapture;
 import com.seamware.consentmanager.support.PostgresTestResource;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micronaut.jdbc.DataSourceResolver;
 import io.micronaut.test.extensions.junit5.annotation.MicronautTest;
 import jakarta.inject.Inject;
@@ -83,6 +85,8 @@ class NotificationOutboxSweeperIT extends PostgresTestResource {
     @Inject UserRepository users;
 
     @Inject DataSource dataSource;
+
+    @Inject MeterRegistry registry;
 
     @Inject DataSourceResolver dataSources;
 
@@ -202,6 +206,16 @@ class NotificationOutboxSweeperIT extends PostgresTestResource {
         assertThat(untouched.getStatus().name()).isEqualTo(due.name());
         assertThat(untouched.getPayload()).isNotNull();
         stub.verify(0, anyRequestedFor(anyUrl()));
+        assertThat(
+                        registry.get(NotificationMetrics.ABANDONED_METRIC)
+                                .tag(NotificationMetrics.PARTICIPANT_TAG, recipient.toString())
+                                .tag(
+                                        NotificationMetrics.REASON_TAG,
+                                        NotificationMetrics.AbandonReason.MAX_AGE_EXCEEDED.tag())
+                                .counter()
+                                .count())
+                .as("the recipient is fresh per test, so its counter holds this sweep alone")
+                .isOne();
     }
 
     @Test
