@@ -79,6 +79,9 @@ src/main/java/com/seamware/consentmanager/
                                    # SigningKeyStore, CanonicalJsonSerializer (ADR-0014)
   notification/                    # (ticket #78) UserNotificationService + Smtp/Logging
                                    # implementations, NotificationConfiguration (smtp.*)
+                                   # (ticket #94, in flight) participant webhook outbox:
+                                   # ParticipantNotificationService, NotificationOutboxRepository,
+                                   # NotificationDispatcher, ParticipantWebhookClient
   error/                           # ApiException + BadRequest/NotFound/Forbidden/Conflict/
                                    # UpstreamService, ProblemType, ApiExceptionHandler,
                                    # GlobalExceptionHandler, AuthorizationProblemHandler,
@@ -96,7 +99,7 @@ src/main/resources/
   static/swagger-ui/index.html     # makes the bundled Swagger UI work
   db/migration/V0__baseline.sql, V1__initial_schema.sql, V2__user_erasure_verifier.sql,
                V3__participant_deregistration.sql, V4__privacy_notice_participant_contracts.sql,
-               V5__consent_receipts.sql
+               V5__consent_receipts.sql, V6__notification_outbox.sql (ticket #94)
 src/test/java/com/seamware/consentmanager/
   support/                         # PostgresTestResource, KeycloakTestResource,
                                    # KeycloakAndPostgresTestResource, OidcDiscoveryStub, Await,
@@ -237,6 +240,11 @@ and point `JAVA_HOME` at it. The Docker socket is `root:2375`, so the agent user
 - **Notifications are best-effort.** `UserNotificationService` is called *after* the consent
   write commits and must never throw; a send failure is logged, never propagated. With
   `smtp.host` unset the logging implementation is bound, so tests never reach a mail server.
+- **Participant notifications (ticket #94).** Every consent write path (`ConsentWriter.saveNew`/
+  `saveUpdated`, `UserService.close`, `ParticipantService.terminate`) enqueues outbox rows in its
+  own transaction; a write path added later must too. Config is
+  `consent-manager.participant-notifications.*` — `consent-manager.notifications` is subject
+  email. Decisions are recorded at the top of `IMPLEMENTATION_PLAN.md`.
 - **Config** is externalized to env vars; document every new one in `.env.sample` **and**
   `application.yml`.
 - **Testing (ticket #83).** `docs/testing.md` maps each testing acceptance criterion to its
