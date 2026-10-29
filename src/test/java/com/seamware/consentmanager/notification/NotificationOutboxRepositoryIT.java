@@ -267,7 +267,7 @@ class NotificationOutboxRepositoryIT extends PostgresTestResource {
         UUID id = enqueue(provider);
         UUID token = lease(id);
 
-        assertThat(outbox.markDelivered(id, UUID.randomUUID())).isZero();
+        assertThat(outbox.markDelivered(id, UUID.randomUUID())).isEmpty();
         assertThat(outbox.markFailed(id, UUID.randomUUID(), 0, FAILURE)).isZero();
         assertThat(outbox.markAbandoned(id, UUID.randomUUID(), FAILURE)).isZero();
 
@@ -283,7 +283,7 @@ class NotificationOutboxRepositoryIT extends PostgresTestResource {
         DELIVERED(
                 NotificationOutboxStatus.DELIVERED,
                 false,
-                (repo, row) -> repo.markDelivered(row.id(), row.token())),
+                (repo, row) -> repo.markDelivered(row.id(), row.token()).isPresent() ? 1 : 0),
         FAILED(
                 NotificationOutboxStatus.FAILED,
                 true,
@@ -377,7 +377,7 @@ class NotificationOutboxRepositoryIT extends PostgresTestResource {
         }
         assertThat(outbox.markDelivered(agedAndLeased, token))
                 .as("the holder of the swept lease can no longer write its outcome")
-                .isZero();
+                .isEmpty();
         assertThat(outbox.findById(fresh).orElseThrow().getStatus())
                 .isEqualTo(NotificationOutboxStatus.PENDING);
     }

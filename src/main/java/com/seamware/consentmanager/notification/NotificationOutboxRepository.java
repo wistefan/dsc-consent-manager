@@ -9,6 +9,7 @@ import io.micronaut.data.repository.CrudRepository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -71,13 +72,17 @@ public interface NotificationOutboxRepository
                     + " SELECT max(next_attempt_at) FROM leased")
     Instant leaseForMillis(List<UUID> ids, UUID token, long leaseMillis);
 
-    /** Records a successful delivery and drops the payload. */
+    /**
+     * Records a successful delivery and drops the payload. Returns the stamped {@code
+     * delivered_at}, or empty when the lease was lost.
+     */
     @Query(
-            "UPDATE notification_outbox SET status = 'DELIVERED', delivered_at = now(),"
-                    + " payload = NULL, last_error = NULL, lease_token = NULL,"
-                    + " attempts = attempts + 1"
-                    + " WHERE id = :id AND lease_token = :token")
-    int markDelivered(UUID id, UUID token);
+            "WITH delivered AS (UPDATE notification_outbox SET status = 'DELIVERED',"
+                    + " delivered_at = now(), payload = NULL, last_error = NULL,"
+                    + " lease_token = NULL, attempts = attempts + 1"
+                    + " WHERE id = :id AND lease_token = :token RETURNING delivered_at)"
+                    + " SELECT delivered_at FROM delivered")
+    Optional<Instant> markDelivered(UUID id, UUID token);
 
     /** Records a failed attempt and schedules the retry {@code delayMillis} from now. */
     @Query(

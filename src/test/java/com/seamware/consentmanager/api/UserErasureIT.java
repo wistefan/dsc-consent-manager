@@ -404,11 +404,11 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
         outbox.lease(ids, token, DRAIN_LEASE);
         ids.forEach(
                 id -> {
-                    int written =
+                    boolean written =
                             drain == Drain.DELIVERED
-                                    ? outbox.markDelivered(id, token)
-                                    : outbox.markAbandoned(id, token, DRAIN_FAILURE);
-                    assertThat(written).isOne();
+                                    ? outbox.markDelivered(id, token).isPresent()
+                                    : outbox.markAbandoned(id, token, DRAIN_FAILURE) == 1;
+                    assertThat(written).isTrue();
                 });
     }
 

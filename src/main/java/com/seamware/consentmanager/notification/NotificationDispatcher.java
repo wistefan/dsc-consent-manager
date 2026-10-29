@@ -3,6 +3,8 @@ package com.seamware.consentmanager.notification;
 import com.seamware.consentmanager.config.ConsentManagerConfiguration.ParticipantNotifications;
 import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.UuidGenerator;
+import com.seamware.consentmanager.observability.NotificationMetrics;
+import com.seamware.consentmanager.observability.NotificationMetrics.Outcome;
 import com.seamware.consentmanager.repository.ParticipantRepository;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.scheduling.annotation.Scheduled;
@@ -16,6 +18,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -29,6 +32,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 import java.util.random.RandomGenerator;
+import java.util.stream.Collectors;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,11 +58,24 @@ public class NotificationDispatcher {
 
     private static final String THREAD_NAME_PREFIX = "notification-dispatcher-";
 
+    /** Abandonment texts with a reason of their own; any other abandonment is a final status. */
+    private static final Map<String, NotificationMetrics.AbandonReason> FIXED_ABANDON_REASONS =
+            Map.of(
+                    NotificationOutboxRepository.AbandonReason.PARTICIPANT_DEREGISTERED,
+                    NotificationMetrics.AbandonReason.PARTICIPANT_DEREGISTERED,
+                    NO_ENDPOINT,
+                    NotificationMetrics.AbandonReason.NO_ENDPOINT,
+                    NO_PAYLOAD,
+                    NotificationMetrics.AbandonReason.PAYLOAD_MISSING,
+                    ParticipantWebhookClient.ENDPOINT_NOT_PERMITTED,
+                    NotificationMetrics.AbandonReason.ENDPOINT_NOT_PERMITTED);
+
     private final NotificationOutboxRepository outbox;
     private final ParticipantRepository participants;
     private final ParticipantWebhookClient webhooks;
     private final TransactionOperations<Connection> transactions;
     private final ParticipantNotifications settings;
+    private final NotificationMetrics metrics;
     private final NotificationBackoff backoff;
     private final LongSupplier nanoClock;
     private final RandomGenerator random;
@@ -71,13 +88,15 @@ public class NotificationDispatcher {
             ParticipantRepository participants,
             ParticipantWebhookClient webhooks,
             TransactionOperations<Connection> transactions,
-            ParticipantNotifications settings) {
+            ParticipantNotifications settings,
+            NotificationMetrics metrics) {
         this(
                 outbox,
                 participants,
                 webhooks,
                 transactions,
                 settings,
+                metrics,
                 System::nanoTime,
                 new SecureRandom());
     }
@@ -89,6 +108,7 @@ public class NotificationDispatcher {
             ParticipantWebhookClient webhooks,
             TransactionOperations<Connection> transactions,
             ParticipantNotifications settings,
+            NotificationMetrics metrics,
             LongSupplier nanoClock,
             RandomGenerator random) {
         this.outbox = outbox;
@@ -96,6 +116,7 @@ public class NotificationDispatcher {
         this.webhooks = webhooks;
         this.transactions = transactions;
         this.settings = settings;
+        this.metrics = metrics;
         this.backoff = new NotificationBackoff(settings.getBackoff(), settings.getJitter());
         this.nanoClock = nanoClock;
         this.random = random;
@@ -111,12 +132,23 @@ public class NotificationDispatcher {
                         daemonThreads());
     }
 
-    /** The scheduled tick; does nothing on a replica with delivery disabled. */
+    /**
+     * The scheduled tick: drains a batch unless delivery is disabled, then refreshes the
+     * queue-depth gauge, which a disabled replica still reports.
+     */
     @Scheduled(fixedDelay = "${consent-manager.participant-notifications.poll-interval}")
     void poll() {
         if (settings.isEnabled()) {
             drainOnce();
         }
+        refreshQueueDepth();
+    }
+
+    /** Re-reads the due rows per participant into the queue-depth gauge. */
+    void refreshQueueDepth() {
+        metrics.queueDepth(
+                outbox.countDueByParticipant().stream()
+                        .collect(Collectors.toMap(DueCount::participantId, DueCount::due)));
     }
 
     /**
@@ -215,35 +247,62 @@ public class NotificationDispatcher {
     }
 
     private void record(NotificationOutboxEntry row, UUID token, DeliveryOutcome outcome) {
-        int updated =
+        boolean recorded =
                 switch (outcome.result()) {
-                    case DELIVERED -> outbox.markDelivered(row.getId(), token);
+                    case DELIVERED -> markDelivered(row, token);
                     case RETRY -> retryOrAbandon(row, token, outcome.reason());
-                    case ABANDON -> abandon(row, token, outcome.reason());
+                    case ABANDON -> abandon(row, token, outcome.reason(), abandonReason(outcome));
                 };
-        if (updated == 0) {
+        if (!recorded) {
             LOG.debug("Lease on notification {} lost; outcome discarded", row.getId());
         }
     }
 
-    private int retryOrAbandon(NotificationOutboxEntry row, UUID token, String reason) {
-        Optional<Duration> delay = backoff.delay(row.getAttempts() + 1, random);
-        if (delay.isEmpty()) {
-            return abandon(row, token, reason);
-        }
-        return outbox.markFailed(row.getId(), token, delay.get().toMillis(), reason);
+    /** The bounded metric reason of an abandoning outcome. */
+    static NotificationMetrics.AbandonReason abandonReason(DeliveryOutcome outcome) {
+        return FIXED_ABANDON_REASONS.getOrDefault(
+                outcome.reason(), NotificationMetrics.AbandonReason.REJECTED);
     }
 
-    private int abandon(NotificationOutboxEntry row, UUID token, String reason) {
-        int updated = outbox.markAbandoned(row.getId(), token, reason);
-        if (updated > 0) {
-            LOG.warn(
-                    "Notification abandoned: participant={} consent={} reason={}",
-                    row.getParticipantId(),
-                    row.getConsentId(),
-                    reason);
+    private boolean markDelivered(NotificationOutboxEntry row, UUID token) {
+        Optional<Instant> deliveredAt = outbox.markDelivered(row.getId(), token);
+        deliveredAt.ifPresent(
+                at -> {
+                    metrics.attempted(row.getParticipantId(), Outcome.DELIVERED);
+                    metrics.delivered(
+                            row.getParticipantId(), Duration.between(row.getCreatedAt(), at));
+                });
+        return deliveredAt.isPresent();
+    }
+
+    private boolean retryOrAbandon(NotificationOutboxEntry row, UUID token, String reason) {
+        Optional<Duration> delay = backoff.delay(row.getAttempts() + 1, random);
+        if (delay.isEmpty()) {
+            return abandon(row, token, reason, NotificationMetrics.AbandonReason.RETRIES_EXHAUSTED);
         }
-        return updated;
+        if (outbox.markFailed(row.getId(), token, delay.get().toMillis(), reason) == 0) {
+            return false;
+        }
+        metrics.attempted(row.getParticipantId(), Outcome.RETRY);
+        return true;
+    }
+
+    private boolean abandon(
+            NotificationOutboxEntry row,
+            UUID token,
+            String reason,
+            NotificationMetrics.AbandonReason metricReason) {
+        if (outbox.markAbandoned(row.getId(), token, reason) == 0) {
+            return false;
+        }
+        LOG.warn(
+                "Notification abandoned: participant={} consent={} reason={}",
+                row.getParticipantId(),
+                row.getConsentId(),
+                reason);
+        metrics.attempted(row.getParticipantId(), Outcome.ABANDONED);
+        metrics.abandoned(row.getParticipantId(), metricReason);
+        return true;
     }
 
     private static ThreadFactory daemonThreads() {

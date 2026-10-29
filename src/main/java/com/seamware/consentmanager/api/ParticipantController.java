@@ -6,6 +6,7 @@ import com.seamware.consentmanager.api.generated.model.Participant;
 import com.seamware.consentmanager.api.generated.model.ParticipantPage;
 import com.seamware.consentmanager.api.generated.model.ParticipantRegistration;
 import com.seamware.consentmanager.api.generated.model.ParticipantUpdate;
+import com.seamware.consentmanager.observability.NotificationMetrics;
 import com.seamware.consentmanager.security.ConsentManagerPrincipal;
 import com.seamware.consentmanager.security.ParticipantPrincipal;
 import com.seamware.consentmanager.service.ConsentReporter;
@@ -28,11 +29,17 @@ public class ParticipantController extends AbstractParticipantsController {
 
     private final ConsentReporter reporter;
 
+    private final NotificationMetrics notificationMetrics;
+
     public ParticipantController(
-            ParticipantService participants, ParticipantMapper mapper, ConsentReporter reporter) {
+            ParticipantService participants,
+            ParticipantMapper mapper,
+            ConsentReporter reporter,
+            NotificationMetrics notificationMetrics) {
         this.participants = participants;
         this.reporter = reporter;
         this.mapper = mapper;
+        this.notificationMetrics = notificationMetrics;
     }
 
     /**
@@ -72,8 +79,15 @@ public class ParticipantController extends AbstractParticipantsController {
     @Override
     public HttpResponse<DeregistrationSummary> deregisterCurrentParticipant(
             ParticipantPrincipal principal) {
-        DeregistrationResult result = participants.deregister(principal.requireRegistered());
+        com.seamware.consentmanager.domain.Participant caller = principal.requireRegistered();
+        DeregistrationResult result = participants.deregister(caller);
         reporter.report(result.moves());
+        if (result.notificationsAbandoned() > 0) {
+            notificationMetrics.abandoned(
+                    caller.getId(),
+                    NotificationMetrics.AbandonReason.PARTICIPANT_DEREGISTERED,
+                    result.notificationsAbandoned());
+        }
         return HttpResponse.ok(
                 new DeregistrationSummary(
                                 result.consentsTerminated(),
