@@ -50,25 +50,64 @@ Where the ticket text and the repo differ, the repo wins:
   are also due, the due index covers `status IN ('PENDING','FAILED')`, not only `PENDING` as the
   ticket's index does.
 - **Claiming uses a lease, not a lock held across HTTP.** A short transaction selects due rows
-  `FOR UPDATE SKIP LOCKED`, pushes their `next_attempt_at` forward by a lease, then commits.
-  Delivery runs outside any transaction, and the outcome is written in a second short transaction.
-  If the process dies mid-send, the row becomes due again when the lease expires (at-least-once,
-  AC3). Startup validation requires the lease to exceed connect timeout + read timeout by a margin,
-  so a live delivery is never re-claimed by another replica (AC13/AC17).
-- **Isolation.** The claim query caps rows per participant per batch, using a `row_number() OVER
-  (PARTITION BY participant_id)` subquery with the outer `SELECT … FOR UPDATE SKIP LOCKED`.
-  Deliveries run on a bounded pool with short timeouts, so a dead endpoint can hold at most its
-  cap of workers.
+  `FOR UPDATE SKIP LOCKED`, pushes their `next_attempt_at` forward by a lease, stamps a fresh
+  `lease_token` (UUIDv7, one per claim), then commits. Lease arithmetic uses the database clock
+  (`now()`), so clock skew between replicas cannot shorten a lease. Delivery runs outside any
+  transaction, and the outcome is written in a second short transaction. If the process dies
+  mid-send, the row becomes due again when the lease expires (at-least-once, AC3).
+- **A lease covers the whole batch, and outcomes are fenced.** One request is bounded by
+  connect + read timeout, but a batch runs in waves of `concurrency`, so it takes up to
+  `ceil(batchSize / concurrency) × (connectTimeout + readTimeout)`. Startup validation requires
+  the lease to exceed *that* bound plus a margin (defaults: `ceil(50/8) × 7s = 49s < 60s`). The
+  dispatcher also never starts a send whose lease has less than `connectTimeout + readTimeout`
+  left; such a row is dropped from the batch untouched and is re-claimed after expiry. Every
+  outcome write is `UPDATE … WHERE id = :id AND lease_token = :token`; 0 rows updated means the
+  lease was lost to another replica, and the late outcome is discarded (logged at DEBUG, no
+  metric). A late writer can therefore never overwrite a row another replica already moved
+  (AC13/AC17).
+- **Isolation.** The claim query caps rows per participant per batch. Postgres refuses
+  `FOR UPDATE` over a window function (`FOR UPDATE is not allowed with window functions`), so the
+  ranking is a joined subquery and only the base table is locked (shape in Step 1). Deliveries run
+  on a bounded pool with short timeouts, and startup validation requires
+  `perParticipantBatchLimit < concurrency`, so a dead endpoint can hold at most its cap of workers
+  and never the whole pool (AC12).
 - **`last_error`** is a short classification (`HTTP 503`, `read timeout`, `connection refused`,
-  `no consentNotification endpoint`, `participant deregistered`). It never holds a response body.
-  The history route returns it, and logs may print it.
-- **Erasure.** A revocation caused by erasure is enqueued *before* the user is pseudonymised, in
-  the same transaction, so its payload carries the identifier the recipients already hold. That is
-  the only identifier they can act on. Terminal rows are purged after
-  `participant-notifications.retention` (default 30 days), which bounds how long that identifier
-  outlives the erasure. Record this in the new ADR.
-- **Redirects are not followed** (SSRF hygiene for a participant-supplied URL). A 3xx response is
-  a permanent failure.
+  `no consentNotification endpoint`, `participant deregistered`, `endpoint not permitted`). It
+  never holds a response body. The history route returns it, and logs may print it.
+- **Erasure, and the subject identifier in the outbox.** ADR-0007/ADR-0014 do not let a stored
+  artefact keep naming an erased subject (`erase` deletes `consent_receipts` for that reason), so
+  the outbox may hold the identifier only while it still has to be sent:
+  - **Terminal rows carry no payload.** The outcome write that moves a row to `DELIVERED` or
+    `ABANDONED` sets `payload = NULL`, and V6 enforces it with
+    `CHECK (status IN ('PENDING','FAILED') OR payload IS NULL)`. The history route reads only
+    columns (`event_id`, `event_type`, `consent_id`, status, timestamps, `last_error`), never the
+    payload, so nothing it needs is lost. Rows that predate an erasure and are already terminal
+    therefore hold no identifier, and nothing has to scrub them.
+  - **Due rows keep it until they turn terminal.** A revocation caused by erasure is enqueued
+    *before* the user is pseudonymised, in the same transaction, so its payload carries the
+    identifier the recipients already hold, the only one they can act on. Earlier rows for that
+    user that are still `PENDING`/`FAILED` keep theirs for the same reason. Each such row turns
+    terminal (and is redacted) no later than the end of the backoff schedule plus one lease
+    (≈ 31.4 h with the defaults, ≈ 34.5 h at maximum jitter).
+  - That bound, not `retention`, is what the ADR states. `participant-notifications.retention`
+    (default 30 days) only limits how long the identifier-free delivery history is kept.
+- **SSRF fence on the participant-supplied URL.** `consentNotification` only requires https, so
+  delivery gets the same fence `SelfDescriptionClient.permits` applies: the address heuristic
+  (`isInternal`/`isExternal`: loopback, link-local, site-local, any-local, multicast, CGNAT
+  `100.64.0.0/10`, ULA `fc00::/7`) is extracted into a shared helper and checked at dispatch time,
+  before any connect. A refused or unresolvable host abandons the row with the fixed reason
+  `endpoint not permitted`, so the history route never reveals whether an internal host is
+  reachable. `participant-notifications.allowed-hosts` mirrors `self-description.allowed-hosts`
+  (non-empty = only these hosts, which waive the address check), and is how the WireMock ITs
+  reach loopback. The DNS-rebinding window between check and connect stays open exactly as for
+  self-descriptions, and `allowed-hosts` closes it; `docs/security.md` says so.
+- **Redirects are not followed** (the other half of the SSRF fence). A 3xx response is a permanent
+  failure.
+- **Notification signatures are typed.** `JwsConsentSigningService` signs every receipt with
+  `typ: JOSE`. Notifications get their own `typ: consent-notification+jws`, so a signature over
+  one kind of document never verifies as the other under the shared key. Receipts keep `JOSE`
+  (existing receipts must still verify). The integrator guide tells recipients to require that
+  `typ`.
 - **Doc comments**: match the file. New records, enums and config stay at one to three lines. No
   `@param`/`@return` echoes. Named constants only. Parameterized tests wherever cases form a
   table.
@@ -79,9 +118,12 @@ Where the ticket text and the repo differ, the repo wins:
 Add the storage layer with no callers yet.
 
 - `src/main/resources/db/migration/V6__notification_outbox.sql`: the ticket's table, plus
-  `event_id uuid NOT NULL` (the `consent_events` id), `UNIQUE (event_id, participant_id)` so the
-  same event is never queued twice for one recipient, and a `CHECK` on `event_type` (the four
-  values). Replace the ticket's index with `notification_outbox_due_idx ON (next_attempt_at)
+  `event_id uuid NOT NULL` (the `consent_events` id), `consent_id uuid NOT NULL` if the ticket's
+  table lacks it (the history route must not read the payload), `lease_token uuid NULL`,
+  `UNIQUE (event_id, participant_id)` so the same event is never queued twice for one recipient,
+  and a `CHECK` on `event_type` (the four values). `payload jsonb` is nullable, with
+  `CHECK (status IN ('PENDING','FAILED') OR payload IS NULL)` (see *Erasure* above). Replace the
+  ticket's index with `notification_outbox_due_idx ON (next_attempt_at)
   WHERE status IN ('PENDING','FAILED')`, and add `notification_outbox_participant_idx ON
   (participant_id, created_at DESC)` for the history route.
 - `notification/` (the existing package; new classes are package-private wherever they can be):
@@ -93,14 +135,37 @@ Add the storage layer with no callers yet.
     `payload` as `@TypeDef(type = DataType.JSON)`, mirroring how `Consent.snapshot` /
     `Participant.endpoints` map `jsonb`.
   - `NotificationOutboxRepository` (`@JdbcRepository(dialect = POSTGRES)`):
-    `claimDue(Instant now, int batchSize, int perParticipant)` as a native query using the
-    per-participant `row_number()` subquery and `FOR UPDATE SKIP LOCKED`.
-    `extendLease(List<UUID>, Instant until)`. `findByParticipantIdOrderByCreatedAtDesc(UUID,
+    `claimDue(int batchSize, int perParticipant)` as a native query. The window function lives in
+    a joined subquery and only the base table is locked, because `FOR UPDATE` directly over a
+    window function is rejected by Postgres 16:
+
+    ```sql
+    SELECT o.* FROM notification_outbox o
+    JOIN (SELECT id, row_number() OVER (PARTITION BY participant_id ORDER BY next_attempt_at) rn
+          FROM notification_outbox
+          WHERE status IN ('PENDING','FAILED') AND next_attempt_at <= now()) r ON r.id = o.id
+    WHERE r.rn <= :perParticipant
+    ORDER BY o.next_attempt_at
+    LIMIT :batchSize
+    FOR UPDATE OF o SKIP LOCKED
+    ```
+
+    The ranking also counts rows another replica holds locked, so a concurrent claim may get
+    fewer than `perParticipant` rows for one participant. That costs throughput, not correctness.
+    `lease(List<UUID> ids, UUID token, Duration lease)` sets `lease_token` and
+    `next_attempt_at = now() + lease`, returning the leased-until time.
+    Fenced outcome writes `markDelivered` / `markFailed` / `markAbandoned`, each
+    `… WHERE id = :id AND lease_token = :token` and returning the updated row count; the
+    terminal two also set `payload = NULL`. `findByParticipantIdOrderByCreatedAtDesc(UUID,
     Pageable)`. `countDueByParticipant()` for the depth gauge. `deleteTerminalBefore(Instant)` for
     retention.
 - Tests: `NotificationOutboxRepositoryIT` (extends `PostgresTestResource`). Cover round-trip of the
-  jsonb payload; the claim returns only due `PENDING`/`FAILED` rows; the per-participant cap; and
-  two concurrent claims in separate transactions (two threads via `support/Race`) returning disjoint sets. Reset between tests with `support/DatabaseReset` (add the new table if it enumerates tables).
+  jsonb payload; the claim returns only due `PENDING`/`FAILED` rows; the per-participant cap (as
+  an upper bound, given the locked-row note above); two concurrent claims in separate transactions
+  (two threads via `support/Race`) returning disjoint sets; a fenced write with a stale token
+  updating 0 rows and leaving the row unchanged; and the payload `CHECK` refusing a terminal row
+  with a payload. Reset between tests with `support/DatabaseReset` (add the new table if it
+  enumerates tables).
 - Acceptance: `./mvnw verify` green. Flyway applies V6 on the Testcontainers database.
 
 ### Step 2: Enqueue in the consent transaction
@@ -116,6 +181,8 @@ Make every permission-changing move durably queue its notifications atomically (
   loudly when called outside the move's transaction. It never commits on its own.
 - Hook it in:
   - `ConsentWriter.saveNew`/`saveUpdated` (thread `held` through. `create` has no held status).
+    The enqueue goes **before** `issueIfGranted` in both methods: the receipt issuer runs inside
+    them, so a receipt failure then rolls back a row that was really written.
   - `UserService.close` (erasure, before pseudonymisation).
   - `ParticipantService.terminate` (deregistration, which produces no rows under the rule, but
     keeps the hook total).
@@ -131,11 +198,14 @@ Make every permission-changing move durably queue its notifications atomically (
     side, resume, request, refuse, re-confirm, cleanup terminate, erasure, deregistration, and
     `writer.move(…, EXPIRED, …)`), asserting the exact outbox rows: event type, recipients, and
     payload fields with no snapshot/content keys (AC4–AC6).
-  - Rollback: force a failure after enqueue inside the same transaction, and assert no outbox row
-    and an unchanged consent (AC2). Use the existing `SigningFailureIT` approach of failing the
-    receipt issuer, which runs after `saveNew` in the same transaction, or a `@Replaces` bean that
-    throws.
+  - Rollback (AC2): a `@Replaces` receipt-issuer bean that, inside the transaction, first counts
+    the outbox rows for the consent (asserting at least one, which proves the enqueue ran before
+    it) and then throws. After the call, assert no outbox row and an unchanged consent. This fails
+    if the enqueue is ever moved after `issueIfGranted`, where a `SigningFailureIT`-style test
+    would pass vacuously.
   - Commit with no dispatcher running: rows exist in `PENDING` (AC1/AC3).
+  - `UserErasureIT`: after erasure and a drain to terminal, no `notification_outbox.payload`
+    contains the erased identifier, and every terminal row's payload is null.
 - Acceptance: AC1–AC6 evidenced. Existing consent ITs stay green.
 
 ### Step 3: Signed webhook sender
@@ -150,9 +220,19 @@ One delivery attempt: sign, POST, classify (AC7, and the classification behind A
   `client/SelfDescriptionHttpClientFactory` from the configured timeouts, with
   `followRedirects=false`. It sends `POST` to the endpoint with body = canonical RFC 8785 JSON of
   the payload (`CanonicalJsonSerializer`), `Content-Type: application/json`, and header
-  `X-Consent-Signature` = the detached compact JWS from `ConsentSigningService.sign(payload)`. The
-  body bytes must equal `SignedReceipt.canonicalJson()`, so a recipient verifies exactly what it
-  received against `/.well-known/jwks.json`. No new key material.
+  `X-Consent-Signature` = the detached compact JWS from `ConsentSigningService`. The body bytes
+  must equal `SignedReceipt.canonicalJson()`, so a recipient verifies exactly what it received
+  against `/.well-known/jwks.json`. No new key material.
+- Typed signatures: extend `ConsentSigningService` with a small `SignatureType` enum
+  (`RECEIPT` → `JOSE`, unchanged; `NOTIFICATION` → `consent-notification+jws`), a
+  `sign(payload, type)` overload, and a `verifyCanonical(body, jws, type)` that also requires the
+  header `typ`. Existing receipt callers keep the current methods, which mean `RECEIPT`.
+- Address fence: extract `SelfDescriptionClient`'s `isExternal`/`isInternal` (and the two
+  helpers below them) into a shared `client/NetworkAddressPolicy`, behaviour unchanged, with
+  `SelfDescriptionClient` delegating to it. The webhook client refuses a non-https URL, a host
+  outside a non-empty `allowed-hosts`, or a host that is not external, *before* connecting,
+  returning `ABANDON` with `endpoint not permitted`. Add `allowedHosts` to
+  `ParticipantNotifications` (env `PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS`, empty default).
 - `notification/DeliveryOutcome` (sealed or record + enum): `DELIVERED` for 2xx. `RETRY` with a
   reason for 408, 429, 5xx, connect/read timeout and I/O errors. `ABANDON` with a reason for any
   other 4xx and for 3xx. Keep the status ranges as named constants.
@@ -161,8 +241,15 @@ One delivery attempt: sign, POST, classify (AC7, and the classification behind A
     trusting WireMock's certificate through test-only config (never trust-all in main config).
     Parameterized over status → outcome (200, 204, 301, 400, 404, 408, 409, 429, 500, 503), plus a
     fixed-delay stub beyond the read timeout → `RETRY` within roughly the timeout.
-  - A signature test asserts the received body is canonical JSON and that
-    `ConsentSigningService.verifyCanonical(body, header)` is true (AC7).
+  - A signature test asserts the received body is canonical JSON, that
+    `verifyCanonical(body, header, NOTIFICATION)` is true (AC7), and, parameterized, that a
+    receipt signature fails `NOTIFICATION` verification and a notification signature fails
+    `RECEIPT` verification.
+  - `NetworkAddressPolicyTest`, parameterized over the address classes (loopback, `10/8`,
+    `172.16/12`, `192.168/16`, `169.254/16`, `100.64/10`, `fc00::/7`, `::1`, a public address),
+    plus a webhook-client case: an internal endpoint returns `ABANDON`/`endpoint not permitted`
+    without a connect attempt, and an `allowed-hosts` entry admits loopback. Existing
+    `SelfDescriptionClient` tests stay green unchanged.
 
 ### Step 4: Dispatcher with backoff, abandonment and retention
 Drain the outbox safely across replicas (AC3, AC8–AC13).
@@ -171,21 +258,29 @@ Drain the outbox safely across replicas (AC3, AC8–AC13).
   `enabled` (true), `pollInterval` (`5s`), `batchSize` (50), `perParticipantBatchLimit` (5),
   `concurrency` (8), `lease` (`60s`), `backoff` (list, default `1m,5m,15m,1h,6h,24h`),
   `jitter` (fraction, default `0.1`), `retention` (`30d`). Add a startup validator (pattern:
-  `SmtpConfigurationValidator`/`IdentityProviderRegistryValidator`) that requires `lease >
-  connectTimeout + readTimeout` and a non-empty, positive backoff.
+  `SmtpConfigurationValidator`/`IdentityProviderRegistryValidator`) that requires
+  `lease > ceil(batchSize / concurrency) × (connectTimeout + readTimeout) + margin` (named
+  constant), `perParticipantBatchLimit < concurrency`, and a non-empty, positive backoff. Each
+  refusal names the offending settings. `NotificationConfigurationValidatorTest`, parameterized
+  over the defaults (admitted) and each violated rule (refused).
 - `notification/NotificationBackoff` (pure): `nextAttemptAt(attemptsSoFar, now, random)` returns
   the scheduled delay ± jitter, or empty once the schedule is exhausted (→ `ABANDONED`). With the
   first attempt plus six retries, the seventh failure abandons.
 - `notification/NotificationDispatcher`: `@Scheduled(fixedDelay = "${…poll-interval}")` calling
   `drainOnce()` (public, so tests drive it with `enabled=false`). Each tick:
-  1. Claim and lease in one short transaction.
+  1. Claim and lease in one short transaction; keep the token and leased-until time.
   2. For each row, on a bounded pool (reuse the `NotificationThreadPool` pattern, sized by
-     `concurrency`), resolve the recipient's current `endpoints.consentNotification`.
+     `concurrency`): if the lease has less than `connectTimeout + readTimeout` left, drop the row
+     untouched (it is re-claimed after expiry). Otherwise resolve the recipient's current
+     `endpoints.consentNotification`.
   3. Abandon immediately with a reason if the participant is gone or deregistered, or has no
-     endpoint (AC11). Otherwise send through `ParticipantWebhookClient`.
-  4. Write the outcome in a short transaction: `DELIVERED` + `delivered_at`. `FAILED` +
-     `attempts+1` + `last_error` + backoff `next_attempt_at`. Or `ABANDONED` (AC9, AC10).
-  5. Wait for the batch, bounded by the lease.
+     endpoint (AC11). Otherwise send through `ParticipantWebhookClient`, which applies the address
+     fence first.
+  4. Write the outcome in a short, fenced transaction (`lease_token` must still match):
+     `DELIVERED` + `delivered_at`, payload nulled. `FAILED` + `attempts+1` + `last_error` + backoff
+     `next_attempt_at`. Or `ABANDONED`, payload nulled (AC9, AC10). A 0-row update means the lease
+     was lost; discard the outcome and record no metric.
+  5. Wait for the batch, bounded by the lease; on expiry cancel the tasks not yet started.
   6. Purge terminal rows older than `retention`.
 
   Log every abandonment at WARN with participant id, consent id and reason, and never the user
@@ -197,7 +292,10 @@ Drain the outbox safely across replicas (AC3, AC8–AC13).
     attempt inside the jitter window, the same `eventId` and signature-verifiable body on the
     retry (AC8), and walking the schedule to `ABANDONED` (AC9). Cover 400 → `ABANDONED` after one
     attempt and 429 → `FAILED` (AC10), and the no-endpoint case → `ABANDONED` with no HTTP call
-    (AC11). Cover an expired lease being re-claimed, with the row delivered (AC3).
+    (AC11). Cover an expired lease being re-claimed, with the row delivered (AC3), and the stale
+    holder's late outcome write updating nothing. Cover a row whose lease is nearly spent never
+    being sent. Cover an endpoint resolving to loopback without an `allowed-hosts` entry →
+    `ABANDONED` with `endpoint not permitted` and no request reaching WireMock.
   - Isolation: participant A's endpoint stalls past the read timeout with many rows, participant B
     has one row, and B is `DELIVERED` within the first `drainOnce()` (AC12).
 
@@ -262,6 +360,8 @@ Prove the whole path against a WireMock recipient (AC12, AC13, AC16, AC17).
   "replicas", scheduler disabled) on the same Postgres, enqueue N notifications for several
   participants, and call `drainOnce()` on both concurrently in loops until the outbox is terminal.
   Assert that WireMock received each `(eventId, participant)` exactly once (AC13, AC17).
+- Both ITs set `participant-notifications.allowed-hosts` to the WireMock host (loopback), the
+  only way past the address fence; main config never carries it.
 - Make sure these ITs disable the scheduler (`participant-notifications.enabled=false` in
   `application-test.yml`, overridden per test only where wanted) so existing ITs are unaffected.
 
@@ -269,11 +369,18 @@ Prove the whole path against a WireMock recipient (AC12, AC13, AC16, AC17).
 Record the contract for integrators and operators.
 
 - `docs/adr/0016-participant-notifications-use-a-transactional-outbox.md`: outbox versus inline
-  send, lease claim, the which-moves-notify table, frozen payload/`eventId`, erasure identifier and
-  retention, redirects off, and no expiry trigger. Set ADR-0011's status line to "partly
-  superseded by ADR-0016 (participant delivery)" and leave its body unchanged.
+  send, lease claim with whole-batch lease and fenced outcomes, the which-moves-notify table,
+  frozen payload/`eventId`, the erasure bound (identifier only on due rows, nulled on turning
+  terminal, at most the backoff schedule plus one lease after enqueue; retention covers only
+  identifier-free history), the SSRF fence and redirects off, the typed notification signature,
+  and no expiry trigger. Set ADR-0011's status line to "partly superseded by ADR-0016
+  (participant delivery)" and leave its body unchanged.
+- `docs/security.md`: the webhook's address fence beside the self-description one, the same
+  DNS-rebinding residual and how `allowed-hosts` closes it, and the `typ` separation between
+  receipt and notification signatures.
 - `docs/participant-notifications.md` (integrator guide): payload, header, how to verify the
-  detached JWS against `/.well-known/jwks.json`, **at-least-once delivery, deduplicate on
+  detached JWS against `/.well-known/jwks.json` **and require `typ: consent-notification+jws`**,
+  that internal or non-public endpoints are refused, **at-least-once delivery, deduplicate on
   `eventId`, no ordering guarantee — read `GET /consents/{id}` or `GET /consents/check` for
   current state**, the retry schedule, which responses abandon, and the history route. Link it from
   `docs/security.md` (authenticity, SSRF note) and the `consentNotification` description.
