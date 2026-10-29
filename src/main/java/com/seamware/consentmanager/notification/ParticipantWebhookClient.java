@@ -19,6 +19,7 @@ import io.micronaut.http.client.RawHttpClient;
 import io.micronaut.http.client.exceptions.HttpClientException;
 import io.micronaut.http.client.exceptions.ReadTimeoutException;
 import io.netty.channel.ConnectTimeoutException;
+import io.netty.handler.ssl.SslHandshakeTimeoutException;
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
@@ -292,7 +293,9 @@ public class ParticipantWebhookClient {
     private static String transportReason(Throwable failure) {
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
             // Before ConnectException, which Netty's connect timeout extends.
-            if (cause instanceof ConnectTimeoutException) {
+            // Reaching an https endpoint includes its TLS handshake.
+            if (cause instanceof ConnectTimeoutException
+                    || cause instanceof SslHandshakeTimeoutException) {
                 return CONNECT_TIMEOUT;
             }
             if (cause instanceof ConnectException) {

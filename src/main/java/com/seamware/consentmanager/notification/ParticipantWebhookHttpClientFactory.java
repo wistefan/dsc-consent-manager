@@ -13,6 +13,10 @@ import jakarta.inject.Singleton;
  * Defines the context-owned HTTP client webhooks are posted over. Redirects are off, and that is
  * load-bearing: {@link ParticipantWebhookClient} vets only the registered URL. The client is raw,
  * so a response body is never buffered and a participant cannot make an attempt pull megabytes.
+ *
+ * <p>Cancelling an abandoned exchange closes a connection already carrying it, but not one still
+ * being opened, which Micronaut finishes and pools. The handshake and connection-lifetime caps
+ * below are what free such a socket, so a stalling peer cannot accumulate one per attempt.
  */
 @Factory
 public class ParticipantWebhookHttpClientFactory {
@@ -28,6 +32,8 @@ public class ParticipantWebhookHttpClientFactory {
         configuration.setConnectTimeout(settings.getConnectTimeout());
         configuration.setReadTimeout(settings.getReadTimeout());
         configuration.setFollowRedirects(false);
+        configuration.getSslConfiguration().setHandshakeTimeout(settings.getConnectTimeout());
+        configuration.setConnectTtl(settings.getConnectTimeout().plus(settings.getReadTimeout()));
         return configuration;
     }
 

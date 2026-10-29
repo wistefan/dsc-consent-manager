@@ -540,7 +540,9 @@ Record the contract for integrators and operators.
   receipt and notification signatures.
 - `docs/participant-notifications.md` (integrator guide): payload, header, how to verify the
   detached JWS against `/.well-known/jwks.json` **and require `typ: consent-notification+jws`**,
-  that internal or non-public endpoints are refused, **at-least-once delivery, deduplicate on
+  that internal or non-public endpoints are refused, that the signed payload does not name its
+  recipient (one participant can forward a genuine notification to another's endpoint), so a
+  recipient ignores events for consents it is not a party to, **at-least-once delivery, deduplicate on
   `eventId`, no ordering guarantee — read `GET /consents/{id}` or `GET /consents/check` for
   current state**. Name the one case that is certain to arrive out of order: a re-grant of a
   notice already granted (`ConsentWriter.decide`) revokes the old consent and grants a new one

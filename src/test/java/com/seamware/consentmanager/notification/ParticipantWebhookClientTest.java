@@ -28,7 +28,6 @@ import io.micronaut.http.HttpResponse;
 import io.micronaut.http.body.CloseableByteBody;
 import io.micronaut.http.client.DefaultHttpClientConfiguration;
 import io.micronaut.http.client.RawHttpClient;
-import io.micronaut.http.ssl.ClientSslConfiguration;
 import io.micronaut.http.ssl.SslConfiguration;
 import java.io.IOException;
 import java.io.InputStream;
@@ -101,9 +100,7 @@ class ParticipantWebhookClientTest {
 
     private static final Duration RESOLVE_TIMEOUT = Duration.ofMillis(300);
 
-    /**
-     * Below Micronaut's 10s TLS handshake timeout, so a silent peer must hit the exchange deadline.
-     */
+    /** Also the TLS handshake timeout, so a silent peer fails the handshake within the deadline. */
     private static final Duration TEST_CONNECT_TIMEOUT = Duration.ofSeconds(1);
 
     private static final int BACKLOG = 1;
@@ -122,8 +119,7 @@ class ParticipantWebhookClientTest {
     /** Well under the read timeout, so an idle limit alone never fires. */
     private static final Duration DRIP_INTERVAL = Duration.ofMillis(200);
 
-    /** Never counted down; a peer awaiting it stays silent until closed. */
-    private static final CountDownLatch NEVER = new CountDownLatch(1);
+    private static final int END_OF_STREAM = -1;
 
     /** How much later than its timeout a bounded attempt may return and still count as bounded. */
     private static final Duration TIMEOUT_SLACK = Duration.ofSeconds(2);
@@ -551,20 +547,22 @@ class ParticipantWebhookClientTest {
     }
 
     @Test
-    void silentPeerRetriesWithinTheSendBound() throws IOException {
+    void silentPeerRetriesAsConnectTimeoutAndIsHungUpOn() throws IOException {
         try (ServerSocket silent = new ServerSocket(0, BACKLOG, InetAddress.getLoopbackAddress());
-                Peer peer = Peer.start(silent, socket -> NEVER.await())) {
+                Peer peer = Peer.start(silent, ParticipantWebhookClientTest::readUntilHungUp)) {
             assertBoundedRetry(
-                    urlOf(silent.getLocalPort()), ParticipantWebhookClient.RESPONSE_TIMEOUT);
+                    urlOf(silent.getLocalPort()), ParticipantWebhookClient.CONNECT_TIMEOUT);
+            peer.awaitHangUp();
         }
     }
 
     @Test
-    void drippedResponseRetriesWithinTheSendBound() throws Exception {
+    void drippedResponseRetriesWithinTheSendBoundAndIsHungUpOn() throws Exception {
         try (ServerSocket tls = tlsServerSocket();
                 Peer peer = Peer.start(tls, ParticipantWebhookClientTest::dripResponse)) {
             assertBoundedRetry(
                     urlOf(tls.getLocalPort()), ParticipantWebhookClient.RESPONSE_TIMEOUT);
+            peer.awaitHangUp();
         }
     }
 
@@ -635,6 +633,15 @@ class ParticipantWebhookClientTest {
         }
     }
 
+    /** Takes whatever the client sends and never answers, returning once the client hangs up. */
+    private static void readUntilHungUp(Socket socket) throws IOException {
+        InputStream in = socket.getInputStream();
+        byte[] sink = new byte[REQUEST_READ_BYTES];
+        while (in.read(sink) != END_OF_STREAM) {
+            // discard
+        }
+    }
+
     /**
      * Completes the TLS handshake, then answers one header byte at a time, each under the idle
      * limit.
@@ -664,8 +671,12 @@ class ParticipantWebhookClientTest {
                 .createServerSocket(0, BACKLOG, InetAddress.getLoopbackAddress());
     }
 
-    /** Serves one connection on a virtual thread; closing it releases the connection. */
-    private record Peer(Thread thread, List<Socket> accepted) implements AutoCloseable {
+    /**
+     * Serves one connection on a virtual thread; closing it releases the connection. A behaviour
+     * ends on its own only when the client hangs up, which is how a test sees the socket freed.
+     */
+    private record Peer(Thread thread, List<Socket> accepted, AtomicBoolean hungUp)
+            implements AutoCloseable {
 
         interface Behaviour {
             void serve(Socket socket) throws Exception;
@@ -673,6 +684,7 @@ class ParticipantWebhookClientTest {
 
         static Peer start(ServerSocket server, Behaviour behaviour) {
             List<Socket> accepted = new CopyOnWriteArrayList<>();
+            AtomicBoolean hungUp = new AtomicBoolean();
             Thread thread =
                     Thread.ofVirtual()
                             .start(
@@ -681,11 +693,20 @@ class ParticipantWebhookClientTest {
                                             Socket socket = server.accept();
                                             accepted.add(socket);
                                             behaviour.serve(socket);
+                                            hungUp.set(true);
+                                        } catch (IOException e) {
+                                            // a write or read refused because the client closed
+                                            hungUp.set(true);
                                         } catch (Exception e) {
-                                            // the client hung up or the test closed the server
+                                            // interrupted by close
                                         }
                                     });
-            return new Peer(thread, accepted);
+            return new Peer(thread, accepted, hungUp);
+        }
+
+        /** Fails unless the client closes its end before the test does. */
+        void awaitHangUp() {
+            Await.until("the client closes the connection", TIMEOUT_SLACK, hungUp::get);
         }
 
         @Override
@@ -727,9 +748,7 @@ class ParticipantWebhookClientTest {
         trust.setPath("file:" + truststore());
         trust.setPassword(STORE_PASSWORD);
         trust.setType(STORE_TYPE);
-        ClientSslConfiguration ssl = new ClientSslConfiguration();
-        ssl.setTrustStore(trust);
-        configuration.setSslConfiguration(ssl);
+        configuration.getSslConfiguration().setTrustStore(trust);
         RawHttpClient http = RawHttpClient.create(null, configuration);
         ParticipantWebhookClient client =
                 new ParticipantWebhookClient(http, signing, resolver, settings);
