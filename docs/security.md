@@ -58,7 +58,7 @@ resolved; discovery retries with bounded backoff rather than aborting the proces
 | --- | --- |
 | `SigningKeyStore` | Loads the signing key and retired-keys JWKS eagerly at startup, each from a mounted file (`RECEIPTS_SIGNING_KEY_FILE`, `RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE`) or inline (`RECEIPTS_SIGNING_KEY`, `RECEIPTS_RETIRED_VERIFICATION_KEYS`); holds the one private key and the published key list (active first). |
 | `CanonicalJsonSerializer` | RFC 8785 canonical form of a receipt: the bytes a JWS covers. |
-| `ConsentSigningService` / `JwsConsentSigningService` | Signs a receipt as a detached JWS (`alg`, `kid`, `typ: JOSE`, no `jku`); `verify` / `verifyCanonical` answer `false`, never throw, on any mismatch. |
+| `ConsentSigningService` / `JwsConsentSigningService` | Signs a receipt or a participant notification as a detached JWS (`alg`, `kid`, no `jku`, and the `typ` its `SignatureType` names: `JOSE` for a receipt, `consent-notification+jws` for a notification); `verify` / `verifyCanonical` require that `typ` and answer `false`, never throw, on any mismatch. |
 | `SignedReceipt` | A receipt, its JWS, the signing `kid` and the canonical text that was signed. |
 | `ReceiptSigningException` | Any signing failure; unchecked and not a `DataAccessException`, so it fails the grant with `500`. |
 
@@ -246,6 +246,15 @@ JWS header names only `alg`, `kid` and `typ: JOSE` — no `jku` — so a verifie
 the deployment it obtained the receipt from, or one it otherwise trusts, rather than from a URL the
 signed object chose.
 
+The same key signs participant notifications (ADR-0016), so the two kinds of document are kept
+apart by `typ`. A receipt keeps `typ: JOSE`, which every receipt issued so far carries; a
+notification carries `typ: consent-notification+jws`. `verifyCanonical` takes the expected
+`SignatureType` and refuses a header naming the other, so a receipt signature never verifies as a
+notification or the reverse, and the [integrator guide](participant-notifications.md) tells
+recipients to require that `typ`. A notification's payload does not name its recipient, so a
+participant can forward a genuine one to another's endpoint; the guide tells recipients to ignore
+consents they are not a party to.
+
 The Kantara receipt (`format=receipt-kantara`) is signed **once**, in the transaction that records
 the grant. `ConsentWriter` hands every write whose recorded status is `GRANTED` to
 `ConsentReceiptIssuer`, which stores the canonical text and JWS in `consent_receipts`; reads serve
@@ -341,7 +350,7 @@ keys — erasure withdraws this service's copy, not the signature.
 
 ## Outbound fetches
 
-Two clients leave this service. `ContractGateway` reaches one configured host — the Contract
+Three clients leave this service. `ContractGateway` reaches one configured host — the Contract
 Service — so its only exposure is the one the operator chose, and an outage there is fatal in one
 place only: generation, where `UpstreamServiceException` becomes `502`. A retrieval degrades
 instead — `PrivacyNoticeResolver` catches that exception so `GET /privacy-notices/{id}` reports
@@ -381,6 +390,30 @@ all `Optional.empty()`, which surfaces as an `UNAVAILABLE` section of the resolv
 than an error, so an unreachable catalog can never become this service's `5xx`.
 `SelfDescriptionGuardTest` pins the fence and `SelfDescriptionCacheIT` pins that nothing a refusal
 or a failure produced is cached.
+
+`ParticipantWebhookClient` is the third, and the same kind: it `POST`s signed participant
+notifications (ADR-0016, [integrator guide](participant-notifications.md)) to the
+`endpoints.consentNotification` URL a participant registered for itself. It applies the same fence
+before connecting, through `client/NetworkAddressPolicy`, which both clients share: the URL must be
+`https`, the host must appear in `PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS` when that list is
+non-empty (a listed host is waived from the address check, as above), and every address must lie
+outside loopback, link-local, site-local, any-local, multicast, CGNAT (`100.64.0.0/10`) and ULA
+(`fc00::/7`). A refused host abandons the notification with the fixed reason
+`endpoint not permitted`, which is all the history route shows, so it never reveals whether an
+internal host answers. Redirects are not followed; a `3xx` abandons. The response body is never
+read, only the status.
+
+The JDK resolver has no timeout and the connect timeout does not cover it, so the lookup runs on a
+bounded executor under `PARTICIPANT_NOTIFICATIONS_RESOLVE_TIMEOUT`. A lookup that fails or times
+out is *retried* as `name resolution failed`, not abandoned, because the JDK reports a transient
+SERVFAIL the same way as a missing name and a brief DNS outage must not drop a revocation. That
+leaves a second residual beside the rebinding one: whether a notification is retried or abandoned
+shows the participant whether its hostname *resolves* in this service's DNS view (for instance,
+whether a cluster-internal service name exists), though never whether anything listens there. The
+DNS-rebinding window between the check and the connection is open exactly as for
+self-descriptions. A non-empty `PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS` closes both, since no
+unlisted name is resolved or reached. `NetworkAddressPolicyTest` and `ParticipantWebhookClientTest`
+pin the fence.
 
 ## Outbound email
 
