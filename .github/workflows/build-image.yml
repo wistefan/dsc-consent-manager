@@ -1,0 +1,87 @@
+# Builds the multi-arch image from docker/Dockerfile and pushes it tagged with the given version.
+# Shared by the pre-release and release workflows, so both publish the image the same way.
+name: Build image
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Image tag and project version, e.g. 1.2.3 or 1.2.3-PRE-42
+        type: string
+        required: true
+      ref:
+        description: Commit to build; defaults to github.sha, which on pull_request is the merge commit
+        type: string
+        required: false
+    secrets:
+      registry-username:
+        required: true
+      registry-password:
+        required: true
+    outputs:
+      image:
+        description: Full reference of the pushed image
+        value: ${{ jobs.build-and-push.outputs.image }}
+
+permissions:
+  contents: read
+
+env:
+  REF: ${{ inputs.ref || github.sha }}
+  REGISTRY: quay.io
+  REPOSITORY: fiware
+  IMAGE_NAME: consent-manager
+  PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # In this checkout only, so the packaged JAR carries the release version; never committed.
+      - name: Set the project version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ./mvnw -B -ntp versions:set -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+
+      - name: Name the image
+        id: image
+        env:
+          VERSION: ${{ inputs.version }}
+        run: echo "image=${REGISTRY}/${REPOSITORY}/${IMAGE_NAME}:${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.registry-username }}
+          password: ${{ secrets.registry-password }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.image.outputs.image }}
+          labels: |
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ env.REF }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

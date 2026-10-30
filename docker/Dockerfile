@@ -18,7 +18,9 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build
 # ---------------------------------------------------------------------------
-FROM eclipse-temurin:25-jdk AS build
+# Native to the builder: the JAR is architecture-independent, so a multi-arch build
+# emulates only the runtime stage below, never the Maven build.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk AS build
 
 WORKDIR /app
 
