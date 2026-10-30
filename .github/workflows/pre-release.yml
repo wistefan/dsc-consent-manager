@@ -1,0 +1,62 @@
+# Publishes every push to a pull request as image and GitHub pre-release X.Y.Z-PRE-<pr>, where
+# X.Y.Z is the latest tag bumped by the PR's major/minor/patch label. A missing label fails
+# `generate-version`, which asks for it on the PR.
+name: Pre-Release
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pre-release-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  generate-version:
+    uses: FIWARE/github-workflows/.github/workflows/semver-version.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      tag-prefix: ""
+
+  # Fork and Dependabot PRs get no Actions secrets, and a fork has no branch the tag could point
+  # at. The PR author is checked, not the actor, so labelling a Dependabot PR does not publish it.
+  build-and-push:
+    needs: generate-version
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
+    uses: ./.github/workflows/build-image.yml
+    with:
+      version: ${{ needs.generate-version.outputs.version }}
+    secrets:
+      registry-username: ${{ secrets.QUAY_USERNAME }}
+      registry-password: ${{ secrets.QUAY_PASSWORD }}
+
+  git-release:
+    needs: [generate-version, build-and-push]
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # A new push replaces the PR's pre-release, and its tag, so the tag follows the new head.
+      - name: Publish the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.generate-version.outputs.version }}
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            gh release delete "$VERSION" --cleanup-tag --yes
+          fi
+          gh release create "$VERSION" --prerelease --target "$HEAD_SHA" \
+            --title "$VERSION" --notes "Image: $IMAGE" LICENSE
