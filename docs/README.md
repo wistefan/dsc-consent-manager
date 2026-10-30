@@ -1,6 +1,8 @@
 # Documentation
 
-The guides for operating, integrating with and contributing to the Consent Manager.
+The Consent Manager manages data subjects' consents in a data space: participants request
+consent, users grant or revoke it, and every decision is recorded, queryable and provable with a
+signed receipt. The guides below cover operating it, integrating with it and contributing to it.
 
 Back to the [project README](../README.md).
 
@@ -8,8 +10,8 @@ Back to the [project README](../README.md).
 
 | Guide | Summary |
 | --- | --- |
-| [Deployment](deployment.md) | One container image, run as a stateless OAuth2 resource server against PostgreSQL 16 and trusted OIDC identity providers; where to start for each target. |
-| [Security Architecture](security.md) | The resource-server model: no tokens issued, no credentials or sessions held, every request carrying a bearer JWT from a trust list fixed at startup. |
+| [Deployment](deployment.md) | How to run the service, one container image backed by PostgreSQL 16 and trusted OIDC identity providers, and where to start for each target. |
+| [Security Architecture](security.md) | How callers are authenticated and authorised: every request carries a bearer JWT from a trust list fixed at startup, and the service issues no tokens and holds no credentials or sessions. |
 | [Helm chart](../charts/consent-manager/README.md) | Kubernetes install: required inputs, values, key rotation, probes and migrations. |
 | [Local stack](../docker/README.md) | The Compose stack (service, PostgreSQL, Keycloak, WireMock), its host ports and the smoke test. |
 
