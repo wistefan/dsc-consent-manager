@@ -1,5 +1,7 @@
 # ADR 0010 — A catalog may relay a resume, and the trail names it as the relay
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0010
+
 - **Status:** Accepted.
 - **Date:** 2026-10-13
 - **Ticket:** TICKET-009 (Taiga #73), step 4

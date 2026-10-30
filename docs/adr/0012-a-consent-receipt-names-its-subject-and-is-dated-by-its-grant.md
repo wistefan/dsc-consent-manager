@@ -1,5 +1,7 @@
 # ADR 0012 — A consent receipt names its subject to the parties and is dated by its grant
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0012
+
 - **Status:** Accepted.
 - **Date:** 2026-10-15
 - **Ticket:** TICKET-010 (Taiga #74), step 5

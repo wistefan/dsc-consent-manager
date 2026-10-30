@@ -1,5 +1,7 @@
 # ADR 0003 — Perform OpenID discovery with `micronaut-security-oauth2`
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0003
+
 - **Status:** Accepted. Its reasoning is extended to JWK Set retrieval by
   [ADR 0004](0004-delegate-jwks-retrieval-and-caching-to-micronaut-security.md).
 - **Date:** 2025-10-01

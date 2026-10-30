@@ -1,5 +1,7 @@
 # API compatibility
 
+[README](../README.md) › [Documentation](README.md) › API compatibility
+
 The published contract is the bundled specification served at `GET /openapi.yaml`. A change that
 would break an existing client must be a decision someone made, not an accident in a refactor.
 
@@ -42,3 +44,9 @@ lint tests ignore it.
 
 The image tag is pinned in `SpecCompatibilityIT.OASDIFF_IMAGE`, because a release can change which
 changes count as breaking. Bump it deliberately and run the test before merging.
+
+## Related documents
+
+- [OpenAPI specification](../api/openapi.yaml): the contract the baseline is compared against.
+- [Security Architecture — Spec layout](security.md#spec-layout): how the specification is split across files and bundled.
+- [Testing](testing.md): how the suite, `SpecCompatibilityIT` included, is organised.

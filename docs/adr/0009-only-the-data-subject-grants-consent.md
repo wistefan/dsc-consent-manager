@@ -1,5 +1,7 @@
 # ADR 0009 — Only the data subject grants consent, and a request confers nothing
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0009
+
 - **Status:** Accepted, and bounded by
   [ADR-0010](0010-a-catalog-relayed-resume-names-the-subject.md), which admits one narrow
   relay and states its limits.

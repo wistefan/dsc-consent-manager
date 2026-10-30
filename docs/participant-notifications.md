@@ -1,5 +1,7 @@
 # Participant notifications — integrator guide
 
+[README](../README.md) › [Documentation](README.md) › Participant notifications — integrator guide
+
 The Consent Manager tells a participant when a consent it is a party to (as provider or consumer)
 starts or stops permitting processing. This page is the contract a receiving endpoint implements.
 The design and its trade-offs are recorded in
@@ -135,3 +137,10 @@ a short classification such as `HTTP 503`, `read timeout`, `connection refused`,
 signed body or the data subject. Final entries are kept for the deployment's retention period
 (default 30 days). A deregistered participant can still read its history. The operation is
 described in full in `api/openapi.yaml`.
+
+## Related documents
+
+- [ADR-0016](adr/0016-participant-notifications-use-a-transactional-outbox.md): why delivery uses a transactional outbox.
+- [ADR-0011](adr/0011-a-lifecycle-move-is-recorded-here-and-notified-elsewhere.md): why a lifecycle move is recorded here and notified elsewhere.
+- [Security Architecture — Outbound fetches](security.md#outbound-fetches): the egress rules a webhook URL is held to.
+- [Deployment](deployment.md): the `PARTICIPANT_NOTIFICATIONS_*` settings an operator tunes.

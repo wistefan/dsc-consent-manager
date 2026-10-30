@@ -1,5 +1,7 @@
 # ADR 0002 — Own the identity provider registry, build it on Nimbus
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0002
+
 - **Status:** **Partly superseded** by
   [ADR 0003](0003-use-micronaut-security-oauth2-for-openid-discovery.md), which moves the
   discovery request itself onto `micronaut-security-oauth2`'s

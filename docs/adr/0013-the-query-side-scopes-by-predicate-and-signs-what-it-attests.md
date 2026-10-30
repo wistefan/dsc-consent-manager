@@ -1,5 +1,7 @@
 # ADR 0013 — The query side scopes by predicate and signs what it attests
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0013
+
 - **Status:** Accepted. Superseded in part by [ADR-0014](0014-a-grant-receipt-is-signed-once-and-travels-beside-its-signature.md) (receipt signing).
 - **Date:** 2026-10-15
 - **Ticket:** TICKET-010 (Taiga #74), step 8
