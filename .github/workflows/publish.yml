@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       superseded: ${{ steps.check.outputs.superseded }}
+      previous-tag: ${{ steps.check.outputs.previous-tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,6 +41,7 @@ jobs:
           else
             echo "superseded=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "previous-tag=$latest_tag" >> "$GITHUB_OUTPUT"
 
   # On a push it resolves the merged PR's label; a commit pushed without a PR fails here.
   generate-version:
@@ -74,13 +76,15 @@ jobs:
         with:
           persist-credentials: false
 
-      # An existing release or tag for this version is a bug and is never overwritten.
+      # An existing release or tag for this version is a bug and is never overwritten. The notes
+      # start at the last plain release, so a PR-branch X.Y.Z-PRE-<pr> tag never becomes the base.
       - name: Publish the release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.generate-version.outputs.version }}
           IMAGE: ${{ needs.build-and-push.outputs.image }}
+          PREVIOUS_TAG: ${{ needs.check-superseded.outputs.previous-tag }}
         run: |
           if gh release view "$VERSION" > /dev/null 2>&1; then
             echo "::error::Release $VERSION already exists"; exit 1
@@ -88,5 +92,7 @@ jobs:
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" > /dev/null 2>&1; then
             echo "::error::Tag $VERSION already exists"; exit 1
           fi
+          start_tag=()
+          if [ -n "$PREVIOUS_TAG" ]; then start_tag=(--notes-start-tag "$PREVIOUS_TAG"); fi
           gh release create "$VERSION" --target "$GITHUB_SHA" --title "$VERSION" \
-            --notes "Image: $IMAGE" --generate-notes LICENSE
+            --notes "Image: $IMAGE" --generate-notes "${start_tag[@]}" LICENSE
