@@ -1,12 +1,11 @@
 # Builds and tests the service. `verify` runs the whole suite, so the Spectral lint (SpecLintIT),
 # the oasdiff breaking-change check (SpecCompatibilityIT) and both JaCoCo gates fail this job.
 # `lint-workflows` and `lint-chart` check the workflows and the Helm chart.
-# Callable (`workflow_call`) so a release can be gated on it.
+# Runs on every pull request. A push to main runs it inside Release (`workflow_call`), which gates
+# the release on it, so it has no push trigger of its own and the suite never runs twice.
 name: Test
 
 on:
-  push:
-    branches: [main]
   # Default types only: a label change must not re-run the whole suite.
   pull_request:
   workflow_dispatch:
