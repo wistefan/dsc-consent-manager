@@ -25,6 +25,7 @@
     <li>
       <a href="#about-the-project">About The Project</a>
       <ul>
+        <li><a href="#prometheus-x">Prometheus-X</a></li>
         <li><a href="#built-with">Built With</a></li>
       </ul>
     </li>
@@ -53,7 +54,9 @@ turns a contract into a privacy notice and asks a user to decide on it. The user
 re-confirms or revokes, and each move is recorded with its history. Both sides can then ask
 whether consent is in force and prove what was agreed with a signed receipt.
 
-Three caller roles, each carried as a role claim in the caller's bearer token:
+Three caller roles. Each is mapped from a role claim in the caller's bearer token: by default the
+values `consent-user`, `consent-participant` and `consent-catalog` under `realm_access.roles`,
+configurable through `IDP_CLAIM_ROLES` and `IDP_ROLE_*` (see [`.env.sample`](.env.sample)):
 
 | Role | Who | What it does |
 | --- | --- | --- |
@@ -76,7 +79,8 @@ Key capabilities:
   transactional outbox.
 - **Erasure and deregistration.** A user's erasure pseudonymises the record and keeps the audit
   trail ([ADR-0007](docs/adr/0007-erasure-pseudonymises-the-user-and-retains-the-audit-trail.md)).
-  A participant's deregistration keeps the participant and closes its open business
+  A participant's deregistration is refused while a consent it is party to is granted; otherwise it
+  closes its open business and keeps its record wherever consents or notices still refer to it
   ([ADR-0008](docs/adr/0008-deregistration-retains-the-participant-and-closes-its-open-business.md)).
 
 **API-first.** The hand-written [`api/openapi.yaml`](api/openapi.yaml) is the contract. The server
@@ -86,6 +90,21 @@ the implementation disagree on routes or security.
 Architecturally, the service is a stateless OAuth2 resource server. It validates bearer JWTs
 against identity providers on a trust list fixed at startup, and it issues no tokens and holds no
 sessions or credentials (see [Security Architecture](docs/security.md)).
+
+### Prometheus-X
+
+The API follows the one defined by the [Prometheus-X](https://github.com/Prometheus-X-association/docs)
+data space association, so this service can take the
+[Consent Manager](https://prometheus-x-association.github.io/docs/consent-manager/) role in a
+Prometheus-X (PTX) data space architecture. There, the Consent Manager is the personal data
+intermediary through which individuals give, review and revoke consent for sharing their personal
+data, next to the Catalog, the Contract Manager and the Dataspace Connector. The consent routes
+keep the Prometheus-X shape: `POST /users/register`, `GET /consents/me` and `/consents/me/{id}`,
+`POST /consents/{id}/refuse`, `/re-confirm` and `/terminate`, and `POST /participants`. Privacy
+notices are generated from the contracts held by the Contract Service. Authentication is the one
+deliberate difference: callers present OAuth2 bearer tokens from a trusted identity provider, and
+the service itself has no login or token endpoints. The reference implementation is
+[Prometheus-X-association/consent-manager](https://github.com/Prometheus-X-association/consent-manager).
 
 ### Built With
 
@@ -278,6 +297,8 @@ Questions, bugs and feature requests: [issues](https://github.com/wistefan/dsc-c
 ## Acknowledgments
 
 - [Best-README-Template](https://github.com/othneildrew/Best-README-Template)
+- [Prometheus-X](https://github.com/Prometheus-X-association/docs), whose Consent Manager API this
+  service follows
 - [Micronaut](https://micronaut.io/)
 - [OpenAPI Generator](https://openapi-generator.tech/)
 - [Keycloak](https://www.keycloak.org/)
