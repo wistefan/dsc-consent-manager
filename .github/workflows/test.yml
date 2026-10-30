@@ -1,0 +1,126 @@
+# Builds and tests the service. `verify` runs the whole suite, so the Spectral lint (SpecLintIT),
+# the oasdiff breaking-change check (SpecCompatibilityIT) and both JaCoCo gates fail this job.
+# `lint-workflows` and `lint-chart` check the workflows and the Helm chart.
+# Callable (`workflow_call`) so a release can be gated on it.
+name: Test
+
+on:
+  push:
+    branches: [main]
+  # Default types only: a label change must not re-run the whole suite.
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A pull request shares one group, so a new push cancels its stale run. Every other run gets a
+# group of its own: a group keeps at most one pending run, so a shared group would drop runs.
+# When called, `github.workflow` is the caller's, so a caller never cancels the PR's own run.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # The spec ITs must have run every case; a skip would let a lint or breaking-change failure pass.
+      REQUIRED_ITS: SpecLintIT SpecCompatibilityIT
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # Testcontainers needs Docker for PostgreSQL, Keycloak, Spectral and oasdiff; fail fast without it.
+      - name: Check Docker
+        run: docker info --format 'Docker {{.ServerVersion}}'
+
+      - name: Verify
+        run: ./mvnw -B -ntp verify
+
+      - name: Require the spec checks to have run
+        run: |
+          for it in $REQUIRED_ITS; do
+            report="target/failsafe-reports/TEST-com.seamware.consentmanager.api.${it}.xml"
+            if [ ! -f "$report" ]; then
+              echo "::error::$it did not run"; exit 1
+            fi
+            if ! grep -Eq '<testsuite [^>]*skipped="0"' "$report"; then
+              echo "::error::$it skipped cases"; exit 1
+            fi
+          done
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          if-no-files-found: warn
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          if-no-files-found: ignore
+
+  lint-workflows:
+    runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint the workflows
+        run: |
+          bash <(curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
+          ./actionlint -color
+
+  # Not FIWARE's chart-lint.yml@v1: it renders every chart with its default values, and this chart
+  # refuses to render without its required inputs (see values.yaml). So the same tools run here
+  # against the ci/*-values.yaml files only.
+  lint-chart:
+    runs-on: ubuntu-latest
+    env:
+      HELM_VERSION: v3.17.3
+      KUBECONFORM_VERSION: v0.7.0
+      CHART_DIR: charts/consent-manager
+      # Schemas for the custom resources the chart renders, e.g. the ServiceMonitor.
+      CRD_SCHEMA_LOCATION: https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubeconform
+        run: |
+          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+
+      # Every values file is checked before the result is reported.
+      - name: Lint and validate the chart
+        run: |
+          set -o pipefail
+          status=0
+          helm lint --strict "$CHART_DIR" || status=1
+          for values in "$CHART_DIR"/ci/*-values.yaml; do
+            echo "Evaluating $CHART_DIR with $(basename "$values")"
+            helm lint --strict "$CHART_DIR" -f "$values" || status=1
+            helm template "$CHART_DIR" -f "$values" \
+              | kubeconform -strict -summary -schema-location default -schema-location "$CRD_SCHEMA_LOCATION" \
+              || status=1
+          done
+          exit "$status"
