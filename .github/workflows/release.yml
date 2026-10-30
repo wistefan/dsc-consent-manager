@@ -1,0 +1,32 @@
+# Releases every push to main: runs the whole Test workflow, then publishes image and GitHub
+# release X.Y.Z, so a commit that fails the suite or a lint is never released.
+# Only `publish` is serialised. A group keeps at most one pending run, so a third merge whose tests
+# finish during a publish cancels the pending one; the newer run releases the newer head, which
+# contains the cancelled merge, but bumps the last tag by its own label only.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # Test's own concurrency group is per run here, so concurrent pushes test in parallel.
+  test:
+    uses: ./.github/workflows/test.yml
+
+  publish:
+    needs: test
+    uses: ./.github/workflows/publish.yml
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    # The ceiling; the called jobs narrow it.
+    permissions:
+      contents: write
+      pull-requests: write
+    secrets:
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+      QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
