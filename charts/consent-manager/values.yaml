@@ -10,7 +10,7 @@
 replicaCount: 2
 
 image:
-  repository: consent-manager
+  repository: quay.io/fiware/consent-manager
   # Defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent
