@@ -29,8 +29,8 @@ permissions:
 env:
   REF: ${{ inputs.ref || github.sha }}
   REGISTRY: quay.io
-  REPOSITORY: fiware
-  IMAGE_NAME: consent-manager
+  REPOSITORY: seamware
+  IMAGE_NAME: dsc-consent-manager
   PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
