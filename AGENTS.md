@@ -79,7 +79,7 @@ src/main/java/com/seamware/consentmanager/
                                    # SigningKeyStore, CanonicalJsonSerializer (ADR-0014)
   notification/                    # (ticket #78) UserNotificationService + Smtp/Logging
                                    # implementations, NotificationConfiguration (smtp.*)
-                                   # (ticket #94, in flight) participant webhook outbox:
+                                   # (ticket #94) participant webhook outbox:
                                    # ParticipantNotificationService, NotificationOutboxRepository,
                                    # NotificationDispatcher, ParticipantWebhookClient
   error/                           # ApiException + BadRequest/NotFound/Forbidden/Conflict/
@@ -99,7 +99,7 @@ src/main/resources/
   static/swagger-ui/index.html     # makes the bundled Swagger UI work
   db/migration/V0__baseline.sql, V1__initial_schema.sql, V2__user_erasure_verifier.sql,
                V3__participant_deregistration.sql, V4__privacy_notice_participant_contracts.sql,
-               V5__consent_receipts.sql, V6__notification_outbox.sql (ticket #94)
+               V5__consent_receipts.sql, V6__notification_outbox.sql
 src/test/java/com/seamware/consentmanager/
   support/                         # PostgresTestResource, KeycloakTestResource,
                                    # KeycloakAndPostgresTestResource, OidcDiscoveryStub, Await,
@@ -109,11 +109,15 @@ src/test/java/com/seamware/consentmanager/
                                    # ParticipantSchemaParityTest, PrivacyNoticeSpecParityTest,
                                    # ConsentEnumParityTest,
                                    # ParticipantCredentialAbsenceTest — all build-failing
-docs/security.md, docs/user-identifiers.md, docs/adr/   # ADRs 0001-0015
+README.md                          # (ticket #108) top-level entry, Best-README-Template layout
+docs/README.md                     # (ticket #108) documentation index, grouped by audience
+docs/security.md, deployment.md, participant-notifications.md, api-compatibility.md,
+  user-identifiers.md, testing.md   # the guides
+docs/adr/                          # ADRs 0001-0016; index in docs/adr/README.md (ticket #108)
 docker/Dockerfile                  # multi-stage image (temurin 25), non-root
 docker/keycloak/consent-manager-realm.json   # realm import: 3 roles, test users, 3 clients
 docker/wiremock/                   # Contract Service stubs (mappings/, __files/, README.md)
-charts/consent-manager/            # Helm chart (ticket #82, being added)
+charts/consent-manager/            # Helm chart + README.md (install, values, key rotation)
 compose.yaml, .env.sample, .dockerignore
 ```
 
@@ -244,7 +248,11 @@ and point `JAVA_HOME` at it. The Docker socket is `root:2375`, so the agent user
   `saveUpdated`, `UserService.close`, `ParticipantService.terminate`) enqueues outbox rows in its
   own transaction; a write path added later must too. Config is
   `consent-manager.participant-notifications.*` — `consent-manager.notifications` is subject
-  email. Decisions are recorded at the top of `IMPLEMENTATION_PLAN.md`.
+  email. The design is ADR-0016; the receiver contract is `docs/participant-notifications.md`.
+- **Documentation.** `README.md` is the entry point; `docs/README.md` indexes every guide and
+  `docs/adr/README.md` every ADR. A new guide or ADR gets a row in its index in the same commit,
+  and every relative link must resolve. ADRs are records: navigation lines only, never edit a
+  decision's text.
 - **Config** is externalized to env vars; document every new one in `.env.sample` **and**
   `application.yml`.
 - **Testing (ticket #83).** `docs/testing.md` maps each testing acceptance criterion to its
