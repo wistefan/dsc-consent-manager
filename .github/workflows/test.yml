@@ -77,6 +77,8 @@ jobs:
 
   lint-workflows:
     runs-on: ubuntu-latest
+    # Bounds a stalled tool download, which would otherwise hold the runner for six hours.
+    timeout-minutes: 10
     env:
       ACTIONLINT_VERSION: 1.7.12
     steps:
@@ -92,6 +94,8 @@ jobs:
   # against the ci/*-values.yaml files only.
   lint-chart:
     runs-on: ubuntu-latest
+    # Bounds a stalled tool or schema download.
+    timeout-minutes: 10
     env:
       HELM_VERSION: v3.17.3
       KUBECONFORM_VERSION: v0.7.0
