@@ -33,8 +33,12 @@ code, build, spec or test changes.
 ## Steps
 
 ### Step 1: Documentation and ADR indices
-Create the two index pages the README will point at.
+Create the two index pages the README will point at, plus a stub root `README.md` so that their
+upward links resolve and Step 1 passes its own link check.
 
+- `README.md` (stub, replaced wholesale in Step 2) — H1 "Consent Manager", the one-line
+  description from Step 2 item 1, and a single link to [`docs/README.md`](docs/README.md). Nothing
+  else; Step 2 owns its content.
 - `docs/README.md` — title "Documentation", one sentence on what lives here, a "Back to the
   [project README](../README.md)" line, then tables grouped by audience, one row per guide with a
   one-line summary taken from the guide's own opening paragraph:
@@ -53,16 +57,32 @@ Create the two index pages the README will point at.
   - **Users, participants and the data subject:** 0007–0010.
   - **Consent records, receipts and notifications:** 0011–0016.
   Status is copied from each ADR's `**Status:**` line in short form (Accepted / Rejected /
-  Partly superseded) and names the superseding ADR as a link where there is one (0001 → 0002,
-  0002 partly, 0011 partly → 0016, 0013 partly → 0014). Summary is one line read from the ADR's
-  decision section, not invented. Add a short "Adding an ADR" paragraph: next free number, same
+  Partly superseded) and names every ADR that line names as superseding it, as a link. The
+  complete mapping (every other ADR is plain "Accepted"):
+  - 0001 → "Rejected; superseded by 0002". Its own status line names only 0002. ADR 0003's
+    `Supersedes` field revisits 0001's discovery half, but that is 0003's claim, not 0001's
+    status, so it goes in 0003's row (below), not in 0001's.
+  - 0002 → "Partly superseded by 0003 (discovery), 0004 (JWKS retrieval, caching, JWS
+    verification)".
+  - 0003 → "Accepted; supersedes part of 0002 and revisits 0001's discovery half".
+  - 0004 → "Accepted; supersedes part of 0002".
+  - 0011 → "Accepted; partly superseded by 0016 (participant delivery)".
+  - 0013 → "Accepted; partly superseded by 0014 (receipt signing)".
+  - 0014 → "Accepted; supersedes part of 0013".
+  Before writing the table, re-read each ADR's `Status` and `Supersedes` fields and stop to report a
+  mismatch with this list rather than adjusting it silently. Summary is one line read from the
+  ADR's decision section, not invented. Add a short "Adding an ADR" paragraph: next free number, same
   header fields (`Status`, `Date`, `Ticket`), add a row here in the same commit.
 
 Acceptance: all 6 guides and all 16 ADRs appear exactly once in the respective index; every
-relative link in both files resolves; no existing file is modified.
+relative link in the three new files (including the `../README.md` and `../../README.md` upward
+links, which reach the stub) resolves; no existing file is modified. Once this step merges, every
+file `AGENTS.md` lists for ticket #108 (`README.md`, `docs/README.md`, `docs/adr/README.md`)
+exists; only the root README's content is still a stub until Step 2.
 
 ### Step 2: Top-level README.md
-Create `README.md` at the repo root following the Best-README-Template section order:
+Replace the Step 1 stub `README.md` at the repo root with the full README, following the
+Best-README-Template section order:
 
 1. `<a id="readme-top"></a>`, centred header: "Consent Manager", one-line description (consent
    lifecycle — request, grant, revoke, query, signed receipts — as a stateless OAuth2 resource
