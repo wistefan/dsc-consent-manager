@@ -4,6 +4,9 @@
 
 The Consent Manager ships as one container image (`docker/Dockerfile`) and runs as a stateless OAuth2
 resource server against PostgreSQL 16 and one or more trusted OIDC identity providers.
+Released images are published as `quay.io/fiware/consent-manager:<version>` for `linux/amd64` and
+`linux/arm64`; the versions are listed on the GitHub releases page, and [CI and releases](ci.md)
+describes how they are built. Pull-request builds are tagged `<version>-PRE-<pr>` and are for testing only.
 
 | Target | Start here |
 | --- | --- |

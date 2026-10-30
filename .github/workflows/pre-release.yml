@@ -1,0 +1,78 @@
+# Publishes every push to a pull request as image and GitHub pre-release X.Y.Z-PRE-<pr>, where
+# X.Y.Z is the latest tag bumped by the PR's major/minor/patch label. A missing label fails
+# `generate-version`, which asks for it on the PR. Adding or removing any other label changes no
+# version, so such events skip every job. Only PRs into main are released, so a stacked or per-step
+# PR into another branch needs no label and publishes nothing.
+# The label gate to make a required check is `generate-version / Semver version`, the called job.
+# A skipped caller job reports as plain `generate-version`, so an ignored label event cannot pass it.
+name: Pre-Release
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+# An ignored label event gets a group of its own, so it cannot cancel a real run of the PR.
+concurrency:
+  group: pre-release-${{ github.event.pull_request.number }}${{ contains(fromJSON('["labeled","unlabeled"]'), github.event.action) && !contains(fromJSON('["major","minor","patch"]'), github.event.label.name) && format('-ignored-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+
+jobs:
+  generate-version:
+    if: ${{ !contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || contains(fromJSON('["major","minor","patch"]'), github.event.label.name) }}
+    uses: FIWARE/github-workflows/.github/workflows/semver-version.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      tag-prefix: ""
+
+  # Fork and Dependabot PRs get no Actions secrets, and a fork has no branch the tag could point
+  # at. The PR author is checked, not the actor, so labelling a Dependabot PR does not publish it.
+  build-and-push:
+    needs: generate-version
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
+    uses: ./.github/workflows/build-image.yml
+    with:
+      version: ${{ needs.generate-version.outputs.version }}
+      # The tag points at the PR head, so the image is built from it, not from the merge commit.
+      ref: ${{ github.event.pull_request.head.sha }}
+    secrets:
+      registry-username: ${{ secrets.QUAY_USERNAME }}
+      registry-password: ${{ secrets.QUAY_PASSWORD }}
+
+  git-release:
+    needs: [generate-version, build-and-push]
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # A new push replaces the PR's pre-release and its tag, so the tag follows the new head. Every
+      # other X.Y.Z-PRE-<pr> goes too, left behind when the semver label changed the version.
+      # `shell: bash` adds pipefail, so a failed `gh release list` fails the job.
+      - name: Publish the pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.generate-version.outputs.version }}
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RELEASE_LIST_LIMIT: 1000
+        run: |
+          gh release list --limit "$RELEASE_LIST_LIMIT" --json tagName \
+            --jq '.[].tagName | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+-PRE-" + env.PR_NUMBER + "$"))' |
+            while read -r stale; do
+              gh release delete "$stale" --cleanup-tag --yes
+            done
+          gh release create "$VERSION" --prerelease --target "$HEAD_SHA" \
+            --title "$VERSION" --notes "Image: $IMAGE" LICENSE

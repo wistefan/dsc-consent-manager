@@ -5,6 +5,11 @@
 <h3 align="center">Consent Manager</h3>
 
   <p align="center">
+    <a href="https://github.com/wistefan/dsc-consent-manager/actions/workflows/test.yml"><img src="https://github.com/wistefan/dsc-consent-manager/actions/workflows/test.yml/badge.svg" alt="Test"></a>
+    <a href="https://github.com/wistefan/dsc-consent-manager/actions/workflows/release.yml"><img src="https://github.com/wistefan/dsc-consent-manager/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  </p>
+
+  <p align="center">
     Manages data subjects' consents in a data space: participants request consent, users grant or
     revoke it, and every decision is recorded, queryable and provable with a signed receipt.
     <br />
@@ -226,6 +231,9 @@ After the smoke test, the page lists the two participants it registered.
   [`.env.sample`](.env.sample).
 - **Deployment.** The Helm chart in [`charts/consent-manager`](charts/consent-manager/README.md)
   installs the service on Kubernetes; [Deployment](docs/deployment.md) covers the other targets.
+- **Releases / container image.** Every merge to `main` publishes the image
+  `quay.io/fiware/consent-manager:<version>` and a GitHub release; see
+  [CI and releases](docs/ci.md).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -238,6 +246,7 @@ After the smoke test, the page lists the two participants it registered.
 | [API compatibility](docs/api-compatibility.md) | integrators | What the published contract promises, and what counts as a breaking change. |
 | [Participant notifications](docs/participant-notifications.md) | integrators | The contract a participant's webhook receiver implements. |
 | [Identifiers in the user directory](docs/user-identifiers.md) | integrators | The identifier the service matches a user on, and how to address it. |
+| [CI and releases](docs/ci.md) | contributors | The workflows, the semver label a PR needs, and how releases are versioned and published. |
 | [Testing](docs/testing.md) | contributors | How the suite is organised and which tests meet each acceptance criterion. |
 | [Architecture Decision Records](docs/adr/README.md) | contributors | Why the service is built the way it is, grouped by theme. |
 
@@ -284,6 +293,8 @@ can be agreed.
   [Adding an ADR](docs/adr/README.md#adding-an-adr)).
 - **Tests.** When a test covers an acceptance criterion, update its row in
   [`docs/testing.md`](docs/testing.md).
+- **Labels.** A pull request into `main` needs exactly one of the labels `major`, `minor` or
+  `patch`, which decides the version its merge releases (see [CI and releases](docs/ci.md)).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

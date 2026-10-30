@@ -119,6 +119,8 @@ docker/keycloak/consent-manager-realm.json   # realm import: 3 roles, test users
 docker/wiremock/                   # Contract Service stubs (mappings/, __files/, README.md)
 charts/consent-manager/            # Helm chart + README.md (install, values, key rotation)
 compose.yaml, .env.sample, .dockerignore
+.github/workflows/build.yml        # ./mvnw verify + IT-ran guard (ticket #110 renames it
+                                   # test.yml and adds pre-release/release, see the plan)
 ```
 
 ## Build & Test
