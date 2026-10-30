@@ -76,3 +76,16 @@ jobs:
             done
           gh release create "$VERSION" --prerelease --target "$HEAD_SHA" \
             --title "$VERSION" --notes "Image: $IMAGE" LICENSE
+
+  # Bumps the chart `version` on the PR branch when the PR changes a chart file. The bump is pushed
+  # with GITHUB_TOKEN and so starts no run: close and reopen the PR to test and pre-release it.
+  # EXCLUDE must stay byte-identical to `chart-release` in publish.yml, which refuses a changed chart
+  # file without a new version; list every file under charts/consent-manager/ci/ in both.
+  chart-version:
+    if: ${{ !contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || contains(fromJSON('["major","minor","patch"]'), github.event.label.name) }}
+    uses: FIWARE/github-workflows/.github/workflows/chart-pr.yml@v1
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      exclude: charts/consent-manager/README.md charts/consent-manager/ci/minimal-values.yaml charts/consent-manager/ci/all-enabled-values.yaml

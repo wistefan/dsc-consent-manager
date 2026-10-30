@@ -119,7 +119,7 @@ An unsupported key in any provider entry fails rendering instead of being silent
 | Value | Default | Notes |
 | --- | --- | --- |
 | `replicaCount` | `2` | Ignored when `autoscaling.enabled`. |
-| `image.repository` / `.tag` / `.pullPolicy` | `consent-manager` / appVersion / `IfNotPresent` | |
+| `image.repository` / `.tag` / `.pullPolicy` | `quay.io/fiware/consent-manager` / appVersion / `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | |
 | `nameOverride`, `fullnameOverride` | `""` | |
 | `podAnnotations`, `podLabels` | `{}` | |

@@ -1,7 +1,8 @@
-# Publishes the pushed main commit as image and GitHub release X.Y.Z, where X.Y.Z is the latest
-# tag bumped by the merged PR's major/minor/patch label. Holds everything that reads or writes
-# release tags, so the caller serialises it as a whole. The X.Y.Z tag is the last thing written:
-# a run that fails before it can be re-run whole, and one that wrote it is superseded on re-run.
+# Publishes the pushed main commit as image, any changed chart and GitHub release X.Y.Z, where
+# X.Y.Z is the latest tag bumped by the merged PR's major/minor/patch label. Holds everything that
+# reads or writes release tags, so the caller serialises it as a whole. The X.Y.Z tag is the last
+# thing written: a run that fails before it can be re-run whole, and one that wrote it is
+# superseded on re-run.
 name: Publish
 
 on:
@@ -64,8 +65,27 @@ jobs:
       registry-username: ${{ secrets.QUAY_USERNAME }}
       registry-password: ${{ secrets.QUAY_PASSWORD }}
 
+  # Packages a changed chart as GitHub release consent-manager-X.Y.Z and indexes it on gh-pages.
+  # cr diffs from `git describe --tags HEAD~`, which sees the app tags too, so git-release waits for
+  # this job: a failed chart release leaves no X.Y.Z tag and the run is re-run whole.
+  # EXCLUDE must stay byte-identical to `chart-version` in pre-release.yml, which bumps from it;
+  # list every file under charts/consent-manager/ci/ in both.
+  chart-release:
+    needs: [check-superseded, build-and-push]
+    if: needs.check-superseded.outputs.superseded != 'true'
+    uses: FIWARE/github-workflows/.github/workflows/chart-release.yml@v1
+    permissions:
+      contents: write
+    with:
+      exclude: charts/consent-manager/README.md charts/consent-manager/ci/minimal-values.yaml charts/consent-manager/ci/all-enabled-values.yaml
+      # Opt-in OCI push; needs the job to pass the Quay credentials as well:
+      # oci-registry: quay.io/fiware/helm-charts
+    # secrets:
+    #   oci-username: ${{ secrets.QUAY_USERNAME }}
+    #   oci-password: ${{ secrets.QUAY_PASSWORD }}
+
   git-release:
-    needs: [check-superseded, generate-version, build-and-push]
+    needs: [check-superseded, generate-version, build-and-push, chart-release]
     if: needs.check-superseded.outputs.superseded != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
