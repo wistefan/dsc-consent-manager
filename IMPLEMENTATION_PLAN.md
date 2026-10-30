@@ -199,6 +199,12 @@ clone with three commits A→B→C, tag B as `0.1.0`, and confirm that it output
 `false` for C, and `false` when no tag exists.
 
 ### Step 4: Helm chart versioning and publication via the FIWARE chart workflows
+**As merged (PR #40): reduced by review.** Chart publication moved to FIWARE/helm-charts, so
+`chart-version`, `chart-release`, the `exclude` list and the squash-only/gh-pages prerequisites
+were dropped. Only the `Chart.yaml`/`values.yaml`/chart README changes below (`appVersion: "0.1.0"`,
+`quay.io/fiware/consent-manager`, GitHub `home`/`sources`) were kept. Every "if Step 4 is in" item of
+Step 5 therefore does not apply.
+
 Reuse `chart-pr.yml@v1` and `chart-release.yml@v1` so that the chart is released too. **The
 reviewer may drop this step** if chart publication is meant to be a follow-up. Steps 1 to 3 do not
 depend on it.
@@ -324,7 +330,7 @@ plain `X.Y.Z` tag is still the last write of the run.
   to `docs/ci.md`.
 - `docs/deployment.md` and `charts/consent-manager/README.md`: where they say how to obtain the
   image, point at `quay.io/fiware/consent-manager:<version>`.
-- `AGENTS.md`: list `.github/workflows/` (`test.yml`, `build-image.yml`, `pre-release.yml`,
+- `AGENTS.md` (**deferred to a plan-mode update**: step agents must not edit `AGENTS.md`): list `.github/workflows/` (`test.yml`, `build-image.yml`, `pre-release.yml`,
   `release.yml`, `publish.yml`) in Project Structure. Add a Key Conventions bullet: a PR needs a semver label to
   pass the Pre-Release workflow, and the pom version is never committed by CI.
 

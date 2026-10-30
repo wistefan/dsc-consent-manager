@@ -14,6 +14,10 @@ helm template t charts/consent-manager -f charts/consent-manager/ci/minimal-valu
 
 ## Install
 
+The chart pulls `quay.io/fiware/consent-manager:<appVersion>` by default; set `image.tag` to run
+another released version. [CI and releases](../../docs/ci.md) describes how images are published,
+and why the chart itself is not published from this repository.
+
 ### Prerequisites
 
 - **PostgreSQL 16**, reachable from the pods, with an empty database and a user that may create
