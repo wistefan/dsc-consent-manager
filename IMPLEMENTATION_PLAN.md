@@ -117,9 +117,12 @@ are records and are not edited.
     `gh release create "$VERSION" --prerelease --target "$HEAD_SHA" --title "$VERSION" --notes "Image: <ref>" LICENSE`,
     where `HEAD_SHA` is `github.event.pull_request.head.sha`.
   - `build-and-push` and `git-release` run only when
-    `github.event.pull_request.head.repo.full_name == github.repository`. A fork PR has neither the
-    Quay secrets nor a branch the tag could point at. `generate-version` still runs for forks, so
-    the label is still required.
+    `github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'`.
+    A fork PR has neither the Quay secrets nor a branch the tag could point at. A Dependabot PR
+    gets no Actions secrets either, so its push would fail. The condition checks the PR author,
+    not `github.actor`, so a human labelling a Dependabot PR does not trigger a push that would
+    still lack the secrets. No `dependabot.yml` exists today, but the guard costs nothing.
+    `generate-version` still runs for both, so the label is still required.
 
 Acceptance: `actionlint` passes on all workflows. Locally,
 `docker buildx build --platform linux/amd64,linux/arm64 -f docker/Dockerfile .` succeeds after
@@ -158,13 +161,18 @@ build; and (b) makes a superseded or out-of-order run harmless:
     PR fails here, and FIWARE intends that.
   - `build-and-push`: `needs: [check-superseded, generate-version]`,
     `uses: ./.github/workflows/build-image.yml`.
-  - `git-release`: `needs: [generate-version, build-and-push]`, `permissions: contents: write`.
-    First fail if `gh release view "$VERSION"` succeeds, because a duplicate version is a bug and
-    must not be silently overwritten. Then run
+  - `git-release`: `needs: [generate-version, build-and-push]` (Step 4 adds `chart-release`),
+    `permissions: contents: write`. First fail if `gh release view "$VERSION"` succeeds, because a
+    duplicate version is a bug and must not be silently overwritten. Then run
     `gh release create "$VERSION" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes LICENSE`
-    (not a pre-release).
-- New `.github/workflows/release.yml`, `name: Release`, `on: push: branches: [main]`. It has **no**
-  workflow-level concurrency. Its jobs:
+    (not a pre-release). **The `X.Y.Z` tag is the last thing a publish run writes.**
+    `check-superseded` reads it, so a run that tagged and then failed could not be re-run. A run
+    that fails before tagging can be re-run whole: `build-and-push` pushes the same tag of the
+    same commit again, and `git-release` creates the tag that is still missing.
+- New `.github/workflows/release.yml`, `name: Release`, `on: push: branches: [main]`, top-level
+  `permissions: contents: read` so the `test` caller job does not start from the repository's
+  default token permissions. Only `publish` widens it. It has **no** workflow-level concurrency.
+  Its jobs:
   - `test`: `uses: ./.github/workflows/test.yml`. Its own group is per run (Step 1), so concurrent
     pushes test in parallel and none is dropped. A release is never published from a commit that
     fails `verify`, the chart lint or actionlint. The reference does not gate; this improves on it.
@@ -181,8 +189,10 @@ build; and (b) makes a superseded or out-of-order run harmless:
   runs on every PR (`Test`) and on every push to `main` (inside `Release`).
 
 Acceptance: `actionlint` passes. Every `needs:` edge and permission is checked by reading the
-workflow graph: inside `publish.yml`, `contents: write` only on `git-release` and
-`pull-requests: write` only on `generate-version`. The `release` concurrency group sits on the
+workflow graph: `release.yml` declares top-level `contents: read`, and `test` does not widen it.
+Inside `publish.yml`, `contents: write` sits only on `git-release` and
+`pull-requests: write` only on `generate-version`. `git-release` is the last job in the graph.
+The `release` concurrency group sits on the
 `publish` job only, and nothing else in the repository uses it. Tag `X.Y.Z` and image `X.Y.Z` come
 from the same `generate-version` output. Check the `check-superseded` script locally in a scratch
 clone with three commits A→B→C, tag B as `0.1.0`, and confirm that it outputs `true` for A and B,
@@ -200,11 +210,10 @@ depend on it.
   Pass the **identical** string to `chart-pr.yml` and to `chart-release.yml`. The latter's
   `check-versions` job fails a release when a chart file changed without a new `version`, so a file
   excluded from the bump but not from the check would make a README-only merge fail `Release` on
-  `main`. Before wiring it, confirm that `chart-release.yml@v1` declares an `exclude` input. If it
-  does not, drop `exclude` from `chart-pr.yml` too, so that both see the same files. Then every
-  chart change bumps the version, and a version bump is better than a failed release. Each
-  workflow carries a comment pointing at the other copy, and a new file under `ci/` must be added
-  to both. `docs/ci.md` repeats that rule.
+  `main`. `chart-release.yml@v1` does declare an `exclude` input (checked at `v1`; it feeds
+  `check-chart-versions.sh`), so both workflows take the list. Each workflow carries a comment
+  pointing at the other copy, and a new file under `ci/` must be added to both. `docs/ci.md`
+  repeats that rule.
 - `pre-release.yml`: add job `chart-version`:
   `uses: FIWARE/github-workflows/.github/workflows/chart-pr.yml@v1`,
   `permissions: {contents: write, pull-requests: write}`, `with: {exclude: <the list above>}`. It
@@ -224,6 +233,16 @@ depend on it.
   Making the checks non-required would let untested heads merge. `docs/ci.md` states the
   close/reopen step, and `chart-version` posts no extra comment (it cannot know whether checks are
   required).
+- **Branches must be up to date before merging (repository setting, documented in Step 5).**
+  `bump-chart-versions.sh` bumps from the base branch's version as it was when the job ran. Two
+  chart-touching PRs opened against chart `0.1.0` both end at `0.2.0`, and the identical
+  `version:` lines merge without a conflict. The second merge then changes templates while the
+  version stays `0.2.0`, so `check-versions` fails `Release` on `main`. Branch protection on
+  `main` must therefore enable "Require branches to be up to date before merging". Updating the
+  second PR fires `synchronize`, `chart-pr` re-bumps from `0.2.0` to `0.3.0`, and the close/reopen
+  step above applies again. If that failure still happens (the setting is off, or an admin
+  bypasses it), the remedy is a follow-up PR that bumps the chart `version`. The failed run created
+  no tag (see below), so that PR's `Release` releases both changes.
 - `release.yml` → `publish.yml` (Step 3): add job `chart-release`,
   `needs: [check-superseded, build-and-push]`, with the same `superseded` condition:
   `uses: FIWARE/github-workflows/.github/workflows/chart-release.yml@v1`,
@@ -237,6 +256,26 @@ depend on it.
   and the Step 3 `check-superseded` guard looks only at plain `X.Y.Z` tags as well. Also raise the
   `publish` job's ceiling in `release.yml` if `chart-release` needs more than
   `contents: write`.
+- **`git-release` runs after `chart-release`:** `needs: [generate-version, build-and-push, chart-release]`.
+  This is required because chart-releaser-action v1.7.0 (`lookup_latest_tag` in `cr.sh`) picks
+  the charts to release with `git diff $(git describe --tags --abbrev=0 HEAD~)`, and that sees
+  **every** tag, including the app's `X.Y.Z`. If `git-release` tagged while `chart-release`
+  failed, a full re-run would be skipped by `check-superseded`. The next merge's diff would also
+  start at that tag, so the chart change would never be packaged (`skip_existing` cannot help
+  with a chart that is never considered). With the tag written last, a failed `chart-release`
+  leaves no tag and the run is re-run whole. On that re-run `chart-release` releases what is
+  missing, and `skip_existing: true` (set by `chart-release.yml@v1`) skips what was already
+  released. `chart-release` is a no-op when no chart changed, so this ordering costs a release
+  nothing. Because no tag exists until the end, re-running all jobs and re-running only the
+  failed ones are both safe.
+- **Squash merges only (repository setting, documented in Step 5).** The same `git describe`
+  also finds the `X.Y.Z-PRE-<pr>` tags that Step 2 puts on PR head commits. With merge commits, a
+  merged PR's head is reachable from `HEAD~`. After a superseded publish (Step 3), the untagged
+  `HEAD~` is closer to that PR's `-PRE-` tag than to the last release tag, so cr diffs from the
+  PR head and misses that PR's chart change. With squash merges, PR heads are never ancestors of
+  `main`, and `describe` only sees release tags on `main`. `semver-version.yml` still resolves a
+  squash commit's PR through `commits/{sha}/pulls`. The repository therefore allows only squash
+  merging.
 - **`appVersion` is decoupled from the pom.** Today `Chart.yaml` carries
   `appVersion: "0.1.0-SNAPSHOT"` with the comment "Tracks <version> in pom.xml". CI never publishes
   that tag, so after this step the default image would not exist. Set `appVersion: "0.1.0"` and
@@ -257,7 +296,8 @@ Acceptance: `actionlint` passes. The Step 1 `lint-chart` commands still pass. `h
 `ci/minimal-values.yaml` renders `quay.io/fiware/consent-manager:0.1.0`, and
 `grep -rn "0.1.0-SNAPSHOT" charts/` finds nothing. The `exclude` string is byte-identical in
 `pre-release.yml` and `publish.yml` (check with `grep`), and it lists every file under
-`charts/consent-manager/ci/`.
+`charts/consent-manager/ci/`. In `publish.yml`, `git-release` needs `chart-release`, so the
+plain `X.Y.Z` tag is still the last write of the run.
 
 ### Step 5: Document the CI/release process
 - New `docs/ci.md`. For each workflow, give its trigger, jobs and what fails it. Describe the
@@ -265,15 +305,19 @@ Acceptance: `actionlint` passes. The Step 1 `lint-chart` commands still pass. `h
   repository) and the version scheme (`X.Y.Z-PRE-<pr>` on a PR, `X.Y.Z` on merge, first release
   bumped from `0.0.0`). List the required secrets (`QUAY_USERNAME`, `QUAY_PASSWORD`) and the
   repository settings: Actions allowed to create releases, the `gh-pages` branch and Pages if
-  Step 4 is in, and the fork-PR behaviour. Explain how to change `REGISTRY`/`REPOSITORY`, and the
+  Step 4 is in, and, when Step 4 is in, squash merges only plus "Require branches to be up to
+  date before merging" on `main` (Step 4 says why). Describe the fork and Dependabot PR behaviour:
+  both get the label check but no image or pre-release. Explain how to change `REGISTRY`/`REPOSITORY`, and the
   deviations from the reference (Dockerfile instead of `-Poci`, `gh` instead of
   `marvinpinto`, local chart lint, no Coveralls). State the accepted limits as well. First, a
   superseded pending release is cancelled, and its label's bump is absorbed into the next release
   (Step 3). Let `Release` finish before merging the next PR when a `major`/`minor` must not be
-  absorbed. If Step 4 is in, also document three things. A chart-bumped PR must be closed and
-  reopened to get checks on its bumped head. A new file under `charts/consent-manager/ci/` must be
-  added to both copies of the `exclude` list. And `appVersion` is raised by hand and never tracks
-  the pom.
+  absorbed. Second, a failed `Release` that created no tag can be re-run, whether all jobs or
+  only the failed ones, because the release tag is written last. If Step 4 is in, also document
+  four things. A chart-bumped PR must be closed and reopened to get checks on its bumped head. A
+  new file under `charts/consent-manager/ci/` must be added to both copies of the `exclude` list.
+  `appVersion` is raised by hand and never tracks the pom. And if two chart bumps collide on
+  `main` anyway, the remedy is a follow-up PR that bumps the chart `version`.
 - `docs/README.md`: add a row under **Contributors** for the CI guide, in the same commit.
 - `README.md`: add the `Test` and `Release` workflow status badges, and add a short
   "Releases / container image" line under the getting-started or contributing section that links
