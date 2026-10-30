@@ -31,6 +31,7 @@ import com.seamware.consentmanager.repository.UserRepository;
 import com.seamware.consentmanager.security.Role;
 import com.seamware.consentmanager.security.UserPrincipal;
 import com.seamware.consentmanager.support.LogCapture;
+import com.seamware.consentmanager.support.RecordingParticipantNotifications;
 import com.seamware.consentmanager.support.TestPseudonymizer;
 import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.exceptions.DataAccessException;
@@ -132,6 +133,9 @@ class UserServiceTest {
 
     private final ConsentFactory consentFactory = new ConsentFactory(new ConsentStateMachine());
 
+    private final RecordingParticipantNotifications participantNotifications =
+            new RecordingParticipantNotifications();
+
     private final UserService service =
             new UserService(
                     users,
@@ -143,7 +147,8 @@ class UserServiceTest {
                     consentFactory,
                     erasureVerifier,
                     PSEUDONYMIZER,
-                    limits);
+                    limits,
+                    participantNotifications);
 
     @Test
     @DisplayName("provisioning inserts a row built from the claims on first sight")
@@ -708,7 +713,8 @@ class UserServiceTest {
                         consentFactory,
                         verifierWith(null),
                         PSEUDONYMIZER,
-                        limits);
+                        limits,
+                        participantNotifications);
         Participant alpha = participants.put(participant());
         User user = users.put(stored());
         consents.put(consent(user, ConsentStatus.GRANTED, alpha, alpha));

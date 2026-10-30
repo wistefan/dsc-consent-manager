@@ -12,6 +12,7 @@ import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
+import com.seamware.consentmanager.support.RecordingParticipantNotifications;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
@@ -64,7 +65,8 @@ class ConsentWriterTest {
                             issued.add(granted);
                             return null;
                         }
-                    });
+                    },
+                    new RecordingParticipantNotifications());
 
     /** A write against the consent {@link #hold} seeded, or against none. */
     private interface Write extends BiConsumer<ConsentWriterTest, Consent> {}

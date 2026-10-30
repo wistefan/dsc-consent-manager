@@ -24,8 +24,14 @@ properties:
     # clear. Bean validation matches the whole value.
     pattern: '^https://[^\s]+$'
     description: >
-      Absolute `https` URL the Consent Manager notifies when a consent naming
-      this participant changes state. Absent when the participant does not want
-      to be notified, which is the default; notification itself is out of scope
-      for this revision and the value is only stored and published.
+      Absolute `https` URL the Consent Manager `POST`s a notification to
+      whenever a consent naming this participant as provider or consumer is
+      granted, revoked, terminated or expires. Each notification carries a detached
+      JWS over its body in the `X-Consent-Signature` header, verifiable with
+      the keys `GET /.well-known/jwks.json` publishes, and
+      is delivered at least once, so a receiver deduplicates on its `eventId`.
+      Signatures carry `typ: consent-notification+jws`, and delivery is not
+      ordered; `docs/participant-notifications.md` is the integrator guide.
+      Delivery history is `GET /participants/me/notifications`. Absent when the
+      participant does not want to be notified, which is the default.
     example: "https://clinic.example.org/consent-notifications"

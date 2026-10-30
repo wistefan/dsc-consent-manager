@@ -18,7 +18,8 @@ import java.util.Map;
 @Singleton
 public class ParticipantMapper {
 
-    private static final String CONSENT_NOTIFICATION_KEY = "consentNotification";
+    private static final String CONSENT_NOTIFICATION_KEY =
+            com.seamware.consentmanager.domain.Participant.CONSENT_NOTIFICATION_ENDPOINT;
 
     private static final String REGISTRATION_NUMBER_KEY = "registrationNumber";
 

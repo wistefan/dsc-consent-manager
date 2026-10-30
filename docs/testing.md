@@ -1,6 +1,7 @@
 # Testing
 
-How the suite is organised, and which tests satisfy each acceptance criterion of ticket #83.
+How the suite is organised, and which tests satisfy each acceptance criterion of ticket #83 and,
+in [its own section](#participant-notifications-ticket-94), of ticket #94.
 Evidence is cited by test class, method or parameter-source name, never by line number, so it
 survives edits to the cited files. Grep a name before citing it.
 
@@ -133,3 +134,35 @@ port, and only a test on `PostgresTestResource` asserts the collector. Not cover
 | Request validation | met | `RequestConstraintMatrixIT.answersAsTheSpecDeclares` crosses each constrained property of `GeneratePrivacyNotice`, `GenerateByContract`, `UserRegistration.email`, `ParticipantUserLinkUpdate`, `BulkUserRegistrationEntry`, `GrantConsent` and `ConsentRequest` with {valid, empty, oversized, malformed}. Bounds, patterns, formats and enums are read from the bundled spec. A valid body earns the route's success status, and a refusal is a `400` problem naming the property. The bulk route answers `207` for any well-formed batch, so its rows also read the entry's result: `BulkUserRegistrationEntry` drops `UserRegistration`'s meaning constraints and `UserService` enforces them per entry, so a value `UserRegistration` refuses (an empty `identifier` or `email`) must come back `REJECTED` with a reason naming the property, and any other accepted value must not. A kind the spec does not constrain is skipped. `ParticipantValidationIT` and `ParticipantUserRegistrationIT` cover the participant schemas and the `UserRegistration` lengths. `everyConstrainedRequestPropertyIsCovered` fails when a constrained property of any request-body schema has no row in the three. |
 | Error mapping | met | `ProblemMappingTest.HandlerMatrix` drives each rendering site through its real handler: every `ApiException` subclass, `AuthorizationProblemHandler` (401 and 403), `ConstraintViolationProblemHandler` and `GlobalExceptionHandler`. Each row asserts the documented status and `ProblemType`. It is total over `ProblemType` (`everyProblemTypeIsProduced`) and over the compiled concrete `ApiException` subclasses (`everyApiExceptionHasARow`). Over HTTP, `ProblemResponseIT` adds the 502 shape and the 401 shape, the latter on a security-enabled server of its own. |
 | Receipts | met | `ConsentReceiptServiceTest.refusesTamperingInEveryFormatAndAlgorithm` crosses {`receipt`, `receipt-kantara`} × {ES256, ES384, ES512, RS256, PS256} × every `SigningFixtures.Tamper`. Each cell renders the served body with a key of that algorithm and a retired key of the same algorithm published beside it. The JWS header must name the algorithm, and `ReceiptSignatures` must verify the untouched receipt. Then both the service's verifier and the outside verifier must refuse the tampered pair. The kid and alg tampers are re-signed by the active key over the untouched receipt, and the cell asserts that signature is genuine, so only the verifier's kid or alg binding refuses it; that covers RS256↔PS256 alg confusion. An EC key cannot sign under another curve's alg, so the EC alg cells only relabel the header. `JwsConsentSigningServiceTest.refusesTampering` runs the same `Tamper` list against the signer alone, and `ConsentReceiptIT` covers route × format over HTTP. |
+
+## Participant notifications (ticket #94)
+
+Every criterion is `met`. Criteria are short forms of the ticket's wording, so check the evidence
+against the ticket text. The contract is recorded in ADR-0016 and the
+[integrator guide](participant-notifications.md).
+
+| AC | Criterion | Status | Evidence |
+|---|---|---|---|
+| 1 | A permission-changing move queues its notifications durably | met | `ParticipantNotificationEnqueueIT.enqueuesWhatTheMoveOwes` drives every write path (grant, a decision superseding a grant, revoke, terminate by each side, resume, request, refuse, re-confirm, cleanup, erasure, deregistration, `writer.move(…, EXPIRED, …)`) with no dispatcher running and asserts the exact `PENDING` rows. |
+| 2 | The enqueue is atomic with the move | met | `ParticipantNotificationRollbackIT.receiptFailureRollsBackTheRows`: a replaced receipt issuer first sees the rows inside the transaction, then throws; afterwards no row exists and the consent is unchanged. |
+| 3 | At-least-once delivery | met | `NotificationDispatcherIT.reclaimsAnExpiredLease` (a row whose holder died is re-claimed and delivered); `NotificationOutboxRepositoryIT.claimsOnlyDueRows` and `staleTokenIsFenced`. |
+| 4 | Event types follow the move | met | `NotificationRecipientsTest.coversEveryPermittedMove`, `unattributed` and `attributed`, total over the state machine's permitted pairs plus creations; `ParticipantNotificationEnqueueIT.enqueuesWhatTheMoveOwes`; `ParticipantNotificationEnumParityTest.servedEnumMatchesDomain`. |
+| 5 | Provider and consumer are notified, the terminator excepted | met | `NotificationRecipientsTest.attributed`, `sameParticipantOnBothSides`, `sameParticipantTerminatingItsOwn`; the recipient columns in `ParticipantNotificationEnqueueIT.enqueuesWhatTheMoveOwes`. |
+| 6 | The payload is minimal | met | `ParticipantNotificationEnqueueIT.enqueuesWhatTheMoveOwes` asserts the payload keys and that no snapshot or notice content is present; `NotificationOutboxRepositoryIT.roundTripsThePayload`. |
+| 7 | Notifications are signed and verifiable | met | `ParticipantWebhookClientTest.bodyIsTheCanonicalJsonTheSignatureCovers` and `signatureVerifiesOnlyAsItsOwnType` (`typ: consent-notification+jws`, refused as a receipt and the reverse); `ParticipantNotificationDeliveryIT.deliversAGrantAndARevokeAsTheRecipientAnswers` verifies against keys fetched from `GET /.well-known/jwks.json` with the independent `ReceiptSignatures`. |
+| 8 | Failures retry with backoff | met | `NotificationDispatcherIT.serverErrorRetriesWithTheSameSignedBody` (same body and `eventId` on the retry); `NotificationBackoffTest.delayStaysInsideTheJitterWindow`. |
+| 9 | Retries end in abandonment | met | `NotificationDispatcherIT.walksTheScheduleToAbandonment`; `NotificationBackoffTest.exhaustsAfterTheLastRetry`; `NotificationOutboxSweeperIT.abandonsAnAgedDueRow` and `NotificationOutboxRepositoryIT.agedRowsAreAbandonedNotClaimed` for the max-age backstop. |
+| 10 | Responses are classified | met | `ParticipantWebhookClientTest.classifiesStatus` (`2xx` delivers, `3xx` and other `4xx` abandon, `408`, `429` and `5xx` retry), `refusedConnectionRetries`, `unansweredConnectRetriesAsConnectTimeout`, `slowResponseRetriesWithinTheReadTimeout`, `classifiesResolution`; `NotificationDispatcherIT.classifiesTheResponse` writes each class to the row. |
+| 11 | No endpoint abandons without a call | met | `NotificationDispatcherIT.abandonsAnUnreachableRecipient` (no `consentNotification`, and a deregistered participant), asserting no HTTP call; `refusesAnInternalEndpoint` for an address the fence refuses. |
+| 12 | A dead endpoint cannot starve others | met | `NotificationDispatcherIT.isolatesAHealthyParticipantFromStalledOnes`; `NotificationOutboxRepositoryIT.capsRowsPerParticipant`; `ParticipantWebhookClientTest.stalledHostHoldsOneResolverThread`; `NotificationConfigurationValidatorTest.refusesNamingTheSetting` (cap `<` concurrency, lease covers the batch). |
+| 13 | Replicas never double-claim | met | `NotificationOutboxRepositoryIT.concurrentClaimsAreDisjoint` and `recheckDropsARowLeasedAfterTheSnapshot`; `NotificationReplicaConcurrencyIT.deliversEachEventToEachPartyExactlyOnce`. |
+| 14 | Per-participant metrics | met | `NotificationDispatcherIT` asserts `NotificationMetrics` attempts and abandonment reasons per participant throughout, and `reportsQueueDepthPerParticipant` the queue-depth gauge. |
+| 15 | Delivery history for the participant | met | `ParticipantNotificationHistoryIT` (`returnsOnlyTheCallersRowsNewestFirst`, `pagesThroughTheHistory`, `clampsAnOversizedPage`, `rendersOutcomesFromColumns`, `staysReadableAfterDeregistration`); the `NOTIFICATION_HISTORY` row of `EndpointRoleMatrixIT`. |
+| 16 | End-to-end against a real recipient | met | `ParticipantNotificationDeliveryIT.deliversAGrantAndARevokeAsTheRecipientAnswers`, parameterized over recipient behaviour (200, 404, 503 then 200, timeout, no endpoint), triggered through the HTTP API; `NotificationSchedulingIT.scheduledTickDeliversAQueuedRow`. |
+| 17 | Each event reaches each party exactly once across replicas | met | `NotificationReplicaConcurrencyIT.deliversEachEventToEachPartyExactlyOnce`; `NotificationOutboxRepositoryIT.staleTokenIsFenced` (a late outcome never overwrites another replica's). |
+
+Erasure is covered beside these: `UserErasureIT.theOutboxForgetsTheErasedIdentifier` asserts no
+payload keeps the erased identifier once rows turn terminal, and
+`NotificationOutboxRepositoryIT.abandonForParticipantTouchesOnlyItsDueRows` and
+`ParticipantNotificationEnqueueIT.deregistrationAbandonsTheDepartingParticipantsRows` the
+deregistration sweep.

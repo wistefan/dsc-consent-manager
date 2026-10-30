@@ -14,6 +14,16 @@ writable `/tmp`, and health and metrics on the management port (`9090`) at the o
 from the API port. Credentials come from a Secret and receipt signing keys from mounted files, never
 from a ConfigMap or the image.
 
+Participant webhooks (ADR-0016) need no extra component: an outbox table drained by every replica,
+configured by the `PARTICIPANT_NOTIFICATIONS_*` variables (chart: `config.participantNotifications`).
+Every replica may deliver, since claims are leased and never overlap. Set `PARTICIPANT_NOTIFICATIONS_ENABLED=false`
+to keep a replica from delivering; the sweep that drops undelivered payloads after
+`PARTICIPANT_NOTIFICATIONS_MAX_AGE` runs regardless. Startup refuses timing values that cannot
+hold together (a lease too short for a batch, a per-participant cap not below the concurrency, a
+max age shorter than the retry schedule). Webhook URLs are participant-supplied, so egress must reach
+the public internet; `PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS` narrows it to listed hosts.
+Integrators read [`participant-notifications.md`](participant-notifications.md).
+
 Related: [`security.md`](security.md) for the token, health and signing-key model, and
 [ADR-0014](adr/0014-a-grant-receipt-is-signed-once-and-travels-beside-its-signature.md) for why
 receipt-key rotation takes two deploys.

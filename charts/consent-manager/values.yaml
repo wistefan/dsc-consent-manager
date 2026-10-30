@@ -107,6 +107,30 @@ config:
     fromAddress: ""
     fromName: ""
   notificationClientUrl: ""
+  # Signed consent-change webhooks to participants.
+  participantNotifications:
+    resolveTimeout: 2s
+    # Concurrent webhook host lookups; a stalled host holds at most one.
+    resolverThreads: 8
+    connectTimeout: 2s
+    readTimeout: 5s
+    # Operator-only: listed hosts are the only webhook targets and skip the private-address check.
+    allowedHosts: []
+    # Whether these replicas deliver; the age and retention sweeps run either way.
+    enabled: true
+    pollInterval: 5s
+    batchSize: 50
+    # Must stay below concurrency.
+    perParticipantBatchLimit: 5
+    concurrency: 16
+    # Startup refuses a lease too short for a whole batch to send.
+    lease: 60s
+    backoff: [1m, 5m, 15m, 1h, 6h, 24h]
+    jitter: 0.1
+    # Undelivered rows older than this are abandoned and redacted; must cover the retry schedule.
+    maxAge: 36h
+    sweepInterval: 1m
+    retention: 30d
   receiptsJurisdiction: EU
   cache:
     idpJwksTtl: 60s
@@ -119,6 +143,8 @@ config:
     participantsMaxSize: 100
     consentsDefaultSize: 20
     consentsMaxSize: 100
+    notificationsDefaultSize: 20
+    notificationsMaxSize: 100
   # Any other non-sensitive variable from .env.sample, e.g. SELF_DESCRIPTION_ALLOWED_HOSTS.
   # Credentials and the variables the deployment sets are refused.
   extraEnv: {}

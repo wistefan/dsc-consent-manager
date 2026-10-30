@@ -14,6 +14,7 @@ import com.seamware.consentmanager.domain.Participant;
 import com.seamware.consentmanager.domain.PrivacyNotice;
 import com.seamware.consentmanager.domain.User;
 import com.seamware.consentmanager.domain.UserParticipant;
+import com.seamware.consentmanager.notification.NotificationOutboxRepository;
 import com.seamware.consentmanager.repository.ConsentEventRepository;
 import com.seamware.consentmanager.repository.ConsentRepository;
 import com.seamware.consentmanager.repository.IssuedReceiptRepository;
@@ -27,6 +28,7 @@ import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.KeycloakAndPostgresTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource;
 import com.seamware.consentmanager.support.KeycloakTestResource.RealmPrincipal;
+import com.seamware.consentmanager.support.RawSql;
 import io.micronaut.core.type.Argument;
 import io.micronaut.data.model.Pageable;
 import io.micronaut.http.HttpRequest;
@@ -88,6 +90,21 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
 
     private static final String PLACEHOLDER_KEY_ID = "erasure-it";
 
+    private static final String PAYLOADS_NAMING =
+            "SELECT count(*) FROM notification_outbox WHERE payload::text LIKE ?";
+
+    private static final String TERMINAL_ROWS_WITH_PAYLOAD =
+            "SELECT count(*) FROM notification_outbox"
+                    + " WHERE status IN ('DELIVERED', 'ABANDONED') AND payload IS NOT NULL";
+
+    private static final String DUE_ROWS =
+            "SELECT count(*) FROM notification_outbox WHERE status IN ('PENDING', 'FAILED')";
+
+    /** Long enough that no drain in a test outlives its lease. */
+    private static final Duration DRAIN_LEASE = Duration.ofMinutes(1);
+
+    private static final String DRAIN_FAILURE = "HTTP 400";
+
     /** Longest a cold Keycloak may take to import its realm and serve discovery. */
     private static final Duration DISCOVERY_TIMEOUT = Duration.ofSeconds(60);
 
@@ -114,6 +131,8 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
     @Inject PrivacyNoticeRepository notices;
 
     @Inject ErasureVerifier verifier;
+
+    @Inject NotificationOutboxRepository outbox;
 
     /** The caller's identifier, resolved once because reading it costs a token request. */
     private String identifier;
@@ -281,6 +300,29 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
         assertThat(users.findByIdentifier(identifier)).isEmpty();
     }
 
+    /** How a queued row turns terminal: an outcome of a dispatch, or the age backstop. */
+    enum Drain {
+        DELIVERED,
+        ABANDONED,
+        MAX_AGE_EXCEEDED
+    }
+
+    @ParameterizedTest(name = "drained as {0}")
+    @EnumSource(Drain.class)
+    @DisplayName("the outbox names the erased subject only until each queued row turns terminal")
+    void theOutboxForgetsTheErasedIdentifier(Drain drain) {
+        eraseAConsentingCaller();
+        assertThat(RawSql.count(PAYLOADS_NAMING, payloadPattern()))
+                .as("the revocation is queued under the identifier its recipients know")
+                .isEqualTo(SEEDED_PARTICIPANTS.size());
+
+        drainToTerminal(drain);
+
+        assertThat(RawSql.count(PAYLOADS_NAMING, payloadPattern())).isZero();
+        assertThat(RawSql.count(TERMINAL_ROWS_WITH_PAYLOAD)).isZero();
+        assertThat(RawSql.count(DUE_ROWS)).isZero();
+    }
+
     @ParameterizedTest(name = "as {0}")
     @EnumSource(
             value = RealmPrincipal.class,
@@ -347,6 +389,31 @@ class UserErasureIT extends KeycloakAndPostgresTestResource {
 
     private String pseudonymOf(HttpResponse<String> response) throws IOException {
         return (String) body(response).get("pseudonym");
+    }
+
+    /** Moves every queued row to a terminal status as {@code drain} would. */
+    private void drainToTerminal(Drain drain) {
+        if (drain == Drain.MAX_AGE_EXCEEDED) {
+            outbox.abandonOlderThan(0);
+            return;
+        }
+        List<UUID> ids =
+                RawSql.query(
+                        "SELECT id FROM notification_outbox", row -> row.getObject(1, UUID.class));
+        UUID token = UUID.randomUUID();
+        outbox.lease(ids, token, DRAIN_LEASE);
+        ids.forEach(
+                id -> {
+                    boolean written =
+                            drain == Drain.DELIVERED
+                                    ? outbox.markDelivered(id, token).isPresent()
+                                    : outbox.markAbandoned(id, token, DRAIN_FAILURE) == 1;
+                    assertThat(written).isTrue();
+                });
+    }
+
+    private String payloadPattern() {
+        return "%" + identifier + "%";
     }
 
     /** Reads the caller's own record, which provisions it, and answers with the stored row. */

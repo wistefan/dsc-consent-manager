@@ -18,6 +18,7 @@ import com.seamware.consentmanager.security.IdentityProviderRegistry;
 import com.seamware.consentmanager.signing.ConsentSigningService;
 import com.seamware.consentmanager.signing.JwsConsentSigningService;
 import com.seamware.consentmanager.signing.ReceiptSigningException;
+import com.seamware.consentmanager.signing.SignatureType;
 import com.seamware.consentmanager.signing.SignedReceipt;
 import com.seamware.consentmanager.support.Await;
 import com.seamware.consentmanager.support.ConsentFixtures;
@@ -260,7 +261,7 @@ class SigningFailureIT extends KeycloakAndPostgresTestResource {
 
         @Override
         @NonNull
-        public <R> SignedReceipt<R> sign(@NonNull R receipt) {
+        public <R> SignedReceipt<R> sign(@NonNull R receipt, @NonNull SignatureType type) {
             throw new ReceiptSigningException(FAILURE_MESSAGE, new IllegalStateException());
         }
 
@@ -270,7 +271,10 @@ class SigningFailureIT extends KeycloakAndPostgresTestResource {
         }
 
         @Override
-        public boolean verifyCanonical(@NonNull String canonicalJson, @NonNull String detachedJws) {
+        public boolean verifyCanonical(
+                @NonNull String canonicalJson,
+                @NonNull String detachedJws,
+                @NonNull SignatureType type) {
             return false;
         }
     }

@@ -271,6 +271,39 @@ consent-manager:
     # SMTP_HOST set, startup fails unless it is an absolute http(s) URL with a host.
     client-url: ${NOTIFICATION_CLIENT_URL:}
 
+  # Signed webhooks to the participants a consent change binds; `notifications` is subject email.
+  participant-notifications:
+    # Bound on resolving a webhook host (the JDK resolver has none); a lookup past it is retried.
+    resolve-timeout: ${PARTICIPANT_NOTIFICATIONS_RESOLVE_TIMEOUT:2s}
+    # Concurrent lookups; one stalled host holds at most one, as lookups of a host are shared.
+    resolver-threads: ${PARTICIPANT_NOTIFICATIONS_RESOLVER_THREADS:8}
+    connect-timeout: ${PARTICIPANT_NOTIFICATIONS_CONNECT_TIMEOUT:2s}
+    read-timeout: ${PARTICIPANT_NOTIFICATIONS_READ_TIMEOUT:5s}
+    # Empty admits any https host whose addresses are all external. An entry restricts delivery
+    # to the listed hosts AND waives the private-address check; operator-only.
+    allowed-hosts: ${PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS:}
+    # Whether this replica delivers. The age and retention sweeps run either way.
+    enabled: ${PARTICIPANT_NOTIFICATIONS_ENABLED:true}
+    poll-interval: ${PARTICIPANT_NOTIFICATIONS_POLL_INTERVAL:5s}
+    batch-size: ${PARTICIPANT_NOTIFICATIONS_BATCH_SIZE:50}
+    # Must stay below `concurrency`, so dead endpoints cannot hold every delivery worker.
+    per-participant-batch-limit: ${PARTICIPANT_NOTIFICATIONS_PER_PARTICIPANT_BATCH_LIMIT:5}
+    concurrency: ${PARTICIPANT_NOTIFICATIONS_CONCURRENCY:16}
+    # Reservation of a claimed batch; startup refuses one too short for a whole batch to send.
+    lease: ${PARTICIPANT_NOTIFICATIONS_LEASE:60s}
+    # One delay per retry; a failure past the last one abandons the row.
+    backoff: ${PARTICIPANT_NOTIFICATIONS_BACKOFF:1m,5m,15m,1h,6h,24h}
+    jitter: ${PARTICIPANT_NOTIFICATIONS_JITTER:0.1}
+    # Undelivered rows older than this are abandoned and their payload (which names the
+    # subject) dropped. Startup refuses one shorter than the whole retry schedule.
+    max-age: ${PARTICIPANT_NOTIFICATIONS_MAX_AGE:36h}
+    sweep-interval: ${PARTICIPANT_NOTIFICATIONS_SWEEP_INTERVAL:1m}
+    # How long delivered and abandoned rows are kept as delivery history.
+    retention: ${PARTICIPANT_NOTIFICATIONS_RETENTION:30d}
+    # Paging of GET /participants/me/notifications; a larger size is clamped, not refused.
+    page-default-size: ${PARTICIPANT_NOTIFICATIONS_PAGE_DEFAULT_SIZE:20}
+    page-max-size: ${PARTICIPANT_NOTIFICATIONS_PAGE_MAX_SIZE:100}
+
   errors:
     # Publish a 5xx exception message as `detail`. Dev-only debugging aid; stack traces
     # are never published.
