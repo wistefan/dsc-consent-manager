@@ -1,5 +1,7 @@
 # ADR 0007 — Erasure pseudonymises the user and retains the consent audit trail
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0007
+
 - **Status:** Accepted.
 - **Date:** 2026-10-06
 - **Ticket:** TICKET-004 (Taiga #68), step 8

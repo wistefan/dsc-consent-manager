@@ -1,5 +1,7 @@
 # ADR 0016 — Participant notifications use a transactional outbox
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0016
+
 - **Status:** Accepted.
 - **Date:** 2026-10-29
 - **Ticket:** Taiga #94 (participant notification)

@@ -1,5 +1,7 @@
 # Testing
 
+[README](../README.md) › [Documentation](README.md) › Testing
+
 How the suite is organised, and which tests satisfy each acceptance criterion of ticket #83 and,
 in [its own section](#participant-notifications-ticket-94), of ticket #94.
 Evidence is cited by test class, method or parameter-source name, never by line number, so it
@@ -166,3 +168,10 @@ payload keeps the erased identifier once rows turn terminal, and
 `NotificationOutboxRepositoryIT.abandonForParticipantTouchesOnlyItsDueRows` and
 `ParticipantNotificationEnqueueIT.deregistrationAbandonsTheDepartingParticipantsRows` the
 deregistration sweep.
+
+## Related documents
+
+- [Security Architecture — Testing](security.md#testing): the security tests and what each pins.
+- [API compatibility](api-compatibility.md): the breaking-change check against the published spec.
+- [Participant notifications](participant-notifications.md): the contract the ticket #94 tests hold the service to.
+- [ADR-0016](adr/0016-participant-notifications-use-a-transactional-outbox.md): the outbox design those tests exercise.

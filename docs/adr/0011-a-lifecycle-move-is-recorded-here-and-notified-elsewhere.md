@@ -1,5 +1,7 @@
 # ADR 0011 — A lifecycle move is recorded here and notified elsewhere
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0011
+
 - **Status:** Accepted; partly superseded by [ADR-0016](0016-participant-notifications-use-a-transactional-outbox.md) (participant delivery).
 - **Date:** 2026-10-14
 - **Ticket:** TICKET-009 (Taiga #73), step 6

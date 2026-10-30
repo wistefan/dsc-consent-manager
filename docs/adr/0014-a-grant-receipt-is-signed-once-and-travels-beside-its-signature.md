@@ -1,5 +1,7 @@
 # ADR 0014 — A grant receipt is signed once and travels beside its signature
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0014
+
 - **Status:** Accepted.
 - **Date:** 2026-10-15
 - **Ticket:** Consent Signing (Taiga #77)

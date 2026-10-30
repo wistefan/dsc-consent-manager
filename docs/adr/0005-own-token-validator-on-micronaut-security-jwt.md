@@ -1,5 +1,7 @@
 # ADR 0005 — Own `TokenValidator`, built on the module's components, instead of `NimbusJsonWebTokenValidator`
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0005
+
 - **Status:** Accepted.
 - **Date:** 2026-10-02
 - **Ticket:** TICKET-003 (Taiga #67), step 5

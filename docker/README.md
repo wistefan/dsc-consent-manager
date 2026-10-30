@@ -1,5 +1,7 @@
 # Local stack (`compose.yaml`)
 
+Part of the [Consent Manager](../README.md), indexed in [Documentation](../docs/README.md); see [Deployment](../docs/deployment.md) for the other targets.
+
 | Service | Image | Host port | Purpose |
 | --- | --- | --- | --- |
 | `consent-manager` | built from `docker/Dockerfile` | `8080` (API), `9090` (management) | the service, `dev` profile |

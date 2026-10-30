@@ -1,5 +1,7 @@
 # Deployment
 
+[README](../README.md) › [Documentation](README.md) › Deployment
+
 The Consent Manager ships as one container image (`docker/Dockerfile`) and runs as a stateless OAuth2
 resource server against PostgreSQL 16 and one or more trusted OIDC identity providers.
 
@@ -24,6 +26,10 @@ max age shorter than the retry schedule). Webhook URLs are participant-supplied,
 the public internet; `PARTICIPANT_NOTIFICATIONS_ALLOWED_HOSTS` narrows it to listed hosts.
 Integrators read [`participant-notifications.md`](participant-notifications.md).
 
-Related: [`security.md`](security.md) for the token, health and signing-key model, and
-[ADR-0014](adr/0014-a-grant-receipt-is-signed-once-and-travels-beside-its-signature.md) for why
-receipt-key rotation takes two deploys.
+## Related documents
+
+- [`security.md`](security.md): the token, health and signing-key model.
+- [ADR-0014](adr/0014-a-grant-receipt-is-signed-once-and-travels-beside-its-signature.md): why
+  receipt-key rotation takes two deploys.
+- [Participant notifications](participant-notifications.md): the webhook contract the outbox
+  delivers to.

@@ -1,5 +1,7 @@
 # Identifiers in the user directory
 
+[README](../README.md) › [Documentation](README.md) › Identifiers in the user directory
+
 A user in the Consent Manager has exactly one name the service matches on, and
 may have any number of names a participant finds convenient. Confusing the two
 is the mistake this page exists to prevent.
@@ -104,3 +106,9 @@ not exist yet; it belongs to the consent lifecycle ticket, and `UserService.unli
 carries a `TODO(consent-lifecycle)` pointing here. Only the two halves together
 close the gap — widening the unlink check to `PENDING` and `DRAFT` would not,
 since it leaves the race untouched while refusing unlinks that nothing justifies.
+
+## Related documents
+
+- [Security Architecture — Participant onboarding](security.md#participant-onboarding): how a participant is onboarded and registered before it can link users.
+- [ADR-0007](adr/0007-erasure-pseudonymises-the-user-and-retains-the-audit-trail.md): what erasure does to a user's identifiers.
+- [ADR-0009](adr/0009-only-the-data-subject-grants-consent.md): why only the data subject grants a consent.

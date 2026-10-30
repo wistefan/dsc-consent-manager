@@ -1,5 +1,7 @@
 # Contract Service stub (local development)
 
+Part of the [local stack](../README.md); see [Documentation](../../docs/README.md) for every guide.
+
 `compose.yaml` runs `wiremock/wiremock` with this directory as its root, and points the
 `consent-manager` service's `CONTRACT_SERVICE_URL` at it. It answers the two endpoints `ContractServiceClient` calls:
 
