@@ -52,9 +52,12 @@ Rename `.github/workflows/build.yml` to `.github/workflows/test.yml` (`name: Tes
 - Triggers: `pull_request`, `push: branches: [main]`, `workflow_dispatch`, and **`workflow_call`**
   (no inputs), so Step 3 can gate the release on it. Do not add the `labeled`/`unlabeled` PR
   types. A label change must not re-run the ~60-minute suite.
-- Concurrency: `group: test-${{ github.event.pull_request.number || github.ref }}` and
-  `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`. Pushes to `main` must never
-  cancel each other, because Step 3 makes each one a release.
+- Concurrency: `group: test-${{ github.event.pull_request.number || github.run_id }}` and
+  `cancel-in-progress: true`. A PR shares one group, so a new push cancels its stale run. Every
+  other event (push, dispatch, and the `workflow_call` from Step 3) gets a group of its own run, so
+  it is never queued, cancelled or superseded. Do not key non-PR runs on `github.ref`: a GitHub
+  concurrency group keeps at most one pending run and cancels the older pending one, so a shared
+  `main` group would silently drop runs even with `cancel-in-progress: false`.
 - New job `lint-workflows`: download actionlint (pinned version, the
   `download-actionlint.bash` pattern from FIWARE/github-workflows `test.yml`) and run
   `./actionlint -color`. Pin it with a named `env` value such as `ACTIONLINT_VERSION`, not a
@@ -62,14 +65,24 @@ Rename `.github/workflows/build.yml` to `.github/workflows/test.yml` (`name: Tes
 - New job `lint-chart`: `azure/setup-helm@v4` with a pinned `HELM_VERSION` (`v3.17.3`, matching
   FIWARE's default). Install kubeconform at a pinned `KUBECONFORM_VERSION` (`v0.7.0`). Run
   `helm lint --strict charts/consent-manager`, then for each `charts/consent-manager/ci/*-values.yaml`
-  run `helm lint --strict -f` and `helm template charts/consent-manager -f <file> | kubeconform -strict -summary`.
-  Fail if any of them fails and report every file before exiting, as FIWARE's `eval-charts.sh`
-  does. A header comment states why `chart-lint.yml@v1` is not used (see Decisions).
+  run `helm lint --strict -f` and `helm template charts/consent-manager -f <file> | kubeconform`.
+  The kubeconform call takes the flags FIWARE's `eval-charts.sh` uses, so the CRDs the chart
+  renders (`ci/all-enabled-values.yaml` emits a `ServiceMonitor`) have a schema:
+  `-strict -summary -schema-location default -schema-location "$CRD_SCHEMA_LOCATION"`, with
+  `CRD_SCHEMA_LOCATION` a named `env` value set to
+  `https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json`.
+  Do **not** add `-ignore-missing-schemas`. The catalog covers `ServiceMonitor`, and without the
+  flag a kind that has no schema fails the job rather than passing unchecked. Plain
+  `kubeconform -strict` with only the default location fails on the `ServiceMonitor`
+  (`could not find schema`).
+  Fail if any of them fails and report every file before exiting, as `eval-charts.sh` does. A
+  header comment states why `chart-lint.yml@v1` is not used (see Decisions).
 - Update the reference in `docs/testing.md` row 20 (`build.yml` → `test.yml`, job names) and the
   `.github/workflows` entry in `AGENTS.md`.
 
 Acceptance: `actionlint` passes locally. The `lint-chart` commands pass locally against both `ci/`
-values files. `grep -rn "build.yml"` finds no stale reference outside `docs/adr/`, because ADRs
+values files, and the `ServiceMonitor` of `ci/all-enabled-values.yaml` appears as valid in the
+kubeconform summary, not as skipped. `grep -rn "build.yml"` finds no stale reference outside `docs/adr/`, because ADRs
 are records and are not edited.
 
 ### Step 2: Reusable image build and the PR pre-release workflow
@@ -116,57 +129,135 @@ builder cannot do multi-arch. The resulting image starts and its `/app/app.jar` 
 `consent-manager-0.0.1-PRE-1.jar`.
 
 ### Step 3: Release workflow on push to main, gated on the tests
-- New `.github/workflows/release.yml`, `name: Release`, `on: push: branches: [main]`,
-  `concurrency: {group: release, cancel-in-progress: false}`, so releases run one after another
-  and each reads the tags the previous one left.
-- Jobs:
-  - `test`: `uses: ./.github/workflows/test.yml`. A release is never published from a commit that
-    fails `verify`, the chart lint or actionlint. The reference does not gate; this improves on it.
+**Serialisation and its limit (accepted behaviour, state it in `docs/ci.md`).** A GitHub
+concurrency group runs one job and keeps at most **one** pending. A newer pending run cancels the
+older pending one, whatever `cancel-in-progress` says, so a concurrency group cannot queue
+releases. The design therefore (a) holds the group only around the short publish section, not
+the ~60-minute test run, so a supersede needs three merges whose tests finish within one image
+build; and (b) makes a superseded or out-of-order run harmless:
+- When a pending publish is superseded, GitHub cancels it. The newer run builds the newer `main`
+  head, which contains the cancelled merge, so no change goes unreleased. **The cancelled PR's
+  label bump is not applied**, though: the next release bumps the last tag by its own label only
+  (`1.2.0` + a superseded `minor` + a `patch` gives `1.2.1`, not `1.3.1`). This is accepted, and
+  `docs/ci.md` tells maintainers to let `Release` finish before merging the next PR when a
+  `major`/`minor` bump must not be absorbed.
+- Test runs finish in any order, so an older commit could reach publish after a newer one was
+  released. The `check-superseded` guard below skips that run instead of tagging an older SHA
+  with a higher version.
+
+- New `.github/workflows/publish.yml` (`workflow_call`, no inputs, Quay secrets passed through),
+  which holds everything that reads or writes release tags:
+  - `check-superseded`: checkout with `fetch-depth: 0`. Find the highest plain `X.Y.Z` tag. Output
+    `superseded=true` when that tag exists and
+    `git merge-base --is-ancestor "$GITHUB_SHA" "$LATEST_TAG"` holds, meaning this commit, or a
+    newer one containing it, is already released. The equal case also stops a re-run from
+    releasing the same commit twice. Every later job carries
+    `if: needs.check-superseded.outputs.superseded != 'true'`.
   - `generate-version`: the same `semver-version.yml@v1` call as in Step 2. On a push it resolves
     the merged PR's label and yields `X.Y.Z`. A commit pushed directly to `main` without a merged
     PR fails here, and FIWARE intends that.
-  - `build-and-push`: `needs: [test, generate-version]`, `uses: ./.github/workflows/build-image.yml`.
-  - `git-release`: `needs: [generate-version, build-and-push]`, `permissions: contents: write`,
+  - `build-and-push`: `needs: [check-superseded, generate-version]`,
+    `uses: ./.github/workflows/build-image.yml`.
+  - `git-release`: `needs: [generate-version, build-and-push]`, `permissions: contents: write`.
+    First fail if `gh release view "$VERSION"` succeeds, because a duplicate version is a bug and
+    must not be silently overwritten. Then run
     `gh release create "$VERSION" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes LICENSE`
     (not a pre-release).
+- New `.github/workflows/release.yml`, `name: Release`, `on: push: branches: [main]`. It has **no**
+  workflow-level concurrency. Its jobs:
+  - `test`: `uses: ./.github/workflows/test.yml`. Its own group is per run (Step 1), so concurrent
+    pushes test in parallel and none is dropped. A release is never published from a commit that
+    fails `verify`, the chart lint or actionlint. The reference does not gate; this improves on it.
+  - `publish`: `needs: test`, `uses: ./.github/workflows/publish.yml`, `secrets: inherit` or the
+    two Quay secrets explicitly. It sets job-level
+    `concurrency: {group: release, cancel-in-progress: false}` (a caller job of a reusable workflow
+    supports `concurrency`), so the whole publish workflow runs alone. It sets
+    `permissions: {contents: write, pull-requests: write}`. That is the ceiling: the called jobs
+    narrow it as in Step 2. The nesting is release → publish → build-image or semver-version,
+    three levels, within GitHub's limit.
 - In `test.yml`, drop the `push: branches: [main]` trigger, since the release now runs the suite on
   every push to `main` and the suite should not run twice. Keep `pull_request`,
   `workflow_dispatch` and `workflow_call`. Update `docs/testing.md` row 20 so it says the suite
   runs on every PR (`Test`) and on every push to `main` (inside `Release`).
 
 Acceptance: `actionlint` passes. Every `needs:` edge and permission is checked by reading the
-workflow graph: `contents: write` only on `git-release`, and `pull-requests: write` only on
-`generate-version`. Tag `X.Y.Z` and image `X.Y.Z` come from the same `generate-version` output.
+workflow graph: inside `publish.yml`, `contents: write` only on `git-release` and
+`pull-requests: write` only on `generate-version`. The `release` concurrency group sits on the
+`publish` job only, and nothing else in the repository uses it. Tag `X.Y.Z` and image `X.Y.Z` come
+from the same `generate-version` output. Check the `check-superseded` script locally in a scratch
+clone with three commits A→B→C, tag B as `0.1.0`, and confirm that it outputs `true` for A and B,
+`false` for C, and `false` when no tag exists.
 
 ### Step 4: Helm chart versioning and publication via the FIWARE chart workflows
 Reuse `chart-pr.yml@v1` and `chart-release.yml@v1` so that the chart is released too. **The
 reviewer may drop this step** if chart publication is meant to be a follow-up. Steps 1 to 3 do not
 depend on it.
 
+- **One exclude list, used twice.** `bump-chart-versions.sh` matches `exclude` against exact file
+  paths (`case " $EXCLUDE " in *" $file "*`), so a directory such as `charts/consent-manager/ci/`
+  excludes nothing. Name every file instead:
+  `charts/consent-manager/README.md charts/consent-manager/ci/minimal-values.yaml charts/consent-manager/ci/all-enabled-values.yaml`.
+  Pass the **identical** string to `chart-pr.yml` and to `chart-release.yml`. The latter's
+  `check-versions` job fails a release when a chart file changed without a new `version`, so a file
+  excluded from the bump but not from the check would make a README-only merge fail `Release` on
+  `main`. Before wiring it, confirm that `chart-release.yml@v1` declares an `exclude` input. If it
+  does not, drop `exclude` from `chart-pr.yml` too, so that both see the same files. Then every
+  chart change bumps the version, and a version bump is better than a failed release. Each
+  workflow carries a comment pointing at the other copy, and a new file under `ci/` must be added
+  to both. `docs/ci.md` repeats that rule.
 - `pre-release.yml`: add job `chart-version`:
   `uses: FIWARE/github-workflows/.github/workflows/chart-pr.yml@v1`,
-  `permissions: {contents: write, pull-requests: write}`. It requires the same label and bumps
-  `charts/consent-manager/Chart.yaml` `version` when the PR changes the chart, committing the bump
-  to the PR branch. `charts/consent-manager/README.md` is not auto-generated, so do not set
-  `helm-docs-version`. Pass `exclude` covering `charts/consent-manager/README.md` and
-  `charts/consent-manager/ci/`, so that doc-only and CI-values-only changes do not bump the chart.
-- `release.yml`: add job `chart-release`, `needs: test`:
+  `permissions: {contents: write, pull-requests: write}`, `with: {exclude: <the list above>}`. It
+  requires the same label and bumps `charts/consent-manager/Chart.yaml` `version` when the PR
+  changes a non-excluded chart file, committing the bump to the PR branch.
+  `charts/consent-manager/README.md` is not auto-generated, so do not set `helm-docs-version`.
+- **The bump commit starts no checks (accepted, documented).** `chart-pr.yml` pushes with the
+  workflow's `GITHUB_TOKEN`, and GitHub starts no workflow runs for pushes made with that token.
+  So after a chart-touching PR is bumped, its new head commit has no `Test` or `Pre-Release` run.
+  A required `Test` check then blocks the merge, and the pre-release from that run points at the
+  pre-bump SHA. The chosen handling: the contributor **closes and reopens the PR** (or pushes
+  again), which fires `reopened`/`synchronize` with the bumped head, so both workflows run on it.
+  `chart-pr` sees that the version is already bumped and pushes nothing, which ends the cycle.
+  Confirm that no-op in the first chart-touching PR. Alternatives considered and not taken: a PAT
+  or GitHub App token would make the bump trigger runs, but it adds a long-lived write credential
+  that only this job needs. Asking contributors to bump by hand would make chart-pr pointless.
+  Making the checks non-required would let untested heads merge. `docs/ci.md` states the
+  close/reopen step, and `chart-version` posts no extra comment (it cannot know whether checks are
+  required).
+- `release.yml` → `publish.yml` (Step 3): add job `chart-release`,
+  `needs: [check-superseded, build-and-push]`, with the same `superseded` condition:
   `uses: FIWARE/github-workflows/.github/workflows/chart-release.yml@v1`,
-  `permissions: contents: write`. No OCI push by default. Leave the commented-out
-  `oci-registry: quay.io/fiware/helm-charts` with the Quay secrets as the documented opt-in.
-  Its GitHub releases are tagged `consent-manager-X.Y.Z`. `next-version.sh` ignores such tags
-  because they are not plain `X.Y.Z`, so they do not affect the app versioning.
+  `permissions: contents: write`, `with: {exclude: <the list above>}`. Placing it inside `publish.yml`
+  and after `build-and-push` means three things. It runs only after the tests passed (`publish`
+  needs `test`). It never publishes a chart for a run whose image push failed. And it is serialised
+  by the same `release` group, so two runs cannot race chart-releaser. No OCI push by default.
+  Leave the commented-out `oci-registry: quay.io/fiware/helm-charts` with the Quay secrets as the
+  documented opt-in. Its GitHub releases are tagged `consent-manager-X.Y.Z`. `next-version.sh`
+  ignores such tags because they are not plain `X.Y.Z`, so they do not affect the app versioning,
+  and the Step 3 `check-superseded` guard looks only at plain `X.Y.Z` tags as well. Also raise the
+  `publish` job's ceiling in `release.yml` if `chart-release` needs more than
+  `contents: write`.
+- **`appVersion` is decoupled from the pom.** Today `Chart.yaml` carries
+  `appVersion: "0.1.0-SNAPSHOT"` with the comment "Tracks <version> in pom.xml". CI never publishes
+  that tag, so after this step the default image would not exist. Set `appVersion: "0.1.0"` and
+  replace the comment: `appVersion` is the released image tag the chart pulls by default. It is set
+  by hand in the PR that moves the chart to a new app release, and it never tracks `pom.xml`.
+  `chart-pr.yml` bumps only `version`. `0.1.0` assumes that the merge of this ticket's work branch
+  to `main` is the first labelled release and carries `minor`, which bumps `0.0.0` to `0.1.0`.
+  Say so in the PR description and in `docs/ci.md`. Until that first release completes, the
+  default tag does not resolve yet, and that is expected.
 - `charts/consent-manager/values.yaml`: set the default `image.repository` to
-  `quay.io/fiware/consent-manager`, matching `build-image.yml`. Update the `Chart.yaml`
-  `appVersion` comment: it is the released image tag the chart pulls by default, and it is set by
-  hand in the PR that moves the chart to a new app release. `chart-pr.yml` bumps only `version`.
-  `home`/`sources` point at `https://github.com/wistefan/dsc-consent-manager`. Mirror the
-  `image.repository` change in `charts/consent-manager/README.md`'s values table.
+  `quay.io/fiware/consent-manager`, matching `build-image.yml`. `Chart.yaml` `home`/`sources` point
+  at `https://github.com/wistefan/dsc-consent-manager`. Mirror the `image.repository` change in
+  `charts/consent-manager/README.md`'s values table.
 - Prerequisite, documented in Step 5 and not automatable from the repo: an empty `gh-pages` branch
   and GitHub Pages served from it, which chart-releaser needs.
 
 Acceptance: `actionlint` passes. The Step 1 `lint-chart` commands still pass. `helm template` with
-`ci/minimal-values.yaml` renders `quay.io/fiware/consent-manager:<appVersion>`.
+`ci/minimal-values.yaml` renders `quay.io/fiware/consent-manager:0.1.0`, and
+`grep -rn "0.1.0-SNAPSHOT" charts/` finds nothing. The `exclude` string is byte-identical in
+`pre-release.yml` and `publish.yml` (check with `grep`), and it lists every file under
+`charts/consent-manager/ci/`.
 
 ### Step 5: Document the CI/release process
 - New `docs/ci.md`. For each workflow, give its trigger, jobs and what fails it. Describe the
@@ -176,7 +267,13 @@ Acceptance: `actionlint` passes. The Step 1 `lint-chart` commands still pass. `h
   repository settings: Actions allowed to create releases, the `gh-pages` branch and Pages if
   Step 4 is in, and the fork-PR behaviour. Explain how to change `REGISTRY`/`REPOSITORY`, and the
   deviations from the reference (Dockerfile instead of `-Poci`, `gh` instead of
-  `marvinpinto`, local chart lint, no Coveralls).
+  `marvinpinto`, local chart lint, no Coveralls). State the accepted limits as well. First, a
+  superseded pending release is cancelled, and its label's bump is absorbed into the next release
+  (Step 3). Let `Release` finish before merging the next PR when a `major`/`minor` must not be
+  absorbed. If Step 4 is in, also document three things. A chart-bumped PR must be closed and
+  reopened to get checks on its bumped head. A new file under `charts/consent-manager/ci/` must be
+  added to both copies of the `exclude` list. And `appVersion` is raised by hand and never tracks
+  the pom.
 - `docs/README.md`: add a row under **Contributors** for the CI guide, in the same commit.
 - `README.md`: add the `Test` and `Release` workflow status badges, and add a short
   "Releases / container image" line under the getting-started or contributing section that links
@@ -184,7 +281,7 @@ Acceptance: `actionlint` passes. The Step 1 `lint-chart` commands still pass. `h
 - `docs/deployment.md` and `charts/consent-manager/README.md`: where they say how to obtain the
   image, point at `quay.io/fiware/consent-manager:<version>`.
 - `AGENTS.md`: list `.github/workflows/` (`test.yml`, `build-image.yml`, `pre-release.yml`,
-  `release.yml`) in Project Structure. Add a Key Conventions bullet: a PR needs a semver label to
+  `release.yml`, `publish.yml`) in Project Structure. Add a Key Conventions bullet: a PR needs a semver label to
   pass the Pre-Release workflow, and the pom version is never committed by CI.
 
 Acceptance: every relative link in the touched Markdown resolves (check with a link-check
