@@ -3,6 +3,8 @@
 # `generate-version`, which asks for it on the PR. Adding or removing any other label changes no
 # version, so such events skip every job. Only PRs into main are released, so a stacked or per-step
 # PR into another branch needs no label and publishes nothing.
+# The label gate to make a required check is `generate-version / Semver version`, the called job.
+# A skipped caller job reports as plain `generate-version`, so an ignored label event cannot pass it.
 name: Pre-Release
 
 on:
