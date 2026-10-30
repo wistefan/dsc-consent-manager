@@ -1,5 +1,7 @@
 # ADR 0008 — Deregistration retains the participant and closes its open business
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0008
+
 - **Status:** Accepted.
 - **Date:** 2026-10-07
 - **Ticket:** TICKET-005 (Taiga #69), step 5

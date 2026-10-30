@@ -1,5 +1,7 @@
 # ADR 0015 — Subject notifications are best-effort and informational
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0015
+
 - **Status:** Accepted.
 - **Date:** 2026-10-16
 - **Ticket:** TICKET-013 (Taiga #78)

@@ -1,5 +1,7 @@
 # consent-manager Helm chart
 
+Part of the [Consent Manager](../../README.md), indexed in [Documentation](../../docs/README.md); see [Deployment](../../docs/deployment.md) for the other targets.
+
 Deploys the Consent Manager, a stateless OAuth2 resource server, as one Deployment, an API Service, a
 cluster-internal management Service and its configuration. Ingress, HorizontalPodAutoscaler and
 ServiceMonitor are optional. The chart does not install PostgreSQL or an identity provider, and it

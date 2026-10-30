@@ -1,5 +1,7 @@
 # ADR 0004 — Retrieve, cache and verify against JWK Sets with `micronaut-security-jwt`
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0004
+
 - **Status:** Accepted.
 - **Date:** 2026-10-01
 - **Ticket:** TICKET-003 (Taiga #67), step 4

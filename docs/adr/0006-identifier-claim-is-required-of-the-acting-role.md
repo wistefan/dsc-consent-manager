@@ -1,5 +1,7 @@
 # ADR 0006 — Require the identifier claim of the acting role, not of every granted role
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0006
+
 - **Status:** Accepted.
 - **Date:** 2026-10-05
 - **Ticket:** TICKET-003 (Taiga #67), step 6

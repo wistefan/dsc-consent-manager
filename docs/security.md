@@ -1,5 +1,7 @@
 # Security Architecture
 
+[README](../README.md) › [Documentation](README.md) › Security Architecture
+
 The Consent Manager is a stateless OAuth2 **resource server**. It issues no tokens, stores no
 credentials and holds no sessions. Every authenticated request carries a bearer JWT minted by an
 OpenID Connect provider from a trust list fixed at startup.
@@ -532,3 +534,10 @@ Integration tests are named `*IT` and run under `maven-failsafe-plugin`, so `./m
 them together with the unit suite; `./mvnw test` runs the unit tests alone. There is no
 integration-only flag: Surefire and Failsafe share the `skipTests` property, and no property
 separating the two is wired in `pom.xml`.
+
+## Related documents
+
+- [Token contract](../api/components/security.yaml): every claim the `bearerAuth` scheme reads.
+- [Deployment](deployment.md): where the trust list, secrets and signing keys are supplied.
+- [Identifiers in the user directory](user-identifiers.md): the one identifier the service matches a user on.
+- [ADR index](adr/README.md): the decisions this model rests on.

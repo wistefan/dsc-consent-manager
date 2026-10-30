@@ -1,5 +1,7 @@
 # ADR 0001 — Delegate OIDC discovery and JWKS handling to `micronaut-security-oauth2`
 
+[Documentation](../README.md) › [ADR index](README.md) › ADR 0001
+
 - **Status:** **Rejected.** Superseded by
   [ADR 0002](0002-own-identity-provider-registry-on-nimbus.md), which keeps implementation
   plan convention 6. Retained because the framework behaviour recorded below was verified by
