@@ -327,6 +327,10 @@ class IdentitySubstitutionIT extends KeycloakAndPostgresTestResource {
                 "get /participants/{identifier}",
                 HttpStatus.OK,
                 s -> Call.of(HttpMethod.GET, "/participants/" + CALLER_PARTICIPANT)),
+        NOTIFICATION_HISTORY(
+                "get /participants/me/notifications",
+                HttpStatus.OK,
+                s -> Call.of(HttpMethod.GET, "/participants/me/notifications")),
         GENERATE_PRIVACY_NOTICE(
                 "post /privacy-notices",
                 HttpStatus.CREATED,

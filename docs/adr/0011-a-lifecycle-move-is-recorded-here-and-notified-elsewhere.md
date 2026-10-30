@@ -1,6 +1,6 @@
 # ADR 0011 — A lifecycle move is recorded here and notified elsewhere
 
-- **Status:** Accepted.
+- **Status:** Accepted; partly superseded by [ADR-0016](0016-participant-notifications-use-a-transactional-outbox.md) (participant delivery).
 - **Date:** 2026-10-14
 - **Ticket:** TICKET-009 (Taiga #73), step 6
 - **Relates to:** the five `POST /consents/{id}/<verb>` operations in `api/openapi.yaml`;

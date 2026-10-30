@@ -141,6 +141,13 @@ An unsupported key in any provider entry fails rendering instead of being silent
 | `config.smtp.port` / `.startTls` / `.fromAddress` / `.fromName` | `587` / `true` / `""` / `""` | `fromAddress` is required once `host` is set. |
 | `config.notificationClientUrl` | `""` | Link in the consent-requested email. |
 | `config.receiptsJurisdiction` | `EU` | |
+| `config.participantNotifications.enabled` | `true` | Whether these replicas deliver webhooks (`PARTICIPANT_NOTIFICATIONS_ENABLED`). The max-age and retention sweeps run either way. |
+| `config.participantNotifications.allowedHosts` | `[]` | Non-empty: the only webhook hosts, waived from the private-address check. Closes the DNS-rebinding window; see `docs/security.md`. |
+| `config.participantNotifications.resolveTimeout` / `.resolverThreads` / `.connectTimeout` / `.readTimeout` | `2s` / `8` / `2s` / `5s` | Per-send bounds. Their sum is one `sendBound`. |
+| `config.participantNotifications.pollInterval` / `.batchSize` / `.concurrency` / `.perParticipantBatchLimit` | `5s` / `50` / `16` / `5` | `perParticipantBatchLimit` must stay below `concurrency`, so a dead endpoint never holds the whole pool. |
+| `config.participantNotifications.lease` | `60s` | Must exceed `ceil(batchSize / concurrency) × sendBound` plus a margin; startup refuses a shorter one. |
+| `config.participantNotifications.backoff` / `.jitter` | `[1m, 5m, 15m, 1h, 6h, 24h]` / `0.1` | Retry schedule; the attempt after the last entry abandons. |
+| `config.participantNotifications.maxAge` / `.sweepInterval` / `.retention` | `36h` / `1m` / `30d` | Undelivered rows older than `maxAge` are abandoned and their payload dropped; `maxAge` must cover the retry schedule. `retention` bounds the identifier-free delivery history. |
 | `config.cache.*` | see `values.yaml` | IdP JWKS, Contract Service and self-description caches. |
 | `config.pagination.*` | `20` default, `100` max | Participants, consents and notification history. |
 | `config.extraEnv` | `{}` | Any other non-sensitive variable from `.env.sample`. Credentials, the signing-key variables and keys a dedicated value sets are refused. |
@@ -169,7 +176,7 @@ An unsupported key in any provider entry fails rendering instead of being silent
 
 | Where | What |
 | --- | --- |
-| ConfigMap `<fullname>` (env) | `PORT`, `MANAGEMENT_PORT`, `DB_URL`, `METRICS_AUTHENTICATION_ENABLED` (fixed `"false"`), `API_PREFIX`, `CONSENT_MANAGER_URL`, `CONTRACT_SERVICE_URL`, `NOTIFICATION_CLIENT_URL`, `RECEIPTS_JURISDICTION`, the cache and page settings, `SMTP_HOST`/`SMTP_PORT`/`SMTP_STARTTLS`/`SMTP_FROM_ADDRESS`/`SMTP_FROM_NAME` (only with `smtp.host`), `config.extraEnv`, and the primary provider: `IDP_ISSUER`, `IDP_DISCOVERY_URL`, `IDP_AUDIENCE`, `IDP_ALLOW_INSECURE_TRANSPORT`, `IDP_CLOCK_SKEW`, `IDP_JWKS_CACHE_TTL`, `IDP_CLAIM_USER_IDENTIFIER`, `IDP_CLAIM_PARTICIPANT_IDENTIFIER`, `IDP_CLAIM_ROLES`, `IDP_ROLE_USER`, `IDP_ROLE_PARTICIPANT`, `IDP_ROLE_CATALOG` |
+| ConfigMap `<fullname>` (env) | `PORT`, `MANAGEMENT_PORT`, `DB_URL`, `METRICS_AUTHENTICATION_ENABLED` (fixed `"false"`), `API_PREFIX`, `CONSENT_MANAGER_URL`, `CONTRACT_SERVICE_URL`, `NOTIFICATION_CLIENT_URL`, `RECEIPTS_JURISDICTION`, the `PARTICIPANT_NOTIFICATIONS_*` webhook settings, the cache and page settings, `SMTP_HOST`/`SMTP_PORT`/`SMTP_STARTTLS`/`SMTP_FROM_ADDRESS`/`SMTP_FROM_NAME` (only with `smtp.host`), `config.extraEnv`, and the primary provider: `IDP_ISSUER`, `IDP_DISCOVERY_URL`, `IDP_AUDIENCE`, `IDP_ALLOW_INSECURE_TRANSPORT`, `IDP_CLOCK_SKEW`, `IDP_JWKS_CACHE_TTL`, `IDP_CLAIM_USER_IDENTIFIER`, `IDP_CLAIM_PARTICIPANT_IDENTIFIER`, `IDP_CLAIM_ROLES`, `IDP_ROLE_USER`, `IDP_ROLE_PARTICIPANT`, `IDP_ROLE_CATALOG` |
 | ConfigMap `<fullname>-identity-providers` (file) | `identity-providers.yml` with the `additional` providers; only rendered when there are any |
 | Secret (`<fullname>` or `existingSecret`) | `DB_USER`, `DB_PASSWORD`, `LOG_PSEUDONYM_KEY`, `ERASURE_VERIFICATION_SECRET`, optionally `SMTP_USER`, `SMTP_PASSWORD` |
 | Secret `<release>-signing-keys` (files, out of band) | `signing-key.jwk`, optionally `retired-verification-keys.jwks`, mounted at `/etc/consent-manager/keys`; the pod gets `RECEIPTS_SIGNING_KEY_FILE` and `RECEIPTS_RETIRED_VERIFICATION_KEYS_FILE` |
