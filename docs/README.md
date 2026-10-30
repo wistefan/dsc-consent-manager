@@ -29,6 +29,7 @@ Back to the [project README](../README.md).
 
 | Guide | Summary |
 | --- | --- |
+| [CI and releases](ci.md) | The GitHub Actions workflows: what each runs and what fails it, the semver label every PR into `main` needs, the version scheme, required secrets and settings. |
 | [Testing](testing.md) | How the suite is organised, and which tests satisfy each acceptance criterion of tickets #83 and #94. |
 | [Architecture Decision Records](adr/README.md) | Index of the recorded design decisions, grouped by theme, with their status. |
 | [Contract Service stub](../docker/wiremock/README.md) | The WireMock stub the local stack uses in place of the Contract Service. |
