@@ -1,11 +1,13 @@
 # Publishes every push to a pull request as image and GitHub pre-release X.Y.Z-PRE-<pr>, where
 # X.Y.Z is the latest tag bumped by the PR's major/minor/patch label. A missing label fails
 # `generate-version`, which asks for it on the PR. Adding or removing any other label changes no
-# version, so such events skip every job.
+# version, so such events skip every job. Only PRs into main are released, so a stacked or per-step
+# PR into another branch needs no label and publishes nothing.
 name: Pre-Release
 
 on:
   pull_request:
+    branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
@@ -54,7 +56,9 @@ jobs:
 
       # A new push replaces the PR's pre-release and its tag, so the tag follows the new head. Every
       # other X.Y.Z-PRE-<pr> goes too, left behind when the semver label changed the version.
+      # `shell: bash` adds pipefail, so a failed `gh release list` fails the job.
       - name: Publish the pre-release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.generate-version.outputs.version }}
