@@ -9,6 +9,10 @@ on:
         description: Image tag and project version, e.g. 1.2.3 or 1.2.3-PRE-42
         type: string
         required: true
+      ref:
+        description: Commit to build; defaults to github.sha, which on pull_request is the merge commit
+        type: string
+        required: false
     secrets:
       registry-username:
         required: true
@@ -23,6 +27,7 @@ permissions:
   contents: read
 
 env:
+  REF: ${{ inputs.ref || github.sha }}
   REGISTRY: quay.io
   REPOSITORY: fiware
   IMAGE_NAME: consent-manager
@@ -36,6 +41,8 @@ jobs:
       image: ${{ steps.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
 
       - uses: actions/setup-java@v4
         with:
@@ -74,7 +81,7 @@ jobs:
           tags: ${{ steps.image.outputs.image }}
           labels: |
             org.opencontainers.image.version=${{ inputs.version }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ env.REF }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

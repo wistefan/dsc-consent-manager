@@ -1,6 +1,7 @@
 # Publishes every push to a pull request as image and GitHub pre-release X.Y.Z-PRE-<pr>, where
 # X.Y.Z is the latest tag bumped by the PR's major/minor/patch label. A missing label fails
-# `generate-version`, which asks for it on the PR.
+# `generate-version`, which asks for it on the PR. Adding or removing any other label changes no
+# version, so such events skip every job.
 name: Pre-Release
 
 on:
@@ -10,12 +11,14 @@ on:
 permissions:
   contents: read
 
+# An ignored label event gets a group of its own, so it cannot cancel a real run of the PR.
 concurrency:
-  group: pre-release-${{ github.event.pull_request.number }}
+  group: pre-release-${{ github.event.pull_request.number }}${{ contains(fromJSON('["labeled","unlabeled"]'), github.event.action) && !contains(fromJSON('["major","minor","patch"]'), github.event.label.name) && format('-ignored-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
   generate-version:
+    if: ${{ !contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || contains(fromJSON('["major","minor","patch"]'), github.event.label.name) }}
     uses: FIWARE/github-workflows/.github/workflows/semver-version.yml@v1
     permissions:
       contents: read
@@ -31,6 +34,8 @@ jobs:
     uses: ./.github/workflows/build-image.yml
     with:
       version: ${{ needs.generate-version.outputs.version }}
+      # The tag points at the PR head, so the image is built from it, not from the merge commit.
+      ref: ${{ github.event.pull_request.head.sha }}
     secrets:
       registry-username: ${{ secrets.QUAY_USERNAME }}
       registry-password: ${{ secrets.QUAY_PASSWORD }}
@@ -47,16 +52,21 @@ jobs:
         with:
           persist-credentials: false
 
-      # A new push replaces the PR's pre-release, and its tag, so the tag follows the new head.
+      # A new push replaces the PR's pre-release and its tag, so the tag follows the new head. Every
+      # other X.Y.Z-PRE-<pr> goes too, left behind when the semver label changed the version.
       - name: Publish the pre-release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.generate-version.outputs.version }}
           IMAGE: ${{ needs.build-and-push.outputs.image }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RELEASE_LIST_LIMIT: 1000
         run: |
-          if gh release view "$VERSION" > /dev/null 2>&1; then
-            gh release delete "$VERSION" --cleanup-tag --yes
-          fi
+          gh release list --limit "$RELEASE_LIST_LIMIT" --json tagName \
+            --jq '.[].tagName | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+-PRE-" + env.PR_NUMBER + "$"))' |
+            while read -r stale; do
+              gh release delete "$stale" --cleanup-tag --yes
+            done
           gh release create "$VERSION" --prerelease --target "$HEAD_SHA" \
             --title "$VERSION" --notes "Image: $IMAGE" LICENSE
