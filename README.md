@@ -98,12 +98,19 @@ data space association, so this service can take the
 [Consent Manager](https://prometheus-x-association.github.io/docs/consent-manager/) role in a
 Prometheus-X (PTX) data space architecture. There, the Consent Manager is the personal data
 intermediary through which individuals give, review and revoke consent for sharing their personal
-data, next to the Catalog, the Contract Manager and the Dataspace Connector. The consent routes
-keep the Prometheus-X shape: `POST /users/register`, `GET /consents/me` and `/consents/me/{id}`,
+data, next to the Catalog, the Contract Manager (called the Contract Service in this repository's
+configuration, e.g. `CONTRACT_SERVICE_URL`) and the Dataspace Connector. The consent routes keep
+the Prometheus-X shape: `POST /users/register`, `GET /consents/me` and `/consents/me/{id}`,
 `POST /consents/{id}/refuse`, `/re-confirm` and `/terminate`, and `POST /participants`. Privacy
-notices are generated from the contracts held by the Contract Service. Authentication is the one
-deliberate difference: callers present OAuth2 bearer tokens from a trusted identity provider, and
-the service itself has no login or token endpoints. The reference implementation is
+notices are generated from the contracts held by the Contract Service.
+
+The main deliberate difference is authentication: callers present OAuth2 bearer tokens from a
+trusted identity provider, and the service itself has no login or token endpoints. The two APIs
+are not identical otherwise either. This service adds routes Prometheus-X does not describe, among
+them `POST /consents/requests`, `GET /consents/check`, `POST /consents/{id}/resume`, the receipt
+formats of `GET /consents/{id}` and `GET /contracts/available`. The reference implementation, in
+turn, has routes this service lacks, such as `/users/login` and `/consents/{id}/token`. The
+reference implementation is
 [Prometheus-X-association/consent-manager](https://github.com/Prometheus-X-association/consent-manager).
 
 ### Built With
